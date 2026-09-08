@@ -1,0 +1,109 @@
+/**
+ * Who may administer this server.
+ *
+ * Two ways to be allowed, and they answer different questions:
+ *
+ * - You hold the control key. That is possession of the share link the server
+ *   printed, which means you are at the machine or someone at it told you.
+ * - You are signed in to nixamp.com as the account that owns this server. That
+ *   is identity, and it works from a phone on the other side of the world.
+ *
+ * The server cannot check a nixamp.com token itself -- it has no part of that
+ * secret, and it should not. So it asks nixamp.com who the token belongs to and
+ * compares the answer to the owner it recorded at startup. Delegating identity
+ * and keeping authorisation local is what lets a nixamp on a laptop trust an
+ * account it has never seen.
+ */
+
+/** How long an answer from nixamp.com is trusted before asking again. */
+export const CACHE_MS = 60_000;
+
+export interface OwnerOptions {
+  /** The account id that owns this server, from the CLI session at startup. */
+  ownerId: string;
+  /** Where to ask about a token. */
+  site: string;
+  fetcher?: typeof fetch;
+  now?: () => number;
+}
+
+export interface AdminCheck {
+  /** May this caller administer the server? */
+  allowed: boolean;
+  /** How they proved it, for the admin view to show. */
+  as: "key" | "owner" | null;
+}
+
+/**
+ * Ask nixamp.com who a token belongs to, and remember the answer briefly.
+ *
+ * Briefly, because an admin request should not cost a round trip to another
+ * host every time, and not for long, because a revoked session should stop
+ * working in about a minute rather than whenever the process restarts.
+ */
+export class Owner {
+  private readonly cache = new Map<string, { id: string; at: number }>();
+
+  constructor(private readonly options: OwnerOptions) {}
+
+  get claimed(): boolean {
+    return this.options.ownerId !== "";
+  }
+
+  /** The account a token belongs to, or "" for one nixamp.com does not accept. */
+  async accountFor(token: string): Promise<string> {
+    if (!token) return "";
+    const now = (this.options.now ?? Date.now)();
+
+    const remembered = this.cache.get(token);
+    if (remembered && now - remembered.at < CACHE_MS) return remembered.id;
+
+    const send = this.options.fetcher ?? fetch;
+    try {
+      const answer = await send(`${this.options.site}/api/v1/auth/me`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!answer.ok) {
+        // Remember the refusal too, or a wrong token costs a round trip on
+        // every request it is presented with.
+        this.cache.set(token, { id: "", at: now });
+        return "";
+      }
+      const body = (await answer.json()) as { account?: { id?: string } };
+      const id = typeof body.account?.id === "string" ? body.account.id : "";
+      this.cache.set(token, { id, at: now });
+      return id;
+    } catch {
+      // nixamp.com being unreachable must not turn into "everyone is the
+      // owner". It turns into "nobody is", and the control key still works.
+      return "";
+    }
+  }
+
+  async check(hasControlKey: boolean, token: string): Promise<AdminCheck> {
+    if (hasControlKey) return { allowed: true, as: "key" };
+    if (!this.claimed) return { allowed: false, as: null };
+    const account = await this.accountFor(token);
+    return account !== "" && account === this.options.ownerId
+      ? { allowed: true, as: "owner" }
+      : { allowed: false, as: null };
+  }
+
+  /** Forget everything remembered, so a sign-out takes effect at once. */
+  forget(): void {
+    this.cache.clear();
+  }
+}
+
+/** Paths only an administrator may reach. */
+export const ADMIN_PATHS = [
+  "/api/connections",
+  "/api/source",
+  "/api/broadcast",
+  "/api/ingest",
+  "/api/admin",
+];
+
+export function needsAdmin(path: string): boolean {
+  return ADMIN_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}

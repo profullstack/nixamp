@@ -25,6 +25,8 @@ import {
 } from "./broadcast.ts";
 import { Ingest, normaliseFormat } from "./ingest.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
+import { needsAdmin, Owner } from "./owner.ts";
+import { readSession } from "./session.ts";
 import { Directory, parseAnnouncement } from "./directory.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
@@ -104,6 +106,8 @@ export interface ServeOptions {
    * useless without somewhere to pay: see NIXAMP_PAY_TO.
    */
   x402: boolean;
+  /** The account id that may administer this server, if not the signed-in one. */
+  owner: string;
   /** Accept a live stream from a phone or a desktop, over HTTP. */
   ingest: boolean;
   /**
@@ -141,6 +145,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     publish: "ask",
     name: "",
     x402: false,
+    owner: "",
     ingest: false,
     rtmpIn: 0,
     rtmp: [],
@@ -180,6 +185,8 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.publish = "no";
     } else if (arg === "--name") {
       options.name = value();
+    } else if (arg === "--owner") {
+      options.owner = value();
     } else if (arg === "--ingest") {
       options.ingest = true;
     } else if (arg === "--rtmp-in") {
@@ -595,6 +602,8 @@ export interface HandlerOptions {
   accounts?: Accounts;
   /** True when this instance is reached over https, for the cookie's Secure. */
   secureCookies?: boolean;
+  /** Who may administer this server. */
+  owner?: Owner;
 }
 
 /**
@@ -777,6 +786,31 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
       json(response, 405, { error: "GET, POST or DELETE" });
       return;
+    }
+
+    // Administering is a different question from listening, and it is asked
+    // after the share key: the control key answers both, but a listen key or a
+    // nixamp.com session answers only one of them.
+    if (options.owner && needsAdmin(path)) {
+      const holdsControl =
+        key !== null &&
+        scopeOf(keyFrom(request, url), key, null) === "control";
+      const check = await options.owner.check(holdsControl, tokenFrom(request.headers));
+
+      if (path === "/api/admin") {
+        // Always answered, and honestly: the page has to know whether to draw
+        // an admin panel at all, and "no" is a real answer rather than a 403.
+        json(response, 200, { allowed: check.allowed, as: check.as, claimed: options.owner.claimed });
+        return;
+      }
+      if (!check.allowed) {
+        json(response, 403, {
+          error: options.owner.claimed
+            ? "sign in to nixamp.com as this server's owner, or use its control link"
+            : "this server has no owner signed in; use its control link",
+        });
+        return;
+      }
     }
 
     // After the key check: a paying listener still needs the link, and a 402
@@ -1263,9 +1297,19 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       })
     : undefined;
 
+  // The account signed in on this machine owns the server it starts. That is
+  // the whole claim: `nixamp login` then `nixamp serve`, and the phone in your
+  // pocket can administer it from anywhere by signing in as the same person.
+  const session = readSession();
+  const owner = new Owner({
+    ownerId: options.owner || (session?.token ? await ownerIdOf(session) : ""),
+    site: session?.site ?? DEFAULT_DIRECTORY,
+  });
+
   const server = createServer(engine, {
     web,
     media: options.media,
+    owner,
     ...(ingest ? { ingest } : {}),
     broadcaster,
     broadcast: () => ({ destinations, settings: DEFAULT_ENCODER }),
@@ -1357,6 +1401,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     );
   }
   if (!options.media) console.log("  Audio stays on this machine: --no-media is set.");
+  if (owner.claimed) {
+    console.log(`  ${session?.email} can administer this from anywhere, signed in at ${session?.site}.`);
+  }
   if (options.ingest) console.log("  Accepting a live stream in at POST /api/ingest.");
   if (options.rtmpIn > 0 && ingest) {
     const publish = addresses.find((a) => a.label !== "here") ?? addresses[0];
@@ -1500,6 +1547,27 @@ export function parseDestinations(specs: string[]): Destination[] {
     });
   }
   return out;
+}
+
+/**
+ * Which account the signed-in session belongs to. Asked once at startup rather
+ * than trusted from the file: a token that nixamp.com no longer accepts should
+ * not confer ownership of anything.
+ */
+async function ownerIdOf(session: { site: string; token: string }): Promise<string> {
+  try {
+    const answer = await fetch(`${session.site}/api/v1/auth/me`, {
+      headers: { authorization: `Bearer ${session.token}` },
+    });
+    if (!answer.ok) return "";
+    const body = (await answer.json()) as { account?: { id?: string } };
+    return typeof body.account?.id === "string" ? body.account.id : "";
+  } catch {
+    // Offline at startup means no remote administration until a restart, and
+    // the control key still works. Better than claiming an owner we cannot
+    // check.
+    return "";
+  }
 }
 
 /** The built PWA, when it is sitting next to us in the same install. */

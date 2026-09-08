@@ -212,6 +212,31 @@ Start writes down where it went and the key it minted, waits until the server
 is actually answering before saying it started, and prints the share link. It is
 one daemon per user, and the state lives in `$XDG_STATE_HOME/nixamp`.
 
+## Who may administer a server
+
+Two ways to be allowed, and they answer different questions.
+
+**You hold its control link.** That is possession: you are at the machine, or
+somebody at it sent you the link. It works with no account and no network.
+
+**You own it.** `nixamp login` and then `nixamp serve` claims the server for the
+account signed in on that machine, and from then on that account can administer
+it from a phone anywhere, by signing in to nixamp.com in the browser.
+
+The server cannot check a nixamp.com token itself, and should not: it holds no
+part of that secret. It asks nixamp.com who the token belongs to and compares
+the answer to the owner it recorded at startup. Delegating identity while
+keeping authorisation local is what lets a nixamp on a laptop trust an account
+it has never seen.
+
+Answers are remembered for a minute, so admin requests do not each cost a round
+trip, and a revoked session stops working in about a minute rather than at the
+next restart. If nixamp.com cannot be reached, nobody becomes the owner — the
+control link is the way in until it can.
+
+Listening is never affected: `/api/state`, `/api/stream` and the page itself
+stay open to whoever has the share link.
+
 ## Watching it
 
 ```

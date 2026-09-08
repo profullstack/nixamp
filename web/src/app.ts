@@ -62,6 +62,11 @@ export function start(): void {
     accountToggle: need<HTMLButtonElement>("account-toggle"),
     accountSignOut: need<HTMLButtonElement>("account-signout"),
     accountNote: need<HTMLParagraphElement>("account-note"),
+    adminPanel: need<HTMLElement>("admin-panel"),
+    adminNote: need<HTMLParagraphElement>("admin-note"),
+    adminConnections: need<HTMLTableElement>("admin-connections"),
+    adminRestream: need<HTMLFormElement>("admin-restream"),
+    adminSource: need<HTMLInputElement>("admin-source"),
     directory: need<HTMLDivElement>("directory"),
     directoryNote: need<HTMLParagraphElement>("directory-note"),
     directoryList: need<HTMLUListElement>("directory-list"),
@@ -495,6 +500,111 @@ export function start(): void {
   // app shell for any unknown path, so the routing is this one line.
   if (location.pathname.replace(/\/+$/, "") === "/directory") void loadDirectory();
 
+  // --- administering ----------------------------------------------------
+  //
+  // The panel appears only for someone the server will actually obey: the
+  // holder of its control link, or the nixamp.com account that owns it. The
+  // server decides, and says so at /api/admin, so the page never has to guess
+  // from a token it can see.
+  let adminTimer: ReturnType<typeof setInterval> | null = null;
+
+  const drawConnections = (rows: {
+    address: string;
+    network: string;
+    kind: string;
+    agent: string;
+    track: string;
+    bytes: number;
+    endedAt: number | null;
+  }[]): void => {
+    dom.adminConnections.replaceChildren();
+    const head = document.createElement("tr");
+    for (const label of ["Where", "Network", "Kind", "Client", "Track", "Sent"]) {
+      const th = document.createElement("th");
+      th.textContent = label;
+      head.append(th);
+    }
+    dom.adminConnections.append(head);
+
+    for (const row of rows.slice(0, 40)) {
+      const tr = document.createElement("tr");
+      if (row.endedAt !== null) tr.className = "ended";
+      const cells: [string, string][] = [
+        [row.address, ""],
+        [row.network, `network-${row.network}`],
+        [row.kind, ""],
+        [row.agent, ""],
+        [row.track || "—", ""],
+        [`${Math.round(row.bytes / 1024)} KiB`, ""],
+      ];
+      for (const [text, className] of cells) {
+        const td = document.createElement("td");
+        // textContent, never innerHTML: a user agent is written by whoever
+        // connected.
+        td.textContent = text;
+        if (className) td.className = className;
+        tr.append(td);
+      }
+      dom.adminConnections.append(tr);
+    }
+  };
+
+  const refreshAdmin = async (): Promise<void> => {
+    try {
+      const answer = await fetch("/api/connections");
+      if (!answer.ok) return;
+      const body = (await answer.json()) as { connections?: Parameters<typeof drawConnections>[0]; active?: number };
+      dom.adminNote.textContent = `${body.active ?? 0} listening now.`;
+      drawConnections(body.connections ?? []);
+    } catch {
+      dom.adminNote.textContent = "lost touch with the server";
+    }
+  };
+
+  const checkAdmin = async (): Promise<void> => {
+    let allowed = false;
+    let as: string | null = null;
+    try {
+      const answer = await fetch("/api/admin");
+      if (answer.ok) {
+        const body = (await answer.json()) as { allowed?: boolean; as?: string | null };
+        allowed = body.allowed === true;
+        as = body.as ?? null;
+      }
+    } catch {
+      allowed = false;
+    }
+
+    dom.adminPanel.hidden = !allowed;
+    if (adminTimer) clearInterval(adminTimer);
+    adminTimer = null;
+    if (!allowed) return;
+
+    dom.adminNote.textContent = as === "owner" ? "You own this server." : "You hold this server's control link.";
+    void refreshAdmin();
+    adminTimer = setInterval(() => void refreshAdmin(), 2000);
+  };
+
+  dom.adminRestream.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const source = dom.adminSource.value.trim();
+    if (!source) return;
+    void (async () => {
+      try {
+        const answer = await fetch("/api/source", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ source }),
+        });
+        const body = (await answer.json()) as { error?: string };
+        dom.adminNote.textContent = answer.ok ? `Now serving ${source}.` : (body.error ?? "that did not work");
+        if (answer.ok) dom.adminSource.value = "";
+      } catch {
+        dom.adminNote.textContent = "could not reach the server";
+      }
+    })();
+  });
+
   // --- the account ------------------------------------------------------
   //
   // The session is a cookie the server sets, so nothing here holds a token:
@@ -551,6 +661,8 @@ export function start(): void {
         // Never leave a password sitting in the DOM after it has been used.
         dom.accountPassword.value = "";
         showAccount(body.account?.email ?? email);
+        // Signing in may have made you this server's owner.
+        void checkAdmin();
       } catch {
         dom.accountNote.textContent = "could not reach nixamp.com";
       } finally {
@@ -567,10 +679,12 @@ export function start(): void {
         // The cookie is the session; failing to say so does not keep it.
       }
       showAccount(null);
+      void checkAdmin();
     })();
   });
 
   void askWhoIsSignedIn();
+  void checkAdmin();
 
   dom.browse.addEventListener("click", () => {
     if (!dom.directory.hidden) {
