@@ -75,6 +75,13 @@ export function start(): void {
   let peaks: number[] = new Array<number>(BAND_COUNT).fill(0);
   let edges: number[] = [];
 
+  /**
+   * Who is making the sound. Connected to a remote, the server plays and we
+   * only draw it — unless "Listen on this device" is ticked, and then the
+   * server is a library rather than a player and everything happens here.
+   */
+  const remoteDrives = (): boolean => mode === "remote" && !dom.listenHere.checked;
+
   const player = new BrowserPlayer({ audio: dom.audio, video: dom.video }, {
     onTime: (_at, of) => {
       // A picked file has no duration until the browser has looked at it.
@@ -90,7 +97,7 @@ export function start(): void {
   const remote = new RemoteClient({
     onSnapshot: (next) => {
       snapshot = next;
-      if (mode === "remote" && !dom.listenHere.checked) {
+      if (remoteDrives()) {
         // The server is the one making the sound; mirror its analyser.
         bars = next.bars.length > 0 ? next.bars : bars;
         peaks = holdPeaks(peaks, bars);
@@ -124,24 +131,28 @@ export function start(): void {
   };
 
   const duration = (): number => {
-    if (mode === "remote" && !dom.listenHere.checked) {
-      return snapshot.tracks[snapshot.index]?.duration ?? 0;
-    }
+    if (remoteDrives()) return snapshot.tracks[snapshot.index]?.duration ?? 0;
     return player.duration;
   };
 
   const position = (): number =>
-    mode === "remote" && !dom.listenHere.checked ? snapshot.position : player.position;
+    remoteDrives() ? snapshot.position : player.position;
 
   const playing = (): boolean =>
-    mode === "remote" && !dom.listenHere.checked ? snapshot.playing : player.playing;
+    remoteDrives() ? snapshot.playing : player.playing;
 
   // ---- commands -----------------------------------------------------------
 
   async function playAt(next: number): Promise<void> {
     if (mode === "remote") {
-      await remote.send({ type: "play", index: next });
-      if (dom.listenHere.checked) await listenTo(next);
+      if (remoteDrives()) {
+        await remote.send({ type: "play", index: next });
+        return;
+      }
+      // Select rather than play: the server's cursor stays in step with ours
+      // without it starting the same track on its own speakers.
+      await remote.send({ type: "select", index: next });
+      await listenTo(next);
       return;
     }
     const track = local[next];
@@ -164,7 +175,7 @@ export function start(): void {
   }
 
   async function toggle(): Promise<void> {
-    if (mode === "remote" && !dom.listenHere.checked) {
+    if (remoteDrives()) {
       await remote.send({ type: "toggle" });
       return;
     }
@@ -178,18 +189,18 @@ export function start(): void {
   async function step(delta: number): Promise<void> {
     const total = count();
     if (total === 0) return;
-    if (mode === "remote") {
+    if (remoteDrives()) {
       await remote.send({ type: delta > 0 ? "next" : "prev" });
-      if (dom.listenHere.checked) {
-        await listenTo((snapshot.index + delta + total) % total);
-      }
       return;
     }
-    await playAt((index + delta + total) % total);
+    // `at()` is already the current index for whichever source is in charge,
+    // so the step is worked out once here rather than again from a cursor the
+    // server has meanwhile moved.
+    await playAt((at() + delta + total) % total);
   }
 
   async function halt(): Promise<void> {
-    if (mode === "remote" && !dom.listenHere.checked) {
+    if (remoteDrives()) {
       await remote.send({ type: "stop" });
       return;
     }
@@ -219,7 +230,7 @@ export function start(): void {
     dom.total.textContent = of > 0 ? formatTime(of) : "--:--";
     if (!scrubbing) {
       dom.seek.value = String(of > 0 ? Math.round((at2 / of) * 1000) : 0);
-      dom.seek.disabled = of <= 0 || (mode === "remote" && !dom.listenHere.checked);
+      dom.seek.disabled = of <= 0 || remoteDrives();
     }
 
     dom.playPause.textContent = live ? "❚❚" : "▶";
@@ -241,7 +252,7 @@ export function start(): void {
 
     renderPlaylist();
     dom.glyphs.textContent = bars.map(glyph).join("");
-    const [l, r] = mode === "remote" && !dom.listenHere.checked ? snapshot.levels : player.levels();
+    const [l, r] = remoteDrives() ? snapshot.levels : player.levels();
     dom.levels.textContent =
       `L${"▮".repeat(Math.round(l * 6)).padEnd(6, "·")} R${"▮".repeat(Math.round(r * 6)).padEnd(6, "·")}`;
   }
@@ -294,7 +305,7 @@ export function start(): void {
     }
     const context = canvas.getContext("2d");
 
-    if (mode !== "remote" || dom.listenHere.checked) {
+    if (!remoteDrives()) {
       const data = player.read();
       if (data.length > 0) {
         if (edges.length !== BAND_COUNT + 1) edges = bandEdges(BAND_COUNT, data.length);
@@ -315,7 +326,7 @@ export function start(): void {
     }
     if (playing()) {
       dom.glyphs.textContent = bars.map(glyph).join("");
-      const [l, r] = mode === "remote" && !dom.listenHere.checked ? snapshot.levels : player.levels();
+      const [l, r] = remoteDrives() ? snapshot.levels : player.levels();
       dom.levels.textContent =
         `L${"▮".repeat(Math.round(l * 6)).padEnd(6, "·")} R${"▮".repeat(Math.round(r * 6)).padEnd(6, "·")}`;
       dom.elapsed.textContent = formatTime(position());
@@ -426,9 +437,16 @@ export function start(): void {
 
   dom.listenHere.addEventListener("change", () => {
     if (mode !== "remote") return;
-    if (dom.listenHere.checked) void listenTo(snapshot.index);
-    else player.stop();
-    draw();
+    void (async () => {
+      if (dom.listenHere.checked) {
+        // "on this device" means instead of over there, not as well as.
+        await remote.send({ type: "stop" });
+        await listenTo(snapshot.index);
+      } else {
+        player.stop();
+      }
+      draw();
+    })();
   });
 
   document.addEventListener("keydown", (event) => {
