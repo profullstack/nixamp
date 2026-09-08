@@ -15,6 +15,11 @@ export interface PublishTarget {
   url: string;
   tracks: number;
   nowPlaying: () => string;
+  /**
+   * Called with whatever configuration the directory sent back. This is how
+   * nixamp.com turns x402 on and off for a server without it restarting.
+   */
+  onConfig?: (config: unknown) => void;
 }
 
 /**
@@ -67,8 +72,9 @@ export class Publisher {
         }),
       });
       if (!response.ok) return null;
-      const listing = (await response.json()) as Listing;
+      const listing = (await response.json()) as Listing & { config?: unknown };
       this.id = listing.id;
+      if (listing.config !== undefined) this.target.onConfig?.(listing.config);
       return listing;
     } catch {
       // The directory being down is not a reason for a player to stop playing.

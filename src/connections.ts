@@ -129,6 +129,19 @@ export class Connections {
     return [...live, ...done];
   }
 
+  /**
+   * Live connections that are actually hearing something. The state feed and
+   * the page are not listeners, and counting them would put a stream over the
+   * free allowance with nobody listening to it.
+   */
+  get listening(): number {
+    let count = 0;
+    for (const item of this.items.values()) {
+      if (item.endedAt === null && (item.kind === "stream" || item.kind === "media")) count++;
+    }
+    return count;
+  }
+
   get active(): number {
     let count = 0;
     for (const item of this.items.values()) if (item.endedAt === null) count++;

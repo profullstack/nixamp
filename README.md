@@ -103,6 +103,28 @@ something else.
 Entries expire a few minutes after a stream stops renewing, so the list is
 always what is actually live.
 
+## Paying to listen
+
+A stream serving a handful of friends costs nothing and asks nothing. Past five
+people listening at once it is bandwidth somebody is paying for, so the gate
+opens: the sixth listener gets a 402 with an
+[x402](https://github.com/profullstack/x402-gateway) offer, and a dollar buys a
+day.
+
+```
+NIXAMP_PAY_TO=0xYourAddress COINPAY_X402_KEY=cp_live_… nixamp serve ~/Music --x402
+```
+
+Three things are deliberate. The count is of *live* listeners, so a stream
+quietens back to free on its own. Only the audio is gated: a 402 on `/api/state`
+would break the page that has to render the offer. And nobody is cut off
+mid-track, because the gate is asked once, when a request arrives.
+
+`NIXAMP_PRICE_CENTS` and `NIXAMP_PASS_MINUTES` change the terms; the defaults are
+100 and 1440, which is the dollar and the day. A server that has agreed to be in
+the directory can also be switched on and off from nixamp.com: the configuration
+rides back on the heartbeat it is already sending.
+
 ## Leaving it running
 
 `nixamp serve` holds a terminal. `nixamp daemon` does not.

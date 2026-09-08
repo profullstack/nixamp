@@ -39,7 +39,8 @@
     "pack:cli": "bun scripts/pack-cli.ts"
   },
   "dependencies": {
-    "@profullstack/hqtui": "^0.3.0"
+    "@profullstack/hqtui": "^0.3.0",
+    "@profullstack/x402-gateway": "^0.4.0"
   },
   "devDependencies": {
     "@types/node": "^26",

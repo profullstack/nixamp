@@ -6,6 +6,7 @@
       "name": "nixamp",
       "dependencies": {
         "@profullstack/hqtui": "^0.3.0",
+        "@profullstack/x402-gateway": "^0.4.0",
       },
       "devDependencies": {
         "@types/node": "^26",
@@ -14,7 +15,7 @@
     },
     "desktop": {
       "name": "@nixamp/desktop",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "devDependencies": {
         "electron": "^44.2.0",
         "electron-builder": "^26.15.3",
@@ -22,7 +23,7 @@
     },
     "web": {
       "name": "@nixamp/web",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "devDependencies": {
         "@types/node": "^26",
         "typescript": "^7.0.2",
@@ -75,6 +76,8 @@
     "@peculiar/webcrypto": ["@peculiar/webcrypto@1.7.1", "", { "dependencies": { "@peculiar/asn1-schema": "^2.7.0", "@peculiar/json-schema": "^1.1.12", "@peculiar/utils": "^2.0.2", "tslib": "^2.8.1", "webcrypto-core": "^1.9.2" } }, "sha512-ODOov0sGMJMf3jPonOkgGqPknTsu+DdQ7kD++gz8aI+aFMOMHFbWAA2taqXXVTdP+OTOQR/znGvSpmkeI0WTYQ=="],
 
     "@profullstack/hqtui": ["@profullstack/hqtui@0.3.0", "", { "bin": { "hqtui": "bin/hqtui.mjs" } }, "sha512-ceiLIarditlryaHqYW1V2VCkF7mlV+u9LJoNB3zEW6FSnRzvugjgLkju4qEsWZSkojeE+lEir5W6nxtuuGzmXw=="],
+
+    "@profullstack/x402-gateway": ["@profullstack/x402-gateway@0.4.0", "", {}, "sha512-Rk3dtpwgi5rOIcHvsRqv7XvbT8rEHyhN/d3zdtsPe8zQfhhYWEjuFuvd/2bIWoWZ6fILQRQOCbejOe2VCRlsNg=="],
 
     "@rolldown/binding-android-arm-eabi": ["@rolldown/binding-android-arm-eabi@1.2.7", "", { "os": "android", "cpu": "arm" }, "sha512-EypzgnYCwyVY4NDHKzGmNJT5b+XaQEBniHxsMdeIQLB/tcCzZnhqrzHpZFbX9iaxx+5RiB8caATBtfvZP7zVxQ=="],
 
