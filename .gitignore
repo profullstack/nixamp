@@ -1,3 +1,10 @@
 node_modules/
 dist/
 *.log
+
+# Built and generated
+web/dist/
+desktop/release/
+desktop/build/icon.png
+.vite/
+desktop/staging/

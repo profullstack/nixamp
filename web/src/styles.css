@@ -1,0 +1,338 @@
+/*
+ * The terminal app's look, in a browser: green on near-black, monospace
+ * throughout, and panels that are drawn as boxes with their title sitting in
+ * the top border — the same shape hqtui draws with box characters.
+ */
+:root {
+  --bg: #080c09;
+  --panel: #0c120e;
+  --edge: #1d2c22;
+  --green: #4af689;
+  --green-dim: #227a4a;
+  --fg: #cfe8d8;
+  --muted: #6d8a79;
+  --warn: #e8c35a;
+  --accent: #7ef0c4;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.45 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+body {
+  /* A very faint scanline, the way the original CRT-era skins looked. */
+  background-image: repeating-linear-gradient(
+    to bottom, rgba(74, 246, 137, 0.025) 0 1px, transparent 1px 3px
+  );
+}
+
+#app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ---- header ------------------------------------------------------------ */
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.brand {
+  color: var(--green);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.status { color: var(--muted); }
+.status[data-playing="true"] { color: var(--green); }
+
+.chip {
+  margin-left: auto;
+  color: var(--muted);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  padding: 1px 10px;
+  font-size: 12px;
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- panels ------------------------------------------------------------ */
+
+.panel {
+  position: relative;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 14px 12px 12px;
+  min-width: 0;
+}
+
+.panel::before {
+  content: attr(data-title);
+  position: absolute;
+  top: -0.72em;
+  left: 10px;
+  padding: 0 6px;
+  background: var(--panel);
+  color: var(--green-dim);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .split { grid-template-columns: 1fr; }
+}
+
+/* ---- now playing ------------------------------------------------------- */
+
+.track-title {
+  color: var(--accent);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-sub {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#video {
+  width: 100%;
+  max-height: 46vh;
+  background: #000;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.scrub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.time { color: var(--fg); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+
+/* ---- ranges ------------------------------------------------------------ */
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 14px;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(var(--edge), var(--edge));
+  border: 1px solid var(--edge);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--edge);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 2px;
+  background: var(--green);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 10px;
+  height: 16px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--green);
+}
+
+input[type="range"]:disabled { opacity: 0.45; cursor: default; }
+
+/* ---- analyser ---------------------------------------------------------- */
+
+#spectrum {
+  display: block;
+  width: 100%;
+  height: 190px;
+  background: #060a07;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+}
+
+.meters {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+
+.glyphs {
+  color: var(--green);
+  letter-spacing: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  min-height: 1.4em;
+}
+
+.levelmeter { margin-left: auto; color: var(--accent); white-space: nowrap; }
+
+/* ---- playlist ---------------------------------------------------------- */
+
+.playlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 214px;
+  overflow-y: auto;
+  scrollbar-color: var(--green-dim) transparent;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.row:hover { background: #142019; }
+.row.selected { background: #16241c; }
+.row.selected .name { color: var(--accent); }
+.row.playing .name { color: var(--green); }
+
+.row .n { color: var(--muted); width: 2.4em; text-align: right; flex: none; }
+.row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.row .time { color: var(--muted); flex: none; }
+
+/* ---- transport --------------------------------------------------------- */
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 8px 10px;
+}
+
+button {
+  font: inherit;
+  color: var(--fg);
+  background: #121a15;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+button:hover { border-color: var(--green-dim); color: var(--green); }
+button:active { transform: translateY(1px); }
+button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
+button.primary { color: var(--green); border-color: var(--green-dim); min-width: 64px; }
+button.ghost { background: transparent; color: var(--muted); }
+
+.volume { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 1; max-width: 220px; }
+.vol { color: var(--muted); font-size: 12px; letter-spacing: 0.08em; }
+
+/* ---- pickers ----------------------------------------------------------- */
+
+.picker { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+.button {
+  display: inline-block;
+  background: #121a15;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+  color: var(--fg);
+}
+
+.button:hover { border-color: var(--green-dim); color: var(--green); }
+.button input[type="file"] { display: none; }
+
+#remote-url {
+  font: inherit;
+  flex: 1;
+  min-width: 12ch;
+  color: var(--fg);
+  background: #060a07;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+
+.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); }
+.check input { accent-color: var(--green); }
+
+.hint { color: var(--muted); margin: 0 0 8px; font-size: 13px; }
+.hint code { color: var(--accent); }
+
+#remote-state[data-status="live"] { color: var(--green); }
+#remote-state[data-status="connecting"] { color: var(--warn); }
+#remote-state[data-status="error"] { color: var(--warn); }
+
+.note {
+  margin: 0;
+  color: var(--warn);
+  border-left: 2px solid var(--warn);
+  padding-left: 8px;
+}
+
+/* ---- status bar -------------------------------------------------------- */
+
+.statusbar {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
+  border-top: 1px solid var(--edge);
+  padding-top: 8px;
+}
+
+.statusbar b { color: var(--green); font-weight: 700; }
+.statusbar .spacer { flex: 1; }
+.statusbar a { color: var(--muted); }

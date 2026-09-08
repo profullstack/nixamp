@@ -1,0 +1,74 @@
+{
+  "name": "@nixamp/desktop",
+  "productName": "nixamp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "nixamp as a desktop app: the PWA in a window, with the CLI bundled in.",
+  "author": "Profullstack, Inc. <anthony@profullstack.com>",
+  "homepage": "https://nixamp.com",
+  "license": "MIT",
+  "main": "main.cjs",
+  "scripts": {
+    "icon": "bun scripts/icon.ts",
+    "stage": "bun scripts/stage-cli.ts",
+    "dev": "bun scripts/ensure-electron.ts && electron .",
+    "build": "bun scripts/ensure-electron.ts && bun scripts/icon.ts && bun scripts/stage-cli.ts && electron-builder --linux --publish never",
+    "build:mac": "bun scripts/ensure-electron.ts && bun scripts/icon.ts && bun scripts/stage-cli.ts && electron-builder --mac --publish never",
+    "pack": "bun scripts/ensure-electron.ts && bun scripts/icon.ts && bun scripts/stage-cli.ts && electron-builder --dir --publish never"
+  },
+  "devDependencies": {
+    "electron": "^44.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "trustedDependencies": ["electron"],
+  "build": {
+    "appId": "com.profullstack.nixamp",
+    "productName": "nixamp",
+    "copyright": "MIT © Profullstack, Inc.",
+    "artifactName": "nixamp-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "staging/cli", "to": "cli", "filter": ["**/*"] }
+    ],
+    "afterPack": "scripts/after-pack.cjs",
+    "npmRebuild": false,
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "executableName": "nixamp",
+      "category": "AudioVideo",
+      "synopsis": "It really whips the terminal's ass.",
+      "description": "A Winamp-shaped player: your own files in the window, and a remote for the nixamp running on your other machine.",
+      "icon": "build/icon.png",
+      "desktop": {
+        "entry": {
+          "Name": "nixamp",
+          "StartupWMClass": "nixamp",
+          "Comment": "It really whips the terminal's ass.",
+          "Categories": "AudioVideo;Audio;Player;"
+        }
+      }
+    },
+    "deb": {
+      "depends": ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0"],
+      "recommends": ["ffmpeg"]
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.music",
+      "icon": "build/icon.png",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "backgroundColor": "#080c09"
+    }
+  }
+}
