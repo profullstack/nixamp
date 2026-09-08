@@ -724,7 +724,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       const follows = options.follows;
 
       if (path === "/api/v1/follows" && request.method === "GET") {
-        json(response, 200, { following: await follows.following(me.id) });
+        const ids = await follows.following(me.id);
+        // An id is not a name. The directory is the only thing that knows what
+        // an account calls itself, from the last stream it announced -- which
+        // is empty for somebody who has never streamed, and the caller decides
+        // what to show for that rather than being handed a blank.
+        json(response, 200, {
+          following: ids.map((id) => ({
+            id,
+            name: options.directory?.nameOf(id) ?? "",
+            live: options.directory?.isLive(id) ?? false,
+          })),
+        });
         return;
       }
 
@@ -1008,7 +1019,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           ...stream,
           callers: onThePhone ? onThePhone.listenersOn(stream.code) : 0,
         }));
-        json(response, 200, { streams, callIn: CALL_IN_NUMBER, now: Date.now() });
+        // Recently ended too, because following exists to hear about
+        // broadcasts you would otherwise miss -- and a list of only what is on
+        // can only be used to follow somebody during a broadcast you did not
+        // miss. No url and no code: there is nothing to listen to.
+        const recent = options.directory.recentlyEnded().map((stream) => ({
+          name: stream.name,
+          ownerId: stream.ownerId,
+          nowPlaying: stream.nowPlaying,
+          endedAt: stream.endedAt,
+        }));
+        json(response, 200, { streams, recent, callIn: CALL_IN_NUMBER, now: Date.now() });
         return;
       }
       if (request.method === "POST") {

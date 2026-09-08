@@ -464,3 +464,14 @@ body.route-directory .player-only { display: none; }
 .toggle input {
   accent-color: var(--accent);
 }
+
+
+/* A recently-live row has no listen button, so its label takes the space the
+   listen button would have. */
+.recent-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.4rem 0.5rem;
+}

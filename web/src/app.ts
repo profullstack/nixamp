@@ -68,6 +68,10 @@ export function start(): void {
     adminRestream: need<HTMLFormElement>("admin-restream"),
     adminSource: need<HTMLInputElement>("admin-source"),
     directory: need<HTMLElement>("directory"),
+    recentNote: need<HTMLParagraphElement>("recent-note"),
+    recentList: need<HTMLUListElement>("recent-list"),
+    followingNote: need<HTMLParagraphElement>("following-note"),
+    followingList: need<HTMLUListElement>("following-list"),
     notifyPanel: need<HTMLElement>("notify-panel"),
     notifyNote: need<HTMLParagraphElement>("notify-note"),
     notifyWeb: need<HTMLInputElement>("notify-web"),
@@ -477,7 +481,12 @@ export function start(): void {
     try {
       const response = await fetch("/api/directory");
       if (!response.ok) throw new Error(String(response.status));
-      streams = ((await response.json()) as { streams?: typeof streams }).streams ?? [];
+      const body = (await response.json()) as {
+        streams?: typeof streams;
+        recent?: RecentStream[];
+      };
+      streams = body.streams ?? [];
+      showRecent(body.recent ?? []);
     } catch {
       dom.directoryNote.textContent = "The directory is not answering. Type an address instead.";
       return;
@@ -642,6 +651,117 @@ export function start(): void {
     })();
   });
 
+  interface RecentStream {
+    name: string;
+    ownerId: string;
+    nowPlaying: string;
+    endedAt: number;
+  }
+
+  /** "12 minutes ago", roughly. Precision here would be false precision. */
+  const ago = (at: number): string => {
+    const minutes = Math.max(1, Math.round((Date.now() - at) / 60000));
+    if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+    const hours = Math.round(minutes / 60);
+    return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  };
+
+  /**
+   * The people who were on recently, and are not on now.
+   *
+   * There is nothing to click through to -- they stopped -- so these are rows
+   * with a follow button and no listen button. That is the whole point of
+   * them: an empty directory used to mean nobody to follow, which made
+   * following useless exactly when it was most useful.
+   */
+  const showRecent = (recent: RecentStream[]): void => {
+    dom.recentList.replaceChildren();
+    const followable = meId ? recent.filter((r) => r.ownerId && r.ownerId !== meId) : [];
+    dom.recentNote.hidden = followable.length === 0;
+    if (followable.length === 0) return;
+
+    for (const stream of followable) {
+      const item = document.createElement("li");
+      const label = document.createElement("span");
+      label.className = "recent-label";
+
+      // textContent, never innerHTML: these names are written by strangers.
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = stream.name;
+      const detail = document.createElement("span");
+      detail.className = "detail";
+      detail.textContent = stream.nowPlaying
+        ? `${stream.nowPlaying} · ended ${ago(stream.endedAt)}`
+        : `ended ${ago(stream.endedAt)}`;
+
+      label.append(name, detail);
+      item.append(label, followButton(stream.ownerId, stream.name));
+      dom.recentList.append(item);
+    }
+  };
+
+  /**
+   * Who you follow, so it can be undone.
+   *
+   * Following was write-only until this: the API could list it and nothing
+   * asked. Somebody who followed a stream once had no way to see it again, let
+   * alone stop it, which is not a thing to ship and call finished.
+   */
+  const loadFollowing = async (): Promise<void> => {
+    dom.followingList.replaceChildren();
+    try {
+      const answer = await fetch("/api/v1/follows");
+      if (!answer.ok) {
+        dom.followingNote.hidden = true;
+        return;
+      }
+      const body = (await answer.json()) as {
+        following?: { id: string; name: string; live: boolean }[];
+      };
+      const list = body.following ?? [];
+      dom.followingNote.hidden = list.length === 0;
+
+      for (const who of list) {
+        const item = document.createElement("li");
+        const label = document.createElement("span");
+        label.className = "recent-label";
+
+        const name = document.createElement("span");
+        name.className = "name";
+        // Somebody who has never streamed has no name we know. Saying so beats
+        // showing a bare account id nobody can recognise.
+        name.textContent = who.name || "a nixamp";
+        const detail = document.createElement("span");
+        detail.className = "detail";
+        detail.textContent = who.live ? "live now" : "not streaming";
+        label.append(name, detail);
+
+        const stop = document.createElement("button");
+        stop.type = "button";
+        stop.className = "ghost follow";
+        stop.textContent = "Unfollow";
+        stop.addEventListener("click", () => {
+          void (async () => {
+            stop.disabled = true;
+            try {
+              await fetch(`/api/v1/follows/${encodeURIComponent(who.id)}`, { method: "DELETE" });
+              item.remove();
+              if (dom.followingList.children.length === 0) dom.followingNote.hidden = true;
+            } finally {
+              stop.disabled = false;
+            }
+          })();
+        });
+
+        item.append(label, stop);
+        dom.followingList.append(item);
+      }
+    } catch {
+      dom.followingNote.hidden = true;
+    }
+  };
+
   /**
    * A follow button that knows its own state.
    *
@@ -681,7 +801,12 @@ export function start(): void {
             headers: { "content-type": "application/json" },
             body: following ? undefined : "{}",
           });
-          if (answer.ok) draw(!following);
+          if (answer.ok) {
+            draw(!following);
+            // The panel is the other half of this: following from the
+            // directory should show up in the list that undoes it.
+            void loadFollowing();
+          }
         } catch {
           // Leave the button as it was rather than lying about the result.
         } finally {
@@ -870,7 +995,15 @@ export function start(): void {
     // Following and notifications belong to an account; there is nowhere to
     // notify a stranger.
     dom.notifyPanel.hidden = !signedIn;
-    if (signedIn) void loadNotify();
+    if (signedIn) {
+      void loadNotify();
+      void loadFollowing();
+    } else {
+      dom.followingNote.hidden = true;
+      dom.followingList.replaceChildren();
+      dom.recentNote.hidden = true;
+      dom.recentList.replaceChildren();
+    }
     dom.accountForm.hidden = signedIn;
     dom.accountSignOut.hidden = !signedIn;
     dom.accountNote.textContent = signedIn
