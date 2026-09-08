@@ -490,6 +490,8 @@ test("when the stream comes back, everyone waiting is texted once", async () => 
   assert.deepEqual(sms.sent.map((m) => m.to).sort(), ["+14155550123", "+14155550124"]);
   assert.match(sms.sent[0]!.text, /Chovy is live now of Top Gun on nixamp/);
   assert.match(sms.sent[0]!.text, /key 482917/);
+  // The text tells them to call the cheap line, the same one /sms names.
+  assert.match(sms.sent[0]!.text, /408-357-2326/);
   // An automated text to a US number has to say how to stop it.
   assert.match(sms.sent[0]!.text, /Reply STOP to opt out/);
 
@@ -545,9 +547,12 @@ test("the opt-in page says the things a carrier and a recipient both need", () =
   const page = optInPage();
   // The consent, quoted as the caller actually hears it.
   assert.match(page, /Press&nbsp;1 to get a text message when they do/);
-  assert.match(page, /888-766-6818/);
+  // The local line, not the toll-free one: it is the number we publish because
+  // it is the only one that can reach channel billing.
+  assert.match(page, /408-357-2326/);
   // The number that sends is not the number you call, and the page says so.
   assert.match(page, /408-426-9127/);
+  assert.ok(!page.includes("888-766-6818"), "the vanity toll-free is not what we publish");
   // The four lines a US A2P programme is required to carry.
   assert.match(page, /Reply <strong>STOP<\/strong>/);
   assert.match(page, /Reply <strong>HELP<\/strong>/);

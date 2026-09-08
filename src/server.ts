@@ -1562,6 +1562,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
             apiKey: process.env["TELNYX_API_KEY"],
             publicKey: process.env["TELNYX_PUBLIC_KEY"],
             streams: directory,
+            callIn: CALL_IN_NUMBER,
             // Only when a sending number is configured. Without one the line
             // still answers and still says when the stream ended; it just does
             // not offer a text it could not send.
