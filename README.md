@@ -48,6 +48,18 @@ curl -fsSL https://nixamp.com/install.sh | sh -s -- --version 0.1.0
 curl -fsSL https://nixamp.com/install.sh | sh -s -- --prefix ~/opt
 ```
 
+On Windows, in PowerShell:
+
+```
+irm https://nixamp.com/install.ps1 | iex
+```
+
+That lands under `%LOCALAPPDATA%\nixamp`, adds itself to your user PATH, and
+needs no administrator rights. Nothing is code signed, so SmartScreen will warn
+the first time.
+
+Builds are published for Linux, macOS and Windows, on both x64 and arm64.
+
 Then:
 
 ```

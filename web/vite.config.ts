@@ -10,7 +10,7 @@ import { writeIcons } from "./scripts/icons.ts";
 
 const here = new URL(".", import.meta.url).pathname;
 const publicDir = resolve(here, "public");
-const INSTALLER = "install.sh";
+const INSTALLERS = ["install.sh", "install.ps1"];
 
 /** Every file under `dir`, as web paths. */
 function walk(dir: string, base = dir): string[] {
@@ -42,22 +42,24 @@ function icons(): Plugin {
 }
 
 /**
- * The one file on the site that is not part of the app: the installer, served
- * at /install.sh so `curl -fsSL https://nixamp.com/install.sh | sh` reaches the
- * same script the repo ships. Emitted from source rather than copied into
- * public/, because two copies of an installer drift and only one of them is
- * the one people run.
+ * The files on the site that are not part of the app: the installers, served at
+ * /install.sh and /install.ps1 so the documented one-liners reach the same
+ * scripts the repo ships. Emitted from source rather than copied into public/,
+ * because two copies of an installer drift and only one of them is the one
+ * people run.
  */
 function installer(): Plugin {
   return {
     name: "nixamp-installer",
     apply: "build",
     generateBundle() {
-      this.emitFile({
-        type: "asset",
-        fileName: INSTALLER,
-        source: readFileSync(resolve(here, "..", "scripts", "install.sh"), "utf8"),
-      });
+      for (const name of INSTALLERS) {
+        this.emitFile({
+          type: "asset",
+          fileName: name,
+          source: readFileSync(resolve(here, "..", "scripts", name), "utf8"),
+        });
+      }
     },
   };
 }
@@ -72,7 +74,7 @@ function serviceWorker(version: string): Plugin {
     apply: "build",
     generateBundle(_options, bundle) {
       const emitted = Object.keys(bundle)
-        .filter((file) => file !== INSTALLER)
+        .filter((file) => !INSTALLERS.includes(file))
         .map((file) => `/${file}`);
       // Public files are copied straight through and never appear in the bundle.
       const statics = walk(publicDir).filter((file) => !file.endsWith(".map"));

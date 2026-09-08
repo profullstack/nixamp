@@ -23,6 +23,9 @@ export interface Manifest {
 
 const SITE = "https://nixamp.com";
 
+/** Windows has its own installer, its own shim and its own removal script. */
+const windows = process.platform === "win32";
+
 /**
  * Where the installer put things. `NIXAMP_HOME` is exported by the shim it
  * wrote, which is the only thing that knows for certain; the walk up from this
@@ -64,7 +67,11 @@ function notInstalled(what: string): number {
   console.error("");
   console.error("  Installed with npm or bun:  npm uninstall -g nixamp");
   console.error("  Running from a checkout:    delete the checkout");
-  console.error(`  Wanted the installed one:   curl -fsSL ${SITE}/install.sh | sh`);
+  console.error(
+    windows
+      ? `  Wanted the installed one:   irm ${SITE}/install.ps1 | iex`
+      : `  Wanted the installed one:   curl -fsSL ${SITE}/install.sh | sh`,
+  );
   return 69;
 }
 
@@ -78,12 +85,25 @@ export function update(argv: string[]): number {
   const manifest = root ? readManifest(root) : null;
   if (!root || !manifest) return notInstalled("update");
 
-  const installer = manifest.installer || `${SITE}/install.sh`;
-  const args = ["-s", "--", manifest.desktop ? "--desktop" : "--cli-only", "--prefix", manifest.prefix];
+  const installer = manifest.installer || `${SITE}/${windows ? "install.ps1" : "install.sh"}`;
   const wanted = argv.find((a) => !a.startsWith("-"));
-  if (wanted) args.push("--version", wanted);
 
   console.log(`nixamp ${manifest.version} is installed. Fetching the installer...`);
+
+  if (windows) {
+    // PowerShell fetches and runs it in one expression, which is also the
+    // documented install line, so an update takes a fresh install's path.
+    const flags = [manifest.desktop ? "" : "-CliOnly", "-Prefix", quote(manifest.prefix)];
+    if (wanted) flags.push("-Version", quote(wanted));
+    const expression = `& ([scriptblock]::Create((irm ${installer}))) ${flags.filter(Boolean).join(" ")}`;
+    const run = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", expression], {
+      stdio: "inherit",
+    });
+    return run.status ?? 1;
+  }
+
+  const args = ["-s", "--", manifest.desktop ? "--desktop" : "--cli-only", "--prefix", manifest.prefix];
+  if (wanted) args.push("--version", wanted);
 
   const fetcher = which("curl") ? ["curl", "-fsSL", installer] : which("wget") ? ["wget", "-qO-", installer] : null;
   if (!fetcher) {
@@ -118,15 +138,22 @@ export function uninstall(argv: string[]): number {
     return 0;
   }
 
-  const script = join(root, "uninstall.sh");
+  const script = join(root, windows ? "uninstall.ps1" : "uninstall.sh");
   if (!existsSync(script)) {
     console.error(`nixamp: ${script} is missing, so removal cannot be exact.`);
     console.error(`  The manifest lists: ${manifest.paths.join(", ")}`);
     return 1;
   }
 
-  const run = spawnSync("sh", [script], { stdio: "inherit" });
+  const run = windows
+    ? spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script], { stdio: "inherit" })
+    : spawnSync("sh", [script], { stdio: "inherit" });
   return run.status ?? 1;
+}
+
+/** A PowerShell single-quoted string: the only escape inside one is a doubled quote. */
+function quote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
 }
 
 function which(command: string): boolean {

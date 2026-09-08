@@ -14,7 +14,8 @@ import {
 } from "./audio.ts";
 import { Analyser, bandEdges, bands, decay } from "./fft.ts";
 import { version } from "./meta.ts";
-import { displayName, loadPlaylist } from "./playlist.ts";
+import { displayName, loadSource } from "./playlist.ts";
+import { isRemote } from "./sources.ts";
 import { DEFAULT_PORT } from "./server.ts";
 
 const FFT_SIZE = 2048;
@@ -71,9 +72,11 @@ const HELP = `nixamp — it really whips the terminal's ass.
 
 Options for serve:
   -p, --port N     port to listen on (default ${DEFAULT_PORT})
-  -h, --host HOST  address to bind (default 127.0.0.1; 0.0.0.0 for the LAN)
+  -h, --host HOST  address to bind (default 0.0.0.0, every interface)
       --web DIR    directory of built PWA files to serve at /
       --no-media   do not stream the library's bytes to remotes
+      --no-key     serve to anyone who can reach the port, with no share link
+      --open-port  let the port through the local firewall, and close it on exit
 
   -v, --version    print the version
       --help       print this
@@ -100,9 +103,12 @@ export async function main(): Promise<void> {
   if (first === "--version" || first === "-v") { console.log(version()); return; }
   if (first === "--help") { console.log(HELP); return; }
 
-  const target = resolve(first ?? ".");
+  // resolve() would turn https://host/x into /cwd/https:/host/x, so a URL is
+  // left exactly as it was typed.
+  const asked = first ?? ".";
+  const target = isRemote(asked) ? asked : resolve(asked);
   const tools = detectTools();
-  const tracks = loadPlaylist(tools, target);
+  const tracks = await loadSource(tools, target);
   if (tracks.length === 0) {
     console.error(`nixamp: no audio files under ${target}`);
     process.exit(1);

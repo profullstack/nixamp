@@ -12,13 +12,27 @@
 import { createReadStream, statSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
+import { spawn, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { isRemote } from "./sources.ts";
+import {
+  elevate,
+  firewallInUse,
+  keyCookie,
+  keyFrom,
+  keysMatch,
+  newKey,
+  portCommands,
+  reachableAddresses,
+  shareLink,
+} from "./share.ts";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import {
   detectTools, peaks, RATE, Stream, toMono,
   type Tools, type Track,
 } from "./audio.ts";
 import { Analyser, bandEdges, bands, decay } from "./fft.ts";
-import { loadPlaylist } from "./playlist.ts";
+import { loadSource } from "./playlist.ts";
 import {
   emptySnapshot, parseCommand,
   type Command, type RemoteTrack, type Snapshot,
@@ -36,6 +50,16 @@ export interface ServeOptions {
   web: string | null;
   /** Stream the library's bytes to remotes. Off keeps the audio on this box. */
   media: boolean;
+  /**
+   * Require the key from the share link. Off serves to anyone who can reach the
+   * port, which is what the public deployment wants and no private one does.
+   */
+  key: boolean;
+  /**
+   * Ask the local firewall to let the port through, and put it back on the way
+   * out. Off by default because it changes the machine, not just this process.
+   */
+  openPort: boolean;
 }
 
 /**
@@ -48,9 +72,14 @@ export function parseServeArgs(argv: string[]): ServeOptions {
   const options: ServeOptions = {
     root: ".",
     port: Number.isInteger(fromEnv) && fromEnv > 0 && fromEnv <= 65535 ? fromEnv : DEFAULT_PORT,
-    host: "127.0.0.1",
+    // Every interface, because a player nobody else can reach is not much of a
+    // remote. The key in the link is what makes that safe; --no-key gives up
+    // both at once, and --host pins it back to one address.
+    host: "0.0.0.0",
     web: null,
     media: true,
+    key: true,
+    openPort: false,
   };
   let sawRoot = false;
   for (let i = 0; i < argv.length; i++) {
@@ -73,6 +102,10 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.web = value();
     } else if (arg === "--no-media") {
       options.media = false;
+    } else if (arg === "--no-key") {
+      options.key = false;
+    } else if (arg === "--open-port") {
+      options.openPort = true;
     } else if (arg.startsWith("-")) {
       throw new Error(`nixamp serve: unknown option ${arg}`);
     } else if (!sawRoot) {
@@ -93,6 +126,7 @@ const TYPES: Record<string, string> = {
   // The installer, so `curl https://nixamp.com/install.sh` is readable rather
   // than a download prompt.
   ".sh": "text/x-shellscript; charset=utf-8",
+  ".ps1": "text/plain; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".ico": "image/x-icon",
@@ -420,6 +454,10 @@ export interface HandlerOptions {
   web: string | null;
   media: boolean;
   version: string;
+  /** The key from the share link, or null to serve to anyone who can connect. */
+  key?: string | null;
+  /** How to run ffmpeg, for the sources a browser cannot play by itself. */
+  ffmpeg?: string[];
 }
 
 /**
@@ -430,11 +468,37 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
   return async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://localhost");
     const path = url.pathname;
+    const key = options.key ?? null;
 
     if (request.method === "OPTIONS") {
       response.writeHead(204, CORS);
       response.end();
       return;
+    }
+
+    // Opening the share link is what hands a browser its key. It comes back as
+    // a cookie, so every later fetch, EventSource and <audio src> carries it
+    // without the page knowing anything about keys.
+    if (key !== null && path.startsWith("/s/")) {
+      const offered = decodeURIComponent(path.slice("/s/".length));
+      if (!keysMatch(offered, key)) {
+        json(response, 404, { error: "not found" });
+        return;
+      }
+      response.writeHead(302, { ...CORS, "set-cookie": keyCookie(key), location: "/" });
+      response.end();
+      return;
+    }
+
+    // /api/health answers unauthenticated on purpose: it is how you check the
+    // port is open from another device before wondering whether the link is
+    // wrong, and it says nothing about the library.
+    if (key !== null && path !== "/api/health") {
+      const offered = keyFrom(request, url);
+      if (offered === null || !keysMatch(offered, key)) {
+        json(response, 401, { error: "this nixamp needs the key from its share link" });
+        return;
+      }
     }
 
     if (path === "/api/health") {
@@ -509,6 +573,25 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    // Whatever the source is, this comes back as MP3 a browser will play:
+    // a flac, a wma, a URL, an HLS stream. ffmpeg reads them all and we hand
+    // the bytes on as they arrive, so a live stream starts immediately rather
+    // than after it ends, which for a live stream is never.
+    if (path.startsWith("/api/stream/")) {
+      const index = Number(path.slice("/api/stream/".length));
+      const source = Number.isInteger(index) ? engine.trackPath(index) : undefined;
+      if (source === undefined) {
+        json(response, 404, { error: "no such track" });
+        return;
+      }
+      if (!options.media) {
+        json(response, 403, { error: "media streaming is off" });
+        return;
+      }
+      transcode(request, response, source, options.ffmpeg ?? ["ffmpeg"]);
+      return;
+    }
+
     if (path.startsWith("/api/")) {
       json(response, 404, { error: "no such endpoint" });
       return;
@@ -533,6 +616,101 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
 
     json(response, 404, { error: "not found" });
   };
+}
+
+/** Read a file, or null. The firewall probe asks about files it may not have. */
+function readIfPossible(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Decode anything and hand back MP3, as it is produced.
+ *
+ * No seeking: this is a pipe, and the length is not known until it ends. The
+ * player falls back to /api/media for a local file it can seek, and uses this
+ * for everything else.
+ */
+function transcode(
+  request: IncomingMessage,
+  response: ServerResponse,
+  source: string,
+  ffmpeg: string[],
+): void {
+  const [command, ...prefix] = ffmpeg as [string, ...string[]];
+  const child = spawn(
+    command,
+    [
+      ...prefix,
+      "-hide_banner",
+      "-loglevel", "error",
+      // Reconnect through the sort of hiccup a long stream runs into. These
+      // belong to the http protocol, and ffmpeg rejects the whole command
+      // when they are handed to it for a file on disk.
+      ...(isRemote(source) ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] : []),
+      "-i", source,
+      "-vn",
+      "-f", "mp3",
+      "-b:a", "192k",
+      "-",
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+
+  let failed = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    // Keep the tail: ffmpeg says what went wrong on its last line.
+    failed = (failed + chunk.toString()).slice(-2000);
+  });
+
+  let started = false;
+  const begin = (): void => {
+    if (started) return;
+    started = true;
+    response.writeHead(200, {
+      ...CORS,
+      "content-type": "audio/mpeg",
+      "cache-control": "no-store",
+      // Length is unknowable up front, and a browser is happy without it.
+      "transfer-encoding": "chunked",
+    });
+  };
+  // Wait for a first byte before promising success. ffmpeg rejects a bad option
+  // or a missing input immediately, and answering 200 with nothing looks the
+  // same from a player as a track that is simply silent.
+  child.stdout.once("data", begin);
+  // Both ends can fail: a listener closing the tab breaks the socket under the
+  // pipe, and an EPIPE nobody is listening for takes the process down.
+  child.stdout.on("error", () => child.kill("SIGKILL"));
+  response.on("error", () => child.kill("SIGKILL"));
+  child.stdout.pipe(response);
+
+  child.on("error", (error) => {
+    console.error(`nixamp: ffmpeg could not start: ${error.message}`);
+    if (!response.headersSent) json(response, 500, { error: "ffmpeg could not start" });
+    else response.end();
+  });
+  child.on("close", (code) => {
+    const message = failed.trim();
+    if (code !== 0 && code !== null) console.error(`nixamp: ffmpeg exited ${code}: ${message}`);
+    if (!started) {
+      // Nothing was ever produced, so the status can still tell the truth.
+      json(response, 502, { error: "could not decode that source", detail: message.split("\n").pop() ?? "" });
+      return;
+    }
+    response.end();
+  });
+
+  // A listener that closes the tab should not leave an ffmpeg decoding into
+  // nothing for the rest of the album.
+  const stop = (): void => {
+    child.kill("SIGKILL");
+  };
+  request.on("close", stop);
+  response.on("close", stop);
 }
 
 function isFile(path: string): boolean {
@@ -592,38 +770,117 @@ export function createServer(engine: Engine, options: HandlerOptions): Server {
   });
 }
 
-/** Where a remote on another device should point its browser. */
-export function addressesFor(host: string, port: number): string[] {
-  if (host !== "0.0.0.0" && host !== "::") return [`http://${host}:${port}`];
-  const out = [`http://localhost:${port}`];
-  for (const entries of Object.values(networkInterfaces())) {
-    for (const entry of entries ?? []) {
-      if (entry.family === "IPv4" && !entry.internal) out.push(`http://${entry.address}:${port}`);
-    }
-  }
-  return out;
-}
 
 export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const options = parseServeArgs(argv);
-  const root = resolve(options.root);
+  const root = isRemote(options.root) ? options.root : resolve(options.root);
   const tools = detectTools();
-  const tracks = loadPlaylist(tools, root);
+  const tracks = await loadSource(tools, root);
   const engine: Engine = tracks.length > 0
     ? new PlayerEngine(tracks, root, tools)
     : new EmptyEngine(`No audio files under ${root}.`);
 
   const web = options.web !== null ? resolve(options.web) : defaultWebDir();
-  const server = createServer(engine, { web, media: options.media, version });
+  const key = options.key ? newKey() : null;
+  const server = createServer(engine, { web, media: options.media, version, key, ffmpeg: tools.ffmpeg });
 
-  await new Promise<void>((done) => server.listen(options.port, options.host, done));
+  // A port already in use is the most ordinary failure there is, and it
+  // arrives as an unhandled 'error' event that takes the process down with a
+  // stack trace nobody reads.
+  await new Promise<void>((done, fail) => {
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      fail(
+        new Error(
+          error.code === "EADDRINUSE"
+            ? `nixamp: port ${options.port} is already in use. Pass --port to pick another.`
+            : error.code === "EACCES"
+              ? `nixamp: not allowed to listen on port ${options.port}. Ports below 1024 need root.`
+              : `nixamp: could not listen on ${options.host}:${options.port}: ${error.message}`,
+        ),
+      );
+    });
+    server.listen(options.port, options.host, done);
+  });
   const bound = server.address();
   const port = typeof bound === "object" && bound !== null ? bound.port : options.port;
+
+  const io = {
+    read: readIfPossible,
+    run: (command: string, args: string[]) => {
+      const done = spawnSync(command, args, { encoding: "utf8" });
+      return { status: done.status, stdout: done.stdout ?? "" };
+    },
+  };
+
   console.log(`nixamp serve — ${tracks.length} tracks under ${root}`);
-  for (const address of addressesFor(options.host, port)) console.log(`  ${address}`);
-  if (web === null) console.log("  (no built PWA found — run `bun run web:build` to serve one)");
+  console.log("");
+
+  // The link, not the address. Without the key the address is a 401, so
+  // printing a bare host:port would be printing something that does not work.
+  const addresses = reachableAddresses(options.host, port);
+  const width = Math.max(...addresses.map((a) => a.label.length));
+  for (const { label, url } of addresses) {
+    console.log(`  ${label.padEnd(width)}  ${shareLink(url, key)}`);
+  }
+
+  console.log("");
+  if (key === null) {
+    console.log("  No key: anyone who can reach this port can drive it and hear it.");
+  } else {
+    console.log("  Open that link once on a phone or a laptop and it stays signed in.");
+    console.log(`  Anything without the key gets a 401. Key: ${key}`);
+  }
+  if (addresses.some((a) => a.label === "on the internet")) {
+    console.log("");
+    console.log(
+      key === null
+        ? "  The public address is open to anyone: --no-key means no key. --host 127.0.0.1 keeps it here."
+        : "  The public address works from anywhere, for anyone with the key. --host 127.0.0.1 keeps it here.",
+    );
+  }
+  if (!options.media) console.log("  Audio stays on this machine: --no-media is set.");
+  if (web === null) console.log("  No built PWA found, so / has nothing to serve: run `bun run web:build`.");
+
+  // Listening on every interface proves the socket is open here and nothing
+  // about the path between here and the phone.
+  const listening = options.host === "0.0.0.0" || options.host === "::";
+  const firewall = listening ? firewallInUse(io) : null;
+  let closePort: (() => void) | null = null;
+
+  if (firewall !== null) {
+    const { open, close } = portCommands(firewall, port);
+    if (!options.openPort) {
+      console.log("");
+      console.log(`  ${firewall} is running, so other devices cannot reach this port yet:`);
+      console.log(`    sudo ${open.join(" ")}`);
+      console.log("  or start with --open-port and nixamp will do it, and undo it on exit.");
+    } else {
+      const elevated = elevate(io, open);
+      if (elevated === null) {
+        console.log("");
+        console.log(`  --open-port needs root or passwordless sudo. Run this yourself:`);
+        console.log(`    sudo ${open.join(" ")}`);
+      } else {
+        const done = spawnSync(elevated[0] as string, elevated.slice(1), { encoding: "utf8" });
+        if (done.status === 0) {
+          console.log("");
+          console.log(`  Opened ${port}/tcp in ${firewall}. It closes again when this exits.`);
+          // Leave the machine as it was found. A player should not be the
+          // reason a port is still open next week.
+          closePort = () => {
+            const undo = elevate(io, close);
+            if (undo) spawnSync(undo[0] as string, undo.slice(1), { stdio: "ignore" });
+          };
+        } else {
+          console.log("");
+          console.log(`  Could not open the port: ${(done.stderr || done.stdout || "").trim() || "unknown error"}`);
+        }
+      }
+    }
+  }
 
   const shutdown = (): void => {
+    closePort?.();
     engine.stop();
     server.close(() => process.exit(0));
     // A hung keep-alive should not outlive a ctrl-c.
