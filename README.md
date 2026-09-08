@@ -103,6 +103,51 @@ something else.
 Entries expire a few minutes after a stream stops renewing, so the list is
 always what is actually live.
 
+## Streaming into it
+
+A nixamp can be the thing you broadcast *to*, not just from.
+
+```
+nixamp serve ~/Music --rtmp-in 1935
+```
+
+Then point OBS, Larix, or another ffmpeg at the URL it prints. RTMP is what
+every native broadcaster already speaks, so there is no nixamp-shaped client to
+install. ffmpeg does the listening, so this costs no extra dependency.
+
+A browser cannot speak RTMP at all, so the web app uses HTTP instead: one long
+`POST /api/ingest` where the platform allows a streaming request body, and
+`POST /api/ingest/chunk` where it does not. All three end up in the same place.
+
+One publisher at a time. A second is refused rather than mixed.
+
+## Broadcasting out
+
+Out to as many places as you like, at once:
+
+```
+nixamp serve ~/Music --rtmp youtube=<key> --rtmp x=<key> --rtmp tiktok=<key>
+```
+
+`youtube`, `x`, `facebook`, `tiktok`, `twitch` and `kick` are known by name and
+need only a key; anything else takes a full `rtmp://host/app/key`.
+
+One ffmpeg, one encode, many outputs, through the `tee` muxer. An ffmpeg per
+destination is the obvious shape and it encodes the same frames four times.
+Every output carries `onfail=ignore`, so one destination with an expired key
+cannot take the others down with it.
+
+The encoder settings come from PairUX, which learned them against the real
+platforms: a one-second keyframe interval because YouTube stalls on ffmpeg's
+default, a forced constant frame rate because a variable-rate source makes
+YouTube report a stream falling behind, and `yuv420p` because that is what RTMP
+platforms accept. Music has no picture, so a flat colour is generated: RTMP
+wants a video track either way.
+
+Stream keys are read from the command line or the environment and never from a
+request. `/api/broadcast/destinations` shows names and URLs with the keys
+redacted.
+
 ## Paying to listen
 
 A stream serving a handful of friends costs nothing and asks nothing. Past five

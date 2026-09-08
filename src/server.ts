@@ -15,6 +15,15 @@ import { hostname, networkInterfaces } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { Connections, type Kind } from "./connections.ts";
+import {
+  Broadcaster,
+  DEFAULT_ENCODER,
+  type Destination,
+  type EncoderSettings,
+  PRESETS,
+  redact,
+} from "./broadcast.ts";
+import { Ingest, normaliseFormat } from "./ingest.ts";
 import { Directory, parseAnnouncement } from "./directory.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
@@ -94,6 +103,18 @@ export interface ServeOptions {
    * useless without somewhere to pay: see NIXAMP_PAY_TO.
    */
   x402: boolean;
+  /** Accept a live stream from a phone or a desktop, over HTTP. */
+  ingest: boolean;
+  /**
+   * Also listen for RTMP publishers on this port, which is what OBS, Larix and
+   * anything else native speaks. 0 means do not.
+   */
+  rtmpIn: number;
+  /**
+   * RTMP destinations, as `name=rtmp://host/app/key` or `youtube=key` for one
+   * of the presets. Repeatable.
+   */
+  rtmp: string[];
 }
 
 /**
@@ -119,6 +140,9 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     publish: "ask",
     name: "",
     x402: false,
+    ingest: false,
+    rtmpIn: 0,
+    rtmp: [],
   };
   let sawRoot = false;
   for (let i = 0; i < argv.length; i++) {
@@ -155,6 +179,18 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.publish = "no";
     } else if (arg === "--name") {
       options.name = value();
+    } else if (arg === "--ingest") {
+      options.ingest = true;
+    } else if (arg === "--rtmp-in") {
+      const port = Number(value());
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error("nixamp serve: --rtmp-in must be a port number");
+      }
+      options.rtmpIn = port;
+      // Listening for RTMP is accepting a live stream, so it implies --ingest.
+      options.ingest = true;
+    } else if (arg === "--rtmp") {
+      options.rtmp.push(value());
     } else if (arg === "--x402") {
       options.x402 = true;
     } else if (arg === "--no-x402") {
@@ -548,6 +584,12 @@ export interface HandlerOptions {
   directory?: Directory;
   /** Answers a request itself when listening has to be paid for. */
   paywall?: (request: IncomingMessage, response: ServerResponse, path: string) => Promise<boolean>;
+  /** Live audio coming in from a phone or a desktop. */
+  ingest?: Ingest;
+  /** Live audio going out to RTMP. */
+  broadcaster?: Broadcaster;
+  /** Where a broadcast should send, and what it should look like. */
+  broadcast?: () => { destinations: Destination[]; settings: EncoderSettings };
 }
 
 /**
@@ -662,6 +704,127 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // After the key check: a paying listener still needs the link, and a 402
     // is a worse answer than a 401 to someone who has neither.
     if (options.paywall && (await options.paywall(request, response, path))) return;
+
+    // --- streaming in ---------------------------------------------------
+    //
+    // Both shapes write into the same ffmpeg, so everything downstream cannot
+    // tell which one a sender used.
+    if (path === "/api/ingest" && options.ingest) {
+      if (request.method === "GET") {
+        json(response, 200, options.ingest.status());
+        return;
+      }
+      if (request.method === "DELETE") {
+        options.ingest.close();
+        json(response, 200, { ok: true });
+        return;
+      }
+      if (request.method !== "POST") {
+        json(response, 405, { error: "GET, POST or DELETE" });
+        return;
+      }
+
+      const format = normaliseFormat(url.searchParams.get("format") ?? request.headers["content-type"]);
+      if (format === null) {
+        json(response, 415, { error: "give a container ffmpeg knows: webm, ogg, mp4, mp3, wav" });
+        return;
+      }
+
+      const session = options.ingest.open(url.searchParams.get("name") ?? "", format);
+      if (session === null) {
+        // Somebody else is already broadcasting, which is a different problem
+        // from the request being wrong.
+        json(response, 409, { error: "something is already streaming in" });
+        return;
+      }
+
+      try {
+        await options.ingest.pump(request);
+      } catch {
+        // A sender that hung up is not an error worth a 500.
+      }
+      options.ingest.close();
+      json(response, 200, { ok: true, bytes: session.bytes });
+      return;
+    }
+
+    // A browser cannot stream a request body over plain HTTP/1.1, so a phone
+    // sends its recording a chunk at a time instead.
+    if (path === "/api/ingest/chunk" && options.ingest) {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "POST only" });
+        return;
+      }
+      if (!options.ingest.live) {
+        const format = normaliseFormat(url.searchParams.get("format") ?? request.headers["content-type"]);
+        if (format === null) {
+          json(response, 415, { error: "give a container ffmpeg knows: webm, ogg, mp4, mp3, wav" });
+          return;
+        }
+        if (options.ingest.open(url.searchParams.get("name") ?? "", format) === null) {
+          json(response, 409, { error: "something is already streaming in" });
+          return;
+        }
+      }
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(chunk as Buffer);
+      options.ingest.write(Buffer.concat(chunks));
+      json(response, 200, options.ingest.status());
+      return;
+    }
+
+    // --- broadcasting out -------------------------------------------------
+    if (path === "/api/broadcast" && options.broadcaster) {
+      if (request.method === "GET") {
+        json(response, 200, options.broadcaster.status());
+        return;
+      }
+      if (request.method === "DELETE") {
+        options.broadcaster.stop();
+        json(response, 200, options.broadcaster.status());
+        return;
+      }
+      if (request.method !== "POST") {
+        json(response, 405, { error: "GET, POST or DELETE" });
+        return;
+      }
+
+      let source = "";
+      try {
+        source = String((JSON.parse(await readBody(request)) as { source?: unknown }).source ?? "");
+      } catch {
+        json(response, 400, { error: "bad JSON" });
+        return;
+      }
+      const current = engine.snapshot();
+      const chosen = source || engine.trackPath(current.index) || "";
+      if (!chosen) {
+        json(response, 422, { error: "nothing to broadcast" });
+        return;
+      }
+
+      const plan = options.broadcast?.() ?? { destinations: [], settings: DEFAULT_ENCODER };
+      const started = options.broadcaster.start({
+        source: chosen,
+        destinations: plan.destinations,
+        settings: plan.settings,
+        webAudio: false,
+        // Music has no picture, and RTMP platforms insist on a video track.
+        needsVideo: true,
+      });
+      if (!started.ok) {
+        json(response, 422, { error: started.error });
+        return;
+      }
+      json(response, 200, options.broadcaster.status());
+      return;
+    }
+
+    // Names and URLs, never a key.
+    if (path === "/api/broadcast/destinations" && options.broadcast) {
+      json(response, 200, { destinations: options.broadcast().destinations.map(redact) });
+      return;
+    }
 
     if (path === "/api/state") {
       json(response, 200, engine.snapshot());
@@ -1010,9 +1173,24 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       key !== null && scopeOf(keyFrom(request, new URL(request.url ?? "/", "http://localhost")), key, null) === "control",
   });
 
+  const destinations = parseDestinations(options.rtmp);
+  const broadcaster = new Broadcaster(tools.ffmpeg);
+  const ingest = options.ingest
+    ? new Ingest({
+        ffmpeg: tools.ffmpeg,
+        sink: "pipe:1",
+        onStart: (session) => console.log(`  ${session.name} started streaming in (${session.format}).`),
+        onEnd: (session, error) =>
+          console.log(`  ${session.name} stopped streaming in${error ? `: ${error}` : ""}.`),
+      })
+    : undefined;
+
   const server = createServer(engine, {
     web,
     media: options.media,
+    ...(ingest ? { ingest } : {}),
+    broadcaster,
+    broadcast: () => ({ destinations, settings: DEFAULT_ENCODER }),
     version,
     key,
     listenKey,
@@ -1090,6 +1268,17 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     );
   }
   if (!options.media) console.log("  Audio stays on this machine: --no-media is set.");
+  if (options.ingest) console.log("  Accepting a live stream in at POST /api/ingest.");
+  if (options.rtmpIn > 0 && ingest) {
+    const publish = addresses.find((a) => a.label !== "here") ?? addresses[0];
+    const host = publish ? new URL(publish.url).hostname : "127.0.0.1";
+    ingest.listenRtmp(options.rtmpIn, listenKey ?? "live");
+    console.log(`  Or publish to it from OBS, Larix or ffmpeg:`);
+    console.log(`    rtmp://${host}:${options.rtmpIn}/live/${listenKey ?? "live"}`);
+  }
+  if (destinations.length > 0) {
+    console.log(`  Ready to broadcast to ${destinations.map((d) => d.name).join(", ")}.`);
+  }
   if (web === null) console.log("  No built PWA found, so / has nothing to serve: run `bun run web:build`.");
 
   // Listening on every interface proves the socket is open here and nothing
@@ -1173,6 +1362,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   }
 
   const shutdown = (): void => {
+    ingest?.stopRtmp();
+    ingest?.close();
+    broadcaster.stop();
     void publisher?.stop();
     closePort?.();
     engine.stop();
@@ -1182,6 +1374,43 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+}
+
+/**
+ * `--rtmp youtube=<key>` or `--rtmp name=rtmp://host/app/key`.
+ *
+ * A key is a password, so it is taken from the command line or the environment
+ * and never from a request: a client that could name its own destination could
+ * point your broadcast at itself.
+ */
+export function parseDestinations(specs: string[]): Destination[] {
+  const out: Destination[] = [];
+  for (const [index, spec] of specs.entries()) {
+    const at = spec.indexOf("=");
+    if (at <= 0) continue;
+    const name = spec.slice(0, at).trim();
+    const rest = spec.slice(at + 1).trim();
+    if (!name || !rest) continue;
+
+    const preset = PRESETS[name.toLowerCase()];
+    if (preset && !/^rtmps?:\/\//i.test(rest)) {
+      out.push({ id: String(index + 1), name, url: preset, key: rest, enabled: true });
+      continue;
+    }
+    if (!/^rtmps?:\/\//i.test(rest)) continue;
+
+    // A full URL: the last path segment is the key.
+    const cut = rest.lastIndexOf("/");
+    if (cut <= "rtmp://".length) continue;
+    out.push({
+      id: String(index + 1),
+      name,
+      url: rest.slice(0, cut),
+      key: rest.slice(cut + 1),
+      enabled: true,
+    });
+  }
+  return out;
 }
 
 /** The built PWA, when it is sitting next to us in the same install. */
