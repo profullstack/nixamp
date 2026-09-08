@@ -29,7 +29,11 @@ async function realBars(): Promise<number[]> {
     const [cmd, ...rest] = tools.ffmpeg;
     const made = spawnSync(cmd as string, [
       ...rest, "-hide_banner", "-loglevel", "error",
-      "-f", "lavfi", "-i", "anoisesrc=d=2:c=pink:a=0.6",
+      // Seeded. anoisesrc defaults to seed=-1, which is random per run, so the
+      // bars -- and therefore the committed screenshot -- differed on every
+      // capture. The source is still real audio; it is just the same real
+      // audio each time.
+      "-f", "lavfi", "-i", "anoisesrc=d=2:c=pink:a=0.6:seed=20260908",
       "-af", "volume=1.5,bass=g=12,treble=g=-6",
       "-ac", "2", "-ar", String(RATE), file,
     ], { timeout: 60_000 });
