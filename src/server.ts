@@ -29,9 +29,12 @@ import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
 import { needsAdmin, Owner } from "./owner.ts";
 import { readSession } from "./session.ts";
-import { Directory, parseAnnouncement } from "./directory.ts";
+import { Directory, parseAnnouncement, type Listing } from "./directory.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
 import { CALL_IN_NUMBER, OPT_IN_PATH, optInPage } from "./optin.ts";
+import pg from "pg";
+import { Follows, phoneFrom } from "./follows.ts";
+import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
   applyRemoteConfig,
@@ -628,6 +631,14 @@ export interface HandlerOptions {
    * Only nixamp.com passes this; a nixamp on a laptop has no number.
    */
   partyLine?: PartyLine;
+  /**
+   * Following broadcasters, and where to reach the people who do. Durable,
+   * unlike everything else here, because the point of a follow is to outlive
+   * the stream.
+   */
+  follows?: Follows;
+  /** The VAPID public key a browser needs before it can subscribe. */
+  vapidPublicKey?: string;
 }
 
 /**
@@ -696,6 +707,134 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         "content-length": Buffer.byteLength(body),
       });
       response.end(request.method === "HEAD" ? undefined : body);
+      return;
+    }
+
+    // --- following a broadcaster ------------------------------------------
+    //
+    // Behind the sign-in rather than the share key: a follow belongs to an
+    // account, and an account is the only thing that makes "notify me on my
+    // other device" mean anything.
+    if (path.startsWith("/api/v1/follows") && options.follows && options.accounts) {
+      const me = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (me === null) {
+        json(response, 401, { error: "sign in to follow" });
+        return;
+      }
+      const follows = options.follows;
+
+      if (path === "/api/v1/follows" && request.method === "GET") {
+        json(response, 200, { following: await follows.following(me.id) });
+        return;
+      }
+
+      const streamer = path.slice("/api/v1/follows/".length);
+      if (!path.startsWith("/api/v1/follows/") || !streamer) {
+        json(response, 404, { error: "no such endpoint" });
+        return;
+      }
+
+      if (request.method === "PUT" || request.method === "POST") {
+        const added = await follows.follow(me.id, decodeURIComponent(streamer));
+        // Following yourself is refused rather than silently stored: you do
+        // not need telling that you went live.
+        json(response, added ? 200 : 422, added
+          ? { following: true, followers: await follows.followerCount(decodeURIComponent(streamer)) }
+          : { error: "you cannot follow yourself" });
+        return;
+      }
+      if (request.method === "DELETE") {
+        await follows.unfollow(me.id, decodeURIComponent(streamer));
+        json(response, 200, { following: false });
+        return;
+      }
+      if (request.method === "GET") {
+        json(response, 200, { following: await follows.isFollowing(me.id, decodeURIComponent(streamer)) });
+        return;
+      }
+      json(response, 405, { error: "PUT, DELETE or GET" });
+      return;
+    }
+
+    // --- where to reach a follower ----------------------------------------
+    if (path.startsWith("/api/v1/notify") && options.follows && options.accounts) {
+      // The key is public by design: it is what a browser needs before it can
+      // ask permission, and it is useless without the private half.
+      if (path === "/api/v1/notify/key" && request.method === "GET") {
+        json(response, 200, { publicKey: options.vapidPublicKey ?? "" });
+        return;
+      }
+
+      const me = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (me === null) {
+        json(response, 401, { error: "sign in first" });
+        return;
+      }
+      const follows = options.follows;
+
+      if (path === "/api/v1/notify/prefs") {
+        if (request.method === "GET") {
+          json(response, 200, await follows.prefs(me.id));
+          return;
+        }
+        if (request.method !== "PUT" && request.method !== "POST") {
+          json(response, 405, { error: "GET or PUT" });
+          return;
+        }
+        let body: Record<string, unknown>;
+        try {
+          body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+        // A number we cannot dial is worse than no number: it is a text that
+        // silently goes nowhere for as long as nobody checks.
+        if (body["phone"] !== undefined && body["phone"] !== "" && !phoneFrom(body["phone"])) {
+          json(response, 422, { error: "that does not look like a phone number" });
+          return;
+        }
+        await follows.setPrefs(me.id, {
+          ...(body["phone"] === undefined ? {} : { phone: String(body["phone"]) }),
+          ...(typeof body["wantsEmail"] === "boolean" ? { wantsEmail: body["wantsEmail"] } : {}),
+          ...(typeof body["wantsSms"] === "boolean" ? { wantsSms: body["wantsSms"] } : {}),
+          ...(typeof body["wantsWeb"] === "boolean" ? { wantsWeb: body["wantsWeb"] } : {}),
+        });
+        json(response, 200, await follows.prefs(me.id));
+        return;
+      }
+
+      if (path === "/api/v1/notify/subscribe") {
+        if (request.method === "DELETE") {
+          const endpoint = url.searchParams.get("endpoint") ?? "";
+          await follows.removePush(endpoint);
+          json(response, 200, { ok: true });
+          return;
+        }
+        if (request.method !== "POST" && request.method !== "PUT") {
+          json(response, 405, { error: "POST or DELETE" });
+          return;
+        }
+        let body: { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
+        try {
+          body = JSON.parse(await readBody(request)) as typeof body;
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+        const endpoint = typeof body.endpoint === "string" ? body.endpoint : "";
+        const p256dh = typeof body.keys?.p256dh === "string" ? body.keys.p256dh : "";
+        const auth = typeof body.keys?.auth === "string" ? body.keys.auth : "";
+        if (!endpoint || !p256dh || !auth) {
+          json(response, 422, { error: "a subscription needs an endpoint and both keys" });
+          return;
+        }
+        await follows.addPush(me.id, { endpoint, p256dh, auth });
+        json(response, 200, { ok: true });
+        return;
+      }
+
+      json(response, 404, { error: "no such endpoint" });
       return;
     }
 
@@ -875,6 +1014,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       if (request.method === "POST") {
         // Only where there are accounts to check against. An instance with no
         // Accounts is somebody's laptop, which has no registration to demand.
+        let ownerId = "";
         if (options.accounts) {
           const who = await options.accounts.whoIs(tokenFrom(request.headers));
           if (who === null) {
@@ -883,6 +1023,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
             });
             return;
           }
+          // From the token, never the body. A stream that could name its own
+          // owner could name somebody else's, and their followers would be
+          // told about a broadcast that person is not making.
+          ownerId = who.id;
         }
 
         let announcement;
@@ -896,7 +1040,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           json(response, 422, { error: "a listing needs a name and a URL a browser can reach" });
           return;
         }
-        const listing = options.directory.announce(announcement);
+        const listing = options.directory.announce(announcement, ownerId);
         // A stream reappearing is the event somebody asked to be told about.
         // Answered first and texted after, because the publisher's heartbeat
         // should not wait on an SMS gateway.
@@ -1526,10 +1670,78 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // The account signed in on this machine owns the server it starts. That is
   // the whole claim: `nixamp login` then `nixamp serve`, and the phone in your
   // pocket can administer it from anywhere by signing in as the same person.
+  // Following outlives every stream, so unlike the rest of this it wants a
+  // database. Only where there is one: a nixamp on a laptop has no followers.
+  const follows =
+    options.directory && process.env["DATABASE_URL"]
+      ? new Follows(new pg.Pool({ connectionString: process.env["DATABASE_URL"] }))
+      : undefined;
+
+  const vapidPublicKey = process.env["VAPID_PUBLIC_KEY"] ?? "";
+  const vapidPrivateKey = process.env["VAPID_PRIVATE_KEY"] ?? "";
+
+  /**
+   * Tell a broadcaster's followers, on whatever they asked to be told on.
+   *
+   * Fired from the directory on the transition to live rather than on every
+   * heartbeat, and awaited by nobody: a publisher's heartbeat should not sit
+   * waiting on a push service.
+   */
+  const tellFollowers = (listing: Listing): void => {
+    if (follows === undefined || !listing.ownerId) return;
+    const what = listing.nowPlaying ? ` Playing ${listing.nowPlaying}.` : "";
+    const note: Notification = {
+      title: `${listing.name} is live`,
+      body: `${what} Listen at ${DEFAULT_DIRECTORY}/directory, or call ${CALL_IN_NUMBER} and key ${listing.code}.`.trim(),
+      url: listing.url,
+    };
+    void follows
+      .audience(listing.ownerId)
+      .then((audience) =>
+        notifyAll(audience, note, {
+          ...(process.env["RESEND_API_KEY"]
+            ? {
+                email: resendEmail({
+                  apiKey: process.env["RESEND_API_KEY"],
+                  from: process.env["NIXAMP_MAIL_FROM"] ?? "nixamp <notifications@nixamp.com>",
+                  onEvent: (message) => console.log(message),
+                }),
+              }
+            : {}),
+          ...(process.env["TELNYX_API_KEY"] && process.env["PARTYLINE_SMS_FROM"]
+            ? {
+                sms: telnyxSms({
+                  apiKey: process.env["TELNYX_API_KEY"],
+                  from: process.env["PARTYLINE_SMS_FROM"],
+                  onEvent: (message) => console.log(message),
+                }),
+              }
+            : {}),
+          ...(vapidPublicKey && vapidPrivateKey
+            ? {
+                push: webPush({
+                  publicKey: vapidPublicKey,
+                  privateKey: vapidPrivateKey,
+                  subject: process.env["NIXAMP_SITE"] ?? DEFAULT_DIRECTORY,
+                  onEvent: (message) => console.log(message),
+                }),
+              }
+            : {}),
+          // A subscription the vendor has retired is a row to delete, not a
+          // failure to retry.
+          onGone: (endpoint) => follows.removePush(endpoint),
+          onEvent: (message) => console.log(message),
+        }),
+      )
+      .catch(() => {});
+  };
+
   // Hoisted rather than built inline, because the party line needs the same
   // instance: a second Directory would be a second set of stream codes, and
   // the one the phone looked in would never be the one the publishers reach.
-  const directory = options.directory ? new Directory() : undefined;
+  const directory = options.directory
+    ? new Directory(undefined, undefined, undefined, tellFollowers)
+    : undefined;
 
   const session = readSession();
   const owner = new Owner({
@@ -1553,6 +1765,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ffmpeg: tools.ffmpeg,
     load: (next) => loadSource(tools, next),
     ...(directory ? { directory } : {}),
+    ...(follows ? { follows, vapidPublicKey } : {}),
     // The party line answers a phone number, and there is only one number.
     // Both keys or neither: without the public key every webhook would be
     // refused, which is a worse failure than not offering the endpoint.
