@@ -423,3 +423,44 @@ button.ghost { background: transparent; color: var(--muted); }
 /* /directory is a page about what is live, not the player with a drawer open
    somewhere below the fold. */
 body.route-directory .player-only { display: none; }
+
+/* A stream and its follow button sit on one row. The list's own rule makes
+   every button full width, which is right for the one you click to listen and
+   wrong for the one beside it. */
+.directory-list li {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+
+.directory-list li > button:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.directory-list .follow {
+  width: auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding-inline: 0.6rem;
+  color: var(--muted);
+}
+
+/* Following is a state worth seeing at a glance, so it borrows the accent
+   rather than only changing its word. */
+.directory-list .follow[data-following="yes"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.toggle {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.toggle input {
+  accent-color: var(--accent);
+}

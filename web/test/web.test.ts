@@ -213,3 +213,23 @@ test("the shell links the manifest, the icons and the theme colour", () => {
     assert.match(html, new RegExp(`id="${id}"`), `#${id} is missing from index.html`);
   }
 });
+
+
+test("the service worker can receive a push and act on a click", () => {
+  const source = serviceWorkerSource(["/assets/app-abc123.js"], "build-9");
+
+  // Without these two the whole notification feature is silent: a push would
+  // arrive at a worker that ignores it, and a click would go nowhere.
+  assert.match(source, /addEventListener\("push"/);
+  assert.match(source, /addEventListener\("notificationclick"/);
+  assert.match(source, /showNotification\(/);
+
+  // A push with no payload still shows something. Some services strip bodies,
+  // and a silent push is worse than a vague one.
+  assert.match(source, /Someone you follow is live/);
+
+  // Clicking focuses a window we already have rather than opening a fourth
+  // copy of the app, which is what openWindow-every-time does.
+  assert.match(source, /matchAll\(/);
+  assert.match(source, /openWindow\(/);
+});
