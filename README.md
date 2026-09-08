@@ -3,8 +3,12 @@
 It really whips the terminal's ass.
 
 ```
-bunx nixamp ~/Music
-bunx nixamp track.flac
+curl -fsSL https://nixamp.com/install.sh | sh
+```
+
+```
+nixamp ~/Music
+nixamp track.flac
 ```
 
 ```
@@ -24,6 +28,40 @@ bunx nixamp track.flac
 ╰─────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────╯
  Space Stop  ↑↓ Select  n/p Next/Prev  Enter Play  q Quit
 ```
+
+## Installing
+
+```
+curl -fsSL https://nixamp.com/install.sh | sh
+```
+
+Everything lands under `~/.local`. No root, no package manager, no system files
+touched. On a machine with a desktop session it installs the app and the CLI
+together, and the CLI then runs on the Node inside the app, so there is no
+system Node to keep in step. Over SSH it detects that there is no desktop and
+installs the CLI alone.
+
+```
+curl -fsSL https://nixamp.com/install.sh | sh -s -- --cli-only
+curl -fsSL https://nixamp.com/install.sh | sh -s -- --desktop
+curl -fsSL https://nixamp.com/install.sh | sh -s -- --version 0.1.0
+curl -fsSL https://nixamp.com/install.sh | sh -s -- --prefix ~/opt
+```
+
+Then:
+
+```
+nixamp update            re-runs the installer, keeping the choices you made
+nixamp update 0.2.0      or pins a version
+nixamp uninstall         says what would go
+nixamp uninstall --yes   removes exactly what the installer created
+```
+
+Removal reads a manifest the installer wrote, so it is exact and works with no
+network. Your music is never touched.
+
+If you would rather not pipe a script into a shell, `npm i -g nixamp` and
+`bunx nixamp ~/Music` both work; that route needs Node 24 or newer.
 
 ## How it works
 

@@ -5,6 +5,7 @@ dist/
 # Built and generated
 web/dist/
 desktop/release/
+release/
 desktop/build/icon.png
 .vite/
 desktop/staging/
