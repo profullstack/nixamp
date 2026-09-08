@@ -68,6 +68,14 @@ export function start(): void {
     adminRestream: need<HTMLFormElement>("admin-restream"),
     adminSource: need<HTMLInputElement>("admin-source"),
     directory: need<HTMLElement>("directory"),
+    notifyPanel: need<HTMLElement>("notify-panel"),
+    notifyNote: need<HTMLParagraphElement>("notify-note"),
+    notifyWeb: need<HTMLInputElement>("notify-web"),
+    notifyEmail: need<HTMLInputElement>("notify-email"),
+    notifySms: need<HTMLInputElement>("notify-sms"),
+    notifyPhone: need<HTMLInputElement>("notify-phone"),
+    notifyPhoneForm: need<HTMLFormElement>("notify-phone-form"),
+    notifyPhoneNote: need<HTMLParagraphElement>("notify-phone-note"),
     directoryNote: need<HTMLParagraphElement>("directory-note"),
     directoryList: need<HTMLUListElement>("directory-list"),
     listenHere: need<HTMLInputElement>("listen-here"),
@@ -454,7 +462,18 @@ export function start(): void {
     dom.directoryNote.textContent = "Looking for live streams…";
     dom.directoryList.replaceChildren();
 
-    let streams: { id: string; name: string; url: string; tracks: number; nowPlaying: string }[];
+    let streams: {
+      id: string;
+      name: string;
+      url: string;
+      tracks: number;
+      nowPlaying: string;
+      /** The account behind the stream. Empty on an instance without accounts. */
+      ownerId?: string;
+      /** The phone code, and how many people are on the line for it. */
+      code?: string;
+      callers?: number;
+    }[];
     try {
       const response = await fetch("/api/directory");
       if (!response.ok) throw new Error(String(response.status));
@@ -481,9 +500,16 @@ export function start(): void {
       name.textContent = stream.name;
       const detail = document.createElement("span");
       detail.className = "detail";
-      detail.textContent = stream.nowPlaying
-        ? `${stream.nowPlaying} · ${stream.tracks} tracks`
-        : `${stream.tracks} tracks`;
+      const parts = [stream.nowPlaying, `${stream.tracks} tracks`].filter(Boolean);
+      // The call-in code earns its place in the list: it is the only way to
+      // hear this from a phone, and a code you cannot see is a code you
+      // cannot dial.
+      if (stream.code) {
+        parts.push(
+          stream.callers ? `☎ ${stream.code} · ${stream.callers} on the phone` : `☎ ${stream.code}`,
+        );
+      }
+      detail.textContent = parts.join(" · ");
 
       button.append(name, detail);
       button.addEventListener("click", () => {
@@ -492,6 +518,12 @@ export function start(): void {
         dom.remoteForm.requestSubmit();
       });
       item.append(button);
+
+      // Following is for other people's streams, and only once we know who you
+      // are: an anonymous visitor has nowhere to be notified.
+      if (stream.ownerId && meId && stream.ownerId !== meId) {
+        item.append(followButton(stream.ownerId, stream.name));
+      }
       dom.directoryList.append(item);
     }
   };
@@ -610,15 +642,235 @@ export function start(): void {
     })();
   });
 
+  /**
+   * A follow button that knows its own state.
+   *
+   * Asked per stream rather than fetched as a set, because the directory is
+   * short and a list of who you follow is a second thing to keep in step with
+   * the first. It reads "Following" once you do, and clicking again undoes it.
+   */
+  const followButton = (streamerId: string, name: string): HTMLButtonElement => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ghost follow";
+    button.textContent = "Follow";
+    button.setAttribute("aria-label", `Follow ${name}`);
+
+    const draw = (following: boolean): void => {
+      button.textContent = following ? "Following" : "Follow";
+      button.dataset["following"] = following ? "yes" : "no";
+    };
+
+    void (async () => {
+      try {
+        const answer = await fetch(`/api/v1/follows/${encodeURIComponent(streamerId)}`);
+        if (answer.ok) draw(((await answer.json()) as { following?: boolean }).following === true);
+      } catch {
+        // A directory that lists is more use than one that refuses to render
+        // because it could not colour a button in.
+      }
+    })();
+
+    button.addEventListener("click", () => {
+      void (async () => {
+        const following = button.dataset["following"] === "yes";
+        button.disabled = true;
+        try {
+          const answer = await fetch(`/api/v1/follows/${encodeURIComponent(streamerId)}`, {
+            method: following ? "DELETE" : "PUT",
+            headers: { "content-type": "application/json" },
+            body: following ? undefined : "{}",
+          });
+          if (answer.ok) draw(!following);
+        } catch {
+          // Leave the button as it was rather than lying about the result.
+        } finally {
+          button.disabled = false;
+        }
+      })();
+    });
+    return button;
+  };
+
+  // --- notifications ------------------------------------------------------
+  //
+  // Three switches and a phone number. The web one is different from the other
+  // two: it needs the browser's permission as well as our preference, and the
+  // browser will only ask in response to a click, so it cannot be turned on
+  // from a page load however much the stored preference says it should be.
+
+  /** VAPID keys travel as base64url and the API wants bytes. */
+  const keyBytes = (base64: string): Uint8Array<ArrayBuffer> => {
+    const padded = (base64 + "=".repeat((4 - (base64.length % 4)) % 4))
+      .replace(/-/g, "+")
+      .replace(/_/g, "/");
+    const raw = atob(padded);
+    // Built on an explicit ArrayBuffer rather than Uint8Array.from: the push
+    // API wants a BufferSource, and a plain Uint8Array is typed over
+    // ArrayBufferLike, which admits SharedArrayBuffer and so is not assignable.
+    const bytes = new Uint8Array(new ArrayBuffer(raw.length));
+    for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+    return bytes;
+  };
+
+  const pushable = (): boolean =>
+    "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+  const subscribeThisDevice = async (): Promise<boolean> => {
+    if (!pushable()) {
+      dom.notifyNote.textContent = "This browser cannot show notifications.";
+      return false;
+    }
+    if (Notification.permission === "denied") {
+      dom.notifyNote.textContent =
+        "This browser is blocking notifications. Allow them in site settings first.";
+      return false;
+    }
+    if ((await Notification.requestPermission()) !== "granted") {
+      dom.notifyNote.textContent = "Not allowed, so nothing will be sent here.";
+      return false;
+    }
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const answer = await fetch("/api/v1/notify/key");
+      const { publicKey } = (await answer.json()) as { publicKey?: string };
+      if (!publicKey) {
+        dom.notifyNote.textContent = "This server is not set up to send notifications.";
+        return false;
+      }
+      const existing = await registration.pushManager.getSubscription();
+      const subscription =
+        existing ??
+        (await registration.pushManager.subscribe({
+          // Required by every browser: a push must result in something the
+          // person can see, which is exactly what this one does.
+          userVisibleOnly: true,
+          applicationServerKey: keyBytes(publicKey),
+        }));
+      const sent = await fetch("/api/v1/notify/subscribe", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(subscription.toJSON()),
+      });
+      if (!sent.ok) throw new Error(String(sent.status));
+      dom.notifyNote.textContent = "This device will be told.";
+      return true;
+    } catch {
+      dom.notifyNote.textContent = "Could not set this device up.";
+      return false;
+    }
+  };
+
+  const forgetThisDevice = async (): Promise<void> => {
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (!subscription) return;
+      await fetch(`/api/v1/notify/subscribe?endpoint=${encodeURIComponent(subscription.endpoint)}`, {
+        method: "DELETE",
+      });
+      await subscription.unsubscribe();
+    } catch {
+      // Nothing to undo that matters: the server drops a dead endpoint on the
+      // next push anyway.
+    }
+  };
+
+  const saveNotify = async (patch: Record<string, unknown>): Promise<void> => {
+    try {
+      const answer = await fetch("/api/v1/notify/prefs", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const body = (await answer.json()) as { error?: string; phone?: string };
+      dom.notifyPhoneNote.textContent = answer.ok ? "" : (body.error ?? "that did not save");
+      if (answer.ok && typeof body.phone === "string") dom.notifyPhone.value = body.phone;
+    } catch {
+      dom.notifyPhoneNote.textContent = "could not reach nixamp.com";
+    }
+  };
+
+  const loadNotify = async (): Promise<void> => {
+    try {
+      const answer = await fetch("/api/v1/notify/prefs");
+      if (!answer.ok) return;
+      const prefs = (await answer.json()) as {
+        phone?: string;
+        wantsEmail?: boolean;
+        wantsSms?: boolean;
+        wantsWeb?: boolean;
+      };
+      dom.notifyEmail.checked = prefs.wantsEmail !== false;
+      dom.notifySms.checked = prefs.wantsSms === true;
+      dom.notifyPhone.value = prefs.phone ?? "";
+      // The preference is only half of it: a device is only really on when the
+      // browser has also granted permission and we hold a subscription.
+      const granted = pushable() && Notification.permission === "granted";
+      const subscribed = granted
+        ? (await (await navigator.serviceWorker.ready).pushManager.getSubscription()) !== null
+        : false;
+      dom.notifyWeb.checked = prefs.wantsWeb !== false && subscribed;
+      dom.notifyNote.textContent = subscribed
+        ? "Get told when someone you follow goes live."
+        : "Turn on “On this device” to be told here.";
+    } catch {
+      // Leave the panel at its defaults rather than blanking it.
+    }
+  };
+
+  dom.notifyWeb.addEventListener("change", () => {
+    void (async () => {
+      if (dom.notifyWeb.checked) {
+        const ok = await subscribeThisDevice();
+        dom.notifyWeb.checked = ok;
+        await saveNotify({ wantsWeb: ok });
+        return;
+      }
+      await forgetThisDevice();
+      await saveNotify({ wantsWeb: false });
+      dom.notifyNote.textContent = "Turn on “On this device” to be told here.";
+    })();
+  });
+
+  dom.notifyEmail.addEventListener("change", () => {
+    void saveNotify({ wantsEmail: dom.notifyEmail.checked });
+  });
+
+  dom.notifySms.addEventListener("change", () => {
+    void (async () => {
+      // A text with no number to send it to is a switch that does nothing, so
+      // say that rather than storing a preference we cannot act on.
+      if (dom.notifySms.checked && !dom.notifyPhone.value.trim()) {
+        dom.notifyPhoneNote.textContent = "Add a phone number first.";
+        dom.notifySms.checked = false;
+        dom.notifyPhone.focus();
+        return;
+      }
+      await saveNotify({ wantsSms: dom.notifySms.checked });
+    })();
+  });
+
+  dom.notifyPhoneForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveNotify({ phone: dom.notifyPhone.value.trim() });
+  });
+
   // --- the account ------------------------------------------------------
   //
   // The session is a cookie the server sets, so nothing here holds a token:
   // the browser attaches it, and a page reload asks who is signed in rather
   // than remembering an answer that may have expired.
   let creating = false;
+  /** The signed-in account, so the directory knows whose stream is whose. */
+  let meId = "";
 
   const showAccount = (email: string | null): void => {
     const signedIn = email !== null;
+    // Following and notifications belong to an account; there is nowhere to
+    // notify a stranger.
+    dom.notifyPanel.hidden = !signedIn;
+    if (signedIn) void loadNotify();
     dom.accountForm.hidden = signedIn;
     dom.accountSignOut.hidden = !signedIn;
     dom.accountNote.textContent = signedIn
@@ -634,9 +886,11 @@ export function start(): void {
   const askWhoIsSignedIn = async (): Promise<void> => {
     try {
       const answer = await fetch("/api/v1/auth/me");
-      const body = (await answer.json()) as { account?: { email?: string } };
+      const body = (await answer.json()) as { account?: { email?: string; id?: string } };
+      meId = answer.ok ? (body.account?.id ?? "") : "";
       showAccount(answer.ok ? (body.account?.email ?? "you") : null);
     } catch {
+      meId = "";
       showAccount(null);
     }
   };
@@ -658,11 +912,15 @@ export function start(): void {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ email, password }),
         });
-        const body = (await answer.json()) as { account?: { email?: string }; error?: string };
+        const body = (await answer.json()) as {
+          account?: { email?: string; id?: string };
+          error?: string;
+        };
         if (!answer.ok) {
           dom.accountNote.textContent = body.error ?? "that did not work";
           return;
         }
+        meId = body.account?.id ?? "";
         // Never leave a password sitting in the DOM after it has been used.
         dom.accountPassword.value = "";
         showAccount(body.account?.email ?? email);
@@ -683,6 +941,7 @@ export function start(): void {
       } catch {
         // The cookie is the session; failing to say so does not keep it.
       }
+      meId = "";
       showAccount(null);
       void checkAdmin();
     })();
