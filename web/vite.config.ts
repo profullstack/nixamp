@@ -4,11 +4,12 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import { serviceWorkerSource } from "./scripts/sw.ts";
 import { writeIcons } from "./scripts/icons.ts";
 
-const here = new URL(".", import.meta.url).pathname;
+const here = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = resolve(here, "public");
 const INSTALLERS = ["install.sh", "install.ps1"];
 

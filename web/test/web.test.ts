@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { clamp, displayName, formatTime, isVideoFile, titleFromFilename } from "../src/format.ts";
 import { bandEdges, bands, decay, holdPeaks } from "../src/spectrum.ts";
 import { apiUrl, mediaUrl, normalizeBase, parseSnapshot } from "../src/remote.ts";
@@ -9,7 +10,7 @@ import { byName, isPlayable } from "../src/player.ts";
 import { NEVER_CACHE, serviceWorkerSource } from "../scripts/sw.ts";
 import { Bitmap, crc32, drawIcon, encodePng, ICONS } from "../scripts/icons.ts";
 
-const webDir = new URL("..", import.meta.url).pathname;
+const webDir = fileURLToPath(new URL("..", import.meta.url));
 
 test("times and names are formatted as the terminal app formats them", () => {
   assert.equal(formatTime(0), "00:00");

@@ -34,4 +34,4 @@ COPY --from=build /app/package.json ./package.json
 # The port comes from PORT, which the platform sets.
 # --no-key: this one is meant to be public. Everywhere else a key from the
 # share link is required, and the hosted PWA has no library to guard anyway.
-CMD ["bun", "dist/serve.js", "/app/library", "--host", "0.0.0.0", "--no-media", "--no-key", "--web", "/app/web/dist"]
+CMD ["bun", "dist/serve.js", "/app/library", "--host", "0.0.0.0", "--no-media", "--no-key", "--directory", "--no-publish", "--web", "/app/web/dist"]

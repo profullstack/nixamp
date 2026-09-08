@@ -14,6 +14,16 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { networkInterfaces } from "node:os";
 
+/**
+ * Two keys, two scopes.
+ *
+ * The full key drives the player: it can skip, stop, and point the server at a
+ * different source. The listen key can only hear it. A stream published to the
+ * public directory hands out the listen key, because a link that lets a
+ * stranger pause your music is not a link you can publish.
+ */
+export type Scope = "control" | "listen";
+
 /** The cookie, and the query parameter that sets it. */
 export const KEY_COOKIE = "nixamp_key";
 export const KEY_QUERY = "k";
@@ -114,6 +124,23 @@ export function reachableAddresses(host: string, port: number): { label: string;
 /** The full link, key and all. */
 export function shareLink(base: string, key: string | null): string {
   return key === null ? base : `${base}/s/${key}`;
+}
+
+/**
+ * What a key is allowed to do. An unknown key is allowed nothing, which is the
+ * same answer as no key at all.
+ */
+export function scopeOf(offered: string | null, control: string | null, listen: string | null): Scope | null {
+  if (offered === null) return null;
+  if (control !== null && keysMatch(offered, control)) return "control";
+  if (listen !== null && keysMatch(offered, listen)) return "listen";
+  return null;
+}
+
+/** Paths a listen key may have. Everything else needs the control key. */
+export function allowedForListening(path: string): boolean {
+  if (path === "/api/command" || path === "/api/source") return false;
+  return true;
 }
 
 /** How to run a command, so the tests never touch a real firewall. */

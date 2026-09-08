@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const repo = join(new URL("..", import.meta.url).pathname);
+const repo = join(fileURLToPath(new URL("..", import.meta.url)));
 const bin = join(repo, "bin", "nixamp.mjs");
 const built = existsSync(join(repo, "dist", "main.js"));
 const manifest = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as {

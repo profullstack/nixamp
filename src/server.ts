@@ -11,12 +11,15 @@
  */
 import { createReadStream, statSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { networkInterfaces } from "node:os";
+import { hostname, networkInterfaces } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { Connections, type Kind } from "./connections.ts";
+import { Directory, parseAnnouncement } from "./directory.ts";
+import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import { isRemote } from "./sources.ts";
 import {
+  allowedForListening,
   elevate,
   firewallInUse,
   keyCookie,
@@ -25,9 +28,11 @@ import {
   newKey,
   portCommands,
   reachableAddresses,
+  scopeOf,
   shareLink,
 } from "./share.ts";
 import { extname, join, normalize, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   detectTools, peaks, RATE, Stream, toMono,
   type Tools, type Track,
@@ -67,6 +72,16 @@ export interface ServeOptions {
    * failed instead of started.
    */
   announce: boolean;
+  /** Host the public directory. Only the deployment behind nixamp.com does. */
+  directory: boolean;
+  /**
+   * List this stream at nixamp.com/directory. "ask" prompts, and is the
+   * default: publishing an address without being asked is not something a
+   * player gets to decide for you.
+   */
+  publish: "ask" | "yes" | "no";
+  /** What to call it in the list. Defaults to this machine's hostname. */
+  name: string;
 }
 
 /**
@@ -88,6 +103,9 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     key: true,
     openPort: false,
     announce: false,
+    directory: false,
+    publish: "ask",
+    name: "",
   };
   let sawRoot = false;
   for (let i = 0; i < argv.length; i++) {
@@ -116,6 +134,14 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.openPort = true;
     } else if (arg === "--announce") {
       options.announce = true;
+    } else if (arg === "--directory") {
+      options.directory = true;
+    } else if (arg === "--publish") {
+      options.publish = "yes";
+    } else if (arg === "--no-publish") {
+      options.publish = "no";
+    } else if (arg === "--name") {
+      options.name = value();
     } else if (arg.startsWith("-")) {
       throw new Error(`nixamp serve: unknown option ${arg}`);
     } else if (!sawRoot) {
@@ -483,6 +509,12 @@ export interface HandlerOptions {
   version: string;
   /** The key from the share link, or null to serve to anyone who can connect. */
   key?: string | null;
+  /**
+   * A second key that may listen but not drive. The public directory hands
+   * this one out: a link that lets a stranger pause your music is not a link
+   * you can publish.
+   */
+  listenKey?: string | null;
   /** How to run ffmpeg, for the sources a browser cannot play by itself. */
   ffmpeg?: string[];
   /** Who is listening, for the admin view. */
@@ -492,6 +524,11 @@ export interface HandlerOptions {
    * imported so the handler stays a plain function of a request.
    */
   load: (source: string) => Promise<Track[]>;
+  /**
+   * The public directory, on the instance that hosts one. Only nixamp.com
+   * passes this; a nixamp on your laptop is a publisher, not a registry.
+   */
+  directory?: Directory;
 }
 
 /**
@@ -526,6 +563,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     const url = new URL(request.url ?? "/", "http://localhost");
     const path = url.pathname;
     const key = options.key ?? null;
+    const listenKey = options.listenKey ?? null;
 
     if (request.method === "OPTIONS") {
       response.writeHead(204, CORS);
@@ -533,16 +571,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
-    // Opening the share link is what hands a browser its key. It comes back as
-    // a cookie, so every later fetch, EventSource and <audio src> carries it
-    // without the page knowing anything about keys.
+    // Opening a share link is what hands a browser its key. It comes back as a
+    // cookie, so every later fetch, EventSource and <audio src> carries it
+    // without the page knowing anything about keys. Either key works here, and
+    // which one was used decides what the browser can then do.
     if (key !== null && path.startsWith("/s/")) {
       const offered = decodeURIComponent(path.slice("/s/".length));
-      if (!keysMatch(offered, key)) {
+      if (scopeOf(offered, key, listenKey) === null) {
         json(response, 404, { error: "not found" });
         return;
       }
-      response.writeHead(302, { ...CORS, "set-cookie": keyCookie(key), location: "/" });
+      response.writeHead(302, { ...CORS, "set-cookie": keyCookie(offered), location: "/" });
       response.end();
       return;
     }
@@ -550,16 +589,54 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // /api/health answers unauthenticated on purpose: it is how you check the
     // port is open from another device before wondering whether the link is
     // wrong, and it says nothing about the library.
-    if (key !== null && path !== "/api/health") {
-      const offered = keyFrom(request, url);
-      if (offered === null || !keysMatch(offered, key)) {
+    if (key !== null && path !== "/api/health" && path !== "/api/directory") {
+      const scope = scopeOf(keyFrom(request, url), key, listenKey);
+      if (scope === null) {
         json(response, 401, { error: "this nixamp needs the key from its share link" });
+        return;
+      }
+      if (scope === "listen" && !allowedForListening(path)) {
+        json(response, 403, { error: "this link can listen, not drive" });
         return;
       }
     }
 
     if (path === "/api/health") {
       json(response, 200, { name: "nixamp", version: options.version, media: options.media });
+      return;
+    }
+
+    // The directory is public in both directions: anyone may read the list,
+    // and anyone running a nixamp may add themselves to it. It is answered
+    // before the key check, because a visitor to nixamp.com has no key and is
+    // exactly who it is for.
+    if (path === "/api/directory" && options.directory) {
+      if (request.method === "GET") {
+        json(response, 200, { streams: options.directory.list(), now: Date.now() });
+        return;
+      }
+      if (request.method === "POST") {
+        let announcement;
+        try {
+          announcement = parseAnnouncement(JSON.parse(await readBody(request)));
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+        if (announcement === null) {
+          json(response, 422, { error: "a listing needs a name and a URL a browser can reach" });
+          return;
+        }
+        json(response, 200, options.directory.announce(announcement));
+        return;
+      }
+      if (request.method === "DELETE") {
+        const id = url.searchParams.get("id");
+        if (id) options.directory.withdraw(id);
+        json(response, 200, { ok: true });
+        return;
+      }
+      json(response, 405, { error: "GET, POST or DELETE" });
       return;
     }
 
@@ -886,13 +963,18 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 
   const web = options.web !== null ? resolve(options.web) : defaultWebDir();
   const key = options.key ? newKey() : null;
+  // Minted whether or not it is published, so `nixamp admin` and the operator
+  // both have a link they can hand out without handing over the controls.
+  const listenKey = key === null ? null : newKey();
   const server = createServer(engine, {
     web,
     media: options.media,
     version,
     key,
+    listenKey,
     ffmpeg: tools.ffmpeg,
     load: (next) => loadSource(tools, next),
+    ...(options.directory ? { directory: new Directory() } : {}),
   });
 
   // A port already in use is the most ordinary failure there is, and it
@@ -944,6 +1026,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   } else {
     console.log("  Open that link once on a phone or a laptop and it stays signed in.");
     console.log(`  Anything without the key gets a 401. Key: ${key}`);
+    if (listenKey !== null) {
+      console.log("");
+      console.log("  A listen-only link, for someone you want to hear it but not drive it:");
+      for (const { label, url } of addresses) {
+        if (label === "here") continue;
+        console.log(`    ${shareLink(url, listenKey)}`);
+      }
+    }
   }
   if (addresses.some((a) => a.label === "on the internet")) {
     console.log("");
@@ -994,7 +1084,42 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     }
   }
 
+  // The listing carries the listen link, and only ever a public address: an
+  // entry pointing at 192.168.1.5 is one nobody outside that house can open.
+  const publishable_ = addresses.find((a) => a.label === "on the internet")
+    ?? addresses.find((a) => a.label === "on tailscale");
+  let publisher: Publisher | null = null;
+
+  if (options.publish !== "no" && publishable_) {
+    const listen = shareLink(publishable_.url, listenKey);
+    const wanted = options.publish === "yes"
+      ? true
+      : await confirm(`\n  List this stream at ${DEFAULT_DIRECTORY}/directory so anyone can find it?\n  It publishes ${listen} — listen only, not the controls.`);
+
+    if (wanted) {
+      publisher = new Publisher({
+        directory: DEFAULT_DIRECTORY,
+        name: options.name || hostname(),
+        url: listen,
+        tracks: tracks.length,
+        nowPlaying: () => {
+          const snapshot = engine.snapshot();
+          return snapshot.tracks[snapshot.index]?.title ?? "";
+        },
+      });
+      const listing = await publisher.start();
+      console.log("");
+      console.log(listing
+        ? `  Listed at ${DEFAULT_DIRECTORY}/directory as "${listing.name}". It leaves the list when this stops.`
+        : `  Could not reach ${DEFAULT_DIRECTORY}; not listed.`);
+    }
+  } else if (options.publish === "yes" && !publishable_) {
+    console.log("");
+    console.log("  --publish needs an address the world can reach. This machine has none.");
+  }
+
   const shutdown = (): void => {
+    void publisher?.stop();
     closePort?.();
     engine.stop();
     server.close(() => process.exit(0));
@@ -1009,7 +1134,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 function defaultWebDir(): string | null {
   const fromEnv = process.env.NIXAMP_WEB_DIR;
   if (fromEnv && isFile(join(fromEnv, "index.html"))) return fromEnv;
-  const here = new URL(".", import.meta.url).pathname;
+  const here = fileURLToPath(new URL(".", import.meta.url));
   for (const guess of [
     join(here, "..", "web", "dist"),
     join(here, "..", "..", "web", "dist"),

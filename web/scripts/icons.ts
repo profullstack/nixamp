@@ -11,6 +11,7 @@
 import { deflateSync } from "node:zlib";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface Rgba { r: number; g: number; b: number; a: number }
 
@@ -178,6 +179,6 @@ export function writeIcons(publicDir: string): string[] {
 }
 
 if (import.meta.main) {
-  const target = process.argv[2] ?? join(new URL("..", import.meta.url).pathname, "public");
+  const target = process.argv[2] ?? join(fileURLToPath(new URL("..", import.meta.url)), "public");
   for (const path of writeIcons(target)) console.log(`wrote ${path}`);
 }

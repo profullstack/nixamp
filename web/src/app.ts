@@ -54,6 +54,10 @@ export function start(): void {
     remoteForm: need<HTMLFormElement>("remote-form"),
     remoteState: need<HTMLElement>("remote-state"),
     disconnect: need<HTMLButtonElement>("disconnect"),
+    browse: need<HTMLButtonElement>("browse"),
+    directory: need<HTMLDivElement>("directory"),
+    directoryNote: need<HTMLParagraphElement>("directory-note"),
+    directoryList: need<HTMLUListElement>("directory-list"),
     listenHere: need<HTMLInputElement>("listen-here"),
     volume: need<HTMLInputElement>("volume"),
     prev: need<HTMLButtonElement>("prev"),
@@ -425,6 +429,71 @@ export function start(): void {
       remote.connect(base);
       draw();
     })();
+  });
+
+  /**
+   * The public directory. It is served by whoever is hosting this page, so a
+   * nixamp on your laptop serving its own copy of the PWA asks its own
+   * /api/directory and finds nothing, which is the honest answer: it does not
+   * host one.
+   */
+  const loadDirectory = async (): Promise<void> => {
+    dom.directory.hidden = false;
+    dom.directoryNote.textContent = "Looking for live streams…";
+    dom.directoryList.replaceChildren();
+
+    let streams: { id: string; name: string; url: string; tracks: number; nowPlaying: string }[];
+    try {
+      const response = await fetch("/api/directory");
+      if (!response.ok) throw new Error(String(response.status));
+      streams = ((await response.json()) as { streams?: typeof streams }).streams ?? [];
+    } catch {
+      dom.directoryNote.textContent = "The directory is not answering. Type an address instead.";
+      return;
+    }
+
+    if (streams.length === 0) {
+      dom.directoryNote.textContent = "Nobody is streaming right now.";
+      return;
+    }
+
+    dom.directoryNote.textContent = `${streams.length} live ${streams.length === 1 ? "stream" : "streams"}:`;
+    for (const stream of streams) {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+
+      // textContent, never innerHTML: these names are written by strangers.
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = stream.name;
+      const detail = document.createElement("span");
+      detail.className = "detail";
+      detail.textContent = stream.nowPlaying
+        ? `${stream.nowPlaying} · ${stream.tracks} tracks`
+        : `${stream.tracks} tracks`;
+
+      button.append(name, detail);
+      button.addEventListener("click", () => {
+        dom.remoteUrl.value = stream.url;
+        dom.directory.hidden = true;
+        dom.remoteForm.requestSubmit();
+      });
+      item.append(button);
+      dom.directoryList.append(item);
+    }
+  };
+
+  // /directory is the shareable address for the list. The server serves the
+  // app shell for any unknown path, so the routing is this one line.
+  if (location.pathname.replace(/\/+$/, "") === "/directory") void loadDirectory();
+
+  dom.browse.addEventListener("click", () => {
+    if (!dom.directory.hidden) {
+      dom.directory.hidden = true;
+      return;
+    }
+    void loadDirectory();
   });
 
   dom.disconnect.addEventListener("click", () => {

@@ -9,8 +9,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const here = new URL(".", import.meta.url).pathname;
+const here = fileURLToPath(new URL(".", import.meta.url));
 const electron = join(here, "..", "node_modules", "electron");
 const installer = join(electron, "install.js");
 const marker = join(electron, "dist");
