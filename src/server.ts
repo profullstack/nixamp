@@ -30,6 +30,7 @@ import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts
 import { needsAdmin, Owner } from "./owner.ts";
 import { readSession } from "./session.ts";
 import { Directory, parseAnnouncement } from "./directory.ts";
+import { PartyLine } from "./partyline.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
   applyRemoteConfig,
@@ -621,6 +622,11 @@ export interface HandlerOptions {
   secureCookies?: boolean;
   /** Who may administer this server. */
   owner?: Owner;
+  /**
+   * The dial-in party line, on the instance that answers the phone number.
+   * Only nixamp.com passes this; a nixamp on a laptop has no number.
+   */
+  partyLine?: PartyLine;
 }
 
 /**
@@ -675,6 +681,66 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
       response.writeHead(302, { ...CORS, "set-cookie": keyCookie(offered), location: "/" });
       response.end();
+      return;
+    }
+
+    // --- the party line ---------------------------------------------------
+    //
+    // Ahead of the share-key check because the caller is a telephone. Telnyx
+    // has no cookie and no link; what it has is an ed25519 signature over the
+    // body, which is a stronger claim than a key in a URL anyway.
+    if (path.startsWith("/api/v1/partyline/") && options.partyLine) {
+      const partyLine = options.partyLine;
+
+      if (path === "/api/v1/partyline/rooms") {
+        json(response, 200, { rooms: partyLine.list() });
+        return;
+      }
+
+      if (path !== "/api/v1/partyline/webhook") {
+        json(response, 404, { error: "no such endpoint" });
+        return;
+      }
+      if (request.method !== "POST") {
+        json(response, 405, { error: "POST only" });
+        return;
+      }
+
+      // The bytes as they arrived. Parsing first and reserialising would
+      // change the whitespace the signature was computed over.
+      let raw: string;
+      try {
+        raw = await readBody(request);
+      } catch {
+        json(response, 413, { error: "body too large" });
+        return;
+      }
+
+      const signature = request.headers["telnyx-signature-ed25519"];
+      const timestamp = request.headers["telnyx-timestamp"];
+      const ok = partyLine.verify(
+        raw,
+        typeof signature === "string" ? signature : undefined,
+        typeof timestamp === "string" ? timestamp : undefined,
+      );
+      if (!ok) {
+        json(response, 401, { error: "bad signature" });
+        return;
+      }
+
+      let event: { data?: { event_type?: string; payload?: Record<string, unknown> } };
+      try {
+        event = JSON.parse(raw) as typeof event;
+      } catch {
+        json(response, 400, { error: "bad JSON" });
+        return;
+      }
+
+      // Answer first, act second. Telnyx retries anything it does not hear
+      // back about quickly, and a retried call.answered would ask the caller
+      // which room they wanted twice.
+      json(response, 200, { ok: true });
+      void partyLine.handle(event.data ?? {}).catch(() => {});
       return;
     }
 
@@ -1435,6 +1501,20 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ffmpeg: tools.ffmpeg,
     load: (next) => loadSource(tools, next),
     ...(options.directory ? { directory: new Directory() } : {}),
+    // The party line answers a phone number, and there is only one number.
+    // Both keys or neither: without the public key every webhook would be
+    // refused, which is a worse failure than not offering the endpoint.
+    ...(options.directory && process.env["TELNYX_API_KEY"] && process.env["TELNYX_PUBLIC_KEY"]
+      ? {
+          partyLine: new PartyLine({
+            apiKey: process.env["TELNYX_API_KEY"],
+            publicKey: process.env["TELNYX_PUBLIC_KEY"],
+            ...(process.env["PARTYLINE_GREETING"] ? { greeting: process.env["PARTYLINE_GREETING"] } : {}),
+            ...(process.env["PARTYLINE_VOICE"] ? { voice: process.env["PARTYLINE_VOICE"] } : {}),
+            onEvent: (message) => console.log(message),
+          }),
+        }
+      : {}),
     // Accounts live where the directory lives, and only there: a nixamp on a
     // laptop has nobody to be an account of.
     ...(options.directory && process.env["DATABASE_URL"]
