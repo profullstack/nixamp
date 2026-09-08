@@ -75,6 +75,34 @@ network. Your music is never touched.
 If you would rather not pipe a script into a shell, `npm i -g nixamp` and
 `bunx nixamp ~/Music` both work; that route needs Node 24 or newer.
 
+## Signing in
+
+An account on nixamp.com is what lets you publish, be paid, and administer a
+server you own. Email and password, on every surface:
+
+```
+nixamp login              # or: nixamp signup
+nixamp whoami
+nixamp logout
+```
+
+The PWA and the desktop app share one form, since the desktop is that page in a
+window. The CLI keeps its token beside the daemon's state, mode 600, so signing
+in there and in the desktop app are the same thing on disk. The password is read
+with the echo off and is never written down.
+
+No magic link. A link in an inbox is no use on a television, or on a phone that
+is not the one you read mail on.
+
+Running the account side of nixamp.com needs Postgres:
+
+```
+DATABASE_URL=postgres://user:pass@host/nixamp NIXAMP_JWT_SECRET=… nixamp serve --directory
+```
+
+Accounts live where the directory lives and nowhere else: a nixamp on a laptop
+has nobody to be an account of.
+
 ## The directory
 
 [nixamp.com/directory](https://nixamp.com/directory) lists nixamps that agreed
