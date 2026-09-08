@@ -337,3 +337,62 @@ test("a directory being down is not the same as a directory saying no", async ()
   assert.equal(await publisher.announce(), null);
   assert.equal(refusals, 0, "a 503 is not a missing account");
 });
+
+
+// --- going live is a transition, not a heartbeat ---------------------------
+
+test("followers are told once when a stream starts, not every ninety seconds", () => {
+  let at = 1_788_928_020_000;
+  const live: string[] = [];
+  const dir = new Directory(4 * 60 * 1000, () => at, () => "482917", (l) => live.push(l.name));
+
+  dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" }, "owner-1");
+  assert.deepEqual(live, ["Chovy"]);
+
+  // The publisher renews every 90 seconds for as long as it is up. Telling
+  // followers on each of those would be telling them forty times an hour.
+  for (let beat = 0; beat < 5; beat += 1) {
+    at += 90_000;
+    dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "x" }, "owner-1");
+  }
+  assert.deepEqual(live, ["Chovy"], "five heartbeats, still one notification");
+});
+
+test("a stream that stopped and came back is a new thing to be told about", () => {
+  let at = 1_788_928_020_000;
+  const live: string[] = [];
+  const dir = new Directory(4 * 60 * 1000, () => at, () => "482917", (l) => live.push(l.name));
+
+  dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" }, "owner-1");
+  at += 5 * 60 * 1000;            // past the TTL: it stopped
+  dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" }, "owner-1");
+
+  assert.equal(live.length, 2, "a second run is a second broadcast");
+});
+
+test("the owner comes from the token and survives a heartbeat that omits it", () => {
+  let at = 1_788_928_020_000;
+  const dir = new Directory(4 * 60 * 1000, () => at, () => "482917");
+
+  const first = dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" }, "owner-1");
+  assert.equal(first.ownerId, "owner-1");
+
+  // A heartbeat with no owner must not orphan a listing people follow.
+  at += 90_000;
+  const beat = dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" });
+  assert.equal(beat.ownerId, "owner-1");
+
+  // And it survives the stream stopping and returning.
+  at += 5 * 60 * 1000;
+  const back = dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" });
+  assert.equal(back.ownerId, "owner-1");
+});
+
+test("an unowned listing notifies nobody, because there is nobody to follow", () => {
+  const live: { ownerId: string }[] = [];
+  const dir = new Directory(4 * 60 * 1000, () => 1, () => "482917", (l) => live.push(l));
+  dir.announce({ name: "anon", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" });
+  // It still fires; the caller is what declines to send, because an empty
+  // owner has no audience to look up.
+  assert.equal(live[0]?.ownerId, "");
+});

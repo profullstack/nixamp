@@ -30,6 +30,14 @@ export interface Listing {
    */
   code: string;
   name: string;
+  /**
+   * The account that announced it.
+   *
+   * Set from the signed-in publisher, never from the announcement body -- a
+   * stream that could name its own owner could name somebody else's, and
+   * followers would be told about a broadcast that person is not making.
+   */
+  ownerId: string;
   /** The listen link, which is what a browser opens. */
   url: string;
   tracks: number;
@@ -53,6 +61,7 @@ export interface Ended {
   id: string;
   code: string;
   name: string;
+  ownerId: string;
   /** Kept so a stream returning on the same url is recognised as the same one. */
   url: string;
   nowPlaying: string;
@@ -140,9 +149,18 @@ export class Directory {
     /** Injected so a test can make a code predictable rather than guess it. */
     private readonly randomCode: () => string = () =>
       String(randomInt(0, 1_000_000)).padStart(6, "0"),
+    /**
+     * Called when a stream starts, and only then.
+     *
+     * A publisher announces every ninety seconds for as long as it is up, so
+     * "announced" is not "went live" -- telling followers on every heartbeat
+     * would be telling them forty times an hour. This fires on the transition
+     * and not on the renewals that follow it.
+     */
+    private readonly onLive: (listing: Listing) => void = () => {},
   ) {}
 
-  announce(announcement: Announcement): Listing {
+  announce(announcement: Announcement, ownerId = ""): Listing {
     this.sweep();
     const existing = [...this.items.values()].find((item) => item.url === announcement.url);
 
@@ -157,6 +175,9 @@ export class Directory {
       id,
       code,
       name: announcement.name,
+      // A returning stream keeps the owner it had, so a heartbeat that omits
+      // it cannot orphan a listing people are following.
+      ownerId: ownerId || existing?.ownerId || previously?.ownerId || "",
       url: announcement.url,
       tracks: announcement.tracks,
       nowPlaying: announcement.nowPlaying,
@@ -166,6 +187,8 @@ export class Directory {
       startedAt: existing?.startedAt ?? this.now(),
     };
     this.items.set(id, listing);
+    // The transition, not the heartbeat: existing means it was already live.
+    if (existing === undefined) this.onLive(listing);
     return listing;
   }
 
@@ -201,6 +224,7 @@ export class Directory {
       id: item.id,
       code: item.code,
       name: item.name,
+      ownerId: item.ownerId,
       url: item.url,
       nowPlaying: item.nowPlaying,
       startedAt: item.startedAt,

@@ -38,6 +38,48 @@ self.addEventListener("message", (event) => {
   if (event.data === "skip-waiting") self.skipWaiting();
 });
 
+// A broadcaster somebody follows went live. This is the same code path for a
+// browser tab, an installed PWA and the desktop app: all three are a push
+// subscription, and none of them has to be open to receive one.
+self.addEventListener("push", (event) => {
+  // A push with no payload is still a push. Showing something beats showing
+  // nothing, and some services strip the body.
+  let note = { title: "nixamp", body: "Someone you follow is live.", url: "/directory" };
+  try {
+    if (event.data) note = { ...note, ...event.data.json() };
+  } catch (_) {}
+
+  event.waitUntil(
+    self.registration.showNotification(note.title, {
+      body: note.body,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      // Tagged by destination so a second notification about the same stream
+      // replaces the first rather than stacking up behind it.
+      tag: "nixamp-live-" + (note.url || ""),
+      renotify: false,
+      data: { url: note.url },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || "/directory";
+  event.waitUntil((async () => {
+    // Focus a window we already have rather than opening a fourth copy of the
+    // app, which is what happens if you just call openWindow every time.
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const client of windows) {
+      if ("focus" in client) {
+        if ("navigate" in client) await client.navigate(target).catch(() => {});
+        return client.focus();
+      }
+    }
+    return self.clients.openWindow(target);
+  })());
+});
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
