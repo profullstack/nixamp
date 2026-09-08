@@ -419,3 +419,7 @@ button.ghost { background: transparent; color: var(--muted); }
 .admin-table td.network-public { color: var(--warning, #e0b341); }
 .admin-table td.network-private { color: var(--success, #7fd18b); }
 .admin-table tr.ended { opacity: 0.45; }
+
+/* /directory is a page about what is live, not the player with a drawer open
+   somewhere below the fold. */
+body.route-directory .player-only { display: none; }

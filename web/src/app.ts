@@ -67,7 +67,7 @@ export function start(): void {
     adminConnections: need<HTMLTableElement>("admin-connections"),
     adminRestream: need<HTMLFormElement>("admin-restream"),
     adminSource: need<HTMLInputElement>("admin-source"),
-    directory: need<HTMLDivElement>("directory"),
+    directory: need<HTMLElement>("directory"),
     directoryNote: need<HTMLParagraphElement>("directory-note"),
     directoryList: need<HTMLUListElement>("directory-list"),
     listenHere: need<HTMLInputElement>("listen-here"),
@@ -496,9 +496,14 @@ export function start(): void {
     }
   };
 
-  // /directory is the shareable address for the list. The server serves the
-  // app shell for any unknown path, so the routing is this one line.
-  if (location.pathname.replace(/\/+$/, "") === "/directory") void loadDirectory();
+  // /directory is a page, not a drawer. Opening it showed the player with the
+  // list somewhere below the fold, which read as "the directory is broken".
+  if (location.pathname.replace(/\/+$/, "") === "/directory") {
+    document.body.classList.add("route-directory");
+    const back = document.getElementById("directory-back");
+    if (back) back.hidden = false;
+    void loadDirectory();
+  }
 
   // --- administering ----------------------------------------------------
   //
@@ -692,6 +697,7 @@ export function start(): void {
       return;
     }
     void loadDirectory();
+    dom.directory.scrollIntoView({ behavior: "smooth", block: "nearest" });
   });
 
   dom.disconnect.addEventListener("click", () => {

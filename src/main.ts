@@ -89,7 +89,8 @@ Options for serve:
       --no-publish never list it, and do not ask
       --name NAME  what to call it in the directory (default: this hostname)
       --ingest     accept a live stream in at POST /api/ingest
-      --rtmp-in N  also listen for RTMP publishers (OBS, Larix) on port N
+      --rtmp-in N  also listen for RTMP publishers (OBS, Larix) from port N
+      --rtmp-streams N  how many may publish at once (default 3, a port each)
       --rtmp D     broadcast out, e.g. --rtmp youtube=<key>. Repeatable
       --x402       charge for listening once more than 5 people are listening
       --no-x402    never charge

@@ -24,6 +24,8 @@ import {
   redact,
 } from "./broadcast.ts";
 import { Ingest, normaliseFormat } from "./ingest.ts";
+import { Channels, cleanId } from "./channels.ts";
+import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
 import { needsAdmin, Owner } from "./owner.ts";
 import { readSession } from "./session.ts";
@@ -116,6 +118,12 @@ export interface ServeOptions {
    */
   rtmpIn: number;
   /**
+   * How many RTMP publishers may be live at once. ffmpeg's listener serves one
+   * connection per process, so this is a port and a process each: 1935, 1936,
+   * and so on. HTTP publishers are not limited by this.
+   */
+  rtmpStreams: number;
+  /**
    * RTMP destinations, as `name=rtmp://host/app/key` or `youtube=key` for one
    * of the presets. Repeatable.
    */
@@ -148,6 +156,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     owner: "",
     ingest: false,
     rtmpIn: 0,
+    rtmpStreams: 3,
     rtmp: [],
   };
   let sawRoot = false;
@@ -189,6 +198,12 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.owner = value();
     } else if (arg === "--ingest") {
       options.ingest = true;
+    } else if (arg === "--rtmp-streams") {
+      const count = Number(value());
+      if (!Number.isInteger(count) || count < 1 || count > 16) {
+        throw new Error("nixamp serve: --rtmp-streams must be between 1 and 16");
+      }
+      options.rtmpStreams = count;
     } else if (arg === "--rtmp-in") {
       const port = Number(value());
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -594,6 +609,8 @@ export interface HandlerOptions {
   paywall?: (request: IncomingMessage, response: ServerResponse, path: string) => Promise<boolean>;
   /** Live audio coming in from a phone or a desktop. */
   ingest?: Ingest;
+  /** Several live streams at once, each with its own audience. */
+  channels?: Channels;
   /** Live audio going out to RTMP. */
   broadcaster?: Broadcaster;
   /** Where a broadcast should send, and what it should look like. */
@@ -791,10 +808,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // Administering is a different question from listening, and it is asked
     // after the share key: the control key answers both, but a listen key or a
     // nixamp.com session answers only one of them.
-    if (options.owner && needsAdmin(path)) {
+    if (options.owner && needsAdmin(path, request.method ?? "GET")) {
+      // A server started with --no-key has said that anyone who can reach the
+      // port may drive it, and prints exactly that. Locking administration to
+      // nobody would contradict it and leave such a server unadministrable.
       const holdsControl =
-        key !== null &&
-        scopeOf(keyFrom(request, url), key, null) === "control";
+        key === null || scopeOf(keyFrom(request, url), key, null) === "control";
       const check = await options.owner.check(holdsControl, tokenFrom(request.headers));
 
       if (path === "/api/admin") {
@@ -816,6 +835,93 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // After the key check: a paying listener still needs the link, and a 402
     // is a worse answer than a 401 to someone who has neither.
     if (options.paywall && (await options.paywall(request, response, path))) return;
+
+    // --- several streams at once ------------------------------------------
+    //
+    // A channel is one publisher and everybody listening to them. Two or three
+    // devices can publish at once, each to their own channel, and a listener
+    // picks which to hear.
+    if (path === "/api/channels" && options.channels) {
+      json(response, 200, { channels: options.channels.list(), listeners: options.channels.listeners });
+      return;
+    }
+
+    // Publishing. Anyone with the control link may; listening to the result is
+    // open to whoever has the share link, like the rest of the audio.
+    if (path.startsWith("/api/channels/") && options.channels) {
+      const channels = options.channels;
+      const rest = path.slice("/api/channels/".length);
+      const [rawId, action] = rest.split("/");
+      const id = cleanId(rawId);
+
+      if (action === undefined && request.method === "GET") {
+        // Listening. The response is the fan-out target: whatever ffmpeg
+        // produces for this channel is written to it until one end goes away.
+        const detach = channels.listen(id, response);
+        if (detach === null) {
+          json(response, 404, { error: "nothing is playing on that channel" });
+          return;
+        }
+        watch(request, response, "stream", id);
+        response.writeHead(200, {
+          ...CORS,
+          "content-type": "audio/mpeg",
+          "cache-control": "no-store",
+        });
+        const leave = (): void => detach();
+        request.on("close", leave);
+        response.on("close", leave);
+        return;
+      }
+
+      if (action === undefined && request.method === "DELETE") {
+        // Asked once: the second call would answer false, having just stopped
+        // the thing it was asking about.
+        const stopped = channels.stop(id);
+        json(response, stopped ? 200 : 404, { ok: stopped });
+        return;
+      }
+
+      if (request.method !== "POST") {
+        json(response, 405, { error: "GET, POST or DELETE" });
+        return;
+      }
+
+      const format = normaliseFormat(url.searchParams.get("format") ?? request.headers["content-type"]);
+      if (format === null) {
+        json(response, 415, { error: "give a container ffmpeg knows: webm, ogg, mp4, mp3, wav" });
+        return;
+      }
+      const name = url.searchParams.get("name") ?? "";
+
+      // A chunked publisher sends many requests to one channel, so the first
+      // claims it and the rest feed what is already there.
+      if (action === "chunk") {
+        if (!channels.has(id) && channels.publish(id, name, format, "http") === null) {
+          json(response, 409, { error: "that channel is already being published to" });
+          return;
+        }
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(chunk as Buffer);
+        channels.writeTo(id, Buffer.concat(chunks));
+        json(response, 200, { ok: true });
+        return;
+      }
+
+      const claimed = channels.publish(id, name, format, "http");
+      if (claimed === null) {
+        json(response, 409, { error: "that channel is already being published to" });
+        return;
+      }
+      try {
+        await claimed.pump(request);
+      } catch {
+        // A publisher that hung up is not an error worth a 500.
+      }
+      claimed.close();
+      json(response, 200, { ok: true, bytes: claimed.info.bytes });
+      return;
+    }
 
     // --- streaming in ---------------------------------------------------
     //
@@ -1285,6 +1391,13 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       key !== null && scopeOf(keyFrom(request, new URL(request.url ?? "/", "http://localhost")), key, null) === "control",
   });
 
+  const channels = new Channels({
+    ffmpeg: tools.ffmpeg,
+    onStart: (info) =>
+      console.log(`  ${info.name} is publishing to "${info.id}" (${info.format} over ${info.via}).`),
+    onEnd: (info) => console.log(`  "${info.id}" stopped.`),
+  });
+
   const destinations = parseDestinations(options.rtmp);
   const broadcaster = new Broadcaster(tools.ffmpeg);
   const ingest = options.ingest
@@ -1310,6 +1423,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     web,
     media: options.media,
     owner,
+    channels,
     ...(ingest ? { ingest } : {}),
     broadcaster,
     broadcast: () => ({ destinations, settings: DEFAULT_ENCODER }),
@@ -1405,12 +1519,23 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     console.log(`  ${session?.email} can administer this from anywhere, signed in at ${session?.site}.`);
   }
   if (options.ingest) console.log("  Accepting a live stream in at POST /api/ingest.");
-  if (options.rtmpIn > 0 && ingest) {
+  let rtmp: RtmpListeners | null = null;
+  if (options.rtmpIn > 0) {
     const publish = addresses.find((a) => a.label !== "here") ?? addresses[0];
     const host = publish ? new URL(publish.url).hostname : "127.0.0.1";
-    ingest.listenRtmp(options.rtmpIn, listenKey ?? "live");
-    console.log(`  Or publish to it from OBS, Larix or ffmpeg:`);
-    console.log(`    rtmp://${host}:${options.rtmpIn}/live/${listenKey ?? "live"}`);
+    // One listener per stream, because ffmpeg's RTMP listener serves a single
+    // connection per process. Three devices going live at once is three ports.
+    const slots = Array.from({ length: options.rtmpStreams }, (_, i) => ({
+      port: options.rtmpIn + i,
+      id: i === 0 ? "live" : `live-${i + 1}`,
+    }));
+    rtmp = new RtmpListeners(channels, tools.ffmpeg, listenKey ?? "live");
+    rtmp.listen(slots);
+
+    console.log("  Or publish from OBS, Larix or ffmpeg, one per URL:");
+    for (const slot of slots) {
+      console.log(`    rtmp://${host}:${slot.port}/live/${listenKey ?? "live"}   -> "${slot.id}"`);
+    }
   }
   if (destinations.length > 0) {
     console.log(`  Ready to broadcast to ${destinations.map((d) => d.name).join(", ")}.`);
@@ -1498,6 +1623,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   }
 
   const shutdown = (): void => {
+    rtmp?.stop();
+    channels.stopAll();
     ingest?.stopRtmp();
     ingest?.close();
     broadcaster.stop();

@@ -104,6 +104,10 @@ export const ADMIN_PATHS = [
   "/api/admin",
 ];
 
-export function needsAdmin(path: string): boolean {
-  return ADMIN_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+export function needsAdmin(path: string, method = "GET"): boolean {
+  if (ADMIN_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) return true;
+  // Publishing to a channel, or ending one, is administering the server.
+  // Listening to a channel is not: that is what the share link is for.
+  if (path.startsWith("/api/channels/") && method !== "GET") return true;
+  return false;
 }
