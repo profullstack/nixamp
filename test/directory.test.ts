@@ -254,3 +254,86 @@ test("a stream nobody has seen for a day is forgotten entirely", () => {
   tick(ENDED_TTL_MS);
   assert.equal(dir.endedByCode(live.code), undefined);
 });
+
+
+test("a publisher signs its announcements, because the directory now asks who", async () => {
+  const calls: { url: string; method: string; auth: string | undefined }[] = [];
+  const fake = (async (url: string | URL, init?: RequestInit) => {
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    calls.push({ url: String(url), method: init?.method ?? "GET", auth: headers["authorization"] });
+    return {
+      ok: true,
+      json: async () => ({
+        id: "assigned-id", code: "482917", name: "n", url: "u",
+        tracks: 0, nowPlaying: "", updatedAt: 0, startedAt: 0,
+      }),
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
+
+  const publisher = new Publisher(
+    {
+      directory: "https://d.example",
+      name: "n",
+      url: "https://a.example/s/1",
+      tracks: 1,
+      nowPlaying: () => "",
+      token: "tok-from-nixamp-login",
+    },
+    fake,
+  );
+
+  await publisher.start();
+  assert.equal(calls[0]?.auth, "Bearer tok-from-nixamp-login");
+
+  // Leaving the list is the same claim as joining it.
+  await publisher.stop();
+  assert.equal(calls[1]?.method, "DELETE");
+  assert.equal(calls[1]?.auth, "Bearer tok-from-nixamp-login");
+});
+
+test("a publisher with no account is told once, not every heartbeat", async () => {
+  let refusals = 0;
+  const fake = (async () =>
+    ({ ok: false, status: 401, json: async () => ({}) }) as unknown as Response) as unknown as typeof fetch;
+
+  const publisher = new Publisher(
+    {
+      directory: "https://d.example",
+      name: "n",
+      url: "https://a.example/s/1",
+      tracks: 1,
+      nowPlaying: () => "",
+      onRefused: () => (refusals += 1),
+    },
+    fake,
+  );
+
+  assert.equal(await publisher.announce(), null);
+  assert.equal(refusals, 1);
+
+  // A heartbeat every 90 seconds must not print this every 90 seconds.
+  await publisher.announce();
+  await publisher.announce();
+  assert.equal(refusals, 1);
+});
+
+test("a directory being down is not the same as a directory saying no", async () => {
+  let refusals = 0;
+  const fake = (async () =>
+    ({ ok: false, status: 503, json: async () => ({}) }) as unknown as Response) as unknown as typeof fetch;
+
+  const publisher = new Publisher(
+    {
+      directory: "https://d.example",
+      name: "n",
+      url: "https://a.example/s/1",
+      tracks: 1,
+      nowPlaying: () => "",
+      onRefused: () => (refusals += 1),
+    },
+    fake,
+  );
+
+  assert.equal(await publisher.announce(), null);
+  assert.equal(refusals, 0, "a 503 is not a missing account");
+});

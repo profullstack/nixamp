@@ -852,10 +852,13 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
-    // The directory is public in both directions: anyone may read the list,
-    // and anyone running a nixamp may add themselves to it. It is answered
-    // before the key check, because a visitor to nixamp.com has no key and is
-    // exactly who it is for.
+    // The directory is public to read and answered before the key check,
+    // because a visitor to nixamp.com has no key and is exactly who it is for.
+    //
+    // Announcing is not public any more. A listing now carries a phone number
+    // people dial and minutes we pay for, so it has to be attributable to
+    // somebody: broadcasters register, and a caller just dials. Reading stays
+    // open to everyone -- the whole point is a directory a stranger can browse.
     if (path === "/api/directory" && options.directory) {
       if (request.method === "GET") {
         // Each stream carries its call-in code and how many people are on the
@@ -870,6 +873,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       if (request.method === "POST") {
+        // Only where there are accounts to check against. An instance with no
+        // Accounts is somebody's laptop, which has no registration to demand.
+        if (options.accounts) {
+          const who = await options.accounts.whoIs(tokenFrom(request.headers));
+          if (who === null) {
+            json(response, 401, {
+              error: "sign in to list a stream: nixamp login, then nixamp serve --directory",
+            });
+            return;
+          }
+        }
+
         let announcement;
         try {
           announcement = parseAnnouncement(JSON.parse(await readBody(request)));
@@ -1728,6 +1743,15 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         name: options.name || hostname(),
         url: listen,
         tracks: tracks.length,
+        // From `nixamp login`. The directory will not list a stream it cannot
+        // attribute to somebody, because a listing is now a phone code that
+        // costs money to answer.
+        ...(session?.token ? { token: session.token } : {}),
+        onRefused: () => {
+          console.log("");
+          console.log("  nixamp.com would not list this stream: it needs an account.");
+          console.log("  Run `nixamp login` (or `nixamp signup`) and start again.");
+        },
         nowPlaying: () => {
           const snapshot = engine.snapshot();
           return snapshot.tracks[snapshot.index]?.title ?? "";

@@ -16,10 +16,21 @@ export interface PublishTarget {
   tracks: number;
   nowPlaying: () => string;
   /**
+   * The account this stream belongs to, from `nixamp login`.
+   *
+   * The directory used to take anybody's word for a listing. It cannot any
+   * more: a listing now carries a phone code people dial and minutes somebody
+   * pays for, so it has to be attributable. Reading the directory is still
+   * open to everyone -- it is announcing that needs a name behind it.
+   */
+  token?: string;
+  /**
    * Called with whatever configuration the directory sent back. This is how
    * nixamp.com turns x402 on and off for a server without it restarting.
    */
   onConfig?: (config: unknown) => void;
+  /** Called when the directory refused us for want of an account. */
+  onRefused?: () => void;
 }
 
 /**
@@ -45,6 +56,8 @@ export async function confirm(question: string, tty = process.stdin.isTTY === tr
 export class Publisher {
   private id: string | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** Whether we have already said that the directory wants an account. */
+  private refused = false;
 
   constructor(
     private readonly target: PublishTarget,
@@ -62,7 +75,10 @@ export class Publisher {
     try {
       const response = await this.fetcher(`${this.target.directory}/api/directory`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(this.target.token ? { authorization: `Bearer ${this.target.token}` } : {}),
+        },
         body: JSON.stringify({
           ...(this.id ? { id: this.id } : {}),
           name: this.target.name,
@@ -71,7 +87,17 @@ export class Publisher {
           nowPlaying: this.target.nowPlaying(),
         }),
       });
-      if (!response.ok) return null;
+      if (!response.ok) {
+        // Worth telling the operator about exactly once. A heartbeat that is
+        // refused every 90 seconds should not print every 90 seconds, and
+        // "could not reach the directory" would be the wrong thing to say
+        // about a directory that answered perfectly clearly.
+        if (response.status === 401 && !this.refused) {
+          this.refused = true;
+          this.target.onRefused?.();
+        }
+        return null;
+      }
       const listing = (await response.json()) as Listing & { config?: unknown };
       this.id = listing.id;
       if (listing.config !== undefined) this.target.onConfig?.(listing.config);
@@ -90,6 +116,7 @@ export class Publisher {
     try {
       await this.fetcher(`${this.target.directory}/api/directory?id=${encodeURIComponent(this.id)}`, {
         method: "DELETE",
+        ...(this.target.token ? { headers: { authorization: `Bearer ${this.target.token}` } } : {}),
       });
     } catch {
       // It expires on its own within the TTL, which is the point of the TTL.
