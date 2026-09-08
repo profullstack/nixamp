@@ -31,7 +31,7 @@ import { needsAdmin, Owner } from "./owner.ts";
 import { readSession } from "./session.ts";
 import { Directory, parseAnnouncement } from "./directory.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
-import { OPT_IN_PATH, optInPage } from "./optin.ts";
+import { CALL_IN_NUMBER, OPT_IN_PATH, optInPage } from "./optin.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
   applyRemoteConfig,
@@ -858,7 +858,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // exactly who it is for.
     if (path === "/api/directory" && options.directory) {
       if (request.method === "GET") {
-        json(response, 200, { streams: options.directory.list(), now: Date.now() });
+        // Each stream carries its call-in code and how many people are on the
+        // phone for it. The code is published on purpose: it is a public
+        // call-in line, and a listing you cannot dial is a listing of nothing.
+        const onThePhone = options.partyLine;
+        const streams = options.directory.list().map((stream) => ({
+          ...stream,
+          callers: onThePhone ? onThePhone.listenersOn(stream.code) : 0,
+        }));
+        json(response, 200, { streams, callIn: CALL_IN_NUMBER, now: Date.now() });
         return;
       }
       if (request.method === "POST") {

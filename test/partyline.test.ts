@@ -163,7 +163,7 @@ test("the first caller opens the room and the second lands in it", async () => {
   const created = calls.find((c) => c.path === "/conferences");
   assert.ok(created, "the first caller creates the conference");
   assert.equal(created?.body["call_control_id"], "leg-1");
-  assert.deepEqual(party.list(), [{ callers: 1, startedAt: NOW }]);
+  assert.deepEqual(party.list(), [{ code: "482917", callers: 1, startedAt: NOW }]);
 
   await party.handle(keyed("leg-2", "482917"));
   assert.ok(
@@ -176,20 +176,58 @@ test("the first caller opens the room and the second lands in it", async () => {
   assert.equal(party.list()[0]?.callers, 2);
 });
 
-test("the code never appears in what Telnyx or the public can see", async () => {
+test("the listing publishes the code, because a listing you cannot dial is nothing", async () => {
   const { calls, fetch } = recorder(conferenceReplies());
   const party = line(fetch);
   await party.handle(keyed("leg-1", "482917"));
 
-  // The rooms listing is served to anyone who asks. A live code in it would be
-  // a door with the key taped to it.
-  assert.deepEqual(Object.keys(party.list()[0] ?? {}).sort(), ["callers", "startedAt"]);
-  assert.ok(!JSON.stringify(party.list()).includes("482917"));
+  // This is a public call-in line, not a private room. The code is how you
+  // join, so withholding it would leave a list nobody can act on.
+  assert.deepEqual(Object.keys(party.list()[0] ?? {}).sort(), ["callers", "code", "startedAt"]);
+  assert.equal(party.list()[0]?.code, "482917");
 
-  // Telnyx lists conferences in a dashboard we do not control, so the code is
-  // not the conference name either.
+  // Still not the Telnyx conference name, which is a different concern: that
+  // is a label in somebody else's dashboard, and it should not be load-bearing.
   const created = calls.find((c) => c.path === "/conferences");
   assert.ok(!String(created?.body["name"]).includes("482917"));
+});
+
+test("phone listeners on a stream are counted, so the directory can say how many", async () => {
+  const { fetch } = recorder();
+  const live = {
+    name: "Chovy",
+    url: "https://chovy.example/listen.mp3",
+    nowPlaying: "Top Gun: Maverick",
+    startedAt: NINE_TWENTY_SEVEN,
+  };
+  const party = line(fetch, "", { streams: streams({ "482917": live }) });
+
+  assert.equal(party.listenersOn("482917"), 0);
+  await party.handle(keyed("leg-1", "482917"));
+  await party.handle(keyed("leg-2", "482917"));
+  assert.equal(party.listenersOn("482917"), 2);
+
+  // A listener is a leg with audio playing, not a conference member, so
+  // nothing else was counting them.
+  assert.deepEqual(party.list(), [], "a stream is not a room");
+
+  await party.handle({ event_type: "call.hangup", payload: { call_control_id: "leg-1" } });
+  assert.equal(party.listenersOn("482917"), 1);
+  await party.handle({ event_type: "call.hangup", payload: { call_control_id: "leg-2" } });
+  assert.equal(party.listenersOn("482917"), 0);
+});
+
+test("a leg that never started playing is not counted as listening", async () => {
+  // Telnyx refused the playback: nobody is hearing anything, and the directory
+  // would be lying if it said somebody was.
+  const { fetch } = recorder((path) => ({ ok: !path.endsWith("playback_start") }));
+  const party = line(fetch, "", {
+    streams: streams({
+      "482917": { name: "Chovy", url: "https://x.example/a.mp3", nowPlaying: "", startedAt: 1 },
+    }),
+  });
+  await party.handle(keyed("leg-1", "482917"));
+  assert.equal(party.listenersOn("482917"), 0);
 });
 
 test("two codes are two rooms", async () => {
