@@ -5,7 +5,7 @@
     "": {
       "name": "nixamp",
       "dependencies": {
-        "@profullstack/hqtui": "^0.2.0",
+        "@profullstack/hqtui": "^0.3.0",
       },
       "devDependencies": {
         "@types/node": "^26",
@@ -14,7 +14,7 @@
     },
   },
   "packages": {
-    "@profullstack/hqtui": ["@profullstack/hqtui@0.2.0", "", { "bin": { "hqtui": "bin/hqtui.mjs" } }, "sha512-u6YeeYlnWgjCGsdPZIkha/UFstX+Bz0JDBHuszrBOJd9/hpnUWEI0FNSU9ElNaVCFrL3y+H5tZNCvIeReaNPHw=="],
+    "@profullstack/hqtui": ["@profullstack/hqtui@0.3.0", "", { "bin": { "hqtui": "bin/hqtui.mjs" } }, "sha512-ceiLIarditlryaHqYW1V2VCkF7mlV+u9LJoNB3zEW6FSnRzvugjgLkju4qEsWZSkojeE+lEir5W6nxtuuGzmXw=="],
 
     "@types/node": ["@types/node@26.5.0", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-dVSGpriSoCgz8WnDNTuSSuSv1PC/ALXihO4ulRZt7Md8k9mlbdin3lGOcDE8SnWOgf513ByWlXd7BK4azmyg/A=="],
 
