@@ -17,6 +17,13 @@ import { readFileSync } from "node:fs";
 import { Connections, type Kind } from "./connections.ts";
 import { Directory, parseAnnouncement } from "./directory.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
+import {
+  applyRemoteConfig,
+  createPaywall,
+  FREE_LISTENERS,
+  type PaywallConfig,
+  paywallFromEnv,
+} from "./paywall.ts";
 import { isRemote } from "./sources.ts";
 import {
   allowedForListening,
@@ -82,6 +89,11 @@ export interface ServeOptions {
   publish: "ask" | "yes" | "no";
   /** What to call it in the list. Defaults to this machine's hostname. */
   name: string;
+  /**
+   * Charge for listening once the stream is busy. Off unless asked for, and
+   * useless without somewhere to pay: see NIXAMP_PAY_TO.
+   */
+  x402: boolean;
 }
 
 /**
@@ -106,6 +118,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     directory: false,
     publish: "ask",
     name: "",
+    x402: false,
   };
   let sawRoot = false;
   for (let i = 0; i < argv.length; i++) {
@@ -142,6 +155,10 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.publish = "no";
     } else if (arg === "--name") {
       options.name = value();
+    } else if (arg === "--x402") {
+      options.x402 = true;
+    } else if (arg === "--no-x402") {
+      options.x402 = false;
     } else if (arg.startsWith("-")) {
       throw new Error(`nixamp serve: unknown option ${arg}`);
     } else if (!sawRoot) {
@@ -529,6 +546,8 @@ export interface HandlerOptions {
    * passes this; a nixamp on your laptop is a publisher, not a registry.
    */
   directory?: Directory;
+  /** Answers a request itself when listening has to be paid for. */
+  paywall?: (request: IncomingMessage, response: ServerResponse, path: string) => Promise<boolean>;
 }
 
 /**
@@ -639,6 +658,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       json(response, 405, { error: "GET, POST or DELETE" });
       return;
     }
+
+    // After the key check: a paying listener still needs the link, and a 402
+    // is a worse answer than a 401 to someone who has neither.
+    if (options.paywall && (await options.paywall(request, response, path))) return;
 
     if (path === "/api/state") {
       json(response, 200, engine.snapshot());
@@ -966,12 +989,35 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // Minted whether or not it is published, so `nixamp admin` and the operator
   // both have a link they can hand out without handing over the controls.
   const listenKey = key === null ? null : newKey();
+  // Configuration can arrive from the directory later, so it is a box the
+  // paywall reads rather than a value it was handed once.
+  let paywallConfig: PaywallConfig = { ...paywallFromEnv(), enabled: options.x402 || paywallFromEnv().enabled };
+  const connections = new Connections();
+  const paywall = createPaywall({
+    config: () => paywallConfig,
+    liveListeners: () => connections.listening,
+    // The address a payer can actually reach: the public one where there is
+    // one, since a quote pointing at 192.168.1.5 is one they cannot pay from.
+    siteUrl: () => {
+      const bound = server.address();
+      const live = typeof bound === "object" && bound !== null ? bound.port : options.port;
+      const reachable = reachableAddresses(options.host, live);
+      return (reachable.find((a) => a.label === "on the internet") ?? reachable[0])?.url
+        ?? `http://127.0.0.1:${live}`;
+    },
+    // The operator drives with the control key, and is not a customer.
+    exempt: (request) =>
+      key !== null && scopeOf(keyFrom(request, new URL(request.url ?? "/", "http://localhost")), key, null) === "control",
+  });
+
   const server = createServer(engine, {
     web,
     media: options.media,
     version,
     key,
     listenKey,
+    connections,
+    paywall,
     ffmpeg: tools.ffmpeg,
     load: (next) => loadSource(tools, next),
     ...(options.directory ? { directory: new Directory() } : {}),
@@ -1105,6 +1151,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         nowPlaying: () => {
           const snapshot = engine.snapshot();
           return snapshot.tracks[snapshot.index]?.title ?? "";
+        },
+        onConfig: (remote) => {
+          const next = applyRemoteConfig(paywallConfig, (remote as { x402?: unknown })?.x402);
+          if (JSON.stringify(next) === JSON.stringify(paywallConfig)) return;
+          paywallConfig = next;
+          console.log(next.enabled
+            ? `  nixamp.com turned paid listening on: $${(next.priceCents / 100).toFixed(2)} for ${next.passMinutes} minutes, over ${FREE_LISTENERS} listeners.`
+            : "  nixamp.com turned paid listening off.");
         },
       });
       const listing = await publisher.start();
