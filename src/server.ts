@@ -15,11 +15,13 @@ import { networkInterfaces } from "node:os";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
-  firewallHint,
+  elevate,
+  firewallInUse,
   keyCookie,
   keyFrom,
   keysMatch,
   newKey,
+  portCommands,
   reachableAddresses,
   shareLink,
 } from "./share.ts";
@@ -52,6 +54,11 @@ export interface ServeOptions {
    * port, which is what the public deployment wants and no private one does.
    */
   key: boolean;
+  /**
+   * Ask the local firewall to let the port through, and put it back on the way
+   * out. Off by default because it changes the machine, not just this process.
+   */
+  openPort: boolean;
 }
 
 /**
@@ -71,6 +78,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     web: null,
     media: true,
     key: true,
+    openPort: false,
   };
   let sawRoot = false;
   for (let i = 0; i < argv.length; i++) {
@@ -95,6 +103,8 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.media = false;
     } else if (arg === "--no-key") {
       options.key = false;
+    } else if (arg === "--open-port") {
+      options.openPort = true;
     } else if (arg.startsWith("-")) {
       throw new Error(`nixamp serve: unknown option ${arg}`);
     } else if (!sawRoot) {
@@ -670,6 +680,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const bound = server.address();
   const port = typeof bound === "object" && bound !== null ? bound.port : options.port;
 
+  const io = {
+    read: readIfPossible,
+    run: (command: string, args: string[]) => {
+      const done = spawnSync(command, args, { encoding: "utf8" });
+      return { status: done.status, stdout: done.stdout ?? "" };
+    },
+  };
+
   console.log(`nixamp serve — ${tracks.length} tracks under ${root}`);
   console.log("");
 
@@ -698,15 +716,44 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 
   // Listening on every interface proves the socket is open here and nothing
   // about the path between here and the phone.
-  const blocked = firewallHint(readIfPossible, (command, args) => {
-    const done = spawnSync(command, args, { encoding: "utf8" });
-    return { status: done.status, stdout: done.stdout ?? "" };
-  });
-  if (blocked !== null && (options.host === "0.0.0.0" || options.host === "::")) {
-    console.log(`  ${blocked.replace("<port>", String(port))}`);
+  const listening = options.host === "0.0.0.0" || options.host === "::";
+  const firewall = listening ? firewallInUse(io) : null;
+  let closePort: (() => void) | null = null;
+
+  if (firewall !== null) {
+    const { open, close } = portCommands(firewall, port);
+    if (!options.openPort) {
+      console.log("");
+      console.log(`  ${firewall} is running, so other devices cannot reach this port yet:`);
+      console.log(`    sudo ${open.join(" ")}`);
+      console.log("  or start with --open-port and nixamp will do it, and undo it on exit.");
+    } else {
+      const elevated = elevate(io, open);
+      if (elevated === null) {
+        console.log("");
+        console.log(`  --open-port needs root or passwordless sudo. Run this yourself:`);
+        console.log(`    sudo ${open.join(" ")}`);
+      } else {
+        const done = spawnSync(elevated[0] as string, elevated.slice(1), { encoding: "utf8" });
+        if (done.status === 0) {
+          console.log("");
+          console.log(`  Opened ${port}/tcp in ${firewall}. It closes again when this exits.`);
+          // Leave the machine as it was found. A player should not be the
+          // reason a port is still open next week.
+          closePort = () => {
+            const undo = elevate(io, close);
+            if (undo) spawnSync(undo[0] as string, undo.slice(1), { stdio: "ignore" });
+          };
+        } else {
+          console.log("");
+          console.log(`  Could not open the port: ${(done.stderr || done.stdout || "").trim() || "unknown error"}`);
+        }
+      }
+    }
   }
 
   const shutdown = (): void => {
+    closePort?.();
     engine.stop();
     server.close(() => process.exit(0));
     // A hung keep-alive should not outlive a ctrl-c.

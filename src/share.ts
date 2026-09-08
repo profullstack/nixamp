@@ -116,25 +116,51 @@ export function shareLink(base: string, key: string | null): string {
   return key === null ? base : `${base}/s/${key}`;
 }
 
+/** How to run a command, so the tests never touch a real firewall. */
+export interface Runner {
+  read(path: string): string | null;
+  run(command: string, args: string[]): { status: number | null; stdout: string };
+}
+
+/** Which firewall is in the way, if any. */
+export type Firewall = "ufw" | "firewalld";
+
 /**
- * Whether a firewall is running that could keep the port closed to other
+ * Whether a firewall is running that would keep the port closed to other
  * devices. Listening on 0.0.0.0 proves the socket is open on this machine and
  * nothing more, so this is the difference between "it works" and "it works
- * here", and it is worth one line of output rather than a silent surprise.
+ * here".
  */
-export function firewallHint(
-  read: (path: string) => string | null,
-  run: (command: string, args: string[]) => { status: number | null; stdout: string },
-): string | null {
+export function firewallInUse(io: Runner): Firewall | null {
   if (process.platform !== "linux") return null;
 
-  // ufw keeps its state in a file, so this needs no privileges.
-  const ufw = read("/etc/ufw/ufw.conf");
-  if (ufw && /^ENABLED=yes/im.test(ufw)) return "ufw is enabled; allow the port with `sudo ufw allow <port>/tcp`";
+  // ufw keeps its state in a file, so asking needs no privileges.
+  const ufw = io.read("/etc/ufw/ufw.conf");
+  if (ufw && /^ENABLED=yes/im.test(ufw)) return "ufw";
 
-  const firewalld = run("systemctl", ["is-active", "firewalld"]);
-  if (firewalld.status === 0 && firewalld.stdout.trim() === "active") {
-    return "firewalld is running; allow the port with `sudo firewall-cmd --add-port=<port>/tcp`";
-  }
+  const firewalld = io.run("systemctl", ["is-active", "firewalld"]);
+  if (firewalld.status === 0 && firewalld.stdout.trim() === "active") return "firewalld";
   return null;
+}
+
+/** The commands that open and close a port, for each firewall we know. */
+export function portCommands(firewall: Firewall, port: number): { open: string[]; close: string[] } {
+  return firewall === "ufw"
+    ? { open: ["ufw", "allow", `${port}/tcp`], close: ["ufw", "delete", "allow", `${port}/tcp`] }
+    : {
+        open: ["firewall-cmd", `--add-port=${port}/tcp`],
+        close: ["firewall-cmd", `--remove-port=${port}/tcp`],
+      };
+}
+
+/**
+ * Root runs it directly; anyone else goes through sudo, and only when sudo
+ * will not stop to ask. A server that hangs on an invisible password prompt is
+ * worse than one that tells you the command to run yourself.
+ */
+export function elevate(io: Runner, command: string[]): string[] | null {
+  const [head, ...rest] = command as [string, ...string[]];
+  if (typeof process.getuid === "function" && process.getuid() === 0) return [head, ...rest];
+  const canSudo = io.run("sudo", ["-n", "true"]);
+  return canSudo.status === 0 ? ["sudo", "-n", head, ...rest] : null;
 }

@@ -75,6 +75,7 @@ Options for serve:
       --web DIR    directory of built PWA files to serve at /
       --no-media   do not stream the library's bytes to remotes
       --no-key     serve to anyone who can reach the port, with no share link
+      --open-port  let the port through the local firewall, and close it on exit
 
   -v, --version    print the version
       --help       print this

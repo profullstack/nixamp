@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import {
   KEY_COOKIE,
-  firewallHint,
+  elevate,
+  firewallInUse,
   keyCookie,
   keyFrom,
   keysMatch,
   classify,
   newKey,
+  portCommands,
   reachableAddresses,
   shareLink,
 } from "../src/share.ts";
@@ -100,19 +102,42 @@ test("serve listens on every interface and wants a key, unless told otherwise", 
   assert.equal(pinned.key, true);
 });
 
-test("ufw and firewalld are reported, and a quiet machine says nothing", () => {
+const io = (
+  read: (path: string) => string | null,
+  run: (command: string, args: string[]) => { status: number | null; stdout: string },
+) => ({ read, run });
+
+test("ufw and firewalld are detected, and a quiet machine reports neither", () => {
   if (process.platform !== "linux") return;
   const nothing = () => null;
   const inactive = () => ({ status: 3, stdout: "inactive\n" });
 
-  assert.equal(firewallHint(nothing, inactive), null);
-  assert.match(
-    firewallHint(() => "ENABLED=yes\n", inactive) ?? "",
-    /ufw is enabled/,
+  assert.equal(firewallInUse(io(nothing, inactive)), null);
+  assert.equal(firewallInUse(io(() => "ENABLED=yes\n", inactive)), "ufw");
+  assert.equal(firewallInUse(io(() => "ENABLED=no\n", inactive)), null);
+  assert.equal(firewallInUse(io(nothing, () => ({ status: 0, stdout: "active\n" }))), "firewalld");
+});
+
+test("each firewall gets the pair of commands that undo each other", () => {
+  assert.deepEqual(portCommands("ufw", 4321), {
+    open: ["ufw", "allow", "4321/tcp"],
+    close: ["ufw", "delete", "allow", "4321/tcp"],
+  });
+  assert.deepEqual(portCommands("firewalld", 4321), {
+    open: ["firewall-cmd", "--add-port=4321/tcp"],
+    close: ["firewall-cmd", "--remove-port=4321/tcp"],
+  });
+});
+
+test("elevation declines rather than hanging on a password prompt", () => {
+  const command = ["ufw", "allow", "4321/tcp"];
+  const nothing = () => null;
+
+  // sudo -n succeeds: it will not ask, so it is safe to use.
+  assert.deepEqual(
+    elevate(io(nothing, () => ({ status: 0, stdout: "" })), command),
+    ["sudo", "-n", "ufw", "allow", "4321/tcp"],
   );
-  assert.equal(firewallHint(() => "ENABLED=no\n", inactive), null);
-  assert.match(
-    firewallHint(nothing, () => ({ status: 0, stdout: "active\n" })) ?? "",
-    /firewalld is running/,
-  );
+  // sudo -n fails: it would have asked, and nobody is there to answer.
+  assert.equal(elevate(io(nothing, () => ({ status: 1, stdout: "" })), command), null);
 });
