@@ -313,3 +313,37 @@ test("html in a stream name cannot become html in an inbox", async () => {
   assert.ok(!String(calls[0]?.["html"]).includes("<img"));
   assert.match(String(calls[0]?.["html"]), /&lt;img/);
 });
+
+
+test("saving only the switches does not violate NOT NULL on the first save", async () => {
+  const { asked, queryable } = db();
+  const follows = new Follows(queryable);
+
+  // Exactly the call the settings page makes when somebody has never given a
+  // phone number: three booleans and no phone. This was a 500 in production.
+  await follows.setPrefs("me", { wantsEmail: true, wantsWeb: true, wantsSms: false });
+
+  const upsert = asked.find((a) => a.text.includes("INSERT INTO notify_prefs"));
+  assert.ok(upsert, "it writes");
+  // phone arrives as null, and the column is NOT NULL, so the INSERT branch
+  // has to supply the default rather than pass the null straight through.
+  assert.equal(upsert?.values[1], null);
+  assert.match(upsert?.text ?? "", /VALUES \(\$1,\s*COALESCE\(\$2::text, ''\)/);
+  // Postgres cannot infer a parameter's type when it is only ever a null
+  // inside COALESCE, so every one is cast.
+  assert.match(upsert?.text ?? "", /COALESCE\(\$3::boolean, TRUE\)/);
+  assert.match(upsert?.text ?? "", /COALESCE\(\$4::boolean, FALSE\)/);
+  assert.match(upsert?.text ?? "", /COALESCE\(\$5::boolean, TRUE\)/);
+});
+
+test("a phone given on its own leaves the switches alone", async () => {
+  const { asked, queryable } = db();
+  await new Follows(queryable).setPrefs("me", { phone: "(415) 555-0123" });
+
+  const upsert = asked.find((a) => a.text.includes("INSERT INTO notify_prefs"));
+  // Normalised on the way in, so what is stored is what we can dial.
+  assert.equal(upsert?.values[1], "+14155550123");
+  // The switches were not mentioned, so they must not be overwritten.
+  assert.deepEqual(upsert?.values.slice(2), [null, null, null]);
+  assert.match(upsert?.text ?? "", /want_email = COALESCE\(\$3::boolean, notify_prefs.want_email\)/);
+});
