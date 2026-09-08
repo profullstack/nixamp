@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Directory, clean, parseAnnouncement, publishable } from "../src/directory.ts";
+import { Directory, ENDED_TTL_MS, clean, parseAnnouncement, publishable } from "../src/directory.ts";
 import { Publisher, confirm } from "../src/publish.ts";
 import { allowedForListening, scopeOf } from "../src/share.ts";
 
@@ -159,4 +159,98 @@ test("a directory that is down does not stop the music", async () => {
   );
   assert.equal(await publisher.start(), null);
   await publisher.stop();
+});
+
+
+// --- codes, and remembering a stream long enough to say when it stopped -----
+
+/** A directory whose clock and codes a test decides. */
+function dated() {
+  let at = 1_788_928_020_000; // 9:27 PM Pacific
+  let n = 0;
+  const dir = new Directory(4 * 60 * 1000, () => at, () => String(100000 + ++n));
+  return { dir, tick: (ms: number) => (at += ms), at: () => at };
+}
+
+const stream = (url: string, name = "Chovy", nowPlaying = "Top Gun: Maverick") =>
+  ({ name, url, tracks: 1, nowPlaying });
+
+test("a stream gets a six digit code, and keeps it while it runs", () => {
+  const { dir, tick } = dated();
+  const first = dir.announce(stream("https://a.example/listen"));
+  assert.match(first.code, /^\d{6}$/);
+  assert.equal(first.startedAt, 1_788_928_020_000);
+
+  // A heartbeat is the same stream, so the code a caller was given still works.
+  tick(60_000);
+  const again = dir.announce(stream("https://a.example/listen"));
+  assert.equal(again.code, first.code);
+  assert.equal(again.id, first.id);
+  assert.equal(again.startedAt, first.startedAt, "the start does not move on a heartbeat");
+
+  assert.equal(dir.liveByCode(first.code)?.name, "Chovy");
+  assert.equal(dir.endedByCode(first.code), undefined);
+});
+
+test("two streams get two codes", () => {
+  const { dir } = dated();
+  const a = dir.announce(stream("https://a.example/listen"));
+  const b = dir.announce(stream("https://b.example/listen", "Someone"));
+  assert.notEqual(a.code, b.code);
+  assert.equal(dir.liveByCode(b.code)?.name, "Someone");
+});
+
+test("a stream that stops is remembered, with the time it stopped", () => {
+  const { dir, tick } = dated();
+  const live = dir.announce(stream("https://a.example/listen"));
+  const startedAt = live.startedAt;
+
+  // Past the TTL: it falls out of the list, which is what the list is for.
+  tick(5 * 60 * 1000);
+  assert.deepEqual(dir.list(), []);
+  assert.equal(dir.liveByCode(live.code), undefined);
+
+  // But the phone line can still say who it was and when it ended, which is
+  // the whole reason this is kept.
+  const ended = dir.endedByCode(live.code);
+  assert.equal(ended?.name, "Chovy");
+  assert.equal(ended?.nowPlaying, "Top Gun: Maverick");
+  assert.equal(ended?.endedAt, startedAt, "the last heartbeat is when it ended");
+});
+
+test("withdrawing is stopping, and is remembered the same way", () => {
+  const { dir } = dated();
+  const live = dir.announce(stream("https://a.example/listen"));
+  dir.withdraw(live.id);
+  assert.deepEqual(dir.list(), []);
+  assert.equal(dir.endedByCode(live.code)?.name, "Chovy");
+});
+
+test("a stream that comes back keeps the code it was given", () => {
+  const { dir, tick, at } = dated();
+  const first = dir.announce(stream("https://a.example/listen"));
+
+  tick(5 * 60 * 1000);
+  assert.ok(dir.endedByCode(first.code), "it stopped");
+
+  // Somebody was told to call back later and key those six digits. They have
+  // to still work, or the reminder was a lie.
+  const back = dir.announce(stream("https://a.example/listen"));
+  assert.equal(back.code, first.code);
+  assert.equal(dir.liveByCode(first.code)?.name, "Chovy");
+  assert.equal(dir.endedByCode(first.code), undefined, "it is not both live and ended");
+  // A second run is a new run: the caller is told when *this* one started.
+  assert.equal(back.startedAt, at());
+  assert.notEqual(back.startedAt, first.startedAt);
+});
+
+test("a stream nobody has seen for a day is forgotten entirely", () => {
+  const { dir, tick } = dated();
+  const live = dir.announce(stream("https://a.example/listen"));
+
+  tick(5 * 60 * 1000);
+  assert.ok(dir.endedByCode(live.code));
+
+  tick(ENDED_TTL_MS);
+  assert.equal(dir.endedByCode(live.code), undefined);
 });

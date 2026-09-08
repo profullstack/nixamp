@@ -64,9 +64,37 @@ interface Room extends RoomInfo {
   legs: Set<string>;
 }
 
+/**
+ * What the party line needs to know about a stream.
+ *
+ * A narrow view of the Directory rather than the Directory itself, so this
+ * module stays a function of its inputs and a test can describe a stream
+ * without standing one up.
+ */
+export interface StreamLookup {
+  liveByCode(code: string): { name: string; url: string; nowPlaying: string; startedAt: number } | undefined;
+  endedByCode(code: string): { name: string; nowPlaying: string; startedAt: number; endedAt: number } | undefined;
+}
+
+/** Sending a text. Injected because the number that sends is not this one. */
+export interface Sms {
+  send(to: string, text: string): Promise<boolean>;
+}
+
 export interface PartyLineOptions {
   /** A Telnyx API key with call-control rights. */
   apiKey: string;
+  /** The directory, on the instance that hosts one. */
+  streams?: StreamLookup;
+  /**
+   * How to text somebody when a stream comes back.
+   *
+   * Not from the toll-free number the call arrived on: toll-free A2P messaging
+   * is filtered by carriers until the number is verified, and ours is not. A
+   * long code that already has a messaging profile sends today, so reminders
+   * go out from there and the verification can land whenever it lands.
+   */
+  sms?: Sms;
   /**
    * The account's ed25519 public key, base64, from the portal. Without it
    * every webhook is refused: an unauthenticated call-control webhook lets a
@@ -110,6 +138,24 @@ export function roomCodeFrom(entered: unknown): string {
   if (typeof entered !== "string" && typeof entered !== "number") return "";
   const digits = String(entered).replace(/\D/g, "");
   return digits.length === CODE_LENGTH ? digits : "";
+}
+
+/**
+ * A time as a caller should hear it.
+ *
+ * Pacific, spelled out, because that is the clock the streams are announced on
+ * and a bare "9:27" down a phone line is a time in somebody's head rather than
+ * a time. Built with Intl rather than arithmetic: the offset changes twice a
+ * year and hand-rolled zone maths is how you end up an hour out for three
+ * weeks every spring.
+ */
+export function pacificTime(at: number): string {
+  const clock = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "America/Los_Angeles",
+  }).format(new Date(at));
+  return `${clock} Pacific`;
 }
 
 /** How a code is read back: one digit at a time, because 482917 is not a number. */
@@ -159,6 +205,12 @@ export class PartyLine {
   private readonly rooms = new Map<string, Room>();
   /** Which room a leg is heading for, between asking and being answered. */
   private readonly legRoom = new Map<string, string>();
+  /** The number each caller is calling from, for a reminder they ask for. */
+  private readonly legFrom = new Map<string, string>();
+  /** Legs that heard "press 1", and which stream they would be reminded about. */
+  private readonly pendingReminder = new Map<string, string>();
+  /** Who to text when a stream returns, by stream code. */
+  private readonly reminders = new Map<string, Set<string>>();
   private readonly key: ReturnType<typeof createPublicKey> | null;
   private readonly fetch: typeof globalThis.fetch;
   private readonly now: () => number;
@@ -241,6 +293,9 @@ export class PartyLine {
       // Only inbound. An outbound leg we dialled is not somebody calling in,
       // and answering it would be answering ourselves.
       if (payload["direction"] !== "incoming") return;
+      // Kept now because a reminder needs it later, and by the time the caller
+      // presses 1 the only thing we have is the leg.
+      if (typeof payload["from"] === "string") this.legFrom.set(leg, payload["from"]);
       await this.command(leg, "answer", {});
       return;
     }
@@ -251,19 +306,36 @@ export class PartyLine {
     }
 
     if (type === "call.gather.ended") {
-      const code = roomCodeFrom(payload["digits"]);
+      const digits = typeof payload["digits"] === "string" ? payload["digits"] : "";
+
+      // A leg that was just offered a reminder is answering that, not keying a
+      // room code -- the same event carries both, so the question we asked is
+      // what decides how to read it.
+      const offered = this.pendingReminder.get(leg);
+      if (offered !== undefined) {
+        this.pendingReminder.delete(leg);
+        await this.reminder(leg, offered, digits);
+        return;
+      }
+
+      const code = roomCodeFrom(digits);
       if (!code) {
         // Re-ask rather than guess. Anything that is not six digits is not a
         // room, and picking the nearest one would be picking a stranger's.
         await this.ask(leg, "That is not a six digit code. ");
         return;
       }
+      // A code that belongs to a stream is answered as a stream. Anything else
+      // is an ordinary room, which is what this line was before.
+      if (await this.stream(leg, code)) return;
       await this.join(leg, code);
       return;
     }
 
     if (type === "conference.participant.left" || type === "call.hangup") {
       this.release(leg);
+      this.legFrom.delete(leg);
+      this.pendingReminder.delete(leg);
       return;
     }
   }
@@ -295,6 +367,107 @@ export class PartyLine {
       terminating_digit: "#",
       timeout_millis: 20000,
     });
+  }
+
+  /**
+   * Answer a code that belongs to a stream, rather than a room.
+   *
+   * Returns false when the code is nobody's stream, which is how an ordinary
+   * room code still works: this line was a party line before it was a way into
+   * a broadcast, and a code that means nothing to the directory should still
+   * mean a room.
+   */
+  private async stream(leg: string, code: string): Promise<boolean> {
+    const streams = this.options.streams;
+    if (streams === undefined) return false;
+
+    const live = streams.liveByCode(code);
+    if (live !== undefined) {
+      const what = live.nowPlaying ? ` of ${live.nowPlaying}` : "";
+      await this.command(leg, "speak", {
+        payload: `Welcome to ${live.name}'s live stream${what}. It started at ${pacificTime(live.startedAt)}. Here it is.`,
+        voice: this.voice,
+      });
+      // A nixamp stream is an MP3 over HTTP and Telnyx will play a URL into a
+      // call, so listening by phone costs no audio handling here at all.
+      await this.command(leg, "playback_start", { audio_url: live.url, loop: "infinity" });
+      return true;
+    }
+
+    const ended = streams.endedByCode(code);
+    if (ended === undefined) return false;
+
+    const what = ended.nowPlaying ? ` of ${ended.nowPlaying}` : "";
+    // Set before the prompt, not after: the answer can arrive while we are
+    // still awaiting the command that asked for it.
+    this.pendingReminder.set(leg, code);
+    await this.command(leg, "gather_using_speak", {
+      payload:
+        `Welcome to ${ended.name}'s live stream${what}. ` +
+        `The live stream ended at ${pacificTime(ended.endedAt)}. ` +
+        "Call back later when they stream again. " +
+        "Press 1 to get a text message when they do.",
+      voice: this.voice,
+      valid_digits: "1",
+      minimum_digits: 1,
+      maximum_digits: 1,
+      timeout_millis: 12000,
+    });
+    return true;
+  }
+
+  /** Whether the caller took the reminder that was offered. */
+  private async reminder(leg: string, code: string, digits: string): Promise<void> {
+    const from = this.legFrom.get(leg) ?? "";
+    if (!digits.includes("1") || !from) {
+      // Not pressing 1 is an answer. So is a call with no caller id, which we
+      // cannot text however willing the caller was.
+      await this.command(leg, "speak", { payload: "Goodbye.", voice: this.voice });
+      await this.command(leg, "hangup", {});
+      return;
+    }
+
+    const waiting = this.reminders.get(code) ?? new Set<string>();
+    waiting.add(from);
+    this.reminders.set(code, waiting);
+    this.options.onEvent?.(`  a caller asked to be told when ${code} is live again.`);
+
+    await this.command(leg, "speak", {
+      payload: "Got it. We will text you when they are live again. Goodbye.",
+      voice: this.voice,
+    });
+    await this.command(leg, "hangup", {});
+  }
+
+  /**
+   * A stream came back: text whoever asked to be told.
+   *
+   * The list is cleared as it is sent. A reminder is a thing somebody asked
+   * for once, and texting them every time that stream starts for the rest of
+   * the week is how a useful message becomes the reason they block the number.
+   */
+  async wentLive(stream: { code: string; name: string; nowPlaying: string }): Promise<number> {
+    const waiting = this.reminders.get(stream.code);
+    const sms = this.options.sms;
+    if (waiting === undefined || waiting.size === 0 || sms === undefined) return 0;
+    this.reminders.delete(stream.code);
+
+    const what = stream.nowPlaying ? ` of ${stream.nowPlaying}` : "";
+    // STOP is not decoration: an automated text to a US number has to say how
+    // to make it stop, and the carriers check.
+    const text =
+      `${stream.name} is live now${what} on nixamp. ` +
+      `Call 888-766-6818 and key ${stream.code} to listen. Reply STOP to opt out.`;
+
+    let sent = 0;
+    for (const to of waiting) if (await sms.send(to, text)) sent += 1;
+    this.options.onEvent?.(`  texted ${sent} of ${waiting.size} waiting on ${stream.code}.`);
+    return sent;
+  }
+
+  /** How many numbers are waiting to hear that a code is live. */
+  waitingOn(code: string): number {
+    return this.reminders.get(code)?.size ?? 0;
   }
 
   /** Put a leg into a room, making the conference if it is the first one there. */
@@ -439,6 +612,44 @@ export class PartyLine {
       return null;
     }
   }
+}
+
+/**
+ * Texting, over Telnyx.
+ *
+ * A separate `from` because it is a different number: the call arrives on the
+ * toll-free line, but toll-free A2P messaging is filtered by carriers until
+ * that number is verified and ours is not yet. The long code already carries a
+ * messaging profile, so it can send today -- and when verification lands, this
+ * becomes a one-line change rather than a redesign.
+ */
+export function telnyxSms(
+  { apiKey, from, fetch = globalThis.fetch, onEvent }: {
+    apiKey: string;
+    from: string;
+    fetch?: typeof globalThis.fetch;
+    onEvent?: (message: string) => void;
+  },
+): Sms {
+  return {
+    async send(to: string, text: string): Promise<boolean> {
+      try {
+        const response = await fetch(`${TELNYX_API}/messages`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+          body: JSON.stringify({ from, to, text }),
+        });
+        if (!response.ok) {
+          onEvent?.(`  sms to ${to} -> ${response.status}`);
+          return false;
+        }
+        return true;
+      } catch (error) {
+        onEvent?.(`  sms to ${to} failed: ${(error as Error).message}`);
+        return false;
+      }
+    },
+  };
 }
 
 /** Constant-time compare, for the places a token is checked rather than signed. */

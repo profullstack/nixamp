@@ -1,7 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign as signMessage } from "node:crypto";
-import { CODE_LENGTH, PartyLine, roomCodeFrom, sameSecret, spokenCode } from "../src/partyline.ts";
+import {
+  CODE_LENGTH,
+  pacificTime,
+  PartyLine,
+  roomCodeFrom,
+  sameSecret,
+  spokenCode,
+  telnyxSms,
+} from "../src/partyline.ts";
+import { optInPage } from "../src/optin.ts";
 
 /** An ed25519 pair standing in for the account's, so a test can sign. */
 function keys() {
@@ -290,4 +299,220 @@ test("a secret is compared without leaking how much of it matched", () => {
   assert.equal(sameSecret("abc", "abd"), false);
   assert.equal(sameSecret("abc", "abcd"), false);
   assert.equal(sameSecret("", ""), true);
+});
+
+
+// --- the phone line as a way into a stream ---------------------------------
+
+/** 9:27 PM Pacific, the time in the line this was built to say. */
+const NINE_TWENTY_SEVEN = 1_788_928_020_000;
+
+/** A directory of exactly the streams a test describes. */
+function streams(
+  live: Record<string, { name: string; url: string; nowPlaying: string; startedAt: number }> = {},
+  ended: Record<string, { name: string; nowPlaying: string; startedAt: number; endedAt: number }> = {},
+) {
+  return {
+    liveByCode: (code: string) => live[code],
+    endedByCode: (code: string) => ended[code],
+  };
+}
+
+/** An SMS gateway that keeps what it was asked to send. */
+function texter(ok = true) {
+  const sent: { to: string; text: string }[] = [];
+  return { sent, send: async (to: string, text: string) => (sent.push({ to, text }), ok) };
+}
+
+const called = (leg: string, from: string) => ({
+  event_type: "call.initiated",
+  payload: { call_control_id: leg, direction: "incoming", from },
+});
+
+test("a time is read in Pacific, spelled out", () => {
+  assert.equal(pacificTime(NINE_TWENTY_SEVEN), "9:27 PM Pacific");
+});
+
+test("a code that is a live stream plays the stream", async () => {
+  const { calls, fetch } = recorder();
+  const party = line(fetch, "", {
+    streams: streams({
+      "482917": {
+        name: "Chovy",
+        url: "https://chovy.example/listen.mp3",
+        nowPlaying: "Top Gun: Maverick",
+        startedAt: NINE_TWENTY_SEVEN,
+      },
+    }),
+  });
+
+  await party.handle(keyed("leg-1", "482917"));
+
+  const spoke = calls.find((c) => c.path === "/calls/leg-1/actions/speak");
+  assert.match(String(spoke?.body["payload"]), /Welcome to Chovy's live stream of Top Gun: Maverick/);
+  assert.match(String(spoke?.body["payload"]), /started at 9:27 PM Pacific/);
+
+  const play = calls.find((c) => c.path === "/calls/leg-1/actions/playback_start");
+  assert.equal(play?.body["audio_url"], "https://chovy.example/listen.mp3");
+  // A stream is not a conference; nothing should have been opened.
+  assert.equal(calls.filter((c) => c.path === "/conferences").length, 0);
+});
+
+test("a code whose stream has ended says when, and offers a text", async () => {
+  const { calls, fetch } = recorder();
+  const party = line(fetch, "", {
+    streams: streams({}, {
+      "482917": {
+        name: "Chovy",
+        nowPlaying: "Top Gun: Maverick",
+        startedAt: NINE_TWENTY_SEVEN - 3_600_000,
+        endedAt: NINE_TWENTY_SEVEN,
+      },
+    }),
+  });
+
+  await party.handle(keyed("leg-1", "482917"));
+
+  const ask = calls.find((c) => c.path === "/calls/leg-1/actions/gather_using_speak");
+  const said = String(ask?.body["payload"]);
+  assert.match(said, /Welcome to Chovy's live stream of Top Gun: Maverick/);
+  assert.match(said, /ended at 9:27 PM Pacific/);
+  assert.match(said, /Call back later when they stream again/);
+  assert.match(said, /Press 1 to get a text message/);
+  // Only 1 is worth pressing, so only 1 is accepted.
+  assert.equal(ask?.body["valid_digits"], "1");
+  assert.equal(calls.filter((c) => c.path === "/conferences").length, 0);
+});
+
+test("pressing 1 signs the caller up, and their number comes from the call", async () => {
+  const { calls, fetch } = recorder();
+  const party = line(fetch, "", {
+    streams: streams({}, {
+      "482917": { name: "Chovy", nowPlaying: "Top Gun", startedAt: 1, endedAt: NINE_TWENTY_SEVEN },
+    }),
+  });
+
+  await party.handle(called("leg-1", "+14155550123"));
+  await party.handle(keyed("leg-1", "482917"));
+  assert.equal(party.waitingOn("482917"), 0);
+
+  await party.handle(keyed("leg-1", "1"));
+  assert.equal(party.waitingOn("482917"), 1);
+  assert.ok(calls.some((c) => /We will text you/.test(String(c.body["payload"]))));
+  assert.ok(calls.some((c) => c.path === "/calls/leg-1/actions/hangup"));
+});
+
+test("not pressing 1 signs nobody up", async () => {
+  const { fetch } = recorder();
+  const party = line(fetch, "", {
+    streams: streams({}, {
+      "482917": { name: "Chovy", nowPlaying: "", startedAt: 1, endedAt: NINE_TWENTY_SEVEN },
+    }),
+  });
+
+  await party.handle(called("leg-1", "+14155550123"));
+  await party.handle(keyed("leg-1", "482917"));
+  await party.handle(keyed("leg-1", ""));
+  assert.equal(party.waitingOn("482917"), 0);
+});
+
+test("a caller with no caller id is not signed up for a text we cannot send", async () => {
+  const { fetch } = recorder();
+  const party = line(fetch, "", {
+    streams: streams({}, {
+      "482917": { name: "Chovy", nowPlaying: "", startedAt: 1, endedAt: NINE_TWENTY_SEVEN },
+    }),
+  });
+
+  // No call.initiated, so no from was ever seen.
+  await party.handle(keyed("leg-1", "482917"));
+  await party.handle(keyed("leg-1", "1"));
+  assert.equal(party.waitingOn("482917"), 0);
+});
+
+test("when the stream comes back, everyone waiting is texted once", async () => {
+  const { fetch } = recorder();
+  const sms = texter();
+  const party = line(fetch, "", {
+    sms,
+    streams: streams({}, {
+      "482917": { name: "Chovy", nowPlaying: "Top Gun", startedAt: 1, endedAt: NINE_TWENTY_SEVEN },
+    }),
+  });
+
+  for (const [leg, from] of [["a", "+14155550123"], ["b", "+14155550124"]] as const) {
+    await party.handle(called(leg, from));
+    await party.handle(keyed(leg, "482917"));
+    await party.handle(keyed(leg, "1"));
+  }
+  assert.equal(party.waitingOn("482917"), 2);
+
+  const sent = await party.wentLive({ code: "482917", name: "Chovy", nowPlaying: "Top Gun" });
+  assert.equal(sent, 2);
+  assert.deepEqual(sms.sent.map((m) => m.to).sort(), ["+14155550123", "+14155550124"]);
+  assert.match(sms.sent[0]!.text, /Chovy is live now of Top Gun on nixamp/);
+  assert.match(sms.sent[0]!.text, /key 482917/);
+  // An automated text to a US number has to say how to stop it.
+  assert.match(sms.sent[0]!.text, /Reply STOP to opt out/);
+
+  // Asked once, told once. Going live again does not text them a second time.
+  assert.equal(party.waitingOn("482917"), 0);
+  assert.equal(await party.wentLive({ code: "482917", name: "Chovy", nowPlaying: "Top Gun" }), 0);
+  assert.equal(sms.sent.length, 2);
+});
+
+test("with no way to send a text, nothing is sent and nothing throws", async () => {
+  const { fetch } = recorder();
+  const party = line(fetch, "", {
+    streams: streams({}, {
+      "482917": { name: "Chovy", nowPlaying: "", startedAt: 1, endedAt: NINE_TWENTY_SEVEN },
+    }),
+  });
+  await party.handle(called("leg-1", "+14155550123"));
+  await party.handle(keyed("leg-1", "482917"));
+  await party.handle(keyed("leg-1", "1"));
+  assert.equal(await party.wentLive({ code: "482917", name: "Chovy", nowPlaying: "" }), 0);
+});
+
+test("a code that is nobody's stream is still an ordinary room", async () => {
+  const { calls, fetch } = recorder(conferenceReplies());
+  const party = line(fetch, "", { streams: streams() });
+
+  await party.handle(keyed("leg-1", "482917"));
+  // This line was a party line before it was a way into a broadcast.
+  assert.ok(calls.some((c) => c.path === "/conferences"));
+  assert.equal(party.list()[0]?.callers, 1);
+});
+
+test("a text is sent from the number that can send one", async () => {
+  const { calls, fetch } = recorder();
+  const sms = telnyxSms({ apiKey: "KEY_test", from: "+14084269127", fetch });
+  assert.equal(await sms.send("+14155550123", "hello"), true);
+
+  const sent = calls[0];
+  assert.equal(sent?.path, "/messages");
+  // Not the toll-free line the call came in on: unverified toll-free A2P is
+  // filtered by carriers.
+  assert.equal(sent?.body["from"], "+14084269127");
+  assert.equal(sent?.body["to"], "+14155550123");
+});
+
+test("a text that will not send is reported as not sent", async () => {
+  const { fetch } = recorder(() => ({ ok: false }));
+  const sms = telnyxSms({ apiKey: "KEY_test", from: "+14084269127", fetch });
+  assert.equal(await sms.send("+14155550123", "hello"), false);
+});
+
+test("the opt-in page says the things a carrier and a recipient both need", () => {
+  const page = optInPage();
+  // The consent, quoted as the caller actually hears it.
+  assert.match(page, /Press&nbsp;1 to get a text message when they do/);
+  assert.match(page, /888-766-6818/);
+  // The number that sends is not the number you call, and the page says so.
+  assert.match(page, /408-426-9127/);
+  // The four lines a US A2P programme is required to carry.
+  assert.match(page, /Reply <strong>STOP<\/strong>/);
+  assert.match(page, /Reply <strong>HELP<\/strong>/);
+  assert.match(page, /Message and data rates may apply/);
+  assert.match(page, /Once per stream you asked about/);
 });
