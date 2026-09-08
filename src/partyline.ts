@@ -211,6 +211,15 @@ export class PartyLine {
   private readonly pendingReminder = new Map<string, string>();
   /** Who to text when a stream returns, by stream code. */
   private readonly reminders = new Map<string, Set<string>>();
+  /**
+   * Legs listening to a stream, by its code.
+   *
+   * Separate from the rooms because a stream listener is not in a conference:
+   * they are a leg with an MP3 playing into it. Nothing else was counting
+   * them, so the directory had no way to say how many people were on the
+   * phone for a broadcast.
+   */
+  private readonly streamLegs = new Map<string, Set<string>>();
   private readonly key: ReturnType<typeof createPublicKey> | null;
   private readonly fetch: typeof globalThis.fetch;
   private readonly now: () => number;
@@ -262,17 +271,18 @@ export class PartyLine {
   }
 
   /**
-   * The rooms with someone in them, busiest first.
+   * The rooms with someone in them, busiest first, with their codes.
    *
-   * The code is deliberately not in it. This is served to anyone who asks, and
-   * a list of live codes would be a list of rooms to walk into -- the code is
-   * the only thing standing between a stranger and a conversation, so
-   * publishing it would be publishing the door.
+   * The code is published on purpose. An earlier version withheld it on the
+   * reasoning that a code is the only thing between a stranger and a
+   * conversation -- true of a private room, and wrong here: this is a public
+   * call-in line, and a listing you cannot dial is a listing of nothing. The
+   * code is how you join, so it is what the list is for.
    */
-  list(): { callers: number; startedAt: number }[] {
+  list(): { code: string; callers: number; startedAt: number }[] {
     return [...this.rooms.values()]
       .filter((room) => room.callers > 0)
-      .map(({ callers, startedAt }) => ({ callers, startedAt }))
+      .map(({ code, callers, startedAt }) => ({ code, callers, startedAt }))
       .sort((a, b) => b.callers - a.callers || a.startedAt - b.startedAt);
   }
 
@@ -390,7 +400,18 @@ export class PartyLine {
       });
       // A nixamp stream is an MP3 over HTTP and Telnyx will play a URL into a
       // call, so listening by phone costs no audio handling here at all.
-      await this.command(leg, "playback_start", { audio_url: live.url, loop: "infinity" });
+      const playing = await this.command(leg, "playback_start", {
+        audio_url: live.url,
+        loop: "infinity",
+      });
+      // Counted only once the audio is actually going. A leg we failed to
+      // start is not somebody listening, and the directory would be saying so.
+      if (playing) {
+        const legs = this.streamLegs.get(code) ?? new Set<string>();
+        legs.add(leg);
+        this.streamLegs.set(code, legs);
+        this.options.onEvent?.(`  a caller is listening to ${code} (${legs.size} on the phone).`);
+      }
       return true;
     }
 
@@ -535,8 +556,16 @@ export class PartyLine {
     this.options.onEvent?.(`  a caller joined a room (${room.callers} on the line).`);
   }
 
+  /** How many people are listening to a stream by phone. */
+  listenersOn(code: string): number {
+    return this.streamLegs.get(code)?.size ?? 0;
+  }
+
   /** A leg that hung up or was dropped, wherever it was. */
   private release(leg: string): void {
+    for (const [code, legs] of this.streamLegs) {
+      if (legs.delete(leg) && legs.size === 0) this.streamLegs.delete(code);
+    }
     const code = this.legRoom.get(leg);
     this.legRoom.delete(leg);
     if (code === undefined) return;
