@@ -93,6 +93,7 @@ const TYPES: Record<string, string> = {
   // The installer, so `curl https://nixamp.com/install.sh` is readable rather
   // than a download prompt.
   ".sh": "text/x-shellscript; charset=utf-8",
+  ".ps1": "text/plain; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".ico": "image/x-icon",

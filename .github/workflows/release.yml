@@ -1,7 +1,7 @@
 name: Release
 
-# Tag a version and this builds everything `install.sh` downloads, publishes the
-# CLI to npm, and attaches the assets to the release. The installer resolves
+# Tag a version and this builds everything the installers download, publishes
+# the CLI to npm, and attaches the assets to the release. The installers resolve
 # "latest" from the GitHub release, so nothing is installable until this has run.
 on:
   push:
@@ -50,16 +50,34 @@ jobs:
           path: release/*.tar.gz
 
   desktop:
-    name: Desktop (${{ matrix.os }})
+    name: Desktop ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     strategy:
+      # One platform failing should not cost the other four their artifacts.
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            script: build
-          - os: macos-latest
-            script: build:mac
+          - label: linux-x64
+            os: ubuntu-latest
+            flags: --linux --x64
+          # Native arm64 rather than cross-compiling: electron-builder repacks a
+          # prebuilt Electron, and the packaging tools it shells out to are the
+          # part that does not cross cleanly.
+          - label: linux-arm64
+            os: ubuntu-24.04-arm
+            flags: --linux --arm64
+          - label: mac-x64
+            os: macos-15-intel
+            flags: --mac --x64
+          - label: mac-arm64
+            os: macos-latest
+            flags: --mac --arm64
+          - label: win-x64
+            os: windows-latest
+            flags: --win --x64
+          - label: win-arm64
+            os: windows-latest
+            flags: --win --arm64
     steps:
       - uses: actions/checkout@v5
         with:
@@ -70,21 +88,31 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun run web:build
-      # Unsigned on purpose: there is no signing identity, and electron-builder
-      # is configured with a null mac identity so it does not look for one.
-      - run: bun run --filter '@nixamp/desktop' ${{ matrix.script }}
+      - run: bun run --filter '@nixamp/desktop' stage
+      # Unsigned on purpose: there is no signing identity or certificate.
+      # electron-builder is configured with a null mac identity so it does not
+      # look for one, and Windows will warn through SmartScreen until there is.
+      - name: electron-builder ${{ matrix.flags }}
+        working-directory: desktop
+        run: bunx electron-builder ${{ matrix.flags }} --publish never
       - uses: actions/upload-artifact@v4
         with:
-          name: desktop-${{ matrix.os }}
+          name: desktop-${{ matrix.label }}
+          if-no-files-found: error
           path: |
             desktop/release/*.tar.gz
             desktop/release/*.zip
             desktop/release/*.AppImage
             desktop/release/*.deb
+            desktop/release/*.dmg
+            desktop/release/*.exe
 
   publish:
     name: Attach to the release
+    # The CLI tarball is what install.sh needs, so it must be there. A desktop
+    # build that failed on one platform should not hold back the other five.
     needs: [cli, desktop]
+    if: always() && needs.cli.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v5
@@ -93,7 +121,9 @@ jobs:
       - name: One flat directory
         run: |
           mkdir -p out
-          find assets -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.AppImage' -o -name '*.deb' \) \
+          find assets -type f \
+            \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.AppImage' \
+               -o -name '*.deb' -o -name '*.dmg' -o -name '*.exe' \) \
             -exec cp {} out/ \;
           ls -la out
       - uses: softprops/action-gh-release@v2

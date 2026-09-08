@@ -10,11 +10,12 @@
   "main": "main.cjs",
   "scripts": {
     "icon": "bun scripts/icon.ts",
-    "stage": "bun scripts/stage-cli.ts",
+    "stage": "bun scripts/ensure-electron.ts && bun scripts/icon.ts && bun scripts/stage-cli.ts",
     "dev": "bun scripts/ensure-electron.ts && electron .",
-    "build": "bun scripts/ensure-electron.ts && bun scripts/icon.ts && bun scripts/stage-cli.ts && electron-builder --linux --publish never",
-    "build:mac": "bun scripts/ensure-electron.ts && bun scripts/icon.ts && bun scripts/stage-cli.ts && electron-builder --mac --publish never",
-    "pack": "bun scripts/ensure-electron.ts && bun scripts/icon.ts && bun scripts/stage-cli.ts && electron-builder --dir --publish never"
+    "build": "bun run stage && electron-builder --linux --publish never",
+    "build:mac": "bun run stage && electron-builder --mac --publish never",
+    "build:win": "bun run stage && electron-builder --win --publish never",
+    "pack": "bun run stage && electron-builder --dir --publish never"
   },
   "devDependencies": {
     "electron": "^44.2.0",
@@ -98,6 +99,21 @@
     },
     "dmg": {
       "backgroundColor": "#080c09"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ],
+      "artifactName": "nixamp-${version}-win-${arch}.${ext}",
+      "executableName": "nixamp",
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "nixamp"
     }
   }
 }
