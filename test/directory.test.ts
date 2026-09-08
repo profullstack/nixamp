@@ -396,3 +396,74 @@ test("an unowned listing notifies nobody, because there is nobody to follow", ()
   // owner has no audience to look up.
   assert.equal(live[0]?.ownerId, "");
 });
+
+
+// --- who is there to follow when nobody is on ------------------------------
+
+test("a stream that stopped is still somebody you can follow", () => {
+  const { dir, tick } = dated();
+  dir.announce(stream("https://a.example/listen"), "owner-1");
+
+  tick(5 * 60 * 1000);
+  assert.deepEqual(dir.list(), [], "nothing is on");
+
+  // The whole point: an empty directory used to mean nobody to follow, which
+  // made following useless exactly when it was most useful.
+  const recent = dir.recentlyEnded();
+  assert.equal(recent.length, 1);
+  assert.equal(recent[0]?.name, "Chovy");
+  assert.equal(recent[0]?.ownerId, "owner-1");
+});
+
+test("a stream that is on is not also listed as recently off", () => {
+  const { dir, tick } = dated();
+  dir.announce(stream("https://a.example/listen"), "owner-1");
+  tick(5 * 60 * 1000);
+  assert.equal(dir.recentlyEnded().length, 1);
+
+  // It came back. Listing it in both places would offer a follow button beside
+  // a listen button for the same person.
+  dir.announce(stream("https://a.example/listen"), "owner-1");
+  assert.equal(dir.list().length, 1);
+  assert.deepEqual(dir.recentlyEnded(), []);
+});
+
+test("recently ended is most recent first", () => {
+  const { dir, tick } = dated();
+  dir.announce(stream("https://a.example/listen", "First"), "o1");
+  tick(60_000);
+  dir.announce(stream("https://b.example/listen", "Second"), "o2");
+  tick(5 * 60 * 1000);
+
+  assert.deepEqual(dir.recentlyEnded().map((r) => r.name), ["Second", "First"]);
+});
+
+test("an account can be named and located whether it is on or off", () => {
+  const { dir, tick } = dated();
+  dir.announce(stream("https://a.example/listen"), "owner-1");
+
+  // An id is not a name, and a follow list of bare ids is unreadable.
+  assert.equal(dir.nameOf("owner-1"), "Chovy");
+  assert.equal(dir.isLive("owner-1"), true);
+
+  tick(5 * 60 * 1000);
+  assert.equal(dir.nameOf("owner-1"), "Chovy", "the name outlives the stream");
+  assert.equal(dir.isLive("owner-1"), false);
+
+  // Somebody who never streamed has no name we know, and saying nothing is
+  // better than inventing one.
+  assert.equal(dir.nameOf("nobody"), "");
+  assert.equal(dir.nameOf(""), "");
+  assert.equal(dir.isLive("nobody"), false);
+});
+
+test("a forgotten stream is nobody to follow either", () => {
+  const { dir, tick } = dated();
+  dir.announce(stream("https://a.example/listen"), "owner-1");
+  tick(5 * 60 * 1000);
+  assert.equal(dir.recentlyEnded().length, 1);
+
+  tick(ENDED_TTL_MS);
+  assert.deepEqual(dir.recentlyEnded(), []);
+  assert.equal(dir.nameOf("owner-1"), "");
+});

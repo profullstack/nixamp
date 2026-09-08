@@ -209,6 +209,42 @@ export class Directory {
     return [...this.items.values()].find((item) => item.code === code);
   }
 
+  /**
+   * Streams that stopped recently, most recent first.
+   *
+   * Kept for the phone line, which has to say when a stream ended -- but they
+   * answer a second question the live list cannot: who is there to follow.
+   * Following exists to hear about broadcasts you would otherwise miss, and a
+   * directory that only lists what is on can only be used to follow somebody
+   * during a broadcast you did not miss.
+   */
+  recentlyEnded(): Ended[] {
+    this.sweep();
+    const live = new Set([...this.items.values()].map((item) => item.id));
+    return [...this.ended.values()]
+      .filter((item) => !live.has(item.id))
+      .sort((a, b) => b.endedAt - a.endedAt);
+  }
+
+  /** The name last used by an account, live or recently ended. */
+  nameOf(ownerId: string): string {
+    if (!ownerId) return "";
+    this.sweep();
+    const live = [...this.items.values()].find((item) => item.ownerId === ownerId);
+    if (live) return live.name;
+    const ended = [...this.ended.values()]
+      .filter((item) => item.ownerId === ownerId)
+      .sort((a, b) => b.endedAt - a.endedAt)[0];
+    return ended?.name ?? "";
+  }
+
+  /** Whether this account is streaming right now. */
+  isLive(ownerId: string): boolean {
+    if (!ownerId) return false;
+    this.sweep();
+    return [...this.items.values()].some((item) => item.ownerId === ownerId);
+  }
+
   /** The stream that used to be on this code, if it stopped recently. */
   endedByCode(code: string): Ended | undefined {
     this.sweep();
