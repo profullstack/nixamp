@@ -14,6 +14,7 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 import { networkInterfaces } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { Connections, type Kind } from "./connections.ts";
 import { isRemote } from "./sources.ts";
 import {
   elevate,
@@ -60,6 +61,12 @@ export interface ServeOptions {
    * out. Off by default because it changes the machine, not just this process.
    */
   openPort: boolean;
+  /**
+   * Print one JSON line once listening. `nixamp daemon start` reads it rather
+   * than sleeping and hoping, so a daemon that failed to bind is reported as
+   * failed instead of started.
+   */
+  announce: boolean;
 }
 
 /**
@@ -80,6 +87,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     media: true,
     key: true,
     openPort: false,
+    announce: false,
   };
   let sawRoot = false;
   for (let i = 0; i < argv.length; i++) {
@@ -106,6 +114,8 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.key = false;
     } else if (arg === "--open-port") {
       options.openPort = true;
+    } else if (arg === "--announce") {
+      options.announce = true;
     } else if (arg.startsWith("-")) {
       throw new Error(`nixamp serve: unknown option ${arg}`);
     } else if (!sawRoot) {
@@ -209,6 +219,12 @@ export interface Engine {
   subscribe(listener: (snapshot: Snapshot) => void): () => void;
   /** Absolute path of a track, or undefined when the index is not one. */
   trackPath(index: number): string | undefined;
+  /**
+   * Play something else instead. Re-streaming is the whole reason the admin
+   * view exists: point a running server at a URL without restarting it and
+   * dropping every listener.
+   */
+  replace(tracks: Track[], root: string): void;
   stop(): void;
 }
 
@@ -247,8 +263,8 @@ export class PlayerEngine implements Engine {
   };
 
   constructor(
-    private readonly tracks: Track[],
-    private readonly root: string,
+    private tracks: Track[],
+    private root: string,
     tools: Tools,
     /** Frames a second pushed to remotes. */
     private readonly fps = 12,
@@ -398,6 +414,16 @@ export class PlayerEngine implements Engine {
     }
     this.listeners.clear();
   }
+
+  replace(tracks: Track[], root: string): void {
+    this.stop();
+    this.tracks = tracks;
+    this.root = root;
+    this.state.index = 0;
+    this.state.position = 0;
+    this.state.note = "";
+    this.push();
+  }
 }
 
 /** An engine with no library behind it, for the hosted PWA. */
@@ -414,6 +440,7 @@ export class EmptyEngine implements Engine {
   trackPath(): undefined {
     return undefined;
   }
+  replace(): void {}
   stop(): void {}
 }
 
@@ -458,6 +485,13 @@ export interface HandlerOptions {
   key?: string | null;
   /** How to run ffmpeg, for the sources a browser cannot play by itself. */
   ffmpeg?: string[];
+  /** Who is listening, for the admin view. */
+  connections?: Connections;
+  /**
+   * How to turn a source into tracks, for re-streaming. Injected rather than
+   * imported so the handler stays a plain function of a request.
+   */
+  load: (source: string) => Promise<Track[]>;
 }
 
 /**
@@ -465,6 +499,29 @@ export interface HandlerOptions {
  * drive it with a real socket and no ffmpeg in sight.
  */
 export function createHandler(engine: Engine, options: HandlerOptions) {
+  const tracker = options.connections ?? new Connections();
+  const started = Date.now();
+
+  /** Count a request in, count its bytes, and close it out exactly once. */
+  const watch = (
+    request: IncomingMessage,
+    response: ServerResponse,
+    kind: Kind,
+    track: string,
+  ): void => {
+    const { id } = tracker.open(request, kind, track);
+    const write = response.write.bind(response);
+    response.write = ((chunk: unknown, ...rest: unknown[]) => {
+      if (typeof chunk === "string" || chunk instanceof Uint8Array) {
+        tracker.add(id, typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength);
+      }
+      return (write as (...args: unknown[]) => boolean)(chunk, ...rest);
+    }) as typeof response.write;
+    // 'close' fires for a finished response and for a listener that walked
+    // away, which are the same thing as far as "is it still going" goes.
+    response.once("close", () => tracker.close(id));
+  };
+
   return async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://localhost");
     const path = url.pathname;
@@ -511,7 +568,20 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    // Everything the admin view draws, in one request: who is connected, and
+    // what this server is.
+    if (path === "/api/connections") {
+      json(response, 200, {
+        connections: tracker.list(),
+        active: tracker.active,
+        startedAt: started,
+        now: Date.now(),
+      });
+      return;
+    }
+
     if (path === "/api/events") {
+      watch(request, response, "events", "");
       response.writeHead(200, {
         ...CORS,
         "content-type": "text/event-stream; charset=utf-8",
@@ -558,6 +628,38 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    // Re-stream: hand the running server a different source. The listeners
+    // stay connected; what they are listening to changes under them.
+    if (path === "/api/source") {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "POST only" });
+        return;
+      }
+      let source = "";
+      try {
+        source = String((JSON.parse(await readBody(request)) as { source?: unknown }).source ?? "");
+      } catch {
+        json(response, 400, { error: "bad JSON" });
+        return;
+      }
+      if (!source) {
+        json(response, 400, { error: "no source given" });
+        return;
+      }
+      try {
+        const tracks = await options.load(source);
+        if (tracks.length === 0) {
+          json(response, 422, { error: `nothing to play at ${source}` });
+          return;
+        }
+        engine.replace(tracks, source);
+        json(response, 200, engine.snapshot());
+      } catch (error) {
+        json(response, 422, { error: (error as Error).message.replace(/^nixamp: /, "") });
+      }
+      return;
+    }
+
     if (path.startsWith("/api/media/")) {
       if (!options.media) {
         json(response, 403, { error: "media streaming is off" });
@@ -569,6 +671,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 404, { error: "no such track" });
         return;
       }
+      watch(request, response, "media", engine.snapshot().tracks[index]?.title ?? file);
       sendFile(request, response, file);
       return;
     }
@@ -588,6 +691,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 403, { error: "media streaming is off" });
         return;
       }
+      watch(request, response, "stream", engine.snapshot().tracks[index]?.title ?? source);
       transcode(request, response, source, options.ffmpeg ?? ["ffmpeg"]);
       return;
     }
@@ -782,7 +886,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 
   const web = options.web !== null ? resolve(options.web) : defaultWebDir();
   const key = options.key ? newKey() : null;
-  const server = createServer(engine, { web, media: options.media, version, key, ffmpeg: tools.ffmpeg });
+  const server = createServer(engine, {
+    web,
+    media: options.media,
+    version,
+    key,
+    ffmpeg: tools.ffmpeg,
+    load: (next) => loadSource(tools, next),
+  });
 
   // A port already in use is the most ordinary failure there is, and it
   // arrives as an unhandled 'error' event that takes the process down with a
@@ -811,6 +922,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       return { status: done.status, stdout: done.stdout ?? "" };
     },
   };
+
+  if (options.announce) {
+    console.log(JSON.stringify({ nixamp: "listening", host: options.host, port, key, source: root }));
+  }
 
   console.log(`nixamp serve — ${tracks.length} tracks under ${root}`);
   console.log("");

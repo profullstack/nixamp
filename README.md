@@ -75,6 +75,48 @@ network. Your music is never touched.
 If you would rather not pipe a script into a shell, `npm i -g nixamp` and
 `bunx nixamp ~/Music` both work; that route needs Node 24 or newer.
 
+## Leaving it running
+
+`nixamp serve` holds a terminal. `nixamp daemon` does not.
+
+```
+nixamp daemon start ~/Music --open-port
+nixamp daemon status
+nixamp daemon stop
+```
+
+Start writes down where it went and the key it minted, waits until the server
+is actually answering before saying it started, and prints the share link. It is
+one daemon per user, and the state lives in `$XDG_STATE_HOME/nixamp`.
+
+## Watching it
+
+```
+nixamp admin
+```
+
+Who is connected, from where, to what, for how long and how much has gone out.
+It reads the daemon's own state file, so it needs no arguments; point it
+anywhere else with `--url` and `--key`.
+
+```
+╭─ Server ─────────────────────────╮ ╭─ Now playing ────────────────────╮
+│ http://127.0.0.1:4321            │ │ long.flac                        │
+│ /home/anthony/Music              │ │ —                                │
+│ Uptime                        3s │ │ State                    stopped │
+│ Tracks                         1 │ │ Position                      0s │
+│ Listeners                      2 │ │                                  │
+╰──────────────────────────────────╯ ╰──────────────────────────────────╯
+╭─ Connections (2 live) ────────────────────────────────────────────────╮
+│ Where        Network   Kind    Client    Track          For      Sent │
+│ 10.0.0.42    private   media   VLC 3     long.flac       3s   2.6 MiB │
+│ 100.65.1.7   tailscale stream  Safari 17 long.flac      41s    18 MiB │
+╰───────────────────────────────────────────────────────────────────────╯
+```
+
+Press `r` to re-stream: hand the running server a different URL or path and the
+listeners stay connected while what they are hearing changes under them.
+
 ## How it works
 
 One decode feeds both your speakers and the display. `ffmpeg` writes raw 32-bit float samples to a pipe; nixamp reads every sample on its way past, runs an FFT over it, and hands the same bytes to `ffplay`.

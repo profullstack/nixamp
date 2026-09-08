@@ -7,6 +7,7 @@
  * ffmpeg decodes; we read every sample on its way to the speakers and draw it.
  */
 import { createApp, themes, type BrailleCanvas, type Container, type KeyEvent, type Theme } from "@profullstack/hqtui";
+import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import {
   detectTools, formatTime, peaks, RATE, Stream, toMono,
@@ -65,10 +66,15 @@ export function barGlyph(value: number): string {
 
 const HELP = `nixamp — it really whips the terminal's ass.
 
-  nixamp [path]                  play a directory or a file in the terminal
-  nixamp serve [path] [options]  play here, and hand out a browser remote
+  nixamp [source]                play it in the terminal
+  nixamp serve [source] [options]  play here, and hand out a browser remote
+  nixamp daemon start|stop|status  serve in the background, and let go of it
+  nixamp admin [--url U] [--key K] who is connected, and re-stream to them
   nixamp update [version]        re-run the installer, keeping your choices
   nixamp uninstall [--yes]       remove everything the installer created
+
+A source is a directory, a file, an .m3u, an .m3u8, a .pls, or a URL to any
+of those.
 
 Options for serve:
   -p, --port N     port to listen on (default ${DEFAULT_PORT})
@@ -83,6 +89,65 @@ Options for serve:
 `;
 
 /**
+ * `nixamp daemon <start|stop|status>`.
+ *
+ * The daemon is `nixamp serve` with nobody holding its terminal, so this is
+ * mostly bookkeeping: start it detached, remember where it went, and be able
+ * to answer whether it is still there.
+ */
+async function runDaemon(argv: string[]): Promise<number> {
+  const d = await import("./daemon.ts");
+  const [action = "status", ...rest] = argv;
+  const entry = fileURLToPath(new URL("./main.js", import.meta.url));
+
+  if (action === "start") {
+    try {
+      const state = await d.start(rest, entry);
+      console.log(`nixamp daemon running (pid ${state.pid})`);
+      const url = d.daemonUrl(state);
+      console.log(`  ${state.key ? `${url}/s/${state.key}` : url}`);
+      console.log(`  ${state.source}`);
+      console.log("");
+      console.log("  nixamp admin        who is connected");
+      console.log("  nixamp daemon stop  when you are done");
+      return 0;
+    } catch (error) {
+      console.error((error as Error).message);
+      return 1;
+    }
+  }
+
+  if (action === "stop") {
+    const stopped = await d.stop();
+    console.log(stopped ? "nixamp daemon stopped" : "nixamp: no daemon was running");
+    return 0;
+  }
+
+  if (action === "status") {
+    const { running, state } = d.status();
+    if (!state) {
+      console.log("nixamp: no daemon. Start one with `nixamp daemon start`.");
+      return 1;
+    }
+    // A pid file outlives its process often enough that saying "running"
+    // without checking is how you report a daemon that died on Tuesday.
+    if (!running) {
+      console.log(`nixamp: the daemon (pid ${state.pid}) is gone. See ${state.log}`);
+      return 1;
+    }
+    const url = d.daemonUrl(state);
+    console.log(`nixamp daemon running (pid ${state.pid})`);
+    console.log(`  ${state.key ? `${url}/s/${state.key}` : url}`);
+    console.log(`  ${state.source}`);
+    console.log(`  up ${Math.round((Date.now() - state.startedAt) / 1000)}s`);
+    return 0;
+  }
+
+  console.error(`nixamp daemon: unknown action ${action}. Try start, stop or status.`);
+  return 64;
+}
+
+/**
  * The whole CLI, as a function. `bin/nixamp.mjs` imports and calls it: relying
  * on `import.meta.main` there would leave the installed binary doing nothing,
  * because the flag is false in a module that was imported rather than run.
@@ -93,6 +158,15 @@ export async function main(): Promise<void> {
   if (first === "serve") {
     const { serve } = await import("./server.ts");
     await serve(rest, version());
+    return;
+  }
+  if (first === "daemon") {
+    process.exitCode = await runDaemon(rest);
+    return;
+  }
+  if (first === "admin") {
+    const { admin } = await import("./admin.ts");
+    await admin(rest);
     return;
   }
   if (first === "update" || first === "uninstall") {
