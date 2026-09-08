@@ -1,14 +1,22 @@
 /**
  * The party line.
  *
- * A phone number, a spoken room name, and everybody who said the same name
- * talking to each other. You call 888-ROOM-818, it asks which room you want,
- * you say "blue", and you are in the blue room with whoever else said blue.
+ * A phone number, a six-digit code, and everybody who keyed the same code
+ * talking to each other. You call 888-ROOM-818, key 482917, and you are on the
+ * line with whoever else keyed 482917.
  *
- * The rooms are not configured anywhere. Saying a name that nobody is using
- * makes it, and the last person to hang up unmakes it -- the same shape as a
- * channel, where a name is just where a stream happens to be rather than a
- * record somebody created first.
+ * Six digits, and digits rather than letters, for one reason: the code is a
+ * thing you say to somebody. The generated ids this replaces were long enough
+ * that nobody could read one down a phone line, and letters would have brought
+ * case and spelling with them -- was that a capital B, was it "blue" or "blu".
+ * A keypad has one way to type a 4 and nobody disagrees about how to say it.
+ *
+ * The rooms are not configured anywhere. Keying a code nobody is using opens
+ * it, and the last person to hang up closes it -- the same shape as a channel,
+ * where a name is just where a stream happens to be rather than a record
+ * somebody created first. The code is a rendezvous, not a credential: two
+ * people who agree on 482917 beforehand both dial in, and neither had to
+ * create it first.
  *
  * The audio mixing is Telnyx's. A conference is a name on their side too, so
  * this module never touches a byte of audio: it answers a call, asks a
@@ -42,8 +50,8 @@ const SIGNATURE_TOLERANCE_MS = 5 * 60 * 1000;
 const CONFERENCE_TTL_MS = 4 * 60 * 60 * 1000;
 
 export interface RoomInfo {
-  /** The spoken name, normalised -- "the Blue Room" and "blue" are one room. */
-  name: string;
+  /** The six-digit code, which is the room's whole identity. */
+  code: string;
   /** Telnyx's id for the conference, once a first caller has made one. */
   conferenceId: string | null;
   /** How many legs we have put in, less the ones we have seen leave. */
@@ -76,31 +84,37 @@ export interface PartyLineOptions {
   onEvent?: (message: string) => void;
 }
 
-/** Words a caller says around the name rather than as part of it. */
-const FILLER = new Set([
-  "the", "a", "an", "room", "rooms", "please", "uh", "um", "er",
-  "join", "me", "to", "in", "into", "put", "i", "want", "wanna", "would",
-  "like", "lets", "let", "go", "take",
-]);
+/**
+ * How long a room code is.
+ *
+ * Six digits, because the code has to survive being read down a phone line and
+ * typed into a URL. The generated ids this replaces were long enough that
+ * nobody could say one out loud, which is the whole failure being fixed: a
+ * room code is something you tell somebody, so it has to be short enough to
+ * hold in your head between hearing it and dialling it.
+ */
+export const CODE_LENGTH = 6;
 
 /**
- * What a caller said, as a room name.
+ * A room code, from whatever the caller keyed.
  *
- * Speech recognition returns a sentence, not a token: "uh, the blue room
- * please" and "blue" have to land in the same place or two people trying to
- * meet will not. Stripping filler and punctuation gets most of the way, and
- * what survives is joined with dashes so it can sit in a URL next to a
- * channel id.
+ * Digits only, and exactly six of them. Five is not a near miss to be
+ * charitable about -- it is a different room, and guessing which one they
+ * meant would drop somebody into a stranger's conversation.
+ *
+ * Nothing here is case-sensitive because nothing here has a case. That is the
+ * point of digits over letters: a phone keypad has one way to type a 4, and no
+ * two people disagree about how to say it.
  */
-export function roomNameFrom(spoken: unknown, fallback = ""): string {
-  if (typeof spoken !== "string") return fallback;
-  const words = spoken
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .split(/[\s-]+/)
-    .filter((word) => word.length > 0 && !FILLER.has(word));
-  const name = words.join("-").slice(0, 40).replace(/^-+|-+$/g, "");
-  return name || fallback;
+export function roomCodeFrom(entered: unknown): string {
+  if (typeof entered !== "string" && typeof entered !== "number") return "";
+  const digits = String(entered).replace(/\D/g, "");
+  return digits.length === CODE_LENGTH ? digits : "";
+}
+
+/** How a code is read back: one digit at a time, because 482917 is not a number. */
+export function spokenCode(code: string): string {
+  return code.split("").join(", ");
 }
 
 /**
@@ -195,12 +209,19 @@ export class PartyLine {
     }
   }
 
-  /** The rooms with someone in them, busiest first. */
-  list(): RoomInfo[] {
+  /**
+   * The rooms with someone in them, busiest first.
+   *
+   * The code is deliberately not in it. This is served to anyone who asks, and
+   * a list of live codes would be a list of rooms to walk into -- the code is
+   * the only thing standing between a stranger and a conversation, so
+   * publishing it would be publishing the door.
+   */
+  list(): { callers: number; startedAt: number }[] {
     return [...this.rooms.values()]
       .filter((room) => room.callers > 0)
-      .map(({ name, conferenceId, callers, startedAt }) => ({ name, conferenceId, callers, startedAt }))
-      .sort((a, b) => b.callers - a.callers || a.name.localeCompare(b.name));
+      .map(({ callers, startedAt }) => ({ callers, startedAt }))
+      .sort((a, b) => b.callers - a.callers || a.startedAt - b.startedAt);
   }
 
   /**
@@ -229,19 +250,15 @@ export class PartyLine {
       return;
     }
 
-    // Speech and keypad arrive as different events with different payloads and
-    // both mean "the caller told us a room".
-    if (type === "call.ai_gather.ended" || type === "call.gather.ended") {
-      const said = this.spokenRoom(payload);
-      if (!said) {
-        await this.command(leg, "speak", {
-          payload: "Sorry, I did not catch that.",
-          voice: this.voice,
-        });
-        await this.ask(leg);
+    if (type === "call.gather.ended") {
+      const code = roomCodeFrom(payload["digits"]);
+      if (!code) {
+        // Re-ask rather than guess. Anything that is not six digits is not a
+        // room, and picking the nearest one would be picking a stranger's.
+        await this.ask(leg, "That is not a six digit code. ");
         return;
       }
-      await this.join(leg, said);
+      await this.join(leg, code);
       return;
     }
 
@@ -251,72 +268,49 @@ export class PartyLine {
     }
   }
 
-  /** Ask which room, by voice, with the keypad as a fallback. */
-  private async ask(leg: string): Promise<void> {
+  /**
+   * Ask for a room code, on the keypad.
+   *
+   * Not by voice, which is the one thing here that changed its mind. Speech
+   * suited a room *name* -- "blue" misheard is still recognisably a word, and
+   * a person can say it differently the second time. A six-digit code has no
+   * such slack: one digit misheard is a different room that also exists, and
+   * the caller lands in a stranger's conversation with nothing to tell them
+   * they went wrong. A keypad cannot mishear a 4.
+   *
+   * Six digits terminates the gather on its own, so the caller does not have
+   * to press anything after; # is there for the ones who do it anyway.
+   */
+  private async ask(leg: string, prefix = ""): Promise<void> {
     const greeting =
       this.options.greeting ??
-      "Welcome to the party line. What room would you like to join? Say a room name, or make one up.";
+      "Welcome to the party line. Enter a six digit room code. Anyone who enters the same code will be on the line with you.";
 
-    // gather_using_ai is the only Telnyx command that listens to speech --
-    // gather_using_speak reads text out but collects keypad digits only. The
-    // schema is what ends the gather: one required value, so it returns as
-    // soon as the caller has named a room rather than waiting for silence.
-    const ok = await this.command(leg, "gather_using_ai", {
-      greeting,
+    await this.command(leg, "gather_using_speak", {
+      payload: `${prefix}${greeting}`,
       voice: this.voice,
-      parameters: {
-        type: "object",
-        properties: {
-          room: {
-            type: "string",
-            description:
-              "The name of the room the caller wants to join. A single word or short phrase, as they said it.",
-          },
-        },
-        required: ["room"],
-      },
+      valid_digits: "0123456789",
+      minimum_digits: CODE_LENGTH,
+      maximum_digits: CODE_LENGTH,
+      terminating_digit: "#",
+      timeout_millis: 20000,
     });
-
-    // AI gather is a paid add-on and an account without it gets a 4xx rather
-    // than silence. Falling back to the keypad keeps the number answering.
-    if (!ok) {
-      await this.command(leg, "gather_using_speak", {
-        payload: `${greeting} Enter a room number, then press pound.`,
-        voice: this.voice,
-        minimum_digits: 1,
-        maximum_digits: 8,
-        terminating_digit: "#",
-      });
-    }
-  }
-
-  /** The room a caller named, from whichever kind of gather answered. */
-  private spokenRoom(payload: Record<string, unknown>): string {
-    const result = payload["result"];
-    if (result && typeof result === "object") {
-      const said = (result as Record<string, unknown>)["room"];
-      const name = roomNameFrom(said);
-      if (name) return name;
-    }
-    // The keypad path: digits are already a name, and a spoken "eight one
-    // eight" and a dialled 818 should not be two different rooms.
-    return roomNameFrom(payload["digits"]);
   }
 
   /** Put a leg into a room, making the conference if it is the first one there. */
-  private async join(leg: string, name: string): Promise<void> {
-    const room = this.room(name);
+  private async join(leg: string, code: string): Promise<void> {
+    const room = this.room(code);
 
     if (room.callers >= this.maxParticipants) {
       await this.command(leg, "speak", {
-        payload: `The ${name} room is full. Goodbye.`,
+        payload: "That room is full. Goodbye.",
         voice: this.voice,
       });
       await this.command(leg, "hangup", {});
       return;
     }
 
-    this.legRoom.set(leg, name);
+    this.legRoom.set(leg, code);
 
     // A conference we made more than four hours ago is gone on Telnyx's side
     // whatever our map says, so it is remade rather than joined.
@@ -336,7 +330,7 @@ export class PartyLine {
     }
 
     const created = await this.request("/conferences", {
-      name: `partyline-${name}-${this.now()}`,
+      name: `partyline-${this.now()}-${room.legs.size}`,
       call_control_id: leg,
       start_conference_on_create: true,
       max_participants: this.maxParticipants,
@@ -365,37 +359,45 @@ export class PartyLine {
     if (room.legs.has(leg)) return;
     room.legs.add(leg);
     room.callers = room.legs.size;
-    this.options.onEvent?.(`  a caller joined "${room.name}" (${room.callers} on the line).`);
+    this.options.onEvent?.(`  a caller joined a room (${room.callers} on the line).`);
   }
 
   /** A leg that hung up or was dropped, wherever it was. */
   private release(leg: string): void {
-    const name = this.legRoom.get(leg);
+    const code = this.legRoom.get(leg);
     this.legRoom.delete(leg);
-    if (name === undefined) return;
-    const room = this.rooms.get(name);
+    if (code === undefined) return;
+    const room = this.rooms.get(code);
     if (room === undefined) return;
     room.legs.delete(leg);
     room.callers = room.legs.size;
     if (room.callers === 0) {
-      // Telnyx ends an empty conference itself; keeping the name would only
+      // Telnyx ends an empty conference itself; keeping the code would only
       // mean handing the next caller a dead id.
-      this.rooms.delete(name);
-      this.options.onEvent?.(`  "${name}" is empty.`);
+      this.rooms.delete(code);
+      this.options.onEvent?.("  a room is empty.");
     }
   }
 
-  private room(name: string): Room {
-    const existing = this.rooms.get(name);
+  /**
+   * The room on this code, made if nobody is using it.
+   *
+   * Entering a code nobody is in opens that room rather than failing. The code
+   * is a rendezvous, not a credential: two people who agree on 482917
+   * beforehand should both be able to dial in, and neither of them should have
+   * had to create it first.
+   */
+  private room(code: string): Room {
+    const existing = this.rooms.get(code);
     if (existing !== undefined) return existing;
     const room: Room = {
-      name,
+      code,
       conferenceId: null,
       callers: 0,
       startedAt: this.now(),
       legs: new Set<string>(),
     };
-    this.rooms.set(name, room);
+    this.rooms.set(code, room);
     return room;
   }
 
