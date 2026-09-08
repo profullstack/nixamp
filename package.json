@@ -8,8 +8,18 @@
   "bin": {
     "nixamp": "./bin/nixamp.mjs"
   },
-  "files": ["dist", "bin", "src", "web/dist", "README.md", "LICENSE"],
-  "workspaces": ["web", "desktop"],
+  "files": [
+    "dist",
+    "bin",
+    "src",
+    "web/dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "workspaces": [
+    "web",
+    "desktop"
+  ],
   "engines": {
     "bun": ">=1.1",
     "node": ">=22.6"
@@ -25,7 +35,8 @@
     "web:build": "bun run --filter '@nixamp/web' build",
     "web:preview": "bun run --filter '@nixamp/web' preview",
     "desktop:dev": "bun run --filter '@nixamp/desktop' dev",
-    "desktop:build": "bun run --filter '@nixamp/desktop' build"
+    "desktop:build": "bun run --filter '@nixamp/desktop' build",
+    "pack:cli": "bun scripts/pack-cli.ts"
   },
   "dependencies": {
     "@profullstack/hqtui": "^0.3.0"
@@ -34,8 +45,19 @@
     "@types/node": "^26",
     "typescript": "^7.0.2"
   },
-  "trustedDependencies": ["electron"],
-  "keywords": ["audio", "player", "winamp", "tui", "terminal", "ffmpeg", "hqtui", "pwa"],
+  "trustedDependencies": [
+    "electron"
+  ],
+  "keywords": [
+    "audio",
+    "player",
+    "winamp",
+    "tui",
+    "terminal",
+    "ffmpeg",
+    "hqtui",
+    "pwa"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/profullstack/nixamp.git"

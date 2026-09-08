@@ -90,6 +90,9 @@ const TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".webmanifest": "application/manifest+json; charset=utf-8",
+  // The installer, so `curl https://nixamp.com/install.sh` is readable rather
+  // than a download prompt.
+  ".sh": "text/x-shellscript; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".ico": "image/x-icon",

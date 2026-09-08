@@ -66,6 +66,8 @@ const HELP = `nixamp — it really whips the terminal's ass.
 
   nixamp [path]                  play a directory or a file in the terminal
   nixamp serve [path] [options]  play here, and hand out a browser remote
+  nixamp update [version]        re-run the installer, keeping your choices
+  nixamp uninstall [--yes]       remove everything the installer created
 
 Options for serve:
   -p, --port N     port to listen on (default ${DEFAULT_PORT})
@@ -88,6 +90,11 @@ export async function main(): Promise<void> {
   if (first === "serve") {
     const { serve } = await import("./server.ts");
     await serve(rest, version());
+    return;
+  }
+  if (first === "update" || first === "uninstall") {
+    const manage = await import("./manage.ts");
+    process.exitCode = first === "update" ? manage.update(rest) : manage.uninstall(rest);
     return;
   }
   if (first === "--version" || first === "-v") { console.log(version()); return; }

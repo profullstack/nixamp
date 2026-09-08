@@ -1,0 +1,104 @@
+name: Release
+
+# Tag a version and this builds everything `install.sh` downloads, publishes the
+# CLI to npm, and attaches the assets to the release. The installer resolves
+# "latest" from the GitHub release, so nothing is installable until this has run.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  cli:
+    name: CLI tarball and npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      # electron is a devDependency of the desktop workspace and this job does
+      # not build the desktop app; skipping its runtime saves most of the time.
+      - run: bun install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: bun run build
+      - run: bun run web:build
+      - run: bun test test web/test
+      - run: bun run pack:cli
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli
+          path: release/*.tar.gz
+
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            script: build
+          - os: macos-latest
+            script: build:mac
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run web:build
+      # Unsigned on purpose: there is no signing identity, and electron-builder
+      # is configured with a null mac identity so it does not look for one.
+      - run: bun run --filter '@nixamp/desktop' ${{ matrix.script }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            desktop/release/*.tar.gz
+            desktop/release/*.zip
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+
+  publish:
+    name: Attach to the release
+    needs: [cli, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: assets
+      - name: One flat directory
+        run: |
+          mkdir -p out
+          find assets -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.AppImage' -o -name '*.deb' \) \
+            -exec cp {} out/ \;
+          ls -la out
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: out/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
