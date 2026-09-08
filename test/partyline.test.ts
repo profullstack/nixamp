@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign as signMessage } from "node:crypto";
-import { PartyLine, roomNameFrom, sameSecret } from "../src/partyline.ts";
+import { CODE_LENGTH, PartyLine, roomCodeFrom, sameSecret, spokenCode } from "../src/partyline.ts";
 
 /** An ed25519 pair standing in for the account's, so a test can sign. */
 function keys() {
@@ -41,23 +41,38 @@ function line(fetch: typeof globalThis.fetch, publicKey = "", extra: Record<stri
   return new PartyLine({ apiKey: "KEY_test", publicKey, fetch, now: () => NOW, ...extra });
 }
 
-test("what a caller said becomes one room name however they said it", () => {
-  assert.equal(roomNameFrom("blue"), "blue");
-  // The filler around a name is not part of it, or two people meaning the
-  // same room would land in two.
-  assert.equal(roomNameFrom("uh, the blue room please"), "blue");
-  assert.equal(roomNameFrom("I want to join the green room"), "green");
-  assert.equal(roomNameFrom("Blue!"), "blue");
-  assert.equal(roomNameFrom("late night radio"), "late-night-radio");
-  // A dialled 818 and a spoken "818" have to be the same place.
-  assert.equal(roomNameFrom("818"), "818");
-  assert.equal(roomNameFrom("a".repeat(80)).length, 40);
-  // Nothing usable is nothing, not an empty room called "".
-  assert.equal(roomNameFrom("the room"), "");
-  assert.equal(roomNameFrom(""), "");
-  assert.equal(roomNameFrom(undefined), "");
-  assert.equal(roomNameFrom(42), "");
-  assert.equal(roomNameFrom(null, "lobby"), "lobby");
+/** Keying a code, as Telnyx reports it. */
+const keyed = (leg: string, digits: string) => ({
+  event_type: "call.gather.ended",
+  payload: { call_control_id: leg, digits },
+});
+
+test("a room code is exactly six digits or it is not a code", () => {
+  assert.equal(CODE_LENGTH, 6);
+  assert.equal(roomCodeFrom("482917"), "482917");
+  // Leading zeros survive: 048291 is a room, not the number 48291.
+  assert.equal(roomCodeFrom("048291"), "048291");
+  // What a keypad or a URL might wrap around it.
+  assert.equal(roomCodeFrom("482-917"), "482917");
+  assert.equal(roomCodeFrom(" 482 917 "), "482917");
+  assert.equal(roomCodeFrom("#482917#"), "482917");
+  assert.equal(roomCodeFrom(482917), "482917");
+
+  // Five digits is a different room, not this one missing a digit. Guessing
+  // which they meant would put somebody in a stranger's conversation.
+  assert.equal(roomCodeFrom("48291"), "");
+  assert.equal(roomCodeFrom("4829177"), "");
+  assert.equal(roomCodeFrom(""), "");
+  assert.equal(roomCodeFrom("abcdef"), "");
+  assert.equal(roomCodeFrom(undefined), "");
+  assert.equal(roomCodeFrom(null), "");
+  assert.equal(roomCodeFrom({}), "");
+});
+
+test("a code is read back one digit at a time", () => {
+  // "482917" spoken as a number is four hundred eighty-two thousand…, which is
+  // not a code anybody can write down.
+  assert.equal(spokenCode("482917"), "4, 8, 2, 9, 1, 7");
 });
 
 test("a webhook is only believed when Telnyx signed it", () => {
@@ -71,9 +86,7 @@ test("a webhook is only believed when Telnyx signed it", () => {
 
   // A body edited after signing is the attack this exists to stop.
   assert.equal(party.verify(body + " ", signed(privateKey, body, ts), ts), false);
-  // Somebody else's key.
   assert.equal(party.verify(body, signed(keys().privateKey, body, ts), ts), false);
-  // Missing pieces.
   assert.equal(party.verify(body, undefined, ts), false);
   assert.equal(party.verify(body, signed(privateKey, body, ts), undefined), false);
   assert.equal(party.verify(body, "not-base64-64-bytes", ts), false);
@@ -88,7 +101,6 @@ test("a signature from too long ago is a replay, in either direction", () => {
   const old = String(Math.floor((NOW - 10 * 60 * 1000) / 1000));
   assert.equal(party.verify(body, signed(privateKey, body, old), old), false);
 
-  // A forgery with a clock ahead of ours is no better than one behind.
   const ahead = String(Math.floor((NOW + 10 * 60 * 1000) / 1000));
   assert.equal(party.verify(body, signed(privateKey, body, ahead), ahead), false);
 
@@ -100,11 +112,10 @@ test("without a public key nothing is believed", () => {
   const party = line(recorder().fetch, "");
   assert.equal(party.armed, false);
   assert.equal(party.verify("{}", "x", "1"), false);
-  // A key of the wrong size is a misconfiguration, not a usable key.
   assert.equal(line(recorder().fetch, Buffer.alloc(16).toString("base64")).armed, false);
 });
 
-test("an inbound call is answered and asked which room, by voice", async () => {
+test("an inbound call is answered and asked for a code, on the keypad", async () => {
   const { calls, fetch } = recorder();
   const party = line(fetch);
 
@@ -116,11 +127,14 @@ test("an inbound call is answered and asked which room, by voice", async () => {
 
   await party.handle({ event_type: "call.answered", payload: { call_control_id: "leg-1" } });
   const ask = calls[1];
-  assert.equal(ask?.path, "/calls/leg-1/actions/gather_using_ai");
-  // Speech, not the keypad: gather_using_speak would read the prompt aloud
-  // and then wait for digits.
-  assert.match(String(ask?.body["greeting"]), /room/i);
-  assert.deepEqual((ask?.body["parameters"] as Record<string, unknown>)["required"], ["room"]);
+  // The keypad, not speech. One digit misheard is a different room that also
+  // exists, and nothing would tell the caller they went wrong.
+  assert.equal(ask?.path, "/calls/leg-1/actions/gather_using_speak");
+  assert.equal(ask?.body["minimum_digits"], 6);
+  assert.equal(ask?.body["maximum_digits"], 6);
+  assert.equal(ask?.body["valid_digits"], "0123456789");
+  assert.match(String(ask?.body["payload"]), /six digit/i);
+  assert.ok(!calls.some((c) => c.path.endsWith("gather_using_ai")));
 });
 
 test("an outbound leg is not somebody calling in", async () => {
@@ -132,62 +146,81 @@ test("an outbound leg is not somebody calling in", async () => {
   assert.deepEqual(calls, []);
 });
 
-test("the first caller opens the room and the second joins it", async () => {
-  const { calls, fetch } = recorder(conferenceReplies("conf-blue"));
+test("the first caller opens the room and the second lands in it", async () => {
+  const { calls, fetch } = recorder(conferenceReplies("conf-482917"));
   const party = line(fetch);
 
-  await party.handle({
-    event_type: "call.ai_gather.ended",
-    payload: { call_control_id: "leg-1", result: { room: "the blue room" } },
-  });
+  await party.handle(keyed("leg-1", "482917"));
   const created = calls.find((c) => c.path === "/conferences");
   assert.ok(created, "the first caller creates the conference");
   assert.equal(created?.body["call_control_id"], "leg-1");
-  assert.match(String(created?.body["name"]), /^partyline-blue-/);
-  assert.deepEqual(party.list(), [
-    { name: "blue", conferenceId: "conf-blue", callers: 1, startedAt: NOW },
-  ]);
+  assert.deepEqual(party.list(), [{ callers: 1, startedAt: NOW }]);
 
-  await party.handle({
-    event_type: "call.ai_gather.ended",
-    payload: { call_control_id: "leg-2", result: { room: "blue" } },
-  });
+  await party.handle(keyed("leg-2", "482917"));
   assert.ok(
-    calls.some((c) => c.path === "/conferences/conf-blue/actions/join" && c.body["call_control_id"] === "leg-2"),
+    calls.some(
+      (c) => c.path === "/conferences/conf-482917/actions/join" && c.body["call_control_id"] === "leg-2",
+    ),
     "the second caller joins rather than opening a second room",
   );
   assert.equal(calls.filter((c) => c.path === "/conferences").length, 1);
   assert.equal(party.list()[0]?.callers, 2);
 });
 
-test("two names are two rooms", async () => {
+test("the code never appears in what Telnyx or the public can see", async () => {
+  const { calls, fetch } = recorder(conferenceReplies());
+  const party = line(fetch);
+  await party.handle(keyed("leg-1", "482917"));
+
+  // The rooms listing is served to anyone who asks. A live code in it would be
+  // a door with the key taped to it.
+  assert.deepEqual(Object.keys(party.list()[0] ?? {}).sort(), ["callers", "startedAt"]);
+  assert.ok(!JSON.stringify(party.list()).includes("482917"));
+
+  // Telnyx lists conferences in a dashboard we do not control, so the code is
+  // not the conference name either.
+  const created = calls.find((c) => c.path === "/conferences");
+  assert.ok(!String(created?.body["name"]).includes("482917"));
+});
+
+test("two codes are two rooms", async () => {
   let n = 0;
   const { fetch } = recorder((path) =>
     path === "/conferences" ? { ok: true, json: { data: { id: `conf-${++n}` } } } : { ok: true },
   );
   const party = line(fetch);
 
-  await party.handle({ event_type: "call.gather.ended", payload: { call_control_id: "a", digits: "818" } });
-  await party.handle({ event_type: "call.gather.ended", payload: { call_control_id: "b", digits: "909" } });
-
-  assert.deepEqual(party.list().map((r) => r.name).sort(), ["818", "909"]);
+  await party.handle(keyed("a", "111111"));
+  await party.handle(keyed("b", "222222"));
   assert.deepEqual(party.list().map((r) => r.callers), [1, 1]);
+});
+
+test("a code that is not six digits is re-asked, never guessed at", async () => {
+  const { calls, fetch } = recorder();
+  const party = line(fetch);
+
+  await party.handle(keyed("leg-1", "4829"));
+
+  const reask = calls.find((c) => c.path === "/calls/leg-1/actions/gather_using_speak");
+  assert.ok(reask, "it asks again");
+  assert.match(String(reask?.body["payload"]), /not a six digit code/i);
+  // Nothing was opened on a code we could not read.
+  assert.equal(calls.filter((c) => c.path === "/conferences").length, 0);
+  assert.deepEqual(party.list(), []);
 });
 
 test("hanging up empties the room, and an empty room stops existing", async () => {
   const { fetch } = recorder(conferenceReplies());
   const party = line(fetch);
 
-  await party.handle({ event_type: "call.ai_gather.ended", payload: { call_control_id: "leg-1", result: { room: "blue" } } });
-  await party.handle({ event_type: "call.ai_gather.ended", payload: { call_control_id: "leg-2", result: { room: "blue" } } });
+  await party.handle(keyed("leg-1", "482917"));
+  await party.handle(keyed("leg-2", "482917"));
   assert.equal(party.list()[0]?.callers, 2);
 
   await party.handle({ event_type: "call.hangup", payload: { call_control_id: "leg-2" } });
   assert.equal(party.list()[0]?.callers, 1);
 
   await party.handle({ event_type: "conference.participant.left", payload: { call_control_id: "leg-1" } });
-  // Telnyx ends an empty conference itself, so keeping the name would only
-  // hand the next caller a dead id.
   assert.deepEqual(party.list(), []);
 
   // A leg we never placed is not an error.
@@ -198,43 +231,17 @@ test("hanging up empties the room, and an empty room stops existing", async () =
 test("the same leg twice is still one caller", async () => {
   const { fetch } = recorder(conferenceReplies());
   const party = line(fetch);
-  const event = { event_type: "call.ai_gather.ended", payload: { call_control_id: "leg-1", result: { room: "blue" } } };
-  await party.handle(event);
-  await party.handle(event);
+  await party.handle(keyed("leg-1", "482917"));
+  await party.handle(keyed("leg-1", "482917"));
   assert.equal(party.list()[0]?.callers, 1);
-});
-
-test("a room that did not catch the name asks again instead of guessing", async () => {
-  const { calls, fetch } = recorder();
-  const party = line(fetch);
-
-  await party.handle({
-    event_type: "call.ai_gather.ended",
-    payload: { call_control_id: "leg-1", result: { room: "uh, the room" } },
-  });
-
-  assert.equal(calls[0]?.path, "/calls/leg-1/actions/speak");
-  assert.equal(calls[1]?.path, "/calls/leg-1/actions/gather_using_ai");
-  // Nothing was opened on a name we could not read.
-  assert.equal(calls.filter((c) => c.path === "/conferences").length, 0);
-});
-
-test("an account without AI gather still answers, on the keypad", async () => {
-  const { calls, fetch } = recorder((path) => ({ ok: !path.endsWith("gather_using_ai") }));
-  await line(fetch).handle({ event_type: "call.answered", payload: { call_control_id: "leg-1" } });
-
-  assert.equal(calls[0]?.path, "/calls/leg-1/actions/gather_using_ai");
-  const fallback = calls[1];
-  assert.equal(fallback?.path, "/calls/leg-1/actions/gather_using_speak");
-  assert.equal(fallback?.body["terminating_digit"], "#");
 });
 
 test("a full room turns a caller away rather than billing for them", async () => {
   const { calls, fetch } = recorder(conferenceReplies());
   const party = line(fetch, "", { maxParticipants: 1 });
 
-  await party.handle({ event_type: "call.ai_gather.ended", payload: { call_control_id: "leg-1", result: { room: "blue" } } });
-  await party.handle({ event_type: "call.ai_gather.ended", payload: { call_control_id: "leg-2", result: { room: "blue" } } });
+  await party.handle(keyed("leg-1", "482917"));
+  await party.handle(keyed("leg-2", "482917"));
 
   assert.equal(party.list()[0]?.callers, 1);
   assert.ok(calls.some((c) => c.path === "/calls/leg-2/actions/hangup"));
@@ -243,7 +250,6 @@ test("a full room turns a caller away rather than billing for them", async () =>
 
 test("a conference Telnyx has already discarded is remade, not joined forever", async () => {
   let n = 0;
-  // The join fails the way a four-hour-old conference does.
   const { calls, fetch } = recorder((path) =>
     path === "/conferences"
       ? { ok: true, json: { data: { id: `conf-${++n}` } } }
@@ -251,14 +257,11 @@ test("a conference Telnyx has already discarded is remade, not joined forever", 
   );
   const party = line(fetch);
 
-  await party.handle({ event_type: "call.ai_gather.ended", payload: { call_control_id: "leg-1", result: { room: "blue" } } });
-  assert.equal(party.list()[0]?.conferenceId, "conf-1");
+  await party.handle(keyed("leg-1", "482917"));
+  await party.handle(keyed("leg-2", "482917"));
 
-  await party.handle({ event_type: "call.ai_gather.ended", payload: { call_control_id: "leg-2", result: { room: "blue" } } });
-  // It tried the id it had, was told no, and opened a new one rather than
-  // dropping the caller.
   assert.ok(calls.some((c) => c.path === "/conferences/conf-1/actions/join"));
-  assert.equal(party.list()[0]?.conferenceId, "conf-2");
+  assert.equal(calls.filter((c) => c.path === "/conferences").length, 2);
   assert.equal(party.list()[0]?.callers, 2);
 });
 
@@ -266,7 +269,7 @@ test("a caller is not left on a silent line when the room cannot be opened", asy
   const { calls, fetch } = recorder((path) => ({ ok: path !== "/conferences" }));
   const party = line(fetch);
 
-  await party.handle({ event_type: "call.ai_gather.ended", payload: { call_control_id: "leg-1", result: { room: "blue" } } });
+  await party.handle(keyed("leg-1", "482917"));
 
   assert.ok(calls.some((c) => c.path === "/calls/leg-1/actions/speak"));
   assert.ok(calls.some((c) => c.path === "/calls/leg-1/actions/hangup"));
