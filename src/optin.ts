@@ -18,8 +18,19 @@
 
 export const OPT_IN_PATH = "/sms";
 
-/** The number a caller dials. */
-export const CALL_IN_NUMBER = "888-766-6818";
+/**
+ * The number a caller dials.
+ *
+ * Local, not the toll-free one, and the reason is billing rather than taste.
+ * Only standard DIDs are eligible for channel billing -- a flat fee for
+ * unlimited inbound minutes -- while toll-free is pay-per-minute forever, at
+ * roughly five times the rate. On a line people stay on for hours that is the
+ * whole cost of the product, so the number we print is the cheap one.
+ *
+ * 888-ROOM-818 still answers, for anyone who has it. It is a vanity alias, not
+ * the number to publish, and it cannot reach the cheap tier at any volume.
+ */
+export const CALL_IN_NUMBER = "408-357-2326";
 
 /** The number a reminder is sent from. Not the one above; see partyline.ts. */
 export const SMS_FROM_NUMBER = "408-426-9127";

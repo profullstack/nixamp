@@ -106,6 +106,8 @@ export interface PartyLineOptions {
   voice?: string;
   /** A ceiling per room, so one room cannot spend the whole balance. */
   maxParticipants?: number;
+  /** The number to tell people to call back on. Injected, not hardcoded. */
+  callIn?: string;
   /** Injected for tests. */
   now?: () => number;
   fetch?: typeof globalThis.fetch;
@@ -478,7 +480,8 @@ export class PartyLine {
     // to make it stop, and the carriers check.
     const text =
       `${stream.name} is live now${what} on nixamp. ` +
-      `Call 888-766-6818 and key ${stream.code} to listen. Reply STOP to opt out.`;
+      `Call ${this.options.callIn ?? "408-357-2326"} and key ${stream.code} to listen. ` +
+      "Reply STOP to opt out.";
 
     let sent = 0;
     for (const to of waiting) if (await sms.send(to, text)) sent += 1;
