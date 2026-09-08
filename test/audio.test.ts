@@ -134,3 +134,21 @@ test("a missing file ends the stream with an error rather than hanging",
     });
     assert.ok(error, "an error was reported");
   });
+
+test("skipping a track does not report the killed decoder as a failure", async () => {
+  // A decoder that outlives the skip, so the kill is what ends it. No ffmpeg
+  // is needed: the bug was in how a late `close` is attributed, not in decoding.
+  const slow = { ffmpeg: ["sh", "-c", "sleep 5"], ffprobe: ["true"], play: null };
+  const track = { path: "/one.mp3", title: "one", artist: "", album: "", duration: 0 };
+  const ends: (string | undefined)[] = [];
+  const stream = new Stream(slow, { onSamples: () => {}, onEnd: (e) => ends.push(e) });
+
+  stream.start(track);
+  await new Promise((done) => setTimeout(done, 120));
+  // The skip: the first decoder is killed and a second takes its place.
+  stream.start({ ...track, path: "/two.mp3", title: "two" });
+  await new Promise((done) => setTimeout(done, 250));
+  stream.stop();
+
+  assert.deepEqual(ends, [], `a killed decoder reported: ${ends.join(", ")}`);
+});

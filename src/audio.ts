@@ -107,6 +107,12 @@ export class Stream {
   private decoder: ChildProcess | null = null;
   private output: ChildProcess | null = null;
   private stopped = false;
+  /**
+   * Which start each callback belongs to. A killed ffmpeg still fires `close`,
+   * and without this its "exited null" lands on the track that replaced it —
+   * so skipping a track would report an error and stop the player.
+   */
+  private generation = 0;
   /** Samples handed to the output so far, per channel. */
   private framesOut = 0;
   /** Leftover bytes when a chunk does not divide into whole f32 samples. */
@@ -129,6 +135,7 @@ export class Stream {
   start(track: Track, from = 0): void {
     this.stop();
     this.stopped = false;
+    const generation = ++this.generation;
     this.framesOut = Math.round(from * RATE);
 
     const [ff, ...ffRest] = this.tools.ffmpeg;
@@ -158,7 +165,7 @@ export class Stream {
     this.decoder.stderr?.on("data", (c: Buffer) => { stderr += c.toString(); });
 
     this.decoder.stdout?.on("data", (chunk: Buffer) => {
-      if (this.stopped) return;
+      if (this.stopped || generation !== this.generation) return;
       this.output?.stdin?.write(chunk);
       const joined = this.tail.length ? Buffer.concat([this.tail, chunk]) : chunk;
       const usable = joined.length - (joined.length % 4);
@@ -172,18 +179,20 @@ export class Stream {
     });
 
     this.decoder.on("close", (code) => {
-      if (this.stopped) return;
+      if (this.stopped || generation !== this.generation) return;
       this.output?.stdin?.end();
       this.handlers.onEnd(code === 0 ? undefined : stderr.trim() || `ffmpeg exited ${code}`);
     });
     this.decoder.on("error", (error) => {
-      if (this.stopped) return;
+      if (this.stopped || generation !== this.generation) return;
       this.handlers.onEnd(error.message);
     });
   }
 
   stop(): void {
     this.stopped = true;
+    // Anything still in flight from the last start belongs to nobody now.
+    this.generation++;
     this.decoder?.kill("SIGKILL");
     this.output?.stdin?.end();
     this.output?.kill("SIGKILL");

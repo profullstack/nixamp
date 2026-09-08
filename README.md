@@ -35,6 +35,69 @@ The analyser is a radix-2 Cooley-Tukey FFT with a Hann window, about 120 lines a
 
 Braille gives four vertical pixels per character cell, so a bar moves smoothly instead of stepping through eight block glyphs.
 
+## Three ways to run it
+
+The terminal player is the original and still the point, but the same engine
+now drives two more surfaces.
+
+### Server mode, and the browser remote
+
+```
+nixamp serve ~/Music --host 0.0.0.0
+```
+
+nixamp keeps playing through your speakers and hands out a remote: open the
+address it prints on your phone and you get the playlist, the transport and the
+same spectrum, pushed as it happens. State goes out over Server-Sent Events
+rather than a WebSocket, because SSE is plain HTTP — no dependency, and it
+reconnects by itself when the phone goes to sleep.
+
+Tick **Listen on this device** and the browser streams the track's bytes and
+plays it there instead, with its own analyser drawing the same picture.
+
+`--host 127.0.0.1` is the default, so nothing is reachable until you say so.
+Track paths never leave the machine; the remote sees titles.
+
+| Endpoint | Does |
+|---|---|
+| `GET /api/state` | one snapshot |
+| `GET /api/events` | snapshots, pushed |
+| `POST /api/command` | `play` `toggle` `stop` `next` `prev` `select` |
+| `GET /api/media/:n` | the track's bytes, with ranges (`--no-media` turns it off) |
+
+### The PWA — [nixamp.com](https://nixamp.com)
+
+```
+bun run web:dev      # or: bun run web:build && bun run serve
+```
+
+A player in the browser, installable, and the remote client above. It opens
+your own files — nothing is uploaded; the browser decodes them where they are —
+and it plays video as well as audio. Vanilla TypeScript and Vite, one 16 kB
+bundle, and a service worker that precaches the shell so the app opens with no
+network at all.
+
+The icons are drawn from source (`web/scripts/icons.ts`) rather than committed
+as opaque binaries, which is how the 192 and the 512 stay in step.
+
+### The desktop app
+
+```
+bun run desktop:dev
+bun run desktop:build      # AppImage + deb into desktop/release
+```
+
+Electron around the same PWA, with a real `nixamp serve` running as a child
+process — so the window is the browser player, the terminal player's engine and
+the remote-control server at once.
+
+The CLI travels inside the bundle and is run by Electron's own Node, which is
+the point: installing the app installs a working nixamp with no system Node
+anywhere near it. **Copy Bundled CLI Path** in the menu tells you how to call
+it.
+
+Building is unsigned on purpose — no code signing, no notarisation.
+
 ## Requirements
 
 **ffmpeg** and **ffprobe** to decode, **ffplay** to make sound. All three ship together.
@@ -64,7 +127,11 @@ Whatever your ffmpeg was built with: mp3, flac, ogg, opus, m4a, aac, wav, wma, a
 
 ## Status
 
-Early. It plays a directory, shows tags and timings, and draws what it hears. Not yet: seeking, volume, shuffle, repeat, m3u playlists, or the visualiser presets that would make the name honest.
+Early. It plays a directory, shows tags and timings, and draws what it hears —
+in a terminal, in a browser and in a window, from one engine. The browser
+player seeks and has a volume slider; the terminal one still does not. Not yet,
+anywhere: shuffle, repeat, m3u playlists, or the visualiser presets that would
+make the name honest.
 
 ## Built with
 

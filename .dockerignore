@@ -1,0 +1,13 @@
+node_modules
+dist
+web/dist
+web/node_modules
+# The desktop workspace's manifest has to stay: bun install reads every
+# workspace. Its build output does not.
+desktop/node_modules
+desktop/release
+desktop/staging
+desktop/build
+.git
+.github
+*.log

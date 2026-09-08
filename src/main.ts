@@ -13,7 +13,9 @@ import {
   type Tools, type Track,
 } from "./audio.ts";
 import { Analyser, bandEdges, bands, decay } from "./fft.ts";
+import { version } from "./meta.ts";
 import { displayName, loadPlaylist } from "./playlist.ts";
+import { DEFAULT_PORT } from "./server.ts";
 
 const FFT_SIZE = 2048;
 export const BAND_COUNT = 24;
@@ -60,8 +62,38 @@ export function barGlyph(value: number): string {
   return RAMP[i] as string;
 }
 
-async function main(): Promise<void> {
-  const target = resolve(process.argv[2] ?? ".");
+const HELP = `nixamp — it really whips the terminal's ass.
+
+  nixamp [path]                  play a directory or a file in the terminal
+  nixamp serve [path] [options]  play here, and hand out a browser remote
+
+Options for serve:
+  -p, --port N     port to listen on (default ${DEFAULT_PORT})
+  -h, --host HOST  address to bind (default 127.0.0.1; 0.0.0.0 for the LAN)
+      --web DIR    directory of built PWA files to serve at /
+      --no-media   do not stream the library's bytes to remotes
+
+  -v, --version    print the version
+      --help       print this
+`;
+
+/**
+ * The whole CLI, as a function. `bin/nixamp.mjs` imports and calls it: relying
+ * on `import.meta.main` there would leave the installed binary doing nothing,
+ * because the flag is false in a module that was imported rather than run.
+ */
+export async function main(): Promise<void> {
+  const [first, ...rest] = process.argv.slice(2);
+
+  if (first === "serve") {
+    const { serve } = await import("./server.ts");
+    await serve(rest, version());
+    return;
+  }
+  if (first === "--version" || first === "-v") { console.log(version()); return; }
+  if (first === "--help") { console.log(HELP); return; }
+
+  const target = resolve(first ?? ".");
   const tools = detectTools();
   const tracks = loadPlaylist(tools, target);
   if (tracks.length === 0) {

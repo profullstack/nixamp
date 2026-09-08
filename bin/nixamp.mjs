@@ -1,2 +1,7 @@
 #!/usr/bin/env node
-import "../dist/main.js";
+import { main } from "../dist/main.js";
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

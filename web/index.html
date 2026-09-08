@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>nixamp</title>
+    <meta name="description" content="nixamp — it really whips the terminal's ass. A Winamp-shaped player for your files and for the nixamp running on your other machine." />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#080c09" />
+    <link rel="icon" href="/icons/icon-192.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="nixamp" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta property="og:title" content="nixamp" />
+    <meta property="og:description" content="It really whips the terminal's ass." />
+    <meta property="og:type" content="website" />
+  </head>
+  <body>
+    <main id="app">
+      <header class="bar">
+        <span class="brand">⣿ NIXAMP</span>
+        <span id="status" class="status" data-playing="false">■ STOPPED</span>
+        <span id="source" class="chip">no source</span>
+        <button id="install" type="button" class="ghost" hidden>Install</button>
+      </header>
+
+      <section class="panel" data-title="Now Playing">
+        <video id="video" playsinline hidden></video>
+        <audio id="audio"></audio>
+        <div id="title-line" class="track-title">Nothing loaded.</div>
+        <div id="album-line" class="track-sub">—</div>
+        <div class="scrub">
+          <span id="elapsed" class="time">00:00</span>
+          <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" disabled />
+          <span id="total" class="time muted">--:--</span>
+        </div>
+      </section>
+
+      <div class="split">
+        <section class="panel" data-title="Spectrum Analyser">
+          <canvas id="spectrum" aria-hidden="true"></canvas>
+          <div class="meters">
+            <span id="glyphs" class="glyphs"></span>
+            <span id="levels" class="levelmeter">L······ R······</span>
+          </div>
+        </section>
+
+        <section class="panel" id="playlist-panel" data-title="Playlist (0)">
+          <ol id="playlist" class="playlist"></ol>
+        </section>
+      </div>
+
+      <section class="transport">
+        <button id="prev" type="button" aria-label="Previous">|◀◀</button>
+        <button id="play-pause" type="button" class="primary" aria-label="Play">▶</button>
+        <button id="stop" type="button" aria-label="Stop">■</button>
+        <button id="next" type="button" aria-label="Next">▶▶|</button>
+        <label class="volume">
+          <span aria-hidden="true" class="vol">VOL</span>
+          <input id="volume" type="range" min="0" max="100" value="100" aria-label="Volume" />
+        </label>
+      </section>
+
+      <div class="split">
+        <section class="panel" data-title="Files">
+          <p class="hint">Nothing is uploaded. The browser decodes your files where they are.</p>
+          <div class="picker">
+            <label class="button">
+              Open files
+              <input id="files" type="file" multiple accept="audio/*,video/*" />
+            </label>
+            <label class="button">
+              Open folder
+              <input id="folder" type="file" multiple webkitdirectory directory />
+            </label>
+          </div>
+        </section>
+
+        <section class="panel" data-title="Remote">
+          <p class="hint">Run <code>nixamp serve ~/Music --host 0.0.0.0</code> and drive it from here.</p>
+          <form id="remote-form" class="picker">
+            <input id="remote-url" type="text" inputmode="url" placeholder="192.168.1.7:4321" aria-label="nixamp server address" />
+            <button type="submit" class="button">Connect</button>
+            <button id="disconnect" type="button" class="ghost" hidden>Disconnect</button>
+          </form>
+          <label class="check">
+            <input id="listen-here" type="checkbox" />
+            Listen on this device
+          </label>
+          <p class="hint">Status: <span id="remote-state" data-status="idle">not connected</span></p>
+        </section>
+      </div>
+
+      <p id="note" class="note" hidden></p>
+
+      <footer class="statusbar">
+        <span><b>Space</b> Play</span>
+        <span><b>↑↓</b> Select</span>
+        <span><b>n/p</b> Next/Prev</span>
+        <span><b>s</b> Stop</span>
+        <span class="spacer"></span>
+        <a href="https://github.com/profullstack/nixamp">github.com/profullstack/nixamp</a>
+      </footer>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

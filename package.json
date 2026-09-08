@@ -4,20 +4,28 @@
   "description": "It really whips the terminal's ass. A Winamp-shaped audio player for your terminal.",
   "license": "MIT",
   "type": "module",
-  "homepage": "https://github.com/profullstack/nixamp",
+  "homepage": "https://nixamp.com",
   "bin": {
     "nixamp": "./bin/nixamp.mjs"
   },
-  "files": ["dist", "bin", "src", "README.md", "LICENSE"],
+  "files": ["dist", "bin", "src", "web/dist", "README.md", "LICENSE"],
+  "workspaces": ["web", "desktop"],
   "engines": {
     "bun": ">=1.1",
     "node": ">=22.6"
   },
   "scripts": {
     "start": "bun src/main.ts",
+    "serve": "bun src/main.ts serve",
     "build": "bun x tsc -p tsconfig.json",
-    "typecheck": "bun x tsc -p tsconfig.json --noEmit",
-    "test": "bun test test"
+    "typecheck": "bun x tsc -p tsconfig.json --noEmit && bun run --filter '@nixamp/web' typecheck",
+    "test": "bun test test web/test",
+    "icons": "bun web/scripts/icons.ts",
+    "web:dev": "bun run --filter '@nixamp/web' dev",
+    "web:build": "bun run --filter '@nixamp/web' build",
+    "web:preview": "bun run --filter '@nixamp/web' preview",
+    "desktop:dev": "bun run --filter '@nixamp/desktop' dev",
+    "desktop:build": "bun run --filter '@nixamp/desktop' build"
   },
   "dependencies": {
     "@profullstack/hqtui": "^0.3.0"
@@ -26,7 +34,8 @@
     "@types/node": "^26",
     "typescript": "^7.0.2"
   },
-  "keywords": ["audio", "player", "winamp", "tui", "terminal", "ffmpeg", "hqtui"],
+  "trustedDependencies": ["electron"],
+  "keywords": ["audio", "player", "winamp", "tui", "terminal", "ffmpeg", "hqtui", "pwa"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/profullstack/nixamp.git"
