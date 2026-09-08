@@ -71,9 +71,10 @@ const HELP = `nixamp — it really whips the terminal's ass.
 
 Options for serve:
   -p, --port N     port to listen on (default ${DEFAULT_PORT})
-  -h, --host HOST  address to bind (default 127.0.0.1; 0.0.0.0 for the LAN)
+  -h, --host HOST  address to bind (default 0.0.0.0, every interface)
       --web DIR    directory of built PWA files to serve at /
       --no-media   do not stream the library's bytes to remotes
+      --no-key     serve to anyone who can reach the port, with no share link
 
   -v, --version    print the version
       --help       print this

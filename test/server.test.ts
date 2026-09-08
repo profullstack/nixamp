@@ -18,9 +18,12 @@ test("serve flags parse, and a bad one is a message rather than a NaN", () => {
   const bare = parseServeArgs([]);
   assert.equal(bare.root, ".");
   assert.equal(bare.port, DEFAULT_PORT);
-  assert.equal(bare.host, "127.0.0.1");
+  // Every interface, so the phone on the sofa can reach it. What makes that
+  // safe is the key in the share link, which is on by default with it.
+  assert.equal(bare.host, "0.0.0.0");
   assert.equal(bare.web, null);
   assert.equal(bare.media, true);
+  assert.equal(bare.key, true);
 
   const full = parseServeArgs(["~/Music", "--port", "9000", "--host", "0.0.0.0", "--web", "web/dist", "--no-media"]);
   assert.equal(full.root, "~/Music");

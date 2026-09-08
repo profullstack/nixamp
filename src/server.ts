@@ -12,6 +12,17 @@
 import { createReadStream, statSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import {
+  firewallHint,
+  keyCookie,
+  keyFrom,
+  keysMatch,
+  newKey,
+  reachableAddresses,
+  shareLink,
+} from "./share.ts";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import {
   detectTools, peaks, RATE, Stream, toMono,
@@ -36,6 +47,11 @@ export interface ServeOptions {
   web: string | null;
   /** Stream the library's bytes to remotes. Off keeps the audio on this box. */
   media: boolean;
+  /**
+   * Require the key from the share link. Off serves to anyone who can reach the
+   * port, which is what the public deployment wants and no private one does.
+   */
+  key: boolean;
 }
 
 /**
@@ -48,9 +64,13 @@ export function parseServeArgs(argv: string[]): ServeOptions {
   const options: ServeOptions = {
     root: ".",
     port: Number.isInteger(fromEnv) && fromEnv > 0 && fromEnv <= 65535 ? fromEnv : DEFAULT_PORT,
-    host: "127.0.0.1",
+    // Every interface, because a player nobody else can reach is not much of a
+    // remote. The key in the link is what makes that safe; --no-key gives up
+    // both at once, and --host pins it back to one address.
+    host: "0.0.0.0",
     web: null,
     media: true,
+    key: true,
   };
   let sawRoot = false;
   for (let i = 0; i < argv.length; i++) {
@@ -73,6 +93,8 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.web = value();
     } else if (arg === "--no-media") {
       options.media = false;
+    } else if (arg === "--no-key") {
+      options.key = false;
     } else if (arg.startsWith("-")) {
       throw new Error(`nixamp serve: unknown option ${arg}`);
     } else if (!sawRoot) {
@@ -421,6 +443,8 @@ export interface HandlerOptions {
   web: string | null;
   media: boolean;
   version: string;
+  /** The key from the share link, or null to serve to anyone who can connect. */
+  key?: string | null;
 }
 
 /**
@@ -431,11 +455,37 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
   return async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://localhost");
     const path = url.pathname;
+    const key = options.key ?? null;
 
     if (request.method === "OPTIONS") {
       response.writeHead(204, CORS);
       response.end();
       return;
+    }
+
+    // Opening the share link is what hands a browser its key. It comes back as
+    // a cookie, so every later fetch, EventSource and <audio src> carries it
+    // without the page knowing anything about keys.
+    if (key !== null && path.startsWith("/s/")) {
+      const offered = decodeURIComponent(path.slice("/s/".length));
+      if (!keysMatch(offered, key)) {
+        json(response, 404, { error: "not found" });
+        return;
+      }
+      response.writeHead(302, { ...CORS, "set-cookie": keyCookie(key), location: "/" });
+      response.end();
+      return;
+    }
+
+    // /api/health answers unauthenticated on purpose: it is how you check the
+    // port is open from another device before wondering whether the link is
+    // wrong, and it says nothing about the library.
+    if (key !== null && path !== "/api/health") {
+      const offered = keyFrom(request, url);
+      if (offered === null || !keysMatch(offered, key)) {
+        json(response, 401, { error: "this nixamp needs the key from its share link" });
+        return;
+      }
     }
 
     if (path === "/api/health") {
@@ -536,6 +586,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
   };
 }
 
+/** Read a file, or null. The firewall probe asks about files it may not have. */
+function readIfPossible(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 function isFile(path: string): boolean {
   try {
     return statSync(path).isFile();
@@ -593,17 +652,6 @@ export function createServer(engine: Engine, options: HandlerOptions): Server {
   });
 }
 
-/** Where a remote on another device should point its browser. */
-export function addressesFor(host: string, port: number): string[] {
-  if (host !== "0.0.0.0" && host !== "::") return [`http://${host}:${port}`];
-  const out = [`http://localhost:${port}`];
-  for (const entries of Object.values(networkInterfaces())) {
-    for (const entry of entries ?? []) {
-      if (entry.family === "IPv4" && !entry.internal) out.push(`http://${entry.address}:${port}`);
-    }
-  }
-  return out;
-}
 
 export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const options = parseServeArgs(argv);
@@ -615,14 +663,48 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     : new EmptyEngine(`No audio files under ${root}.`);
 
   const web = options.web !== null ? resolve(options.web) : defaultWebDir();
-  const server = createServer(engine, { web, media: options.media, version });
+  const key = options.key ? newKey() : null;
+  const server = createServer(engine, { web, media: options.media, version, key });
 
   await new Promise<void>((done) => server.listen(options.port, options.host, done));
   const bound = server.address();
   const port = typeof bound === "object" && bound !== null ? bound.port : options.port;
+
   console.log(`nixamp serve — ${tracks.length} tracks under ${root}`);
-  for (const address of addressesFor(options.host, port)) console.log(`  ${address}`);
-  if (web === null) console.log("  (no built PWA found — run `bun run web:build` to serve one)");
+  console.log("");
+
+  // The link, not the address. Without the key the address is a 401, so
+  // printing a bare host:port would be printing something that does not work.
+  const addresses = reachableAddresses(options.host, port);
+  const width = Math.max(...addresses.map((a) => a.label.length));
+  for (const { label, url } of addresses) {
+    console.log(`  ${label.padEnd(width)}  ${shareLink(url, key)}`);
+  }
+
+  console.log("");
+  if (key === null) {
+    console.log("  No key: anyone who can reach this port can drive it and hear it.");
+  } else {
+    console.log("  Open that link once on a phone or a laptop and it stays signed in.");
+    console.log(`  Anything without the key gets a 401. Key: ${key}`);
+  }
+  if (addresses.some((a) => a.label === "ON THE INTERNET")) {
+    console.log("");
+    console.log("  This machine has a public address, so the port is reachable from");
+    console.log(`  anywhere${key === null ? " by anyone" : " to anyone holding the key"}. --host 127.0.0.1 keeps it to this machine.`);
+  }
+  if (!options.media) console.log("  Audio stays on this machine: --no-media is set.");
+  if (web === null) console.log("  No built PWA found, so / has nothing to serve: run `bun run web:build`.");
+
+  // Listening on every interface proves the socket is open here and nothing
+  // about the path between here and the phone.
+  const blocked = firewallHint(readIfPossible, (command, args) => {
+    const done = spawnSync(command, args, { encoding: "utf8" });
+    return { status: done.status, stdout: done.stdout ?? "" };
+  });
+  if (blocked !== null && (options.host === "0.0.0.0" || options.host === "::")) {
+    console.log(`  ${blocked.replace("<port>", String(port))}`);
+  }
 
   const shutdown = (): void => {
     engine.stop();
