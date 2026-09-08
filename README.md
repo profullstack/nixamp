@@ -131,6 +131,29 @@ something else.
 Entries expire a few minutes after a stream stops renewing, so the list is
 always what is actually live.
 
+## Several streams at once
+
+A channel is one publisher and everybody listening to them. Two or three devices
+can be live at the same time -- a phone, a desktop, a second window -- each with
+its own audience.
+
+```
+GET  /api/channels              what is live now
+POST /api/channels/<id>         publish to one
+GET  /api/channels/<id>         listen to one
+```
+
+One ffmpeg decodes each publisher once and the result is written to every
+listener on that channel. A decode per listener would cost a core each and, for
+a live stream, would not even agree with itself about what "now" is.
+
+A listener who joins halfway through gets the stream from that moment, which is
+what live means. Two publishers on **one** channel is refused; on two channels it
+is the whole point.
+
+Publishing is administering the server, so it needs the control link or the
+owner's account. Listening only needs the share link, like any other audio.
+
 ## Streaming into it
 
 A nixamp can be the thing you broadcast *to*, not just from.
