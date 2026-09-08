@@ -193,14 +193,26 @@ export class Follows {
   ): Promise<void> {
     if (!accountId) return;
     await this.ensure();
+    // Every column is COALESCEd on the way IN as well as on conflict. A caller
+    // setting only the switches sends no phone, and an unset field arrives as
+    // null -- which the ON CONFLICT branch handles fine and the INSERT branch
+    // does not, because these columns are NOT NULL. Saving preferences for the
+    // first time was a 500 until this said so.
+    //
+    // The casts are not decoration either: Postgres cannot infer the type of a
+    // parameter that is only ever seen inside COALESCE against a null.
     await this.db.query(
       `INSERT INTO notify_prefs (account_id, phone, want_email, want_sms, want_web)
-       VALUES ($1, $2, $3, $4, $5)
+       VALUES ($1,
+               COALESCE($2::text, ''),
+               COALESCE($3::boolean, TRUE),
+               COALESCE($4::boolean, FALSE),
+               COALESCE($5::boolean, TRUE))
        ON CONFLICT (account_id) DO UPDATE
-         SET phone = COALESCE($2, notify_prefs.phone),
-             want_email = COALESCE($3, notify_prefs.want_email),
-             want_sms = COALESCE($4, notify_prefs.want_sms),
-             want_web = COALESCE($5, notify_prefs.want_web)`,
+         SET phone = COALESCE($2::text, notify_prefs.phone),
+             want_email = COALESCE($3::boolean, notify_prefs.want_email),
+             want_sms = COALESCE($4::boolean, notify_prefs.want_sms),
+             want_web = COALESCE($5::boolean, notify_prefs.want_web)`,
       [
         accountId,
         prefs.phone === undefined ? null : phoneFrom(prefs.phone),
