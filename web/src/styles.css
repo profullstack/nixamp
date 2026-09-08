@@ -388,3 +388,34 @@ button.ghost { background: transparent; color: var(--muted); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* The admin table. Small, dense, and scrollable rather than pushing the
+   player off the screen when a stream gets popular. */
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+  margin: 0.4rem 0;
+  display: block;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.admin-table th {
+  text-align: left;
+  font-weight: normal;
+  opacity: 0.6;
+  padding: 0.2rem 0.4rem 0.2rem 0;
+}
+
+.admin-table td {
+  padding: 0.2rem 0.4rem 0.2rem 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12rem;
+}
+
+.admin-table td.network-public { color: var(--warning, #e0b341); }
+.admin-table td.network-private { color: var(--success, #7fd18b); }
+.admin-table tr.ended { opacity: 0.45; }
