@@ -30,7 +30,8 @@ import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts
 import { needsAdmin, Owner } from "./owner.ts";
 import { readSession } from "./session.ts";
 import { Directory, parseAnnouncement } from "./directory.ts";
-import { PartyLine } from "./partyline.ts";
+import { PartyLine, telnyxSms } from "./partyline.ts";
+import { OPT_IN_PATH, optInPage } from "./optin.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
   applyRemoteConfig,
@@ -684,6 +685,20 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    // The page explaining the reminder texts. Public for the same reason the
+    // webhook is: the reader is a carrier reviewing the number, or somebody
+    // who just got a message and wants it to stop. Neither has a share link.
+    if (path === OPT_IN_PATH && options.partyLine) {
+      const body = optInPage();
+      response.writeHead(200, {
+        ...CORS,
+        "content-type": "text/html; charset=utf-8",
+        "content-length": Buffer.byteLength(body),
+      });
+      response.end(request.method === "HEAD" ? undefined : body);
+      return;
+    }
+
     // --- the party line ---------------------------------------------------
     //
     // Ahead of the share-key check because the caller is a telephone. Telnyx
@@ -858,7 +873,16 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           json(response, 422, { error: "a listing needs a name and a URL a browser can reach" });
           return;
         }
-        json(response, 200, options.directory.announce(announcement));
+        const listing = options.directory.announce(announcement);
+        // A stream reappearing is the event somebody asked to be told about.
+        // Answered first and texted after, because the publisher's heartbeat
+        // should not wait on an SMS gateway.
+        json(response, 200, listing);
+        if (options.partyLine) {
+          void options.partyLine
+            .wentLive({ code: listing.code, name: listing.name, nowPlaying: listing.nowPlaying })
+            .catch(() => {});
+        }
         return;
       }
       if (request.method === "DELETE") {
@@ -1479,6 +1503,11 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // The account signed in on this machine owns the server it starts. That is
   // the whole claim: `nixamp login` then `nixamp serve`, and the phone in your
   // pocket can administer it from anywhere by signing in as the same person.
+  // Hoisted rather than built inline, because the party line needs the same
+  // instance: a second Directory would be a second set of stream codes, and
+  // the one the phone looked in would never be the one the publishers reach.
+  const directory = options.directory ? new Directory() : undefined;
+
   const session = readSession();
   const owner = new Owner({
     ownerId: options.owner || (session?.token ? await ownerIdOf(session) : ""),
@@ -1500,7 +1529,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     paywall,
     ffmpeg: tools.ffmpeg,
     load: (next) => loadSource(tools, next),
-    ...(options.directory ? { directory: new Directory() } : {}),
+    ...(directory ? { directory } : {}),
     // The party line answers a phone number, and there is only one number.
     // Both keys or neither: without the public key every webhook would be
     // refused, which is a worse failure than not offering the endpoint.
@@ -1509,6 +1538,19 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
           partyLine: new PartyLine({
             apiKey: process.env["TELNYX_API_KEY"],
             publicKey: process.env["TELNYX_PUBLIC_KEY"],
+            streams: directory,
+            // Only when a sending number is configured. Without one the line
+            // still answers and still says when the stream ended; it just does
+            // not offer a text it could not send.
+            ...(process.env["PARTYLINE_SMS_FROM"]
+              ? {
+                  sms: telnyxSms({
+                    apiKey: process.env["TELNYX_API_KEY"],
+                    from: process.env["PARTYLINE_SMS_FROM"],
+                    onEvent: (message) => console.log(message),
+                  }),
+                }
+              : {}),
             ...(process.env["PARTYLINE_GREETING"] ? { greeting: process.env["PARTYLINE_GREETING"] } : {}),
             ...(process.env["PARTYLINE_VOICE"] ? { voice: process.env["PARTYLINE_VOICE"] } : {}),
             onEvent: (message) => console.log(message),
