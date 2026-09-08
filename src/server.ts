@@ -24,6 +24,7 @@ import {
   redact,
 } from "./broadcast.ts";
 import { Ingest, normaliseFormat } from "./ingest.ts";
+import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
 import { Directory, parseAnnouncement } from "./directory.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
@@ -590,6 +591,10 @@ export interface HandlerOptions {
   broadcaster?: Broadcaster;
   /** Where a broadcast should send, and what it should look like. */
   broadcast?: () => { destinations: Destination[]; settings: EncoderSettings };
+  /** Accounts, on the instance that keeps them. Only nixamp.com passes this. */
+  accounts?: Accounts;
+  /** True when this instance is reached over https, for the cookie's Secure. */
+  secureCookies?: boolean;
 }
 
 /**
@@ -650,7 +655,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // /api/health answers unauthenticated on purpose: it is how you check the
     // port is open from another device before wondering whether the link is
     // wrong, and it says nothing about the library.
-    if (key !== null && path !== "/api/health" && path !== "/api/directory") {
+    if (
+      key !== null &&
+      path !== "/api/health" &&
+      path !== "/api/directory" &&
+      !path.startsWith("/api/v1/auth/")
+    ) {
       const scope = scopeOf(keyFrom(request, url), key, listenKey);
       if (scope === null) {
         json(response, 401, { error: "this nixamp needs the key from its share link" });
@@ -664,6 +674,74 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
 
     if (path === "/api/health") {
       json(response, 200, { name: "nixamp", version: options.version, media: options.media });
+      return;
+    }
+
+    // --- accounts ---------------------------------------------------------
+    //
+    // Before the share-key check, because signing in is how somebody without a
+    // key becomes somebody with one. The API is versioned and namespaced the
+    // way the rest of the fleet's is.
+    if (path.startsWith("/api/v1/auth/") && options.accounts) {
+      const accounts = options.accounts;
+      const secure = options.secureCookies ?? false;
+
+      if (path === "/api/v1/auth/me") {
+        const who = await accounts.whoIs(tokenFrom(request.headers));
+        if (who === null) {
+          json(response, 401, { error: "not signed in" });
+          return;
+        }
+        json(response, 200, { account: who });
+        return;
+      }
+
+      if (path === "/api/v1/auth/logout") {
+        response.writeHead(200, {
+          ...CORS,
+          "content-type": "application/json; charset=utf-8",
+          "set-cookie": clearedCookie(),
+        });
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      const signingUp = path === "/api/v1/auth/signup";
+      if (!signingUp && path !== "/api/v1/auth/login") {
+        json(response, 404, { error: "no such endpoint" });
+        return;
+      }
+      if (request.method !== "POST") {
+        json(response, 405, { error: "POST only" });
+        return;
+      }
+
+      let body: { email?: unknown; password?: unknown };
+      try {
+        body = JSON.parse(await readBody(request)) as typeof body;
+      } catch {
+        json(response, 400, { error: "bad JSON" });
+        return;
+      }
+
+      const result = signingUp
+        ? await accounts.signUp(body.email, body.password)
+        : await accounts.signIn(body.email, body.password);
+
+      if (!result.ok) {
+        // 409 for an address that is taken, 401 for credentials that are not.
+        json(response, signingUp ? 409 : 401, { error: result.error });
+        return;
+      }
+
+      // The token goes back in the body for the CLI and the desktop app, and
+      // as a cookie for the browser, which then needs to know nothing about it.
+      response.writeHead(200, {
+        ...CORS,
+        "content-type": "application/json; charset=utf-8",
+        "set-cookie": sessionCookie(result.token, secure),
+      });
+      response.end(JSON.stringify({ account: result.account, token: result.token }));
       return;
     }
 
@@ -1199,6 +1277,17 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ffmpeg: tools.ffmpeg,
     load: (next) => loadSource(tools, next),
     ...(options.directory ? { directory: new Directory() } : {}),
+    // Accounts live where the directory lives, and only there: a nixamp on a
+    // laptop has nobody to be an account of.
+    ...(options.directory && process.env["DATABASE_URL"]
+      ? {
+          accounts: new Accounts({
+            connectionString: process.env["DATABASE_URL"],
+            secret: process.env["NIXAMP_JWT_SECRET"] ?? "",
+          }),
+          secureCookies: (process.env["NIXAMP_SITE"] ?? "").startsWith("https://"),
+        }
+      : {}),
   });
 
   // A port already in use is the most ordinary failure there is, and it

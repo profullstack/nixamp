@@ -70,6 +70,8 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp serve [source] [options]  play here, and hand out a browser remote
   nixamp daemon start|stop|status  serve in the background, and let go of it
   nixamp admin [--url U] [--key K] who is connected, and re-stream to them
+  nixamp login [--signup]        sign in to nixamp.com
+  nixamp logout / whoami        forget it, or check it
   nixamp update [version]        re-run the installer, keeping your choices
   nixamp uninstall [--yes]       remove everything the installer created
 
@@ -175,6 +177,16 @@ export async function main(): Promise<void> {
   if (first === "admin") {
     const { admin } = await import("./admin.ts");
     await admin(rest);
+    return;
+  }
+  if (first === "login" || first === "signup") {
+    const { login } = await import("./session.ts");
+    process.exitCode = await login(first === "signup" ? [...rest, "--signup"] : rest);
+    return;
+  }
+  if (first === "logout" || first === "whoami") {
+    const session = await import("./session.ts");
+    process.exitCode = first === "logout" ? session.logout() : await session.whoami();
     return;
   }
   if (first === "update" || first === "uninstall") {

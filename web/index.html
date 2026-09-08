@@ -78,6 +78,19 @@
           </div>
         </section>
 
+        <section class="panel" data-title="Account">
+          <p class="hint" id="account-note">Sign in to nixamp.com to publish and get paid.</p>
+          <form id="account-form" class="picker">
+            <input id="account-email" type="email" autocomplete="email"
+                   placeholder="you@example.com" aria-label="Email" />
+            <input id="account-password" type="password" autocomplete="current-password"
+                   placeholder="password" aria-label="Password" />
+            <button type="submit" class="button" id="account-submit">Sign in</button>
+            <button id="account-toggle" type="button" class="ghost">Create one</button>
+            <button id="account-signout" type="button" class="ghost" hidden>Sign out</button>
+          </form>
+        </section>
+
         <section class="panel" data-title="Remote">
           <p class="hint">Run <code>nixamp serve ~/Music --host 0.0.0.0</code> and drive it from here.</p>
           <form id="remote-form" class="picker">

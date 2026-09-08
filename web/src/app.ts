@@ -55,6 +55,13 @@ export function start(): void {
     remoteState: need<HTMLElement>("remote-state"),
     disconnect: need<HTMLButtonElement>("disconnect"),
     browse: need<HTMLButtonElement>("browse"),
+    accountForm: need<HTMLFormElement>("account-form"),
+    accountEmail: need<HTMLInputElement>("account-email"),
+    accountPassword: need<HTMLInputElement>("account-password"),
+    accountSubmit: need<HTMLButtonElement>("account-submit"),
+    accountToggle: need<HTMLButtonElement>("account-toggle"),
+    accountSignOut: need<HTMLButtonElement>("account-signout"),
+    accountNote: need<HTMLParagraphElement>("account-note"),
     directory: need<HTMLDivElement>("directory"),
     directoryNote: need<HTMLParagraphElement>("directory-note"),
     directoryList: need<HTMLUListElement>("directory-list"),
@@ -487,6 +494,83 @@ export function start(): void {
   // /directory is the shareable address for the list. The server serves the
   // app shell for any unknown path, so the routing is this one line.
   if (location.pathname.replace(/\/+$/, "") === "/directory") void loadDirectory();
+
+  // --- the account ------------------------------------------------------
+  //
+  // The session is a cookie the server sets, so nothing here holds a token:
+  // the browser attaches it, and a page reload asks who is signed in rather
+  // than remembering an answer that may have expired.
+  let creating = false;
+
+  const showAccount = (email: string | null): void => {
+    const signedIn = email !== null;
+    dom.accountForm.hidden = signedIn;
+    dom.accountSignOut.hidden = !signedIn;
+    dom.accountNote.textContent = signedIn
+      ? `Signed in as ${email}.`
+      : creating
+        ? "Create an account on nixamp.com."
+        : "Sign in to nixamp.com to publish and get paid.";
+    dom.accountSubmit.textContent = creating ? "Create account" : "Sign in";
+    dom.accountToggle.textContent = creating ? "I have one" : "Create one";
+    dom.accountPassword.autocomplete = creating ? "new-password" : "current-password";
+  };
+
+  const askWhoIsSignedIn = async (): Promise<void> => {
+    try {
+      const answer = await fetch("/api/v1/auth/me");
+      const body = (await answer.json()) as { account?: { email?: string } };
+      showAccount(answer.ok ? (body.account?.email ?? "you") : null);
+    } catch {
+      showAccount(null);
+    }
+  };
+
+  dom.accountToggle.addEventListener("click", () => {
+    creating = !creating;
+    showAccount(null);
+  });
+
+  dom.accountForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const email = dom.accountEmail.value.trim();
+    const password = dom.accountPassword.value;
+    void (async () => {
+      dom.accountSubmit.disabled = true;
+      try {
+        const answer = await fetch(`/api/v1/auth/${creating ? "signup" : "login"}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+        const body = (await answer.json()) as { account?: { email?: string }; error?: string };
+        if (!answer.ok) {
+          dom.accountNote.textContent = body.error ?? "that did not work";
+          return;
+        }
+        // Never leave a password sitting in the DOM after it has been used.
+        dom.accountPassword.value = "";
+        showAccount(body.account?.email ?? email);
+      } catch {
+        dom.accountNote.textContent = "could not reach nixamp.com";
+      } finally {
+        dom.accountSubmit.disabled = false;
+      }
+    })();
+  });
+
+  dom.accountSignOut.addEventListener("click", () => {
+    void (async () => {
+      try {
+        await fetch("/api/v1/auth/logout", { method: "POST" });
+      } catch {
+        // The cookie is the session; failing to say so does not keep it.
+      }
+      showAccount(null);
+    })();
+  });
+
+  void askWhoIsSignedIn();
 
   dom.browse.addEventListener("click", () => {
     if (!dom.directory.hidden) {
