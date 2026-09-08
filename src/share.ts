@@ -78,10 +78,10 @@ export function classify(address: string): "private" | "cgnat" | "public" {
 }
 
 /**
- * The addresses another device could actually reach this machine on, worst
- * surprise last. A public address is called one: binding every interface on a
- * machine with a public IP puts the port on the internet, and the key is then
- * the only thing between a stranger and your library.
+ * The addresses another device could actually reach this machine on, nearest
+ * first. On a server the public one is the point: it is the address a phone
+ * somewhere else can open. It is labelled for what it is, because the key in
+ * the link is then the only thing between a stranger and the library.
  */
 export function reachableAddresses(host: string, port: number): { label: string; url: string }[] {
   const link = (address: string): string => {
@@ -92,7 +92,7 @@ export function reachableAddresses(host: string, port: number): { label: string;
 
   if (host !== "0.0.0.0" && host !== "::") return [{ label: "here", url: link(host) }];
 
-  const LABELS = { private: "on your network", cgnat: "on tailscale", public: "ON THE INTERNET" } as const;
+  const LABELS = { private: "on your network", cgnat: "on tailscale", public: "on the internet" } as const;
   const found: { label: string; url: string; kind: keyof typeof LABELS }[] = [];
   for (const [name, entries] of Object.entries(networkInterfaces())) {
     if (VIRTUAL.test(name)) continue;

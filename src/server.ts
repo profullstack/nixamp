@@ -12,8 +12,9 @@
 import { createReadStream, statSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { isRemote } from "./sources.ts";
 import {
   elevate,
   firewallInUse,
@@ -31,7 +32,7 @@ import {
   type Tools, type Track,
 } from "./audio.ts";
 import { Analyser, bandEdges, bands, decay } from "./fft.ts";
-import { loadPlaylist } from "./playlist.ts";
+import { loadSource } from "./playlist.ts";
 import {
   emptySnapshot, parseCommand,
   type Command, type RemoteTrack, type Snapshot,
@@ -455,6 +456,8 @@ export interface HandlerOptions {
   version: string;
   /** The key from the share link, or null to serve to anyone who can connect. */
   key?: string | null;
+  /** How to run ffmpeg, for the sources a browser cannot play by itself. */
+  ffmpeg?: string[];
 }
 
 /**
@@ -570,6 +573,25 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    // Whatever the source is, this comes back as MP3 a browser will play:
+    // a flac, a wma, a URL, an HLS stream. ffmpeg reads them all and we hand
+    // the bytes on as they arrive, so a live stream starts immediately rather
+    // than after it ends, which for a live stream is never.
+    if (path.startsWith("/api/stream/")) {
+      const index = Number(path.slice("/api/stream/".length));
+      const source = Number.isInteger(index) ? engine.trackPath(index) : undefined;
+      if (source === undefined) {
+        json(response, 404, { error: "no such track" });
+        return;
+      }
+      if (!options.media) {
+        json(response, 403, { error: "media streaming is off" });
+        return;
+      }
+      transcode(request, response, source, options.ffmpeg ?? ["ffmpeg"]);
+      return;
+    }
+
     if (path.startsWith("/api/")) {
       json(response, 404, { error: "no such endpoint" });
       return;
@@ -603,6 +625,92 @@ function readIfPossible(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Decode anything and hand back MP3, as it is produced.
+ *
+ * No seeking: this is a pipe, and the length is not known until it ends. The
+ * player falls back to /api/media for a local file it can seek, and uses this
+ * for everything else.
+ */
+function transcode(
+  request: IncomingMessage,
+  response: ServerResponse,
+  source: string,
+  ffmpeg: string[],
+): void {
+  const [command, ...prefix] = ffmpeg as [string, ...string[]];
+  const child = spawn(
+    command,
+    [
+      ...prefix,
+      "-hide_banner",
+      "-loglevel", "error",
+      // Reconnect through the sort of hiccup a long stream runs into. These
+      // belong to the http protocol, and ffmpeg rejects the whole command
+      // when they are handed to it for a file on disk.
+      ...(isRemote(source) ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] : []),
+      "-i", source,
+      "-vn",
+      "-f", "mp3",
+      "-b:a", "192k",
+      "-",
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+
+  let failed = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    // Keep the tail: ffmpeg says what went wrong on its last line.
+    failed = (failed + chunk.toString()).slice(-2000);
+  });
+
+  let started = false;
+  const begin = (): void => {
+    if (started) return;
+    started = true;
+    response.writeHead(200, {
+      ...CORS,
+      "content-type": "audio/mpeg",
+      "cache-control": "no-store",
+      // Length is unknowable up front, and a browser is happy without it.
+      "transfer-encoding": "chunked",
+    });
+  };
+  // Wait for a first byte before promising success. ffmpeg rejects a bad option
+  // or a missing input immediately, and answering 200 with nothing looks the
+  // same from a player as a track that is simply silent.
+  child.stdout.once("data", begin);
+  // Both ends can fail: a listener closing the tab breaks the socket under the
+  // pipe, and an EPIPE nobody is listening for takes the process down.
+  child.stdout.on("error", () => child.kill("SIGKILL"));
+  response.on("error", () => child.kill("SIGKILL"));
+  child.stdout.pipe(response);
+
+  child.on("error", (error) => {
+    console.error(`nixamp: ffmpeg could not start: ${error.message}`);
+    if (!response.headersSent) json(response, 500, { error: "ffmpeg could not start" });
+    else response.end();
+  });
+  child.on("close", (code) => {
+    const message = failed.trim();
+    if (code !== 0 && code !== null) console.error(`nixamp: ffmpeg exited ${code}: ${message}`);
+    if (!started) {
+      // Nothing was ever produced, so the status can still tell the truth.
+      json(response, 502, { error: "could not decode that source", detail: message.split("\n").pop() ?? "" });
+      return;
+    }
+    response.end();
+  });
+
+  // A listener that closes the tab should not leave an ffmpeg decoding into
+  // nothing for the rest of the album.
+  const stop = (): void => {
+    child.kill("SIGKILL");
+  };
+  request.on("close", stop);
+  response.on("close", stop);
 }
 
 function isFile(path: string): boolean {
@@ -665,18 +773,34 @@ export function createServer(engine: Engine, options: HandlerOptions): Server {
 
 export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const options = parseServeArgs(argv);
-  const root = resolve(options.root);
+  const root = isRemote(options.root) ? options.root : resolve(options.root);
   const tools = detectTools();
-  const tracks = loadPlaylist(tools, root);
+  const tracks = await loadSource(tools, root);
   const engine: Engine = tracks.length > 0
     ? new PlayerEngine(tracks, root, tools)
     : new EmptyEngine(`No audio files under ${root}.`);
 
   const web = options.web !== null ? resolve(options.web) : defaultWebDir();
   const key = options.key ? newKey() : null;
-  const server = createServer(engine, { web, media: options.media, version, key });
+  const server = createServer(engine, { web, media: options.media, version, key, ffmpeg: tools.ffmpeg });
 
-  await new Promise<void>((done) => server.listen(options.port, options.host, done));
+  // A port already in use is the most ordinary failure there is, and it
+  // arrives as an unhandled 'error' event that takes the process down with a
+  // stack trace nobody reads.
+  await new Promise<void>((done, fail) => {
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      fail(
+        new Error(
+          error.code === "EADDRINUSE"
+            ? `nixamp: port ${options.port} is already in use. Pass --port to pick another.`
+            : error.code === "EACCES"
+              ? `nixamp: not allowed to listen on port ${options.port}. Ports below 1024 need root.`
+              : `nixamp: could not listen on ${options.host}:${options.port}: ${error.message}`,
+        ),
+      );
+    });
+    server.listen(options.port, options.host, done);
+  });
   const bound = server.address();
   const port = typeof bound === "object" && bound !== null ? bound.port : options.port;
 
@@ -706,10 +830,13 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     console.log("  Open that link once on a phone or a laptop and it stays signed in.");
     console.log(`  Anything without the key gets a 401. Key: ${key}`);
   }
-  if (addresses.some((a) => a.label === "ON THE INTERNET")) {
+  if (addresses.some((a) => a.label === "on the internet")) {
     console.log("");
-    console.log("  This machine has a public address, so the port is reachable from");
-    console.log(`  anywhere${key === null ? " by anyone" : " to anyone holding the key"}. --host 127.0.0.1 keeps it to this machine.`);
+    console.log(
+      key === null
+        ? "  The public address is open to anyone: --no-key means no key. --host 127.0.0.1 keeps it here."
+        : "  The public address works from anywhere, for anyone with the key. --host 127.0.0.1 keeps it here.",
+    );
   }
   if (!options.media) console.log("  Audio stays on this machine: --no-media is set.");
   if (web === null) console.log("  No built PWA found, so / has nothing to serve: run `bun run web:build`.");

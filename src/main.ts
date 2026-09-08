@@ -14,7 +14,8 @@ import {
 } from "./audio.ts";
 import { Analyser, bandEdges, bands, decay } from "./fft.ts";
 import { version } from "./meta.ts";
-import { displayName, loadPlaylist } from "./playlist.ts";
+import { displayName, loadSource } from "./playlist.ts";
+import { isRemote } from "./sources.ts";
 import { DEFAULT_PORT } from "./server.ts";
 
 const FFT_SIZE = 2048;
@@ -102,9 +103,12 @@ export async function main(): Promise<void> {
   if (first === "--version" || first === "-v") { console.log(version()); return; }
   if (first === "--help") { console.log(HELP); return; }
 
-  const target = resolve(first ?? ".");
+  // resolve() would turn https://host/x into /cwd/https:/host/x, so a URL is
+  // left exactly as it was typed.
+  const asked = first ?? ".";
+  const target = isRemote(asked) ? asked : resolve(asked);
   const tools = detectTools();
-  const tracks = loadPlaylist(tools, target);
+  const tracks = await loadSource(tools, target);
   if (tracks.length === 0) {
     console.error(`nixamp: no audio files under ${target}`);
     process.exit(1);
