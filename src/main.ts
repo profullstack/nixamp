@@ -86,6 +86,9 @@ Options for serve:
       --publish    list it at nixamp.com/directory without asking first
       --no-publish never list it, and do not ask
       --name NAME  what to call it in the directory (default: this hostname)
+      --ingest     accept a live stream in at POST /api/ingest
+      --rtmp-in N  also listen for RTMP publishers (OBS, Larix) on port N
+      --rtmp D     broadcast out, e.g. --rtmp youtube=<key>. Repeatable
       --x402       charge for listening once more than 5 people are listening
       --no-x402    never charge
 
