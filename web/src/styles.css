@@ -336,3 +336,55 @@ button.ghost { background: transparent; color: var(--muted); }
 .statusbar b { color: var(--green); font-weight: 700; }
 .statusbar .spacer { flex: 1; }
 .statusbar a { color: var(--muted); }
+
+/* The public directory, inside the Remote panel rather than over the top of
+   it: a modal here would hide the address field you are about to fill in. */
+.directory {
+  margin-top: 0.6rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.6rem;
+}
+
+.directory-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.directory-list li + li {
+  margin-top: 0.3rem;
+}
+
+.directory-list button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: inherit;
+  font: inherit;
+  padding: 0.4rem 0.5rem;
+  cursor: pointer;
+}
+
+.directory-list button:hover,
+.directory-list button:focus-visible {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.directory-list .name {
+  display: block;
+  color: var(--accent);
+}
+
+.directory-list .detail {
+  display: block;
+  font-size: 0.85em;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

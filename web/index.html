@@ -84,7 +84,13 @@
             <input id="remote-url" type="text" inputmode="url" placeholder="192.168.1.7:4321" aria-label="nixamp server address" />
             <button type="submit" class="button">Connect</button>
             <button id="disconnect" type="button" class="ghost" hidden>Disconnect</button>
+            <button id="browse" type="button" class="ghost">Browse the directory</button>
           </form>
+
+          <div id="directory" class="directory" hidden>
+            <p class="hint" id="directory-note">Looking for live streams…</p>
+            <ul id="directory-list" class="directory-list"></ul>
+          </div>
           <label class="check">
             <input id="listen-here" type="checkbox" />
             Listen on this device

@@ -75,6 +75,34 @@ network. Your music is never touched.
 If you would rather not pipe a script into a shell, `npm i -g nixamp` and
 `bunx nixamp ~/Music` both work; that route needs Node 24 or newer.
 
+## The directory
+
+[nixamp.com/directory](https://nixamp.com/directory) lists nixamps that agreed
+to be listed. In the PWA, **Browse the directory** next to the address field
+picks one without typing anything.
+
+`nixamp serve` asks before listing you, and shows the exact link it would
+publish:
+
+```
+  List this stream at https://nixamp.com/directory so anyone can find it?
+  It publishes http://198.51.100.7:4321/s/Lk1EM_mP977e1VT — listen only,
+  not the controls. [Y/n]
+```
+
+Yes is the default; `--publish` and `--no-publish` skip the question, `--name`
+sets what it is called. A terminal that cannot ask never publishes, because
+nobody being there to answer is not consent.
+
+What gets published is a **listen-only** link. Every server mints two keys: the
+one in your own share link drives the player, and the listen key can hear it
+and nothing else. `/api/command` and `/api/source` answer 403 to a listen key,
+so a stranger in the directory cannot pause your music or point your machine at
+something else.
+
+Entries expire a few minutes after a stream stops renewing, so the list is
+always what is actually live.
+
 ## Leaving it running
 
 `nixamp serve` holds a terminal. `nixamp daemon` does not.

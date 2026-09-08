@@ -4,9 +4,10 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { drawIcon, encodePng } from "../../web/scripts/icons.ts";
 
-const buildDir = join(new URL("..", import.meta.url).pathname, "build");
+const buildDir = join(fileURLToPath(new URL("..", import.meta.url)), "build");
 mkdirSync(buildDir, { recursive: true });
 
 const path = join(buildDir, "icon.png");

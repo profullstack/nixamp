@@ -9,6 +9,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** What the installer recorded about this install. */
 export interface Manifest {
@@ -31,7 +32,7 @@ const windows = process.platform === "win32";
  * wrote, which is the only thing that knows for certain; the walk up from this
  * file covers a shim from an older install that did not set it.
  */
-export function installRoot(from = new URL(".", import.meta.url).pathname): string | null {
+export function installRoot(from = fileURLToPath(new URL(".", import.meta.url))): string | null {
   const declared = process.env["NIXAMP_HOME"];
   if (declared && existsSync(join(declared, "manifest.json"))) return declared;
 
