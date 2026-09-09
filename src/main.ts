@@ -91,6 +91,9 @@ Options for serve:
       --publish    list it at nixamp.com/directory without asking first
       --no-publish never list it, and do not ask
       --name NAME  what to call it in the directory (default: this hostname)
+      --public-url URL  the address this server is reachable at from outside,
+                   when that is a tunnel or a forwarded port rather than one of
+                   its own interfaces. Also NIXAMP_PUBLIC_URL
       --ingest     accept a live stream in at POST /api/ingest
       --rtmp-in N  also listen for RTMP publishers (OBS, Larix) from port N
       --rtmp-streams N  how many may publish at once (default 3, a port each)
@@ -334,7 +337,10 @@ export async function main(): Promise<void> {
   const asked = first ?? ".";
   const target = isRemote(asked) ? asked : resolve(asked);
   const tools = detectTools();
-  const tracks = await loadSource(tools, target);
+  // Names now, tags later: an ffprobe per file over a large library is minutes
+  // of a blank terminal before the player appears. The list is the same list;
+  // only the titles arrive late, and they arrive into a player already running.
+  const tracks = await loadSource(tools, target, false);
   if (tracks.length === 0) {
     console.error(`nixamp: no audio files under ${target}`);
     process.exit(1);
@@ -346,6 +352,21 @@ export async function main(): Promise<void> {
   // gone. A field rather than a local, because a local assigned only inside a
   // closure stays narrowed to null for the checker.
   const handoff: { to: { daemon: DaemonState; url: string } | null } = { to: null };
+
+  // The titles, arriving into a player that is already up. Not awaited, and
+  // applied only if the list is still the one it describes.
+  if (!isRemote(target)) {
+    void loadSource(tools, target, true)
+      .then((tagged) => {
+        if (tagged.length !== state.tracks.length) return;
+        if (tagged.some((track, at) => track.path !== state.tracks[at]?.path)) return;
+        state.tracks = tagged;
+        app.invalidate();
+      })
+      .catch(() => {
+        // Filenames play. Nothing to say about tags that would not read.
+      });
+  }
 
   const analyser = new Analyser(FFT_SIZE, RATE);
   const edges = bandEdges(BAND_COUNT, RATE, FFT_SIZE);

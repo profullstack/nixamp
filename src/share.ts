@@ -93,14 +93,24 @@ export function classify(address: string): "private" | "cgnat" | "public" {
  * somewhere else can open. It is labelled for what it is, because the key in
  * the link is then the only thing between a stranger and the library.
  */
-export function reachableAddresses(host: string, port: number): { label: string; url: string }[] {
+export function reachableAddresses(
+  host: string,
+  port: number,
+  publicUrl = "",
+): { label: string; url: string }[] {
   const link = (address: string): string => {
     // A bare IPv6 address needs brackets before it is a URL.
     const authority = address.includes(":") ? `[${address}]` : address;
     return `http://${authority}:${port}`;
   };
 
-  if (host !== "0.0.0.0" && host !== "::") return [{ label: "here", url: link(host) }];
+  // An address somebody told us about, because it is one this machine cannot
+  // know: a tunnel, a reverse proxy, or a router forwarding a port. It goes
+  // first so that it, and not a guess from an interface, is the address this
+  // stream is published under.
+  const told = publicUrl ? [{ label: "on the internet", url: publicUrl.replace(/\/+$/, "") }] : [];
+
+  if (host !== "0.0.0.0" && host !== "::") return [...told, { label: "here", url: link(host) }];
 
   const LABELS = { private: "on your network", cgnat: "on tailscale", public: "on the internet" } as const;
   const found: { label: string; url: string; kind: keyof typeof LABELS }[] = [];
@@ -116,6 +126,7 @@ export function reachableAddresses(host: string, port: number): { label: string;
   const order = { private: 0, cgnat: 1, public: 2 } as const;
   found.sort((x, y) => order[x.kind] - order[y.kind]);
   return [
+    ...told,
     { label: "here", url: `http://localhost:${port}` },
     ...found.map(({ label, url }) => ({ label, url })),
   ];

@@ -120,6 +120,15 @@ export interface ServeOptions {
   /** What to call it in the list. Defaults to this machine's hostname. */
   name: string;
   /**
+   * The address this server is reachable at from outside, when that is not one
+   * of its own interfaces: a tunnel, a reverse proxy, a forwarded port.
+   *
+   * Without it a machine behind NAT has nothing to publish -- every address it
+   * can see is a 192.168 one that is no use to anybody else -- so the directory
+   * listing is skipped and the printed links only work inside the house.
+   */
+  publicUrl: string;
+  /**
    * Charge for listening once the stream is busy. Off unless asked for, and
    * useless without somewhere to pay: see NIXAMP_PAY_TO.
    */
@@ -168,6 +177,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     directory: false,
     publish: "ask",
     name: "",
+    publicUrl: process.env["NIXAMP_PUBLIC_URL"] ?? "",
     x402: false,
     owner: "",
     ingest: false,
@@ -208,6 +218,14 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.publish = "yes";
     } else if (arg === "--no-publish") {
       options.publish = "no";
+    } else if (arg === "--public-url") {
+      const given = value().trim();
+      // A hostname on its own is the likely typo, and it fails much later --
+      // as a directory listing nobody can open -- so it is refused here.
+      if (!/^https?:\/\/[^\s/]+/i.test(given)) {
+        throw new Error("nixamp serve: --public-url must be a URL, e.g. https://nixamp.example.com");
+      }
+      options.publicUrl = given.replace(/\/+$/, "");
     } else if (arg === "--name") {
       options.name = value();
     } else if (arg === "--owner") {
@@ -343,6 +361,16 @@ export interface Engine {
    * dropping every listener.
    */
   replace(tracks: Track[], root: string): void;
+  /**
+   * The same tracks, now with their tags.
+   *
+   * Startup lists filenames and begins serving immediately, because an ffprobe
+   * per file over a real library takes minutes; the tags arrive afterwards and
+   * land here. Unlike `replace` this must not disturb anything -- whoever is
+   * listening keeps listening, and the only visible change is that the titles
+   * fill in.
+   */
+  retag(tracks: Track[], root: string): void;
   stop(): void;
 }
 
@@ -542,6 +570,18 @@ export class PlayerEngine implements Engine {
     this.state.note = "";
     this.push();
   }
+
+  retag(tracks: Track[], root: string): void {
+    // Dropped rather than applied if the library moved underneath: somebody
+    // re-streamed while the tagging was still running, and these tags describe
+    // something nobody is playing any more.
+    if (root !== this.root || tracks.length !== this.tracks.length) return;
+    if (tracks.some((track, at) => track.path !== this.tracks[at]?.path)) return;
+    this.tracks = tracks;
+    // No stop, no index reset: the only thing that changes is what the titles
+    // say, and every remote finds out because a snapshot goes out.
+    this.push();
+  }
 }
 
 /** An engine with no library behind it, for the hosted PWA. */
@@ -559,6 +599,7 @@ export class EmptyEngine implements Engine {
     return undefined;
   }
   replace(): void {}
+  retag(): void {}
   stop(): void {}
 }
 
@@ -2062,7 +2103,18 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const options = parseServeArgs(argv);
   const root = isRemote(options.root) ? options.root : resolve(options.root);
   const tools = detectTools();
-  const tracks = await loadSource(tools, root);
+  // Names now, tags later.
+  //
+  // Reading tags is an ffprobe per file, which over a real library is minutes,
+  // and every one of them used to happen before this process printed a word or
+  // listened on a port. `nixamp serve ~/music` looked hung, and `nixamp daemon
+  // start` was worse: it waits fifteen seconds for the announce line, killed a
+  // daemon that was working perfectly, and reported a failure whose log was
+  // empty because nothing had been written to it yet.
+  //
+  // So the filenames are enough to start: the server is up and answering in the
+  // time it takes to walk the directory, and the titles fill in behind it.
+  const tracks = await loadSource(tools, root, false);
   const engine: Engine = tracks.length > 0
     ? new PlayerEngine(tracks, root, tools)
     : new EmptyEngine(`No audio files under ${root}.`);
@@ -2342,12 +2394,25 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     console.log(JSON.stringify({ nixamp: "listening", host: options.host, port, key, source: root }));
   }
 
+  // The other half of "names now, tags later". It runs while the banner is
+  // printed and while the publish prompt waits, and it is deliberately not
+  // awaited: nothing downstream needs it, and a library that takes a minute to
+  // read should cost nobody a minute of silence.
+  if (tracks.length > 0 && !isRemote(root)) {
+    void loadSource(tools, root, true)
+      .then((tagged) => engine.retag(tagged, root))
+      .catch(() => {
+        // Filenames are a working player. A failure here is worth nothing but
+        // titles that stay as they are.
+      });
+  }
+
   console.log(`nixamp serve — ${tracks.length} tracks under ${root}`);
   console.log("");
 
   // The link, not the address. Without the key the address is a 401, so
   // printing a bare host:port would be printing something that does not work.
-  const addresses = reachableAddresses(options.host, port);
+  const addresses = reachableAddresses(options.host, port, options.publicUrl);
   const width = Math.max(...addresses.map((a) => a.label.length));
   for (const { label, url } of addresses) {
     console.log(`  ${label.padEnd(width)}  ${shareLink(url, key)}`);
