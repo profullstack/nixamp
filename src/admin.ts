@@ -8,7 +8,7 @@
 import { createApp, themes, type Container, type KeyEvent, type Theme } from "@profullstack/hqtui";
 import type { Color } from "@profullstack/hqtui";
 import type { Connection } from "./connections.ts";
-import { daemonUrl, readState } from "./daemon.ts";
+import { daemonUrl, isLoopbackTls, readState } from "./daemon.ts";
 import { KEY_HEADER } from "./share.ts";
 
 interface Report {
@@ -59,8 +59,12 @@ export function resolveTarget(argv: string[]): AdminOptions {
   if (state === null) {
     throw new Error("nixamp: no daemon is running. Start one with `nixamp daemon start`, or pass --url.");
   }
+  const url_ = daemonUrl(state);
+  // Talking to our own daemon, whose certificate names somewhere else. Nothing
+  // is in the way on loopback, so there is nothing for a certificate to prove.
+  if (isLoopbackTls(url_)) process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
   return {
-    url: daemonUrl(state),
+    url: url_,
     key: key ?? state.key,
     // A state file written before 0.5.3 has no list; loopback stands in.
     links: state.urls ?? [{ label: "here", url: daemonUrl(state) }],

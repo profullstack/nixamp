@@ -95,8 +95,38 @@ export function status(): { running: boolean; state: DaemonState | null } {
 
 /** The URL an admin client should talk to. */
 export function daemonUrl(state: DaemonState): string {
+  // A daemon serving https has a certificate for a name, and loopback is not
+  // that name. Asking it for https://localhost fails verification even though
+  // it is the same process on the same machine, which is how turning TLS on
+  // silently broke `nixamp admin` and `nixamp attach`. Prefer the address it
+  // was told to publish, which is the one the certificate is actually for.
+  const told = state.urls?.find(
+    (entry) => entry.label === "on the internet" && entry.url.startsWith("https://"),
+  );
+  if (told) return told.url;
+
+  const scheme = state.urls?.[0]?.url.startsWith("https://") ? "https" : "http";
   const host = state.host === "0.0.0.0" || state.host === "::" ? "127.0.0.1" : state.host;
-  return `http://${host.includes(":") ? `[${host}]` : host}:${state.port}`;
+  return `${scheme}://${host.includes(":") ? `[${host}]` : host}:${state.port}`;
+}
+
+/**
+ * Whether this address is our own machine over TLS with a certificate that
+ * cannot possibly name it.
+ *
+ * A certificate proves you reached the host you asked for. Asking for loopback
+ * proves that already: nothing is in the way to impersonate. So a daemon with a
+ * certificate for some public name is still reachable at 127.0.0.1, and a
+ * client refusing to talk to it is protecting nobody from anything.
+ */
+export function isLoopbackTls(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") return false;
+    return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+  } catch {
+    return false;
+  }
 }
 
 /**
