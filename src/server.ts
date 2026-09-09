@@ -1267,114 +1267,6 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
 
-      // --- the name other people see ---------------------------------------
-      //
-      // Separate from the address on purpose. The address is a credential and
-      // a way to reach somebody; publishing it in a directory listing or an
-      // invite would be publishing what they log in with.
-      if (path === "/api/v1/me/handle" && options.handles) {
-        const handles = options.handles;
-        const who = await accounts.whoIs(tokenFrom(request.headers));
-        if (who === null) {
-          json(response, 401, { error: "not signed in" });
-          return;
-        }
-
-        if (request.method === "GET") {
-          json(response, 200, { handle: await handles.of(who.id) });
-          return;
-        }
-        if (request.method === "PUT" || request.method === "POST") {
-          let body: { handle?: unknown };
-          try {
-            body = JSON.parse(await readBody(request)) as typeof body;
-          } catch {
-            json(response, 400, { error: "bad JSON" });
-            return;
-          }
-          const claimed = await handles.claim(who.id, body.handle);
-          if (claimed.error) {
-            json(response, 409, { error: claimed.error });
-            return;
-          }
-          json(response, 200, { handle: claimed.handle });
-          return;
-        }
-        json(response, 405, { error: "GET or PUT" });
-        return;
-      }
-
-      // --- the servers this account runs ----------------------------------
-      //
-      // Kept against the account rather than the machine, so the list reads the
-      // same from the CLI, the PWA and the desktop app -- which is the whole
-      // point: a share link in a terminal you closed is a server you have lost.
-      if ((path === "/api/v1/servers" || path.startsWith("/api/v1/servers/")) && options.servers) {
-        const servers = options.servers;
-        const who = await accounts.whoIs(tokenFrom(request.headers));
-        if (who === null) {
-          json(response, 401, { error: "not signed in" });
-          return;
-        }
-
-        if (path === "/api/v1/servers" && request.method === "GET") {
-          json(response, 200, { servers: await servers.list(who.id) });
-          return;
-        }
-
-        if (path === "/api/v1/servers" && request.method === "POST") {
-          let body: { name?: unknown; url?: unknown; key?: unknown };
-          try {
-            body = JSON.parse(await readBody(request)) as typeof body;
-          } catch {
-            json(response, 400, { error: "bad JSON" });
-            return;
-          }
-          const made = await servers.add(who, {
-            ...(typeof body.name === "string" ? { name: body.name } : {}),
-            ...(typeof body.url === "string" ? { url: body.url } : {}),
-            ...(typeof body.key === "string" ? { key: body.key } : {}),
-          });
-          if (made === null) {
-            json(response, 422, { error: "that needs an http or https address" });
-            return;
-          }
-          json(response, 201, { server: made });
-          return;
-        }
-
-        const id = path.slice("/api/v1/servers/".length);
-        if (id && request.method === "DELETE") {
-          const gone = await servers.remove(who.id, id);
-          json(response, gone ? 200 : 404, gone ? { ok: true } : { error: "no such server" });
-          return;
-        }
-
-        if (id && (request.method === "PATCH" || request.method === "PUT")) {
-          let body: { name?: unknown; url?: unknown; key?: unknown };
-          try {
-            body = JSON.parse(await readBody(request)) as typeof body;
-          } catch {
-            json(response, 400, { error: "bad JSON" });
-            return;
-          }
-          const changed = await servers.update(who.id, id, {
-            ...(typeof body.name === "string" ? { name: body.name } : {}),
-            ...(typeof body.url === "string" ? { url: body.url } : {}),
-            ...(typeof body.key === "string" ? { key: body.key } : {}),
-          });
-          if (changed === null) {
-            json(response, 404, { error: "no such server, or a bad address" });
-            return;
-          }
-          json(response, 200, { server: changed });
-          return;
-        }
-
-        json(response, 405, { error: "GET, POST, PATCH or DELETE" });
-        return;
-      }
-
       // --- tokens a person made on purpose --------------------------------
       if (path === "/api/v1/auth/tokens" || path.startsWith("/api/v1/auth/tokens/")) {
         const who = await accounts.whoIs(tokenFrom(request.headers));
@@ -1498,6 +1390,114 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         "set-cookie": sessionCookie(token, secure),
       });
       response.end(JSON.stringify({ account: result.account, token }));
+      return;
+    }
+
+    // --- the name other people see ---------------------------------------
+    //
+    // Separate from the address on purpose. The address is a credential and
+    // a way to reach somebody; publishing it in a directory listing or an
+    // invite would be publishing what they log in with.
+    if (path === "/api/v1/me/handle" && options.handles && options.accounts) {
+      const handles = options.handles;
+      const who = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (who === null) {
+        json(response, 401, { error: "not signed in" });
+        return;
+      }
+
+      if (request.method === "GET") {
+        json(response, 200, { handle: await handles.of(who.id) });
+        return;
+      }
+      if (request.method === "PUT" || request.method === "POST") {
+        let body: { handle?: unknown };
+        try {
+          body = JSON.parse(await readBody(request)) as typeof body;
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+        const claimed = await handles.claim(who.id, body.handle);
+        if (claimed.error) {
+          json(response, 409, { error: claimed.error });
+          return;
+        }
+        json(response, 200, { handle: claimed.handle });
+        return;
+      }
+      json(response, 405, { error: "GET or PUT" });
+      return;
+    }
+
+    // --- the servers this account runs ----------------------------------
+    //
+    // Kept against the account rather than the machine, so the list reads the
+    // same from the CLI, the PWA and the desktop app -- which is the whole
+    // point: a share link in a terminal you closed is a server you have lost.
+    if ((path === "/api/v1/servers" || path.startsWith("/api/v1/servers/")) && options.servers && options.accounts) {
+      const servers = options.servers;
+      const who = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (who === null) {
+        json(response, 401, { error: "not signed in" });
+        return;
+      }
+
+      if (path === "/api/v1/servers" && request.method === "GET") {
+        json(response, 200, { servers: await servers.list(who.id) });
+        return;
+      }
+
+      if (path === "/api/v1/servers" && request.method === "POST") {
+        let body: { name?: unknown; url?: unknown; key?: unknown };
+        try {
+          body = JSON.parse(await readBody(request)) as typeof body;
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+        const made = await servers.add(who, {
+          ...(typeof body.name === "string" ? { name: body.name } : {}),
+          ...(typeof body.url === "string" ? { url: body.url } : {}),
+          ...(typeof body.key === "string" ? { key: body.key } : {}),
+        });
+        if (made === null) {
+          json(response, 422, { error: "that needs an http or https address" });
+          return;
+        }
+        json(response, 201, { server: made });
+        return;
+      }
+
+      const id = path.slice("/api/v1/servers/".length);
+      if (id && request.method === "DELETE") {
+        const gone = await servers.remove(who.id, id);
+        json(response, gone ? 200 : 404, gone ? { ok: true } : { error: "no such server" });
+        return;
+      }
+
+      if (id && (request.method === "PATCH" || request.method === "PUT")) {
+        let body: { name?: unknown; url?: unknown; key?: unknown };
+        try {
+          body = JSON.parse(await readBody(request)) as typeof body;
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+        const changed = await servers.update(who.id, id, {
+          ...(typeof body.name === "string" ? { name: body.name } : {}),
+          ...(typeof body.url === "string" ? { url: body.url } : {}),
+          ...(typeof body.key === "string" ? { key: body.key } : {}),
+        });
+        if (changed === null) {
+          json(response, 404, { error: "no such server, or a bad address" });
+          return;
+        }
+        json(response, 200, { server: changed });
+        return;
+      }
+
+      json(response, 405, { error: "GET, POST, PATCH or DELETE" });
       return;
     }
 
