@@ -60,6 +60,8 @@ export function start(): void {
     glyphs: need<HTMLElement>("glyphs"),
     levels: need<HTMLElement>("levels"),
     playlist: need<HTMLOListElement>("playlist"),
+    crumbs: need<HTMLElement>("crumbs"),
+    filter: need<HTMLInputElement>("filter"),
     playlistTitle: need<HTMLElement>("playlist-panel"),
     note: need<HTMLElement>("note"),
     files: need<HTMLInputElement>("files"),
@@ -403,35 +405,146 @@ export function start(): void {
   let renderedFor = "";
   /** The row the list was last scrolled to, so it is only done when it moves. */
   let scrolledTo = -1;
+  /**
+   * The folder being looked at, "" for the top of the library.
+   *
+   * A way of looking, not a different playlist: what plays is still a track
+   * number the server knows, and next and previous still walk the whole thing.
+   * Somebody browsing for something to watch should not thereby have changed
+   * what happens when the current track ends.
+   */
+  let openFolder = "";
+
+  /** The path back out, one clickable step at a time. */
+  function drawCrumbs(needed: boolean): void {
+    dom.crumbs.hidden = !needed;
+    if (!needed) return;
+    const parts = openFolder === "" ? [] : openFolder.split("/");
+    const step = (label: string, to: string, last: boolean): HTMLElement => {
+      if (last) {
+        const here = document.createElement("span");
+        here.className = "here";
+        here.textContent = label;
+        return here;
+      }
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", () => {
+        openFolder = to;
+        renderedFor = "";
+        renderPlaylist();
+      });
+      return button;
+    };
+
+    const children: HTMLElement[] = [step("All files", "", parts.length === 0)];
+    let walked = "";
+    parts.forEach((part, i) => {
+      walked = walked === "" ? part : `${walked}/${part}`;
+      const sep = document.createElement("span");
+      sep.textContent = "/";
+      children.push(sep, step(part, walked, i === parts.length - 1));
+    });
+    dom.crumbs.replaceChildren(...children);
+  }
+
+  /** A folder in the list: its name, and how much is inside it. */
+  function folderRow(name: string, count: number): HTMLElement {
+    const item = document.createElement("li");
+    item.className = "folder";
+    const label = document.createElement("span");
+    label.className = "name";
+    label.textContent = `${name}/`;
+    const amount = document.createElement("span");
+    amount.className = "count";
+    amount.textContent = `${count} file${count === 1 ? "" : "s"}`;
+    item.append(label, amount);
+    item.addEventListener("click", () => {
+      openFolder = openFolder === "" ? name : `${openFolder}/${name}`;
+      renderedFor = "";
+      renderPlaylist();
+    });
+    return item;
+  }
   function renderPlaylist(): void {
-    // A row is a name, a length, and which pile it is in. The pile is why this
-    // list is not one flat run any more: a server with an album added to it
-    // has the album's tracks on the end, and without a heading over them
-    // nobody could tell whose files they were about to play.
-    const rows = mode === "remote"
-      ? snapshot.tracks.map((t) => ({ name: displayName(t), seconds: t.duration, group: t.group ?? "" }))
-      : local.map((t) => ({ name: displayName(t), seconds: t.duration, group: "" }));
-    // Durations are part of the key: a picked file learns its own length late.
-    const key = `${mode}:${rows.map((r) => `${r.name}@${r.seconds}@${r.group}`).join("|")}`;
+    // A row is a name, a length, where it sits, and which pile it is in.
+    //
+    // Where it sits is what turns a library into something you can look
+    // through. Five thousand files listed one after another is a list nobody
+    // can find anything in, however carefully it is sorted -- so the folders
+    // are folders here, and you walk into them.
+    const all = mode === "remote"
+      ? snapshot.tracks.map((t) => ({
+          name: displayName(t), seconds: t.duration, group: t.group ?? "", folder: t.folder ?? "",
+        }))
+      : local.map((t) => ({ name: displayName(t), seconds: t.duration, group: "", folder: "" }));
+
+    // Only what belongs to this server. Anything re-streamed into it is a live
+    // stream and lives in the list of live streams -- having the two mixed in
+    // one list is what made moving between a channel and an album so
+    // confusing, because they are different kinds of thing.
+    const wanted = dom.filter.value.trim().toLowerCase();
+    const rows = all
+      .map((row, index) => ({ ...row, index }))
+      .filter((row) => row.group === "")
+      .filter((row) => wanted === "" || `${row.folder}/${row.name}`.toLowerCase().includes(wanted));
+
+    // Everything under the folder we are looking at, and the folders directly
+    // inside it. A track sitting deeper than here belongs to one of those, not
+    // to this list.
+    // A filter searches the whole library: looking for a name is not the same
+    // as looking in a place, and having to find the folder first would defeat
+    // the point of typing the name.
+    const inside = (folder: string): boolean =>
+      wanted !== "" || openFolder === "" || folder === openFolder || folder.startsWith(`${openFolder}/`);
+    const here = (folder: string): boolean => wanted !== "" || folder === openFolder;
+    const below = (folder: string): string => {
+      const rest = openFolder === "" ? folder : folder.slice(openFolder.length + 1);
+      const at = rest.indexOf("/");
+      return at === -1 ? rest : rest.slice(0, at);
+    };
+
+    const folders = new Map<string, number>();
+    for (const row of rows) {
+      if (!inside(row.folder) || here(row.folder)) continue;
+      const name = below(row.folder);
+      if (name !== "") folders.set(name, (folders.get(name) ?? 0) + 1);
+    }
+    const files = rows.filter((row) => here(row.folder) && inside(row.folder));
+
+    const key = `${mode}:${openFolder}:${wanted}:${[...folders].join(",")}:${files
+      .map((r) => `${r.index}@${r.name}@${r.seconds}@${r.group}`)
+      .join("|")}`;
     if (key !== renderedFor) {
       renderedFor = key;
+      // No crumbs while filtering: what is on screen is not a place.
+      drawCrumbs(wanted === "" && ([...folders.keys()].length > 0 || openFolder !== ""));
       const children: HTMLElement[] = [];
+
+      for (const [name, count] of [...folders].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))) {
+        children.push(folderRow(name, count));
+      }
+
       let heading = "";
       // Only worth a heading over the library itself if something else is
       // here too; on an ordinary server every track is the library and a
       // heading saying so is noise.
-      const grouped = rows.some((row) => row.group !== "");
-      rows.forEach((row, i) => {
+      const grouped = files.some((row) => row.group !== "");
+      for (const row of files) {
         if (row.group !== heading && (grouped || row.group !== "")) {
           heading = row.group;
           children.push(groupHeading(row.group));
         }
         const item = document.createElement("li");
         item.className = "row";
-        item.dataset.index = String(i);
+        // The index into the whole playlist, not into what is on screen: what
+        // plays is a track number the server knows, and folders are a way of
+        // looking rather than a different list.
+        item.dataset.index = String(row.index);
         const n = document.createElement("span");
         n.className = "n";
-        n.textContent = String(i + 1).padStart(2, " ");
+        n.textContent = String(row.index + 1).padStart(2, " ");
         const label = document.createElement("span");
         label.className = "name";
         label.textContent = row.name;
@@ -440,7 +553,7 @@ export function start(): void {
         time.textContent = row.seconds > 0 ? formatTime(row.seconds) : "--:--";
         item.append(n, label, time);
         children.push(item);
-      });
+      }
       dom.playlist.replaceChildren(...children);
     }
     const active = at();
@@ -580,6 +693,11 @@ export function start(): void {
   }
 
   // ---- wiring -------------------------------------------------------------
+
+  dom.filter.addEventListener("input", () => {
+    renderedFor = "";
+    renderPlaylist();
+  });
 
   dom.playlist.addEventListener("click", (event) => {
     const row = (event.target as HTMLElement).closest("li");
@@ -1885,6 +2003,7 @@ export function start(): void {
       live: boolean; code: string; url: string;
     };
     channels: { id: string; name: string; via: string; listeners: number; startedAt: number }[];
+    restreams?: { name: string; at: number; tracks: number }[];
   }
 
   let drawnOnAir = "";
@@ -1935,9 +2054,11 @@ export function start(): void {
     if (key === drawnOnAir) return;
     drawnOnAir = key;
 
-    dom.onairNote.textContent = air.channels.length === 0
-      ? "One stream, from this server's own playlist."
-      : `${air.channels.length + 1} streams: this server's playlist, and ${air.channels.length} publishing into it.`;
+    const restreams = air.restreams ?? [];
+    const others = air.channels.length + restreams.length;
+    dom.onairNote.textContent = others === 0
+      ? "One stream, from this server's own files."
+      : `${others + 1} streams: this server's own files, and ${others} more on it.`;
 
     const rows: HTMLElement[] = [];
 
@@ -1956,6 +2077,21 @@ export function start(): void {
       onPlay: () => { void playAt(at()); },
       link: air.server.live ? air.server.url : "",
     }));
+
+    // Anything re-streamed into this server. These used to sit in the middle
+    // of the playlist among the files, which is what made moving between a
+    // channel and an album so confusing: they are different kinds of thing and
+    // were in one list.
+    for (const restream of restreams) {
+      rows.push(onAirRow({
+        title: restream.name,
+        detail: restream.tracks === 1
+          ? "re-streamed from the web"
+          : `re-streamed from the web · ${restream.tracks} tracks`,
+        onPlay: () => { void playAt(restream.at); },
+        link: "",
+      }));
+    }
 
     for (const channel of air.channels) {
       rows.push(onAirRow({

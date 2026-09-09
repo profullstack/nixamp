@@ -29,6 +29,16 @@ export interface RemoteTrack {
    * a client puts at the top of that block so the two are not one soup.
    */
   group?: string;
+  /**
+   * Which folder it sits in, under whatever it was loaded from.
+   *
+   * Empty for a track at the top. A library is a shelf of albums and seasons,
+   * and five thousand files in one flat list is a list nobody can find
+   * anything in -- so the shape of the folders comes across and a player can
+   * offer them as folders. Relative, always: where the library sits on
+   * somebody's disk is their business.
+   */
+  folder?: string;
 }
 
 /** Everything a remote needs to draw the player. */

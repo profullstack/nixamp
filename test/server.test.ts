@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import {
-  contentType, createServer, DEFAULT_PORT, EmptyEngine, PlayerEngine,
+  contentType, createServer, DEFAULT_PORT, EmptyEngine, folderOf, PlayerEngine,
   parseRange, parseServeArgs, safeJoin, toRemoteTracks,
   type Engine,
 } from "../src/server.ts";
@@ -1214,6 +1214,60 @@ test("an administrator is told where a server's own files are, and a viewer is n
     // names streams and how to reach them, and nothing about the disk.
     const streams = await (await fetch(`${base}/api/streams`)).text();
     assert.equal(streams.includes("/home/ubuntu"), false, "a path leaked to the viewing side");
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});
+
+test("a track knows which folder it sits in, and never where the disk is", () => {
+  // Five thousand files in one flat list is a list nobody can find anything
+  // in. The shape of the folders is what lets a player offer them as folders.
+  assert.equal(folderOf("/music/Bad Religion/Suffer/01.mp3", "/music"), "Bad Religion/Suffer");
+  assert.equal(folderOf("/music/loose.mp3", "/music"), "");
+  // A trailing slash on the root is the same root.
+  assert.equal(folderOf("/music/a/b.mp3", "/music/"), "a");
+
+  // Relative, always: where somebody keeps their library is their business,
+  // and the folder is the only part a listener needs.
+  assert.ok(!folderOf("/home/ubuntu/Downloads/done/Album/1.mp3", "/home/ubuntu/Downloads/done").includes("/home"));
+
+  // A remote folder reads as a person wrote it rather than as a URL spells it.
+  assert.equal(
+    folderOf("https://x.test/done/%5B1982%5D%20How/01.mp3", "https://x.test/done"),
+    "[1982] How",
+  );
+
+  // Nothing sensible to say about a track from somewhere else entirely.
+  assert.equal(folderOf("/elsewhere/a.mp3", "/music"), "");
+  assert.equal(folderOf("/music/a.mp3", ""), "");
+});
+
+test("a re-stream is listed as live, not buried among the files", async () => {
+  // A channel and an album are different kinds of thing, and having them in
+  // one list is what made moving between them so confusing. What is live says
+  // what is live; the playlist is the server's own files.
+  const engine = new PlayerEngine(
+    ["/m/a.mp3", "/m/b.mp3"].map((path) => ({ path, title: path, artist: "", album: "", duration: 0 })),
+    "/m",
+    { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+  );
+  engine.add([{ path: "http://x.test/live/301", title: "301", artist: "", album: "", duration: 0 }],
+    "http://x.test/live/301");
+
+  const server = createServer(engine, { web: null, media: false, version: "test", serverName: "box" });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  try {
+    const air = (await (await fetch(`http://127.0.0.1:${port}/api/streams`)).json()) as {
+      restreams?: { name: string; at: number; tracks: number }[];
+    };
+    assert.equal(air.restreams?.length, 1);
+    assert.equal(air.restreams?.[0]?.name, "301");
+    // The index it starts at, so it can be played from the list of what is
+    // live rather than hunted for among the files.
+    assert.equal(air.restreams?.[0]?.at, 2);
+    assert.equal(air.restreams?.[0]?.tracks, 1);
   } finally {
     await new Promise<void>((done) => server.close(() => done()));
     engine.stop();
