@@ -1005,3 +1005,67 @@ test("a link cannot claim to be one thing and carry the other", async () => {
     engine.stop();
   }
 });
+
+test("what is live on a server is one list, readable by anybody it let in", async () => {
+  // Two different things are live on a server -- its own playlist, which is
+  // what the directory lists it as, and anybody publishing into it from OBS or
+  // a phone -- and they were only ever visible in two different places. Asked
+  // "what is on here?", a person connected to a server had nowhere to look.
+  const engine = new PlayerEngine(
+    ["/m/a.mp3", "/m/b.mp3"].map((path) => ({ path, title: path, artist: "", album: "", duration: 0 })),
+    "/m",
+    { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+  );
+  const server = createServer(engine, {
+    web: null,
+    media: false,
+    version: "test",
+    serverName: "chovy's box",
+    live: {
+      status: () => ({
+        live: true, code: "482917", name: "chovy's box",
+        url: "https://server1.chovy.nixamp.com:4321/v/VIEW", possible: true,
+      }),
+      start: async () => ({ live: true, code: "482917", name: "", url: "" }),
+      stop: async () => {},
+    },
+    channels: {
+      list: () => [
+        { id: "live", name: "an RTMP publisher", format: "flv", via: "rtmp" as const,
+          startedAt: 1, bytes: 10, listeners: 2 },
+      ],
+      listeners: 2,
+    } as unknown as Parameters<typeof createServer>[1]["channels"],
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+
+  try {
+    const body = (await (await fetch(`http://127.0.0.1:${port}/api/streams`)).json()) as {
+      server: { name: string; nowPlaying: string; tracks: number; live: boolean; code: string; url: string };
+      channels: { id: string; name: string; via: string; listeners: number }[];
+    };
+
+    // The server's own stream, named, with the code somebody dials and the
+    // link they can be sent -- the viewing one, never the one that drives.
+    assert.equal(body.server.name, "chovy's box");
+    assert.equal(body.server.tracks, 2);
+    assert.equal(body.server.live, true);
+    assert.equal(body.server.code, "482917");
+    assert.match(body.server.url, /\/v\//);
+    assert.ok(!body.server.url.includes("/a/"), "the list must not hand out the controls");
+
+    // And whoever is publishing into it.
+    assert.equal(body.channels.length, 1);
+    assert.equal(body.channels[0]?.name, "an RTMP publisher");
+    assert.equal(body.channels[0]?.via, "rtmp");
+    assert.equal(body.channels[0]?.listeners, 2);
+
+    // Nothing here says how to change anything, which is why it is readable by
+    // somebody holding the viewing link rather than only by an administrator.
+    assert.equal(JSON.stringify(body).includes("rtmp://"), false, "no publish address leaks to a viewer");
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});
