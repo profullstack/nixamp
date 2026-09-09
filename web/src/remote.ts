@@ -35,8 +35,9 @@ export function apiUrl(base: string, path: string): string {
 }
 
 /** Where the browser fetches a track's bytes from, to play it here. */
-export function mediaUrl(base: string, index: number): string {
-  return apiUrl(base, `/api/media/${index}`);
+export function mediaUrl(base: string, index: number, kbps = 0): string {
+  const path = kbps > 0 ? `/api/media/${index}?kbps=${Math.round(kbps)}` : `/api/media/${index}`;
+  return apiUrl(base, path);
 }
 
 /** A snapshot off the wire is untrusted JSON; missing fields get defaults. */
@@ -138,8 +139,8 @@ export class RemoteClient {
     if (snapshot) this.handlers.onSnapshot(snapshot);
   }
 
-  media(index: number): string {
-    return mediaUrl(this.base, index);
+  media(index: number, kbps = 0): string {
+    return mediaUrl(this.base, index, kbps);
   }
 
   close(): void {
@@ -194,4 +195,36 @@ export function blockedAsMixedContent(base: string, pageProtocol = globalThis.lo
     "This page is https, and a browser refuses every request from an https page to an http one. " +
     "Open that address directly, or give the server a certificate: nixamp serve --tls-cert cert.pem --tls-key key.pem."
   );
+}
+
+/**
+ * The rungs a stream can be asked for, largest first.
+ *
+ * Not an HLS ladder: producing several renditions at once needs a machine that
+ * can encode several at once, and the ones people run nixamp on cannot. This is
+ * one rendition at a time, chosen to fit, which is what actually matters when a
+ * film will not play at all.
+ *
+ * 0 means the original, untouched and unencoded, which is free for the server
+ * and right whenever the link can carry it.
+ */
+export const LADDER = [0, 6000, 3000, 1500, 700] as const;
+
+/**
+ * The next rung down, or null at the bottom.
+ *
+ * Stepping rather than calculating, because the useful signal from a browser is
+ * "this stalled again", not a number. Two stalls is the threshold: one is a
+ * seek, a hiccup, or a laptop waking up.
+ */
+export function stepDown(current: number): number | null {
+  const at = LADDER.indexOf(current as (typeof LADDER)[number]);
+  const next = LADDER[(at === -1 ? 0 : at) + 1];
+  return next === undefined ? null : next;
+}
+
+/** A rung a person chose, as it reads on a button. */
+export function rungName(kbps: number): string {
+  if (kbps === 0) return "Original";
+  return kbps >= 1000 ? `${kbps / 1000} Mbps` : `${kbps} kbps`;
 }

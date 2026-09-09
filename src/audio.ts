@@ -232,6 +232,82 @@ export function formatTime(seconds: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+/**
+ * The same tags, read without blocking anything.
+ *
+ * `probe` is spawnSync, and 0.5.5 tried to fix the tagging pass by yielding
+ * between files. That is not enough: each individual call still stops the
+ * process for as long as one ffprobe takes, and on a large file over a slow
+ * disk that is hundreds of milliseconds. Yield, block, yield, block, and a
+ * server delivers a stream in slivers -- measured at 357 KB/s on a machine
+ * whose disk reads at 6.5 MB/s and whose link runs at 1.4 Gbps.
+ *
+ * ffprobe still costs what it costs. It just costs it in a child process now,
+ * which is where that work belongs.
+ */
+export async function probeAsync(tools: Tools, path: string): Promise<Track> {
+  const [cmd, ...rest] = tools.ffprobe;
+  const fallback: Track = {
+    path,
+    title: path.split("/").pop() ?? path,
+    artist: "",
+    album: "",
+    duration: 0,
+  };
+  if (!cmd) return fallback;
+
+  return new Promise<Track>((done) => {
+    const child = spawn(
+      cmd,
+      [
+        ...rest,
+        "-v", "quiet", "-print_format", "json",
+        "-show_format", "-show_entries", "format_tags=title,artist,album",
+        path,
+      ],
+      { stdio: ["ignore", "pipe", "ignore"] },
+    );
+    let out = "";
+    // A file that will not answer must not hold a place in the queue for ever.
+    const giveUp = setTimeout(() => child.kill("SIGKILL"), 20_000);
+    giveUp.unref?.();
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (out.length < 4 * 1024 * 1024) out += chunk.toString("utf8");
+    });
+    child.on("error", () => {
+      clearTimeout(giveUp);
+      done(fallback);
+    });
+    child.on("close", (code) => {
+      clearTimeout(giveUp);
+      if (code !== 0) return done(fallback);
+      done(readTags(out, fallback));
+    });
+  });
+}
+
+/** The tags out of ffprobe's JSON, or the filename when it said nothing useful. */
+function readTags(stdout: string, fallback: Track): Track {
+  try {
+    const parsed = JSON.parse(stdout) as {
+      format?: { duration?: string; tags?: Record<string, string> };
+    };
+    const tags = parsed.format?.tags ?? {};
+    const lower: Record<string, string> = {};
+    for (const [k, v] of Object.entries(tags)) lower[k.toLowerCase()] = v;
+    return {
+      path: fallback.path,
+      title: lower.title || fallback.title,
+      artist: lower.artist ?? "",
+      album: lower.album ?? "",
+      duration: Number(parsed.format?.duration ?? 0) || 0,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 /** What is actually inside a container, as opposed to what the name suggests. */
 export interface Codecs {
   /** e.g. "h264", "hevc", "vp9". Empty when there is no video stream. */
@@ -293,7 +369,11 @@ export async function codecsOf(tools: Tools, path: string): Promise<Codecs> {
  * would cost a core per viewer and look worse. So the streams decide, one part
  * at a time -- a film can have its video copied and only its DTS re-encoded.
  */
-export function videoArgs(codecs: Codecs): string[] {
+export function videoArgs(codecs: Codecs, capKbps = 0): string[] {
+  // A ceiling means re-encoding whatever is there, because you cannot cap the
+  // bitrate of a stream you are copying: copying is what "unchanged" means.
+  if (capKbps > 0) return cappedArgs(capKbps);
+
   // What a browser can play inside MP4 without help.
   const keepVideo = codecs.video === "h264";
   const keepAudio = codecs.audio === "aac" || codecs.audio === "mp3";
@@ -306,6 +386,45 @@ export function videoArgs(codecs: Codecs): string[] {
     // Fragmented, because this is a pipe: a normal MP4 writes its index at the
     // end, which for a stream never arrives and for a browser means nothing
     // plays at all.
+    "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+  ];
+}
+
+/**
+ * The width that suits a bitrate.
+ *
+ * 1080p squeezed into a megabit is worse than 360p at the same megabit: the
+ * encoder spends everything it has on detail it cannot afford and the result
+ * smears on every motion. Dropping the resolution with the bitrate is what
+ * makes a small stream watchable rather than merely small.
+ */
+export function widthFor(kbps: number): number {
+  if (kbps <= 800) return 640;
+  if (kbps <= 1800) return 854;
+  if (kbps <= 4000) return 1280;
+  return 1920;
+}
+
+/** Arguments for a stream that has to fit through a link of a known size. */
+function cappedArgs(kbps: number): string[] {
+  const audioKbps = kbps <= 800 ? 96 : 128;
+  const videoKbps = Math.max(200, kbps - audioKbps);
+  return [
+    "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-pix_fmt", "yuv420p",
+    // -2 keeps the aspect ratio and an even height, which H.264 requires.
+    // The min() never enlarges: a 480p source asked for 720p stays 480p.
+    "-vf", `scale='min(${widthFor(kbps)},iw)':-2`,
+    "-b:v", `${videoKbps}k`,
+    // A ceiling rather than an average, because an average that spikes is a
+    // stall on a link this size. The buffer is one second of it.
+    "-maxrate", `${videoKbps}k`,
+    "-bufsize", `${videoKbps}k`,
+    "-c:a", "aac",
+    "-b:a", `${audioKbps}k`,
+    "-ac", "2",
+    "-f", "mp4",
     "-movflags", "frag_keyframe+empty_moov+default_base_moof",
   ];
 }

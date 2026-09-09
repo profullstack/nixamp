@@ -1,7 +1,7 @@
 /** The playlist: audio found on disk or named by a playlist, in a stable order. */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { probe, type Tools, type Track } from "./audio.ts";
+import { probe, probeAsync, type Tools, type Track } from "./audio.ts";
 import {
   type Entry,
   isHls,
@@ -153,8 +153,11 @@ export async function loadTagged(tools: Tools, source: string): Promise<Track[]>
   const paths = findAudio(source);
   const tracks: Track[] = [];
   for (const path of paths) {
-    tracks.push(probe(tools, path));
-    await new Promise<void>((done) => setImmediate(done));
+    // Awaiting a child process, not blocking on one. Yielding between files
+    // was not enough: each spawnSync still stopped everything for as long as
+    // one ffprobe took, which on a large file is long enough to strangle a
+    // stream being served at the same time.
+    tracks.push(await probeAsync(tools, path));
   }
   return tracks;
 }
