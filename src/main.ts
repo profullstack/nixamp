@@ -252,11 +252,10 @@ async function runDaemon(argv: string[]): Promise<number> {
       console.log(`nixamp: the daemon (pid ${state.pid}) is gone. See ${state.log}`);
       return 1;
     }
-    const url = d.daemonUrl(state);
-    console.log(`nixamp daemon running (pid ${state.pid})`);
-    console.log(`  ${state.key ? `${url}/s/${state.key}` : url}`);
-    console.log(`  ${state.source}`);
-    console.log(`  up ${Math.round((Date.now() - state.startedAt) / 1000)}s`);
+    // The same lines start prints, because the question "where is it" has the
+    // same answer however you ask it -- and printing loopback alone was the
+    // one address that cannot be handed to anybody.
+    for (const line of d.daemonLines(state, Date.now() - state.startedAt)) console.log(line);
     return 0;
   }
 
