@@ -186,6 +186,16 @@ export class Stream {
     this.decoder = spawn(ff, [
       ...ffRest,
       "-hide_banner", "-loglevel", "error",
+      // Paced to real time when nothing is draining the pipe at real time.
+      //
+      // With speakers, ffplay pulls samples at the rate a person hears them
+      // and the decoder is held back by that. Without them -- which is every
+      // server -- nothing pushes back, ffmpeg decodes as fast as the disk
+      // allows, and `position` runs away: a film reached its end in a couple
+      // of minutes. That number is what a watch party is synchronised to, so a
+      // clock that runs at nineteen times normal speed is not a small
+      // cosmetic fault; it is the whole feature not working.
+      ...(this.tools.play === null ? ["-re"] : []),
       ...(from > 0 ? ["-ss", String(from)] : []),
       "-i", track.path,
       "-f", "f32le", "-ac", String(CHANNELS), "-ar", String(RATE), "-",
