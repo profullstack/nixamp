@@ -44,8 +44,8 @@ export function apiUrl(base: string, path: string, key = ""): string {
  * A share link split into the two things it is.
  *
  * People paste the link they were given, which is an address with a key on the
- * end of it: `https://host:4321/a/KEY`. As a base that is useless -- there is
- * no /a/KEY/api/state, and asking for one gets a 404 -- and thrown away it is
+ * end of it: `https://host:4321/admin/KEY`. As a base that is useless -- there
+ * is no /admin/KEY/api/state, and asking for one gets a 404 -- and thrown away it is
  * worse, because without the key every request from another origin is a 401.
  * So it is taken apart and both halves are kept.
  */
@@ -59,8 +59,8 @@ export function splitShareLink(input: string): { base: string; key: string } {
     return { base: "", key: "" };
   }
 
-  // Either shape a key arrives in: /a/ administers, /v/ only views.
-  const share = /^\/[av]\/([^/]+)\/?$/.exec(url.pathname);
+  // Either shape a key arrives in: /admin/ administers, /view/ only views.
+  const share = /^\/(?:admin|view)\/([^/]+)\/?$/.exec(url.pathname);
   const key = share?.[1] ?? url.searchParams.get("k") ?? "";
   if (share) url.pathname = "/";
   url.searchParams.delete("k");
@@ -127,7 +127,7 @@ export class RemoteClient {
   /** The share key, when the address came with one. Empty is same-origin. */
   private key = "";
   /** Which door the key was handed over at: /a/ administers, /v/ only views. */
-  private shape = "/a/";
+  private shape = "/admin/";
   private lastRevision = -1;
 
   constructor(private readonly handlers: RemoteHandlers) {}
@@ -165,7 +165,7 @@ export class RemoteClient {
     this.close();
     this.base = base;
     this.key = key;
-    this.shape = /\/v\/[^/]+\/?$/.test(input.trim()) ? "/v/" : "/a/";
+    this.shape = /\/view\/[^/]+\/?$/.test(input.trim()) ? "/view/" : "/admin/";
     this.lastRevision = -1;
     this.handlers.onStatus("connecting");
     const source = new EventSource(apiUrl(base, "/api/events", key));
@@ -277,7 +277,7 @@ export async function refusesUs(base: string, key = "", signal?: AbortSignal): P
   if (response.ok) return "";
   if (response.status === 401) {
     return key === ""
-      ? "That server needs its share link. Paste the whole link — the one with /a/ or /v/ in it — or sign in as its owner."
+      ? "That server needs its share link. Paste the whole link — the one with /admin/ or /view/ in it — or sign in as its owner."
       : "That share link is not accepted by that server. It may have been restarted, which gives it a new one.";
   }
   if (response.status === 403) return "That link can listen but not drive this server.";

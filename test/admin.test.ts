@@ -145,9 +145,9 @@ test("the admin view shows the links you can hand out, not just loopback", () =>
 
   // The complaint this fixes: it showed the one address that only works on the
   // machine you are already sitting at.
-  assert.match(screen, /on the internet\s+http:\/\/104\.152\.209\.195:4321\/a\/KEY/);
-  assert.match(screen, /on tailscale\s+http:\/\/100\.96\.166\.75:4321\/a\/KEY/);
-  assert.match(screen, /here\s+http:\/\/localhost:4321\/a\/KEY/);
+  assert.match(screen, /on the internet\s+http:\/\/104\.152\.209\.195:4321\/admin\/KEY/);
+  assert.match(screen, /on tailscale\s+http:\/\/100\.96\.166\.75:4321\/admin\/KEY/);
+  assert.match(screen, /here\s+http:\/\/localhost:4321\/admin\/KEY/);
   // And says what is being served, without being asked.
   assert.match(screen, /Downloads\/done/);
 });
@@ -158,7 +158,7 @@ test("no key means no /s/ on the end, because there is nothing to put there", ()
     { width: 100, height: 40 },
   );
   assert.match(screen, /here\s+http:\/\/localhost:4321/);
-  assert.doesNotMatch(screen, /\/a\//);
+  assert.doesNotMatch(screen, /\/admin\//);
 });
 
 test("pointed somewhere by hand, that address is the only one there is", () => {

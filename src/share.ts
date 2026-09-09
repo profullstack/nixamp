@@ -274,13 +274,14 @@ export function reachableAddresses(
 /**
  * The two paths a key can arrive on, and what each one says about itself.
  *
- * `/a/` administers and `/v/` only views. There used to be a `/s/` that meant
+ * `/admin/` administers and `/view/` only views. There used to be a `/s/`
+ * that meant
  * neither -- just "here is a key" -- which is why somebody handed one of two
  * identical-looking links had no way to tell which they were holding, and
  * reported the controls as missing when they were never going to be there.
  * A link should say what it is before anybody clicks it.
  */
-export const KEY_PATHS = ["/a/", "/v/"] as const;
+export const KEY_PATHS = ["/admin/", "/view/"] as const;
 
 /**
  * The key in a share link, and what the link claimed to be.
@@ -288,7 +289,7 @@ export const KEY_PATHS = ["/a/", "/v/"] as const;
  * Both halves, because a label nobody checks is a label that can lie. `/a/`
  * means this administers and `/v/` means this only views; handed the other
  * key, a path would otherwise have said one thing and done the other -- and
- * the dangerous direction is real: a `/v/` link built around the control key
+ * the dangerous direction is real: a `/view/` link built around the control key
  * reads as view-only to the person you send it to and hands them the controls.
  */
 export function keyInPath(path: string): { key: string; wants: Scope } | null {
@@ -303,14 +304,14 @@ export function keyInPath(path: string): { key: string; wants: Scope } | null {
       // A key that is not valid percent-encoding is taken as written; it will
       // fail to match anything, which is the right answer either way.
     }
-    return { key, wants: prefix === "/a/" ? "control" : "listen" };
+    return { key, wants: prefix === "/admin/" ? "control" : "listen" };
   }
   return null;
 }
 
 /** The full link, key and all. `admin` picks the shape that says which it is. */
 export function shareLink(base: string, key: string | null, admin = true): string {
-  return key === null ? base : `${base}${admin ? "/a/" : "/v/"}${key}`;
+  return key === null ? base : `${base}${admin ? "/admin/" : "/view/"}${key}`;
 }
 
 /**

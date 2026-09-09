@@ -269,12 +269,12 @@ test("a pasted share link is an address and a key, and both are needed", () => {
   // What people actually paste. Kept whole it is a 404 -- there is no
   // /a/KEY/api/state -- and with the key thrown away every request from
   // another origin is a 401. Neither half is optional.
-  assert.deepEqual(splitShareLink("https://chovy.nixamp.com:4321/a/kk8a7LvceeVg1NassmuBwA"), {
+  assert.deepEqual(splitShareLink("https://chovy.nixamp.com:4321/admin/kk8a7LvceeVg1NassmuBwA"), {
     base: "https://chovy.nixamp.com:4321",
     key: "kk8a7LvceeVg1NassmuBwA",
   });
   // Trailing slash, and the query form the API itself takes.
-  assert.deepEqual(splitShareLink("http://box.local:4321/v/ABC/"), {
+  assert.deepEqual(splitShareLink("http://box.local:4321/view/ABC/"), {
     base: "http://box.local:4321",
     key: "ABC",
   });
@@ -368,7 +368,7 @@ test("a share link has to be taken apart before a server is asked anything", asy
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const { port } = server.address() as AddressInfo;
   const origin = `http://127.0.0.1:${port}`;
-  const shareLink = `${origin}/a/${KEY}`;
+  const shareLink = `${origin}/admin/${KEY}`;
 
   try {
     // The bug, kept here so it cannot come back: pasted whole, the link is not

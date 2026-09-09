@@ -102,7 +102,7 @@ test("a request path cannot climb out of the web directory", () => {
   for (const attempt of [
     "/../../etc/passwd",
     "/%2e%2e%2f%2e%2e%2fetc/passwd",
-    "/a/../../../etc/passwd",
+    "/admin/../../../etc/passwd",
     "/../web-other/x",
     "/..%2f..%2f..%2fetc/shadow",
   ]) {
@@ -375,8 +375,8 @@ test("the daemon prints every address it has, not the one nobody can use", () =>
 
   // The complaint this fixes: one loopback link, and nothing you could send
   // to a phone in another room.
-  assert.match(out, /on your network\s+http:\/\/192\.168\.1\.5:4321\/a\/KEY/);
-  assert.match(out, /on the internet\s+https:\/\/nixamp\.example\.com\/a\/KEY/);
+  assert.match(out, /on your network\s+http:\/\/192\.168\.1\.5:4321\/admin\/KEY/);
+  assert.match(out, /on the internet\s+https:\/\/nixamp\.example\.com\/admin\/KEY/);
   assert.match(out, /source\s+\/home\/ubuntu\/Music/);
 
   // "did you open the firewall port?" -- it did not, and it says so with the
@@ -405,7 +405,7 @@ test("a state file from an older nixamp still prints something", () => {
   }).join("\n");
   assert.match(out, /here\s+http:\/\/127\.0\.0\.1:4321/);
   // No key means no /v/ suffix, because there is nothing to put after it.
-  assert.doesNotMatch(out, /\/a\//);
+  assert.doesNotMatch(out, /\/admin\//);
 });
 
 test("an address looked up outside is an address, or it is nothing", async () => {
@@ -445,7 +445,7 @@ test("a guessed public address is printed as the claim it is", () => {
     guessedPublic: true,
   }).join("\n");
 
-  assert.match(out, /on the internet\s+http:\/\/67\.205\.189\.229:4321\/a\/KEY/);
+  assert.match(out, /on the internet\s+http:\/\/67\.205\.189\.229:4321\/admin\/KEY/);
   // The honest part: knowing the router's address says nothing about whether
   // anything reaches this port.
   assert.match(out, /router, not this port/);
@@ -473,7 +473,7 @@ test("status says where it is and how long it has been there", () => {
     ],
   }, 222_000).join("\n");
 
-  assert.match(out, /on the internet\s+http:\/\/104\.152\.209\.195:4321\/a\/KEY/);
+  assert.match(out, /on the internet\s+http:\/\/104\.152\.209\.195:4321\/admin\/KEY/);
   assert.match(out, /source\s+\/home\/ubuntu\/Downloads\/done/);
   assert.match(out, /up\s+3m 42s/);
 
@@ -856,12 +856,12 @@ test("going live is something an admin does, not something startup asked once", 
         live,
         code: live ? "482917" : "",
         name: "chovy",
-        url: "https://server1.chovy.nixamp.com:4321/v/KEY",
+        url: "https://server1.chovy.nixamp.com:4321/view/KEY",
         possible: true,
       }),
       start: async () => {
         live = true;
-        return { live: true, code: "482917", name: "chovy", url: "https://server1.chovy.nixamp.com:4321/v/KEY" };
+        return { live: true, code: "482917", name: "chovy", url: "https://server1.chovy.nixamp.com:4321/view/KEY" };
       },
       stop: async () => {
         live = false;
@@ -934,7 +934,11 @@ test("a source ffmpeg cannot read is a 502, not the end of the server", async ()
     media: true,
     version: "test",
     // Says there is a picture, so the video path is taken rather than audio.
-    ffprobe: ["echo", '{"streams":[{"codec_type":"video","codec_name":"h264"}]}'],
+    // `sh -c` rather than `echo`: ffprobe's own arguments are appended to
+    // whatever is spawned, and echo would print them after the JSON, so
+    // nothing parsed and the video path was never reached. Here they arrive
+    // as positional parameters the script ignores.
+    ffprobe: ["sh", "-c", 'echo \'{"streams":[{"codec_type":"video","codec_name":"h264"}]}\''],
     // Exits non-zero at once, having written nothing: exactly what ffmpeg did.
     ffmpeg: ["false"],
   });
@@ -984,18 +988,18 @@ test("a link cannot claim to be one thing and carry the other", async () => {
 
   try {
     // Each key at its own door.
-    assert.equal((await open("/a/control-key")).status, 302);
-    assert.equal((await open("/v/listen-key")).status, 302);
+    assert.equal((await open("/admin/control-key")).status, 302);
+    assert.equal((await open("/view/listen-key")).status, 302);
 
     // And at the other one, refused -- the view link may not carry the
     // controls, and the admin link is not what a viewer was given.
-    assert.equal((await open("/v/control-key")).status, 404);
-    assert.equal((await open("/a/listen-key")).status, 404);
+    assert.equal((await open("/view/control-key")).status, 404);
+    assert.equal((await open("/admin/listen-key")).status, 404);
 
     // Answered exactly as a key that is simply wrong, so the difference
     // between "wrong key" and "wrong door" tells an attacker nothing.
-    assert.equal((await open("/a/nonsense")).status, 404);
-    assert.equal((await open("/v/nonsense")).status, 404);
+    assert.equal((await open("/admin/nonsense")).status, 404);
+    assert.equal((await open("/view/nonsense")).status, 404);
 
     // The shape that said neither is gone. It is an ordinary path now, and an
     // ordinary path without a key is a 401.
@@ -1024,7 +1028,7 @@ test("what is live on a server is one list, readable by anybody it let in", asyn
     live: {
       status: () => ({
         live: true, code: "482917", name: "chovy's box",
-        url: "https://server1.chovy.nixamp.com:4321/v/VIEW", possible: true,
+        url: "https://server1.chovy.nixamp.com:4321/view/VIEW", possible: true,
       }),
       start: async () => ({ live: true, code: "482917", name: "", url: "" }),
       stop: async () => {},
@@ -1052,8 +1056,8 @@ test("what is live on a server is one list, readable by anybody it let in", asyn
     assert.equal(body.server.tracks, 2);
     assert.equal(body.server.live, true);
     assert.equal(body.server.code, "482917");
-    assert.match(body.server.url, /\/v\//);
-    assert.ok(!body.server.url.includes("/a/"), "the list must not hand out the controls");
+    assert.match(body.server.url, /\/view\//);
+    assert.ok(!body.server.url.includes("/admin/"), "the list must not hand out the controls");
 
     // And whoever is publishing into it.
     assert.equal(body.channels.length, 1);
@@ -1064,6 +1068,53 @@ test("what is live on a server is one list, readable by anybody it let in", asyn
     // Nothing here says how to change anything, which is why it is readable by
     // somebody holding the viewing link rather than only by an administrator.
     assert.equal(JSON.stringify(body).includes("rtmp://"), false, "no publish address leaks to a viewer");
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});
+
+test("a track that turns out to have a picture stops claiming to be a song", async () => {
+  // Whether a track is a film is worked out when it is added, and for an
+  // address with no extension that means asking ffprobe. A track added before
+  // that could be asked -- by an older nixamp, or on a machine that could not
+  // find ffprobe -- kept the wrong answer for ever, so every remote went on
+  // putting a television channel into an audio element and the only cure was
+  // noticing and adding it again. Streaming it is when the truth is certain.
+  const engine = new PlayerEngine(
+    // No extension, so nothing about the name says either way -- an IPTV
+    // channel, which is exactly the case this is about.
+    [{ path: "http://x.test/live/932", title: "932", artist: "", album: "", duration: 0 }],
+    "http://x.test/live/",
+    { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+  );
+  const server = createServer(engine, {
+    web: null,
+    media: true,
+    version: "test",
+    // Says there is a picture, which is what the real ffprobe says about it.
+    // `sh -c` rather than `echo`: ffprobe's own arguments are appended to
+    // whatever is spawned, and echo would print them after the JSON, so
+    // nothing parsed and the video path was never reached. Here they arrive
+    // as positional parameters the script ignores.
+    ffprobe: ["sh", "-c", 'echo \'{"streams":[{"codec_type":"video","codec_name":"h264"}]}\''],
+    ffmpeg: ["true"],
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    // As the playlist starts: a film, described as a song.
+    const before = (await (await fetch(`${base}/api/state`)).json()) as { tracks: { video?: boolean }[] };
+    assert.equal(before.tracks[0]?.video, undefined);
+
+    // Somebody plays it. The server has to look inside to serve it, and that
+    // is the moment it learns what it is.
+    await (await fetch(`${base}/api/media/0`)).arrayBuffer();
+
+    const after = (await (await fetch(`${base}/api/state`)).json()) as { tracks: { video?: boolean }[] };
+    assert.equal(after.tracks[0]?.video, true, "the playlist did not learn from streaming it");
   } finally {
     await new Promise<void>((done) => server.close(() => done()));
     engine.stop();

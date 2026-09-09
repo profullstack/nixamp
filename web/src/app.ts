@@ -658,7 +658,7 @@ export function start(): void {
     event.preventDefault();
     const typed = dom.remoteUrl.value;
     // What people paste is a share link: an address with a key on the end of
-    // it. Taken whole it is not an address -- there is no /a/KEY/api/health,
+    // it. Taken whole it is not an address -- there is no /admin/KEY/api/health,
     // and asking for one gets a 404 that reads as "no nixamp answered there",
     // which is how connecting to your own server failed while the server was
     // healthy the entire time. The directory's Listen button hands this the
@@ -1227,7 +1227,7 @@ export function start(): void {
         open.textContent = "Open";
         open.addEventListener("click", () => {
           // The key kept against your account is the one that administers.
-          dom.remoteUrl.value = entry.key ? `${entry.url}/a/${entry.key}` : entry.url;
+          dom.remoteUrl.value = entry.key ? `${entry.url}/admin/${entry.key}` : entry.url;
           dom.remoteForm.requestSubmit();
         });
 
@@ -1910,9 +1910,12 @@ export function start(): void {
     // there and the one the directory listing points at.
     rows.push(onAirRow({
       title: air.server.name,
+      // Deliberately not the server's own playing/stopped: that is about the
+      // speakers attached to that machine, and it reads as "this stream is
+      // stopped" to somebody who is watching it perfectly happily from here.
       detail: [
-        air.server.nowPlaying || `${air.server.tracks} tracks`,
-        air.server.playing ? "playing" : "stopped",
+        air.server.nowPlaying || "nothing loaded",
+        `${air.server.tracks} track${air.server.tracks === 1 ? "" : "s"}`,
         air.server.live && air.server.code ? `☎ ${air.server.code}` : "not listed",
       ].join(" · "),
       onPlay: () => { void playAt(at()); },

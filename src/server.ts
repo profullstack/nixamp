@@ -438,6 +438,16 @@ export interface Engine {
   /** The library, arriving after the server was already listening. */
   fill(tracks: Track[], root: string): void;
   /**
+   * This track turned out to have a picture after all.
+   *
+   * Whether a track is a film is worked out when it is added, and for an
+   * address with no extension that means asking ffprobe. A track added before
+   * that was asked -- or by an older nixamp -- keeps the wrong answer forever,
+   * and every remote goes on putting a television channel into an audio
+   * element. Streaming it is the moment the truth is known for certain.
+   */
+  sawPicture(index: number): void;
+  /**
    * Play something as well as everything here.
    *
    * What somebody means by putting a folder in a box: the album shows up at
@@ -760,6 +770,15 @@ export class PlayerEngine implements Engine {
     return removed;
   }
 
+  sawPicture(index: number): void {
+    const track = this.tracks[index];
+    if (!track || track.picture === true) return;
+    this.tracks = this.tracks.map((one, at) => (at === index ? { ...one, picture: true } : one));
+    // The list changed in a way a client acts on -- which element it plays the
+    // track in -- so it has to go out rather than wait for the next change.
+    this.push(true);
+  }
+
   groups(): string[] {
     const seen: string[] = [];
     for (const track of this.tracks) {
@@ -836,6 +855,7 @@ export class EmptyEngine implements Engine {
   }
   replace(): void {}
   fill(): void {}
+  sawPicture(): void {}
   add(): number {
     return 0;
   }
@@ -2475,6 +2495,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         // the picture, and whether there is a picture to keep at all.
         const codecs = await codecsOf({ ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, file);
         if (codecs.video !== "") {
+          // Told back to the playlist, so an entry that was added before this
+          // could be asked stops claiming to be a song. Without it a track
+          // added by an older nixamp goes to an audio element for ever, and
+          // the only cure is noticing and adding it again.
+          engine.sawPicture(index);
           pipeFfmpeg(request, response, file, options.ffmpeg ?? ["ffmpeg"], videoArgs(codecs, capKbps), "video/mp4");
           return;
         }
