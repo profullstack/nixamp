@@ -2611,7 +2611,13 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       watch(request, response, "stream", current.tracks?.[current.index]?.title ?? "live");
-      liveAudio(request, response, engine, options.ffmpeg ?? ["ffmpeg"]);
+      await liveAudio(
+        request,
+        response,
+        engine,
+        options.ffmpeg ?? ["ffmpeg"],
+        options.ffprobe ?? ["ffprobe"],
+      );
       return;
     }
 
@@ -2690,13 +2696,39 @@ const LIVE_IDLE_MS = 2000;
  * seconds and then sit waiting for the player to catch up, so the thing that
  * decides what plays next would be minutes behind what the listener hears.
  */
-function liveAudio(
+/**
+ * The server's own output, as one address that keeps playing.
+ *
+ * This is the watch party: everybody pointed at it hears and sees whatever the
+ * server is playing, and somebody joining halfway through joins halfway
+ * through rather than starting the film again on their own.
+ *
+ * A film comes with its picture. It used to be `-vn` and MP3 whatever it was,
+ * so inviting people to watch a film got them its soundtrack -- which is not
+ * an invitation anybody wants. The container is decided when the connection
+ * opens, because a response has one content type and MP4 and MP3 cannot be
+ * spliced; going from a film to a song ends the stream, and a client that
+ * wants to keep listening asks again and gets the right one.
+ */
+async function liveAudio(
   request: IncomingMessage,
   response: ServerResponse,
   engine: Engine,
   ffmpeg: string[],
-): void {
+  ffprobe: string[],
+): Promise<void> {
   const [command, ...prefix] = ffmpeg as [string, ...string[]];
+
+  /** Whether this track is something to watch rather than only to hear. */
+  const looksLikeVideo = async (source: string): Promise<boolean> => {
+    if (hasPicture(source)) return true;
+    if (!nameSaysNothing(source)) return false;
+    const codecs = await codecsOf({ ffmpeg: [], ffprobe, play: null }, source);
+    return codecs.video !== "";
+  };
+
+  const first = engine.trackPath(engine.snapshot().index);
+  const asVideo = first === undefined ? false : await looksLikeVideo(first);
   let child: ReturnType<typeof spawn> | null = null;
   let waiting: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
@@ -2710,7 +2742,7 @@ function liveAudio(
     started = true;
     response.writeHead(200, {
       ...CORS,
-      "content-type": "audio/mpeg",
+      "content-type": asVideo ? "video/mp4" : "audio/mpeg",
       "cache-control": "no-store",
       "transfer-encoding": "chunked",
     });
@@ -2749,6 +2781,13 @@ function liveAudio(
     }
 
     playing = snapshot.index;
+    // Joined where the server is, not where the track begins. Somebody
+    // arriving forty minutes into a film should arrive forty minutes in;
+    // starting it again for them is not a watch party, it is two people
+    // watching the same film separately.
+    //
+    // Before -i, so ffmpeg seeks rather than decoding its way there.
+    const from = Math.max(0, Math.floor(snapshot.position));
     const spawned = spawn(
       command,
       [
@@ -2756,11 +2795,16 @@ function liveAudio(
         "-hide_banner",
         "-loglevel", "error",
         ...(isRemote(source) ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] : []),
+        // A live source has no beginning to seek from.
+        ...(from > 1 && !isRemote(source) ? ["-ss", String(from)] : []),
         "-re",
         "-i", source,
-        "-vn",
-        "-f", "mp3",
-        "-b:a", "192k",
+        ...(asVideo
+          // Copied where it can be, because a room full of viewers is a room
+          // full of encoders otherwise.
+          ? ["-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-ac", "2",
+             "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof"]
+          : ["-vn", "-f", "mp3", "-b:a", "192k"]),
         "-",
       ],
       { stdio: ["ignore", "pipe", "pipe"] },
@@ -2789,7 +2833,21 @@ function liveAudio(
   // A track change that lands while we are between songs is the signal to go
   // now rather than wait out the poll.
   const unsubscribe = engine.subscribe(() => {
-    if (child === null && !closed && engine.snapshot().index !== playing) next();
+    if (closed || child !== null) return;
+    if (engine.snapshot().index === playing) return;
+    // The kind changed under us -- a film after a song, or the other way --
+    // and one response cannot carry both. Ending it is how the client is told
+    // to ask again, which it does.
+    const source = engine.trackPath(engine.snapshot().index);
+    if (source !== undefined) {
+      void looksLikeVideo(source).then((wants) => {
+        if (closed) return;
+        if (wants !== asVideo) stop();
+        else next();
+      });
+      return;
+    }
+    next();
   });
 
   response.on("close", stop);

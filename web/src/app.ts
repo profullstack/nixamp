@@ -2074,7 +2074,12 @@ export function start(): void {
         `${air.server.tracks} track${air.server.tracks === 1 ? "" : "s"}`,
         air.server.live && air.server.code ? `☎ ${air.server.code}` : "not listed",
       ].join(" · "),
-      onPlay: () => { void playAt(at()); },
+      // Joining, not starting your own copy. Everybody pointed at this sees
+      // whatever the server is playing, from where it has got to -- which is
+      // the difference between watching a film together and two people
+      // watching the same film separately.
+      playLabel: "Join live",
+      onPlay: () => { void joinLive(air.server.nowPlaying); },
       link: air.server.live ? air.server.url : "",
     }));
 
@@ -2113,8 +2118,33 @@ export function start(): void {
     dom.onairList.replaceChildren(...rows);
   }
 
+  /**
+   * Watch what the server is playing, from where it has got to.
+   *
+   * One address that keeps playing: the track changes under it when the
+   * server moves on, so a room stays together instead of drifting apart.
+   */
+  async function joinLive(title: string): Promise<void> {
+    // Ours to follow, not the server's cursor: joining is a thing this device
+    // is doing, and it should not look like the server moved.
+    watching = -1;
+    await player.load({
+      title: title || "Live", artist: "", album: "", duration: 0,
+      url: remote.url("/api/live"),
+      // The server decides what it sends; a film comes with its picture, and
+      // the element that can show one can also play a song.
+      video: true,
+      objectUrl: false,
+    }, true);
+    showVideo(true);
+    note = "Watching what this server is playing. Everyone here sees the same thing.";
+    draw();
+  }
+
   /** One row of what is live: what it is, and the two things you can do. */
-  function onAirRow(row: { title: string; detail: string; onPlay: () => void; link: string }): HTMLElement {
+  function onAirRow(row: {
+    title: string; detail: string; onPlay: () => void; link: string; playLabel?: string;
+  }): HTMLElement {
     const item = document.createElement("li");
     const label = document.createElement("span");
     label.className = "recent-label";
@@ -2129,7 +2159,7 @@ export function start(): void {
     const play = document.createElement("button");
     play.type = "button";
     play.className = "button";
-    play.textContent = "Play";
+    play.textContent = row.playLabel ?? "Play";
     play.addEventListener("click", row.onPlay);
     item.append(label, play);
 
