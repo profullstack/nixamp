@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import {
-  contentType, createServer, DEFAULT_PORT, EmptyEngine, folderOf, PlayerEngine,
+  contentType, createServer, DEFAULT_PORT, EmptyEngine, folderOf, liveOnes, PlayerEngine,
   parseRange, parseServeArgs, safeJoin, toRemoteTracks,
   type Engine,
 } from "../src/server.ts";
@@ -1281,4 +1281,67 @@ test("a re-stream is listed as live, not buried among the files", async () => {
     await new Promise<void>((done) => server.close(() => done()));
     engine.stop();
   }
+});
+
+test("what is live is where it came from, not which button loaded it", () => {
+  // The bug this fixes, in one line: re-streaming a channel as a replacement
+  // set no group, the live list was built from groups, and so the channel
+  // appeared in no list anywhere. "I re-stream MLB Network and I never saw it
+  // linked anywhere."
+  const engine = new PlayerEngine(
+    ["/m/a.mp3"].map((path) => ({ path, title: path, artist: "", album: "", duration: 0 })),
+    "/m",
+    { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+  );
+  engine.replace(
+    [{ path: "http://x.test/live/932", title: "932", artist: "", album: "", duration: 0 }],
+    "http://x.test/live/932",
+  );
+  const live = liveOnes(engine);
+  assert.equal(live.length, 1);
+  assert.equal(live[0]?.name, "932");
+  assert.equal(live[0]?.at, 0);
+  engine.stop();
+});
+
+test("two channels are two channels, each by the name it was given", () => {
+  // Two at once, which is the whole point of a server that carries streams.
+  const engine = new PlayerEngine(
+    ["/m/a.mp3", "/m/b.mp3"].map((path) => ({ path, title: path, artist: "", album: "", duration: 0 })),
+    "/m",
+    { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+  );
+  engine.add(
+    [{ path: "http://x.test/live/932", title: "MLB Network", artist: "", album: "", duration: 0 }],
+    "http://x.test/live/932", "MLB Network",
+  );
+  engine.add(
+    [{ path: "http://x.test/live/301", title: "CNN", artist: "", album: "", duration: 0 }],
+    "http://x.test/live/301", "CNN",
+  );
+
+  // Named for what they are, not for what their addresses end in -- neither
+  // "932" nor "301" tells anybody anything, and the streams themselves say
+  // "Service01".
+  assert.deepEqual(liveOnes(engine).map((one) => one.name), ["MLB Network", "CNN"]);
+  // And each one still says where to start, so both can be played.
+  assert.deepEqual(liveOnes(engine).map((one) => one.at), [2, 3]);
+
+  // The files stay files: the library is not polluted by what is on the air.
+  const files = (engine.snapshot().tracks ?? []).filter((t) => t.remote !== true);
+  assert.equal(files.length, 2);
+  engine.stop();
+});
+
+test("a whole re-streamed folder is one thing on the air, not twenty", () => {
+  // Somebody looking at what is on wants the album, not every track in it.
+  const engine = new PlayerEngine([], "/m", { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null });
+  engine.add(
+    ["1.mp3", "2.mp3", "3.mp3"].map((name) => ({
+      path: `http://x.test/album/${name}`, title: name, artist: "", album: "", duration: 0,
+    })),
+    "http://x.test/album", "Somebody's Album",
+  );
+  assert.deepEqual(liveOnes(engine), [{ name: "Somebody's Album", at: 0, tracks: 3 }]);
+  engine.stop();
 });
