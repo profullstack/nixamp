@@ -38,7 +38,7 @@ export const DEFAULT_PAYWALL: PaywallConfig = {
 };
 
 /** Only the audio is behind the gate. */
-export const GATED = ["/api/stream/", "/api/media/"];
+export const GATED = ["/api/stream/", "/api/media/", "/api/live"];
 
 export function isGated(path: string): boolean {
   return GATED.some((prefix) => path.startsWith(prefix));

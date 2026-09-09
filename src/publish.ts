@@ -13,6 +13,14 @@ export interface PublishTarget {
   name: string;
   /** The listen link: what a stranger opens. Never the control key. */
   url: string;
+  /**
+   * The same stream as bytes, for a listener that cannot hold a cookie.
+   *
+   * The phone line plays this address into a call. The listen link cannot be
+   * played: it is a redirect that sets a cookie, and Telnyx fetching it once
+   * gets a 401 in JSON, which is a caller hearing nothing.
+   */
+  audio?: string;
   tracks: number;
   nowPlaying: () => string;
   /**
@@ -83,6 +91,7 @@ export class Publisher {
           ...(this.id ? { id: this.id } : {}),
           name: this.target.name,
           url: this.target.url,
+          ...(this.target.audio ? { audio: this.target.audio } : {}),
           tracks: this.target.tracks,
           nowPlaying: this.target.nowPlaying(),
         }),

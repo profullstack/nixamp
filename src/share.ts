@@ -127,6 +127,19 @@ export function shareLink(base: string, key: string | null): string {
 }
 
 /**
+ * The same stream, as bytes rather than as a page.
+ *
+ * A share link is for a browser: it answers 302, leaves a cookie behind and
+ * redirects to the player. Anything that cannot hold a cookie -- the phone
+ * line, curl, ffplay -- gets a 401 from it and no audio. This carries the key
+ * in the query instead, which keyFrom() accepts, so a single anonymous GET is
+ * enough to start hearing sound.
+ */
+export function audioLink(base: string, key: string | null): string {
+  return key === null ? `${base}/api/live` : `${base}/api/live?${KEY_QUERY}=${encodeURIComponent(key)}`;
+}
+
+/**
  * What a key is allowed to do. An unknown key is allowed nothing, which is the
  * same answer as no key at all.
  */

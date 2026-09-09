@@ -12,6 +12,8 @@
 #   sh -s -- --desktop      install it even with no desktop session detected
 #   sh -s -- --version X    install a specific release
 #   sh -s -- --prefix DIR   install root (default: ~/.local)
+#   sh -s -- --port N       the port to open in the firewall (default: 4321)
+#   sh -s -- --no-firewall  leave the firewall alone
 set -eu
 
 REPO="profullstack/nixamp"
@@ -19,11 +21,17 @@ SITE="${NIXAMP_SITE:-https://nixamp.com}"
 PREFIX="${NIXAMP_PREFIX:-$HOME/.local}"
 VERSION="${NIXAMP_VERSION:-}"
 WANT_DESKTOP=auto
+# The port `nixamp serve` listens on unless told otherwise, which is the one
+# worth opening ahead of time.
+PORT="${NIXAMP_PORT:-4321}"
+WANT_FIREWALL=auto
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --cli-only) WANT_DESKTOP=no ;;
     --desktop)  WANT_DESKTOP=yes ;;
+    --no-firewall) WANT_FIREWALL=no ;;
+    --port)     PORT="${2:?--port needs a value}"; shift ;;
     --version)  VERSION="${2:?--version needs a value}"; shift ;;
     --prefix)   PREFIX="${2:?--prefix needs a value}"; shift ;;
     -h|--help)  sed -n '2,15p' "$0" 2>/dev/null || echo "See $SITE"; exit 0 ;;
@@ -265,6 +273,69 @@ DESKTOP_FLAG=false
 } > "$SHARE/uninstall.sh"
 chmod 0755 "$SHARE/uninstall.sh"
 
+# --- firewall -----------------------------------------------------------------
+#
+# A nixamp that lists itself hands out an address on this machine, and the
+# phone line fetches the audio from that address to play into a call. A
+# firewall dropping the port turns every one of those into a listing nobody
+# can open and a caller who hears nothing, and the failure says so nowhere:
+# the stream is up, the listing is up, and the port is shut.
+#
+# `nixamp serve --open-port` opens it for one run and closes it after. This is
+# the other half: a machine that is going to publish wants the port open for
+# longer than a single process, and being told to run a command by hand after
+# an installer has finished is a setup step the installer should have done.
+#
+# Root is needed and this installer otherwise needs none, so it is asked for
+# non-interactively and never waited on: a `curl | sh` has no terminal to type
+# a password into. When that will not work the exact command is printed rather
+# than the port being left quietly closed.
+FIREWALL=""
+if [ "$WANT_FIREWALL" != no ] && [ "$OS" = linux ]; then
+  if [ -r /etc/ufw/ufw.conf ] && grep -qi '^ENABLED=yes' /etc/ufw/ufw.conf; then
+    FIREWALL=ufw
+  elif command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
+    FIREWALL=firewalld
+  fi
+fi
+
+# Run one privileged command, however this machine gets to root.
+as_root() {
+  if [ "$(id -u)" = 0 ]; then
+    "$@"
+  else
+    sudo -n "$@"
+  fi
+}
+
+# What a person would type, for when we cannot.
+firewall_command() {
+  if [ "$FIREWALL" = ufw ]; then
+    echo "sudo ufw allow $PORT/tcp"
+  else
+    echo "sudo firewall-cmd --permanent --add-port=$PORT/tcp && sudo firewall-cmd --reload"
+  fi
+}
+
+open_firewall() {
+  if [ "$FIREWALL" = ufw ]; then
+    as_root ufw allow "$PORT/tcp"
+  else
+    as_root firewall-cmd --permanent "--add-port=$PORT/tcp" && as_root firewall-cmd --reload
+  fi
+}
+
+FW_RESULT=""
+if [ -n "$FIREWALL" ]; then
+  if [ "$(id -u)" != 0 ] && ! { command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; }; then
+    FW_RESULT=manual
+  elif open_firewall >/dev/null 2>&1; then
+    FW_RESULT=opened
+  else
+    FW_RESULT=manual
+  fi
+fi
+
 # --- report -------------------------------------------------------------------
 
 say ""
@@ -278,6 +349,17 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   say "  ffmpeg was not found, and nixamp decodes with ffmpeg."
   say "  Debian/Ubuntu:  sudo apt install ffmpeg"
   say "  macOS:          brew install ffmpeg"
+fi
+
+if [ "$FW_RESULT" = opened ]; then
+  say ""
+  say "  Opened $PORT/tcp in $FIREWALL, so a stream you publish is reachable."
+  say "  Undo with:  $(firewall_command | sed 's/allow/delete allow/; s/--add-port/--remove-port/')"
+elif [ "$FW_RESULT" = manual ]; then
+  say ""
+  say "  $FIREWALL is running and $PORT/tcp is closed, so a published stream"
+  say "  would be listed at an address nobody outside this machine can open."
+  say "  Open it with:  $(firewall_command)"
 fi
 
 case ":$PATH:" in

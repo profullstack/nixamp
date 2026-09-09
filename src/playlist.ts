@@ -15,6 +15,11 @@ import {
 export const AUDIO_EXTENSIONS = new Set([
   ".mp3", ".flac", ".ogg", ".oga", ".opus", ".m4a", ".aac",
   ".wav", ".wma", ".aiff", ".aif", ".alac", ".mp4", ".webm",
+  // Video containers, for their audio. Everything on the way out of here is
+  // already decoded by ffmpeg and re-encoded to MP3 with -vn, so a film is a
+  // long track with a picture nobody asked for -- and a library of them was
+  // invisible to nixamp for want of the extension being on this list.
+  ".mkv", ".avi", ".mov", ".m4v", ".mpg", ".mpeg", ".wmv", ".flv",
 ]);
 
 export function isAudio(path: string): boolean {

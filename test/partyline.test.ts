@@ -196,7 +196,8 @@ test("phone listeners on a stream are counted, so the directory can say how many
   const { fetch } = recorder();
   const live = {
     name: "Chovy",
-    url: "https://chovy.example/listen.mp3",
+    url: "https://chovy.example/s/iqGqDaKSSLXwXnST3bwgkg",
+    audio: "https://chovy.example/api/live?k=iqGqDaKSSLXwXnST3bwgkg",
     nowPlaying: "Top Gun: Maverick",
     startedAt: NINE_TWENTY_SEVEN,
   };
@@ -347,7 +348,7 @@ const NINE_TWENTY_SEVEN = 1_788_928_020_000;
 
 /** A directory of exactly the streams a test describes. */
 function streams(
-  live: Record<string, { name: string; url: string; nowPlaying: string; startedAt: number }> = {},
+  live: Record<string, { name: string; url: string; audio: string; nowPlaying: string; startedAt: number }> = {},
   ended: Record<string, { name: string; nowPlaying: string; startedAt: number; endedAt: number }> = {},
 ) {
   return {
@@ -377,7 +378,12 @@ test("a code that is a live stream plays the stream", async () => {
     streams: streams({
       "482917": {
         name: "Chovy",
-        url: "https://chovy.example/listen.mp3",
+        // A real listing, which is the point. The listen link is a share link,
+        // and playing that into a call is what this test used to let through:
+        // the old fixture called it listen.mp3, so asserting the played URL
+        // equalled it proved nothing about what a caller would hear.
+        url: "https://chovy.example/s/iqGqDaKSSLXwXnST3bwgkg",
+        audio: "https://chovy.example/api/live?k=iqGqDaKSSLXwXnST3bwgkg",
         nowPlaying: "Top Gun: Maverick",
         startedAt: NINE_TWENTY_SEVEN,
       },
@@ -391,8 +397,40 @@ test("a code that is a live stream plays the stream", async () => {
   assert.match(String(spoke?.body["payload"]), /started at 9:27 PM Pacific/);
 
   const play = calls.find((c) => c.path === "/calls/leg-1/actions/playback_start");
-  assert.equal(play?.body["audio_url"], "https://chovy.example/listen.mp3");
+  // The audio address, never the share link. Telnyx fetches this once with no
+  // cookie jar; handed the /s/ link it gets a 401 and the caller hears silence.
+  assert.equal(play?.body["audio_url"], "https://chovy.example/api/live?k=iqGqDaKSSLXwXnST3bwgkg");
+  assert.ok(!String(play?.body["audio_url"]).includes("/s/"));
   // A stream is not a conference; nothing should have been opened.
+  assert.equal(calls.filter((c) => c.path === "/conferences").length, 0);
+});
+
+test("a live stream that announced no audio address is said so, not played", async () => {
+  // An older publisher, which only ever sent the share link. Playing that is
+  // what "here it is" followed by silence sounded like, and silence somebody
+  // is paying for by the minute is worse than being told the truth.
+  const { calls, fetch } = recorder();
+  const party = line(fetch, "", {
+    streams: streams({
+      "482917": {
+        name: "Chovy",
+        url: "https://chovy.example/s/iqGqDaKSSLXwXnST3bwgkg",
+        audio: "",
+        nowPlaying: "Top Gun: Maverick",
+        startedAt: NINE_TWENTY_SEVEN,
+      },
+    }),
+  });
+
+  await party.handle(keyed("leg-1", "482917"));
+
+  assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/playback_start").length, 0);
+  const spoke = calls.find((c) => c.path === "/calls/leg-1/actions/speak");
+  assert.match(String(spoke?.body["payload"]), /cannot be played over the phone/);
+  assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/hangup").length, 1);
+  // Nobody is hearing it, so the directory must not say somebody is.
+  assert.equal(party.listenersOn("482917"), 0);
+  // And it is a stream, so it must not fall through into a stranger's room.
   assert.equal(calls.filter((c) => c.path === "/conferences").length, 0);
 });
 
