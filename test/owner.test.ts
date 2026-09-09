@@ -131,4 +131,13 @@ test("the paths that need an administrator, and the ones that do not", () => {
   assert.equal(needsAdmin("/"), false);
   // A path that merely starts with the same letters is not the same path.
   assert.equal(needsAdmin("/api/sources-of-truth"), false);
+
+  // Listing this machine in a public directory is administering it.
+  assert.equal(needsAdmin("/api/live/start"), true);
+  assert.equal(needsAdmin("/api/live/stop"), true);
+  assert.equal(needsAdmin("/api/live/state"), true);
+  // But /api/live is the public listen address -- the one the phone line is
+  // handed -- so gating it by prefix would shut the front door to lock the
+  // office.
+  assert.equal(needsAdmin("/api/live"), false);
 });

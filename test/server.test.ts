@@ -840,3 +840,78 @@ test("an https link to a bare IP is offered last, and said to be uncertifiable",
   const plain = reachableAddresses("0.0.0.0", 4321, "", "http");
   assert.ok(plain.every((entry) => !/no certificate/.test(entry.label)));
 });
+
+test("going live is something an admin does, not something startup asked once", async () => {
+  // A server started with --no-publish had no listing, so no phone code and
+  // nothing to hand anybody -- and no way to change its mind short of stopping
+  // and starting it. That is why sharing felt like it did not exist.
+  let live = false;
+  const engine = new PlayerEngine([], "/m", { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null });
+  const server = createServer(engine, {
+    web: null,
+    media: false,
+    version: "test",
+    live: {
+      status: () => ({
+        live,
+        code: live ? "482917" : "",
+        name: "chovy",
+        url: "https://server1.chovy.nixamp.com:4321/s/KEY",
+        possible: true,
+      }),
+      start: async () => {
+        live = true;
+        return { live: true, code: "482917", name: "chovy", url: "https://server1.chovy.nixamp.com:4321/s/KEY" };
+      },
+      stop: async () => {
+        live = false;
+      },
+    },
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    const before = (await (await fetch(`${base}/api/live/state`)).json()) as { live: boolean; code: string };
+    assert.equal(before.live, false);
+    assert.equal(before.code, "");
+
+    const started = (await (await fetch(`${base}/api/live/start`, { method: "POST" })).json()) as {
+      live: boolean; code: string;
+    };
+    assert.equal(started.live, true);
+    // The code is the point: it is what somebody keys on the phone.
+    assert.equal(started.code, "482917");
+    assert.equal(((await (await fetch(`${base}/api/live/state`)).json()) as { live: boolean }).live, true);
+
+    await fetch(`${base}/api/live/stop`, { method: "POST" });
+    assert.equal(((await (await fetch(`${base}/api/live/state`)).json()) as { live: boolean }).live, false);
+
+    // GET is not how you change something.
+    assert.equal((await fetch(`${base}/api/live/start`)).status, 405);
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});
+
+test("a server that cannot be reached from outside says so rather than offering a button", async () => {
+  const engine = new PlayerEngine([], "/m", { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null });
+  // No `live` at all: an older server, or one built without it.
+  const server = createServer(engine, { web: null, media: false, version: "test" });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  try {
+    const state = (await (await fetch(`http://127.0.0.1:${port}/api/live/state`)).json()) as {
+      live: boolean; possible: boolean;
+    };
+    assert.equal(state.live, false);
+    assert.equal(state.possible, false);
+    // And asking it to go live is refused with a reason, not a crash.
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/live/start`, { method: "POST" })).status, 409);
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});
