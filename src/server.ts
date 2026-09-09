@@ -61,7 +61,7 @@ import {
   paywallFromEnv,
 } from "./paywall.ts";
 import { isRemote, playsInBrowser, sourceLabel } from "./sources.ts";
-import { codecsOf, videoArgs } from "./audio.ts";
+import { codecsOf, probeAsync, videoArgs } from "./audio.ts";
 import {
   allowedForListening,
   elevate,
@@ -2232,6 +2232,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         // Where to point OBS. Printed at startup since RTMP was added, which
         // is no use at all to somebody looking at the admin panel a day later.
         publish: options.publishUrls?.() ?? [],
+        // And which of those slots somebody is already on, because the
+        // question you have in front of three addresses is which one is free.
+        channels: options.channels?.list().map(({ id, name, via }) => ({ id, name, via })) ?? [],
       });
       return;
     }
@@ -3233,7 +3236,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       }
       console.log(`nixamp serve — ${found.length} tracks under ${root}`);
       if (isRemote(root)) return;
-      return loadTagged(tools, root)
+      // Handed the files we already found. Tagging used to walk the whole
+      // library a second time to discover the same paths, and that second walk
+      // was the one that ran with the port already open.
+      return loadTagged(tools, root, probeAsync, found.map((track) => track.path))
         .then((tagged) => engine.retag(tagged, root))
         .catch(() => {
           // Filenames are a working player. A failure here is worth nothing

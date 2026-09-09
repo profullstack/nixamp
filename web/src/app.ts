@@ -81,6 +81,7 @@ export function start(): void {
     adminPanel: need<HTMLElement>("admin-panel"),
     adminNote: need<HTMLParagraphElement>("admin-note"),
     adminConnections: need<HTMLTableElement>("admin-connections"),
+    publishPanel: need<HTMLElement>("publish-panel"),
     publishNote: need<HTMLParagraphElement>("publish-note"),
     publishList: need<HTMLUListElement>("publish-list"),
     adminRestream: need<HTMLFormElement>("admin-restream"),
@@ -786,6 +787,37 @@ export function start(): void {
   // from a token it can see.
   let adminTimer: ReturnType<typeof setInterval> | null = null;
 
+  /**
+   * Where somebody is, in words rather than in network jargon.
+   *
+   * "cgnat" said nothing to anybody and, worse, read as an accusation: the
+   * 100.64.0.0/10 range belongs to carrier-grade NAT, which is what a phone on
+   * a mobile network comes from -- and also what Tailscale uses. Saying
+   * "tailscale" would be a guess, and it was frightening when wrong.
+   */
+  const networkName = (network: string): string =>
+    network === "cgnat"
+      ? "mobile or tailscale"
+      : network === "private"
+        ? "your network"
+        : network === "local"
+          ? "this machine"
+          : network === "public"
+            ? "the internet"
+            : network;
+
+  /** What a connection is doing, rather than which route it came down. */
+  const kindName = (kind: string): string =>
+    kind === "events"
+      ? "watching the panel"
+      : kind === "page"
+        ? "opened the page"
+        : kind === "media"
+          ? "playing a track"
+          : kind === "stream"
+            ? "listening live"
+            : kind;
+
   const drawConnections = (rows: {
     address: string;
     network: string;
@@ -809,8 +841,8 @@ export function start(): void {
       if (row.endedAt !== null) tr.className = "ended";
       const cells: [string, string][] = [
         [row.address, ""],
-        [row.network, `network-${row.network}`],
-        [row.kind, ""],
+        [networkName(row.network), `network-${row.network}`],
+        [kindName(row.kind), ""],
         [row.agent, ""],
         [row.track || "—", ""],
         [`${Math.round(row.bytes / 1024)} KiB`, ""],
@@ -837,10 +869,20 @@ export function start(): void {
         connections?: Parameters<typeof drawConnections>[0];
         active?: number;
         publish?: { id: string; url: string }[];
+        channels?: { id: string }[];
       };
-      dom.adminNote.textContent = `${body.active ?? 0} listening now.`;
+      // Said in full, because "0 listening now" over a table with rows in it
+      // reads as a contradiction. Only media and live connections are
+      // listeners; a panel open in a browser is not one, and it is the row
+      // most likely to be there.
+      const rows = body.connections ?? [];
+      const others = rows.filter((row) => row.endedAt === null && row.kind !== "media" && row.kind !== "stream").length;
+      const listening = body.active ?? 0;
+      dom.adminNote.textContent = others === 0
+        ? `${listening} listening now.`
+        : `${listening} listening now, and ${others} with the page open.`;
       drawConnections(body.connections ?? []);
-      drawPublish(body.publish ?? []);
+      drawPublish(body.publish ?? [], (body.channels ?? []).map((one) => one.id));
     } catch {
       dom.adminNote.textContent = "lost touch with the server";
     }
@@ -854,26 +896,28 @@ export function start(): void {
    * takes one connection per process, so each simultaneous publisher gets its
    * own port and its own URL, and the channel it lands on is named beside it.
    */
-  function drawPublish(entries: { id: string; url: string }[]): void {
-    dom.publishNote.hidden = entries.length === 0;
+  function drawPublish(entries: { id: string; url: string }[], busy: string[]): void {
+    // A server started without --rtmp-in cannot be published to at all, so the
+    // panel is not there rather than being there and saying no.
+    dom.publishPanel.hidden = entries.length === 0;
     if (entries.length === 0) {
       dom.publishList.replaceChildren();
-      // Said once rather than left blank: a server that was not started with
-      // --rtmp-in cannot be published to, and the panel should say why.
-      dom.publishNote.hidden = false;
-      dom.publishNote.textContent =
-        "This server takes no RTMP. Start it with --rtmp-in 1935 to publish into it from OBS.";
       return;
     }
-    dom.publishNote.textContent = entries.length === 1
-      ? "Publish into this server from OBS, Larix or ffmpeg:"
-      : `Publish into this server from OBS, Larix or ffmpeg. One URL per stream — ${entries.length} at once:`;
+    const free = entries.length - busy.length;
+    dom.publishNote.textContent =
+      `Point OBS, Larix or ffmpeg at one of these. One publisher per URL — ` +
+      `${entries.length} at once, ${free} free right now.`;
 
     dom.publishList.replaceChildren(...entries.map((entry) => {
+      const inUse = busy.includes(entry.id);
       const item = document.createElement("li");
+      if (inUse) item.className = "in-use";
       const slot = document.createElement("span");
       slot.className = "slot";
-      slot.textContent = entry.id;
+      // Which slot, and whether anybody is on it -- the question you actually
+      // have when you are about to point OBS at one of three addresses.
+      slot.textContent = inUse ? `${entry.id} · live` : entry.id;
       const box = document.createElement("input");
       box.type = "text";
       box.readOnly = true;
