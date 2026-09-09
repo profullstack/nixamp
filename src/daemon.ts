@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { type Firewall, portCommands } from "./share.ts";
 
 export interface DaemonState {
   pid: number;
@@ -21,6 +22,17 @@ export interface DaemonState {
   startedAt: number;
   /** Where its output went, for when it died and you want to know why. */
   log: string;
+  /**
+   * The labelled addresses the server itself worked out, share key not applied.
+   *
+   * Recorded rather than recomputed because only the server knows them: a
+   * daemon bound to every interface has no single host to print, and the
+   * public one may be a tunnel it was told about rather than an interface
+   * anybody here can see. Absent on a state file written by an older nixamp.
+   */
+  urls?: { label: string; url: string }[];
+  /** The firewall standing between this port and the rest of the network. */
+  firewall?: string | null;
 }
 
 /** XDG, with the usual fallback. One daemon per user, which is one too few for nobody. */
@@ -83,6 +95,53 @@ export function daemonUrl(state: DaemonState): string {
 }
 
 /**
+ * What `nixamp daemon start` prints, as lines, so it can be tested without
+ * starting a daemon.
+ *
+ * Every address the server found, not one loopback link: the point of a daemon
+ * is the phone in the other room, and 127.0.0.1 is the single address that
+ * cannot be handed to anybody. The firewall warning comes with it because the
+ * server writes that into a log file nobody reads, not to the person who just
+ * typed the command.
+ */
+export function daemonLines(state: DaemonState): string[] {
+  const link = (url: string): string => (state.key ? `${url}/s/${state.key}` : url);
+  // A state file written by an older nixamp has no list, so host and port
+  // still stand in rather than printing nothing at all.
+  const addresses = state.urls ?? [{ label: "here", url: daemonUrl(state) }];
+  const width = Math.max(...addresses.map((a) => a.label.length), "source".length);
+
+  const lines = [`nixamp daemon running (pid ${state.pid})`];
+  for (const { label, url } of addresses) lines.push(`  ${label.padEnd(width)}  ${link(url)}`);
+  lines.push(`  ${"source".padEnd(width)}  ${state.source}`);
+
+  if (state.firewall) {
+    const { open } = portCommands(state.firewall as Firewall, state.port);
+    lines.push(
+      "",
+      `  ${state.firewall} is running, so nothing else can reach port ${state.port} yet:`,
+      `    sudo ${open.join(" ")}`,
+      "  or `nixamp daemon stop` and start again with --open-port.",
+    );
+  }
+  if (!addresses.some((a) => a.label === "on the internet")) {
+    lines.push(
+      "",
+      "  None of those work from outside this network. If it should:",
+      "    nixamp daemon start ... --public-url https://your-tunnel.example.com",
+    );
+  }
+
+  lines.push(
+    "",
+    "  nixamp attach       the player, in front of it",
+    "  nixamp admin        who is connected",
+    "  nixamp daemon stop  when you are done",
+  );
+  return lines;
+}
+
+/**
  * Start one, detached, and wait until it is actually answering before saying
  * it started. Reporting success and leaving the user to discover a crash in a
  * log file is the thing this is meant to avoid.
@@ -142,11 +201,14 @@ async function waitForAnnounce(
       try {
         const parsed = JSON.parse(line) as { nixamp?: string } & Record<string, unknown>;
         if (parsed["nixamp"] === "listening") {
+          const urls = parsed["urls"];
           return {
             host: String(parsed["host"]),
             port: Number(parsed["port"]),
             key: (parsed["key"] as string | null) ?? null,
             source: String(parsed["source"]),
+            ...(Array.isArray(urls) ? { urls: urls as { label: string; url: string }[] } : {}),
+            ...(typeof parsed["firewall"] === "string" ? { firewall: parsed["firewall"] } : {}),
           };
         }
       } catch {

@@ -224,13 +224,7 @@ async function runDaemon(argv: string[]): Promise<number> {
   if (action === "start") {
     try {
       const state = await d.start(rest, entry);
-      console.log(`nixamp daemon running (pid ${state.pid})`);
-      const url = d.daemonUrl(state);
-      console.log(`  ${state.key ? `${url}/s/${state.key}` : url}`);
-      console.log(`  ${state.source}`);
-      console.log("");
-      console.log("  nixamp admin        who is connected");
-      console.log("  nixamp daemon stop  when you are done");
+      for (const line of d.daemonLines(state)) console.log(line);
       return 0;
     } catch (error) {
       console.error((error as Error).message);
