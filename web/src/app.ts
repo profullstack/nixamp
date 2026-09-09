@@ -76,6 +76,9 @@ export function start(): void {
     recentList: need<HTMLUListElement>("recent-list"),
     followingNote: need<HTMLParagraphElement>("following-note"),
     followingList: need<HTMLUListElement>("following-list"),
+    serversPanel: need<HTMLElement>("servers-panel"),
+    serversNote: need<HTMLParagraphElement>("servers-note"),
+    serversList: need<HTMLUListElement>("servers-list"),
     notifyPanel: need<HTMLElement>("notify-panel"),
     notifyNote: need<HTMLParagraphElement>("notify-note"),
     notifyWeb: need<HTMLInputElement>("notify-web"),
@@ -731,6 +734,76 @@ export function start(): void {
    * asked. Somebody who followed a stream once had no way to see it again, let
    * alone stop it, which is not a thing to ship and call finished.
    */
+  /**
+   * The machines on this account.
+   *
+   * A share link printed in a terminal you have since closed is a server you
+   * have lost, so the list lives against the account and reads the same here,
+   * in the CLI and in the desktop app. Where the key was kept with the entry
+   * the link opens straight into the player; where it was not, the address is
+   * still the thing you needed.
+   */
+  const loadServers = async (): Promise<void> => {
+    dom.serversList.replaceChildren();
+    try {
+      const answer = await fetch("/api/v1/servers");
+      if (!answer.ok) {
+        dom.serversPanel.hidden = true;
+        return;
+      }
+      const body = (await answer.json()) as {
+        servers?: { id: string; name: string; url: string; key: string }[];
+      };
+      const list = body.servers ?? [];
+      dom.serversPanel.hidden = false;
+      dom.serversNote.textContent = list.length === 0
+        ? "No servers yet. `nixamp server add --here` remembers the one you are running."
+        : "The machines on your account. Open one, or forget it.";
+
+      for (const entry of list) {
+        const item = document.createElement("li");
+        const label = document.createElement("span");
+        label.className = "recent-label";
+
+        // textContent, never innerHTML: a name is whatever somebody typed.
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = entry.name;
+        const detail = document.createElement("span");
+        detail.className = "detail";
+        detail.textContent = entry.url;
+        label.append(name, detail);
+
+        const open = document.createElement("a");
+        open.className = "button";
+        open.textContent = "Open";
+        open.href = entry.key ? `${entry.url}/s/${entry.key}` : entry.url;
+        open.rel = "noreferrer";
+
+        const forget = document.createElement("button");
+        forget.type = "button";
+        forget.className = "ghost";
+        forget.textContent = "Forget";
+        forget.addEventListener("click", () => {
+          void (async () => {
+            forget.disabled = true;
+            try {
+              await fetch(`/api/v1/servers/${encodeURIComponent(entry.id)}`, { method: "DELETE" });
+              await loadServers();
+            } catch {
+              forget.disabled = false;
+            }
+          })();
+        });
+
+        item.append(label, open, forget);
+        dom.serversList.append(item);
+      }
+    } catch {
+      dom.serversPanel.hidden = true;
+    }
+  };
+
   const loadFollowing = async (): Promise<void> => {
     dom.followingList.replaceChildren();
     try {
@@ -1021,7 +1094,9 @@ export function start(): void {
     if (signedIn) {
       void loadNotify();
       void loadFollowing();
+      void loadServers();
     } else {
+      dom.serversPanel.hidden = true;
       dom.followingNote.hidden = true;
       dom.followingList.replaceChildren();
       dom.recentNote.hidden = true;

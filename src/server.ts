@@ -28,6 +28,7 @@ import { Ingest, normaliseFormat } from "./ingest.ts";
 import { Channels, cleanId } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
+import { Servers } from "./servers.ts";
 import { DeviceGrants } from "./device.ts";
 import { BAD_KEY_LIMIT, callerOf, Guard, SIGN_IN_LIMIT } from "./guard.ts";
 import {
@@ -685,7 +686,14 @@ const OAUTH_ROUTE = /^\/api\/v1\/([a-z0-9-]+)\/oauth\/(start|callback)$/;
  * the share-key check rather than behind it.
  */
 export function isSignInPath(path: string): boolean {
-  return path.startsWith("/api/v1/auth/") || OAUTH_ROUTE.test(path);
+  return (
+    path.startsWith("/api/v1/auth/") ||
+    // The account's own server list: nixamp.com's API, gated by the session
+    // rather than by a share key it has nothing to do with.
+    path === "/api/v1/servers" ||
+    path.startsWith("/api/v1/servers/") ||
+    OAUTH_ROUTE.test(path)
+  );
 }
 
 function html(response: ServerResponse, code: number, body: string): void {
@@ -762,6 +770,8 @@ export interface HandlerOptions {
   accounts?: Accounts;
   /** Providers to sign in with, and the terminals waiting to be connected. */
   signIn?: SignIn;
+  /** The servers each account runs, on the instance that keeps accounts. */
+  servers?: Servers;
   /** True when this instance is reached over https, for the cookie's Secure. */
   secureCookies?: boolean;
   /** A certificate and key in PEM, when this server is to speak https itself. */
@@ -1237,6 +1247,77 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         }
 
         json(response, 404, { error: "no such endpoint" });
+        return;
+      }
+
+      // --- the servers this account runs ----------------------------------
+      //
+      // Kept against the account rather than the machine, so the list reads the
+      // same from the CLI, the PWA and the desktop app -- which is the whole
+      // point: a share link in a terminal you closed is a server you have lost.
+      if ((path === "/api/v1/servers" || path.startsWith("/api/v1/servers/")) && options.servers) {
+        const servers = options.servers;
+        const who = await accounts.whoIs(tokenFrom(request.headers));
+        if (who === null) {
+          json(response, 401, { error: "not signed in" });
+          return;
+        }
+
+        if (path === "/api/v1/servers" && request.method === "GET") {
+          json(response, 200, { servers: await servers.list(who.id) });
+          return;
+        }
+
+        if (path === "/api/v1/servers" && request.method === "POST") {
+          let body: { name?: unknown; url?: unknown; key?: unknown };
+          try {
+            body = JSON.parse(await readBody(request)) as typeof body;
+          } catch {
+            json(response, 400, { error: "bad JSON" });
+            return;
+          }
+          const made = await servers.add(who, {
+            ...(typeof body.name === "string" ? { name: body.name } : {}),
+            ...(typeof body.url === "string" ? { url: body.url } : {}),
+            ...(typeof body.key === "string" ? { key: body.key } : {}),
+          });
+          if (made === null) {
+            json(response, 422, { error: "that needs an http or https address" });
+            return;
+          }
+          json(response, 201, { server: made });
+          return;
+        }
+
+        const id = path.slice("/api/v1/servers/".length);
+        if (id && request.method === "DELETE") {
+          const gone = await servers.remove(who.id, id);
+          json(response, gone ? 200 : 404, gone ? { ok: true } : { error: "no such server" });
+          return;
+        }
+
+        if (id && (request.method === "PATCH" || request.method === "PUT")) {
+          let body: { name?: unknown; url?: unknown; key?: unknown };
+          try {
+            body = JSON.parse(await readBody(request)) as typeof body;
+          } catch {
+            json(response, 400, { error: "bad JSON" });
+            return;
+          }
+          const changed = await servers.update(who.id, id, {
+            ...(typeof body.name === "string" ? { name: body.name } : {}),
+            ...(typeof body.url === "string" ? { url: body.url } : {}),
+            ...(typeof body.key === "string" ? { key: body.key } : {}),
+          });
+          if (changed === null) {
+            json(response, 404, { error: "no such server, or a bad address" });
+            return;
+          }
+          json(response, 200, { server: changed });
+          return;
+        }
+
+        json(response, 405, { error: "GET, POST, PATCH or DELETE" });
         return;
       }
 
@@ -2517,6 +2598,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
           // Whichever providers this deployment was given both halves of, plus
           // the device grant, which is worth having even with no provider at
           // all: a browser already signed in can approve a terminal.
+          // The same pool the follows and reminders use: three small tables in
+          // one database do not want three sets of connections.
+          ...(pool ? { servers: new Servers(pool) } : {}),
           signIn: new SignIn(
             providersFrom(process.env),
             new DeviceGrants(),
