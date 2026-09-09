@@ -35,14 +35,16 @@ const VOLUME_KEY = "nixamp.volume";
  */
 const LISTEN_HERE_KEY = "nixamp.listenHere";
 /**
- * Whether this tab has already made its noise.
+ * Whether this page has already made its noise.
  *
- * sessionStorage, not localStorage: once per new page in this tab is the
- * behaviour somebody means by "on startup". A sound you like the first time is
- * a sound you resent the fourth, and one that fires on every navigation is the
- * fourth by lunchtime.
+ * Per page rather than per tab. It was per tab, which meant refreshing the
+ * page was silent -- and refreshing is exactly how somebody checks whether the
+ * thing they asked for works. A load is a load.
+ *
+ * Still guarded, because a refused autoplay arms a listener for the first
+ * click and that must not fire twice on the same page.
  */
-const JINGLE_KEY = "nixamp.jingled";
+let jingled = false;
 
 type Mode = "local" | "remote";
 
@@ -1866,7 +1868,34 @@ export function start(): void {
       }
       meId = "";
       showAccount(null);
+
+      // Leaving means leaving. Signing out used to clear the account and
+      // nothing else, so the server stayed connected and its address stayed
+      // saved -- and finding yourself still driving somebody's machine after
+      // logging out is a reasonable thing to be alarmed by.
+      //
+      // The key itself lives in a cookie on that server's own origin and this
+      // page cannot reach across to delete it; what it can do is let go and
+      // forget. `--new-key` on the server is what actually revokes a link.
+      remote.close();
+      watching = -1;
+      mode = "local";
+      remoteStatus = "idle";
+      remoteDetail = "";
+      dom.remoteUrl.value = "";
+      dom.sharePanel.hidden = true;
+      dom.publishPanel.hidden = true;
+      dom.adminPanel.hidden = true;
+      dom.onairPanel.hidden = true;
+      dom.listenOnly.hidden = true;
+      watchOnAir(false);
+      try {
+        localStorage.removeItem(REMOTE_KEY);
+      } catch { /* private mode */ }
+      note = "Signed out, and disconnected from the server.";
+
       void checkAdmin();
+      draw();
     })();
   });
 
@@ -2386,13 +2415,7 @@ export function start(): void {
   // spent a decade learning to refuse -- so a refusal arms it to go on the
   // first click or keypress instead, once, and then never again this session.
   void (() => {
-    let already = false;
-    try {
-      already = sessionStorage.getItem(JINGLE_KEY) === "1";
-    } catch {
-      // Private mode. One jingle is not worth refusing to start over.
-    }
-    if (already) return;
+    if (jingled) return;
 
     // One of however many ship, at random. The list is written by the build
     // from whatever is in the folder, so another one is a file to drop in
@@ -2414,9 +2437,7 @@ export function start(): void {
     const jingle = new Audio();
     jingle.volume = 0.7;
     const spend = (): void => {
-      try {
-        sessionStorage.setItem(JINGLE_KEY, "1");
-      } catch { /* private mode */ }
+      jingled = true;
     };
     const armed = (): void => {
       document.removeEventListener("pointerdown", armed);
