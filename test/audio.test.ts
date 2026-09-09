@@ -315,10 +315,10 @@ test("the jingle is played once, without a window, and gets out of the way", () 
   assert.equal(runs[0]?.args.at(-1), "/home/me/NixAmp Whips the D-M-C-As.mp3");
 });
 
-test("a server with no speakers decodes at real time, or its clock is a lie", () => {
-  // With speakers, ffplay pulls samples at the rate a person hears them and the
-  // decoder is held back by that. Without them -- which is every server --
-  // nothing pushes back and ffmpeg decodes as fast as the disk allows.
+test("decoding is paced to real time, or the clock is a lie", () => {
+  // Pacing must not be conditional on finding an ffplay binary. A server has
+  // one sitting there that cannot open an audio device: it exits at once and
+  // drains nothing, while its existence said pacing was somebody else's job.
   //
   // That matters because `position` is what a watch party synchronises to. A
   // film reached its end in a couple of minutes and every viewer who joined
@@ -328,7 +328,9 @@ test("a server with no speakers decodes at real time, or its clock is a lie", ()
   // Read off the source rather than run ffmpeg: a real decode needs a real
   // file and a real clock, and what is wrong or right here is one flag.
   const source = readFileSync(join(fileURLToPath(new URL("..", import.meta.url)), "src/audio.ts"), "utf8");
-  assert.match(source, /this\.tools\.play === null \? \["-re"\] : \[\]/);
+  assert.match(source, /^\s*"-re",$/m);
+  // Unconditional: not "only when no player was found".
+  assert.equal(/play === null \? \["-re"\]/.test(source), false, "pacing is conditional again");
   // Before -i, because it paces the reading of the input.
   const at = source.indexOf('"-re"');
   const input = source.indexOf('"-i", track.path');
