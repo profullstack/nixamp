@@ -90,25 +90,25 @@ test("a link says which of the two it is", () => {
   // A server hands out two links and they used to look identical -- both of
   // them /s/KEY -- so somebody holding the viewing one had no way to know, and
   // reported the controls as missing when they were never going to be there.
-  assert.equal(shareLink("http://10.0.0.5:4321", "abc"), "http://10.0.0.5:4321/a/abc");
-  assert.equal(shareLink("http://10.0.0.5:4321", "abc", false), "http://10.0.0.5:4321/v/abc");
+  assert.equal(shareLink("http://10.0.0.5:4321", "abc"), "http://10.0.0.5:4321/admin/abc");
+  assert.equal(shareLink("http://10.0.0.5:4321", "abc", false), "http://10.0.0.5:4321/view/abc");
   assert.equal(shareLink("http://10.0.0.5:4321", null), "http://10.0.0.5:4321");
 
   // The path says what the link is for, and that claim is checked against the
   // key rather than taken on trust.
-  assert.deepEqual(keyInPath("/a/abc"), { key: "abc", wants: "control" });
-  assert.deepEqual(keyInPath("/v/abc"), { key: "abc", wants: "listen" });
+  assert.deepEqual(keyInPath("/admin/abc"), { key: "abc", wants: "control" });
+  assert.deepEqual(keyInPath("/view/abc"), { key: "abc", wants: "listen" });
   // And the shape that said neither is gone, rather than lingering as a third
   // way to write the same link.
   assert.equal(keyInPath("/s/abc"), null);
-  assert.deepEqual(keyInPath("/a/abc/"), { key: "abc", wants: "control" });
+  assert.deepEqual(keyInPath("/admin/abc/"), { key: "abc", wants: "control" });
   // Percent-encoded, because a key rides in a path.
-  assert.deepEqual(keyInPath("/a/a%2Fb"), { key: "a/b", wants: "control" });
+  assert.deepEqual(keyInPath("/admin/a%2Fb"), { key: "a/b", wants: "control" });
 
   // And nothing else is a key.
   assert.equal(keyInPath("/"), null);
-  assert.equal(keyInPath("/a/"), null);
-  assert.equal(keyInPath("/a/abc/extra"), null);
+  assert.equal(keyInPath("/admin/"), null);
+  assert.equal(keyInPath("/admin/abc/extra"), null);
   assert.equal(keyInPath("/api/state"), null);
   assert.equal(keyInPath("/assets/app.js"), null);
 });

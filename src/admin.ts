@@ -66,7 +66,7 @@ export function resolveTarget(argv: string[]): AdminOptions {
         "  Or administer another machine, with its share link:\n" +
         "                    nixamp admin --url https://server1.you.nixamp.com:4321 --key KEY\n" +
         "  The URL and key are the two halves of the link that server printed:\n" +
-        "  https://host:4321/a/KEY",
+        "  https://host:4321/admin/KEY",
     );
   }
   const url_ = daemonUrl(state);

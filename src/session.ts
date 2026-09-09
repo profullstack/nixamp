@@ -586,7 +586,7 @@ export async function servers(argv: string[], fetcher: typeof fetch = fetch): Pr
           console.error(
             "nixamp: no daemon is running here.\n" +
               "  Start one:  nixamp daemon start ~/Music\n" +
-              "  Or give the share link of the one you mean: https://host:4321/a/KEY",
+              "  Or give the share link of the one you mean: https://host:4321/admin/KEY",
           );
           return 1;
         }

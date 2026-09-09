@@ -196,7 +196,7 @@ test("people on the phone for a stream are counted, so the directory can say how
   const { fetch } = recorder(conferenceReplies());
   const live = {
     name: "Chovy",
-    url: "https://chovy.example/v/iqGqDaKSSLXwXnST3bwgkg",
+    url: "https://chovy.example/view/iqGqDaKSSLXwXnST3bwgkg",
     audio: "https://chovy.example/api/live?k=iqGqDaKSSLXwXnST3bwgkg",
     nowPlaying: "Top Gun: Maverick",
     startedAt: NINE_TWENTY_SEVEN,
@@ -382,7 +382,7 @@ test("a code that is a live stream puts you in the room, and plays nothing", asy
         // and playing that into a call is what this test used to let through:
         // the old fixture called it listen.mp3, so asserting the played URL
         // equalled it proved nothing about what a caller would hear.
-        url: "https://chovy.example/v/iqGqDaKSSLXwXnST3bwgkg",
+        url: "https://chovy.example/view/iqGqDaKSSLXwXnST3bwgkg",
         audio: "https://chovy.example/api/live?k=iqGqDaKSSLXwXnST3bwgkg",
         nowPlaying: "Top Gun: Maverick",
         startedAt: NINE_TWENTY_SEVEN,
@@ -413,7 +413,7 @@ test("a stream with no audio address is still somewhere to call", async () => {
     streams: streams({
       "482917": {
         name: "Chovy",
-        url: "https://chovy.example/v/iqGqDaKSSLXwXnST3bwgkg",
+        url: "https://chovy.example/view/iqGqDaKSSLXwXnST3bwgkg",
         audio: "",
         nowPlaying: "Top Gun: Maverick",
         startedAt: NINE_TWENTY_SEVEN,
