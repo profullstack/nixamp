@@ -20,6 +20,7 @@ import { isRemote } from "./sources.ts";
 import { DEFAULT_PORT } from "./server.ts";
 import type { DaemonState } from "./daemon.ts";
 import { shareLink } from "./share.ts";
+import { playJingle } from "./jingle.ts";
 
 const FFT_SIZE = 2048;
 export const BAND_COUNT = 24;
@@ -83,6 +84,10 @@ const HELP = `nixamp — it really whips the terminal's ass.
 
 A source is a directory, a file, an .m3u, an .m3u8, a .pls, or a URL to any
 of those.
+
+It plays a jingle when it starts. Yours from ~/NixAmp-anything.mp3 if you have
+one, otherwise the one that ships. --no-jingle, or NIXAMP_NO_JINGLE=1, for
+silence.
 
 Options for serve:
   -p, --port N     port to listen on (default ${DEFAULT_PORT})
@@ -375,6 +380,10 @@ export async function main(): Promise<void> {
   const asked = first ?? ".";
   const target = isRemote(asked) ? asked : resolve(asked);
   const tools = detectTools();
+  // The noise it makes when it wakes up. Started before the library is walked
+  // so it plays over the wait rather than after it, and never awaited: a
+  // jingle that delays the player is worse than no jingle.
+  if (!rest.includes("--no-jingle")) playJingle(tools);
   // Names now, tags later: an ffprobe per file over a large library is minutes
   // of a blank terminal before the player appears. The list is the same list;
   // only the titles arrive late, and they arrive into a player already running.
