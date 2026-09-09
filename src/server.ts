@@ -44,7 +44,7 @@ import {
   type PaywallConfig,
   paywallFromEnv,
 } from "./paywall.ts";
-import { isRemote } from "./sources.ts";
+import { isRemote, playsInBrowser } from "./sources.ts";
 import {
   allowedForListening,
   elevate,
@@ -57,6 +57,7 @@ import {
   reachableAddresses,
   scopeOf,
   shareLink,
+  audioLink,
 } from "./share.ts";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1432,7 +1433,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       watch(request, response, "media", engine.snapshot().tracks[index]?.title ?? file);
-      sendFile(request, response, file);
+      // A browser asks for every track here, and a matroska or an avi handed
+      // to it raw is bytes it cannot play. Seeking is what this route is for
+      // and transcoding gives it up, but an unseekable film beats a silent
+      // one -- and the seekable formats are untouched.
+      if (playsInBrowser(file)) sendFile(request, response, file);
+      else transcode(request, response, file, options.ffmpeg ?? ["ffmpeg"]);
       return;
     }
 
@@ -1440,6 +1446,23 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // a flac, a wma, a URL, an HLS stream. ffmpeg reads them all and we hand
     // the bytes on as they arrive, so a live stream starts immediately rather
     // than after it ends, which for a live stream is never.
+    // One address that keeps playing, for a listener that cannot ask for the
+    // next track: the phone line hands exactly this to Telnyx.
+    if (path === "/api/live") {
+      if (!options.media) {
+        json(response, 403, { error: "media streaming is off" });
+        return;
+      }
+      const current = engine.snapshot();
+      if (current.tracks.length === 0) {
+        json(response, 404, { error: "nothing is playing" });
+        return;
+      }
+      watch(request, response, "stream", current.tracks[current.index]?.title ?? "live");
+      liveAudio(request, response, engine, options.ffmpeg ?? ["ffmpeg"]);
+      return;
+    }
+
     if (path.startsWith("/api/stream/")) {
       const index = Number(path.slice("/api/stream/".length));
       const source = Number.isInteger(index) ? engine.trackPath(index) : undefined;
@@ -1489,6 +1512,138 @@ function readIfPossible(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** How long to wait before looking again when the player has not moved on. */
+const LIVE_GAP_MS = 500;
+/** How long to wait when there is nothing to play at all yet. */
+const LIVE_IDLE_MS = 2000;
+
+/**
+ * Whatever is playing, as one endless MP3.
+ *
+ * /api/stream/N is one track: it needs an index, and it stops at the end of
+ * the song. That is right for a browser, which knows what is playing and can
+ * ask for the next one. It is wrong for everything that cannot -- a telephone
+ * call, `curl | mpv`, anything handed a single address and expected to keep
+ * hearing sound. Those need one URL that never ends and never needs asking
+ * again, which is what a listener means by "the stream".
+ *
+ * So this follows the player rather than an index: transcode what is playing,
+ * and when that track ends look at what is playing now and keep writing into
+ * the same response. The listener sees one continuous audio/mpeg body.
+ *
+ * Read at native rate (-re), unlike /api/stream/N which is free to run ahead
+ * into a browser's buffer. Here running ahead would finish the song in two
+ * seconds and then sit waiting for the player to catch up, so the thing that
+ * decides what plays next would be minutes behind what the listener hears.
+ */
+function liveAudio(
+  request: IncomingMessage,
+  response: ServerResponse,
+  engine: Engine,
+  ffmpeg: string[],
+): void {
+  const [command, ...prefix] = ffmpeg as [string, ...string[]];
+  let child: ReturnType<typeof spawn> | null = null;
+  let waiting: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
+  let started = false;
+  let playing = -1;
+
+  // Held back until the first byte, for the reason transcode() holds it back:
+  // a 200 with nothing behind it is indistinguishable from silence.
+  const begin = (): void => {
+    if (started || closed) return;
+    started = true;
+    response.writeHead(200, {
+      ...CORS,
+      "content-type": "audio/mpeg",
+      "cache-control": "no-store",
+      "transfer-encoding": "chunked",
+    });
+  };
+
+  const later = (ms: number, run: () => void): void => {
+    if (waiting) clearTimeout(waiting);
+    waiting = setTimeout(run, ms);
+    waiting.unref?.();
+  };
+
+  const stop = (): void => {
+    if (closed) return;
+    closed = true;
+    if (waiting) clearTimeout(waiting);
+    waiting = null;
+    unsubscribe();
+    child?.kill("SIGKILL");
+    child = null;
+    if (!response.writableEnded) response.end();
+  };
+
+  const next = (): void => {
+    if (closed || child !== null) return;
+    if (waiting) {
+      clearTimeout(waiting);
+      waiting = null;
+    }
+    const snapshot = engine.snapshot();
+    const source = engine.trackPath(snapshot.index);
+    if (source === undefined) {
+      // A playlist that was replaced out from under us, or one that is empty
+      // for the moment. Keep the connection and keep looking.
+      later(LIVE_IDLE_MS, next);
+      return;
+    }
+
+    playing = snapshot.index;
+    const spawned = spawn(
+      command,
+      [
+        ...prefix,
+        "-hide_banner",
+        "-loglevel", "error",
+        ...(isRemote(source) ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] : []),
+        "-re",
+        "-i", source,
+        "-vn",
+        "-f", "mp3",
+        "-b:a", "192k",
+        "-",
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    child = spawned;
+
+    spawned.stdout.once("data", begin);
+    spawned.stdout.on("error", () => spawned.kill("SIGKILL"));
+    // end: false, because the response outlives this track. Ending it here is
+    // exactly the bug this endpoint exists to avoid.
+    spawned.stdout.pipe(response, { end: false });
+    spawned.stderr.resume();
+
+    spawned.on("error", stop);
+    spawned.on("close", () => {
+      if (child !== spawned) return;
+      child = null;
+      if (closed) return;
+      // Follow the player if it has already moved on. If it has not, look
+      // again shortly -- which is also what makes a single-track library
+      // repeat rather than fall silent.
+      later(engine.snapshot().index === playing ? LIVE_GAP_MS : 0, next);
+    });
+  };
+
+  // A track change that lands while we are between songs is the signal to go
+  // now rather than wait out the poll.
+  const unsubscribe = engine.subscribe(() => {
+    if (child === null && !closed && engine.snapshot().index !== playing) next();
+  });
+
+  response.on("close", stop);
+  response.on("error", stop);
+  request.on("close", stop);
+  next();
 }
 
 /**
@@ -2019,6 +2174,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 
   if (options.publish !== "no" && publishable_) {
     const listen = shareLink(publishable_.url, listenKey);
+    // Announced next to the listen link, not instead of it: one is for a person
+    // with a browser, the other for the phone line and anything else that is
+    // handed one address and expected to play it.
+    const audio = audioLink(publishable_.url, listenKey);
     const wanted = options.publish === "yes"
       ? true
       : await confirm(`\n  List this stream at ${DEFAULT_DIRECTORY}/directory so anyone can find it?\n  It publishes ${listen} — listen only, not the controls.`);
@@ -2028,6 +2187,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         directory: DEFAULT_DIRECTORY,
         name: options.name || hostname(),
         url: listen,
+        audio,
         tracks: tracks.length,
         // From `nixamp login`. The directory will not list a stream it cannot
         // attribute to somebody, because a listing is now a phone code that

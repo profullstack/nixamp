@@ -72,7 +72,9 @@ interface Room extends RoomInfo {
  * without standing one up.
  */
 export interface StreamLookup {
-  liveByCode(code: string): { name: string; url: string; nowPlaying: string; startedAt: number } | undefined;
+  liveByCode(
+    code: string,
+  ): { name: string; url: string; audio: string; nowPlaying: string; startedAt: number } | undefined;
   endedByCode(code: string): { name: string; nowPlaying: string; startedAt: number; endedAt: number } | undefined;
 }
 
@@ -420,6 +422,24 @@ export class PartyLine {
     const live = streams.liveByCode(code);
     if (live !== undefined) {
       const what = live.nowPlaying ? ` of ${live.nowPlaying}` : "";
+
+      // The share link is not playable. It answers 302 with a cookie and sends
+      // a browser to the player page; Telnyx fetches once with no cookie jar
+      // and gets a 401 in JSON. Playing it means a caller who is told "here it
+      // is" and then hears nothing at all, which is how this was found. Say
+      // what is true instead, and hang up rather than bill for silence.
+      if (!live.audio) {
+        await this.command(leg, "speak", {
+          payload:
+            `${live.name} is live right now${what}, but this stream cannot be played over the phone. ` +
+            "You can listen to it at nixamp dot com slash directory. Goodbye.",
+          voice: this.voice,
+        });
+        await this.command(leg, "hangup", {});
+        this.options.onEvent?.(`  ${code} is live but announced no audio address; nothing to play.`);
+        return true;
+      }
+
       await this.command(leg, "speak", {
         payload: `Welcome to ${live.name}'s live stream${what}. It started at ${pacificTime(live.startedAt)}. Here it is.`,
         voice: this.voice,
@@ -427,7 +447,7 @@ export class PartyLine {
       // A nixamp stream is an MP3 over HTTP and Telnyx will play a URL into a
       // call, so listening by phone costs no audio handling here at all.
       const playing = await this.command(leg, "playback_start", {
-        audio_url: live.url,
+        audio_url: live.audio,
         loop: "infinity",
       });
       // Counted only once the audio is actually going. A leg we failed to

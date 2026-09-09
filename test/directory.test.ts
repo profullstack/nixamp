@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Directory, ENDED_TTL_MS, clean, parseAnnouncement, publishable } from "../src/directory.ts";
 import { Publisher, confirm } from "../src/publish.ts";
-import { allowedForListening, scopeOf } from "../src/share.ts";
+import { allowedForListening, audioLink, scopeOf, shareLink } from "../src/share.ts";
 
 test("a listing has to point somewhere a stranger can actually go", () => {
   assert.notEqual(publishable("https://nixamp.example.com/s/abc"), null);
@@ -148,6 +148,31 @@ test("a publisher keeps the id the directory gave it, and leaves on stop", async
   assert.match(calls[2]?.url ?? "", /id=assigned-id/);
 });
 
+test("a publisher announces the audio address next to the listen link", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const fake = (async (_url: string, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return { ok: true, json: async () => ({ id: "assigned-id" }) } as unknown as Response;
+  }) as unknown as typeof fetch;
+
+  const publisher = new Publisher(
+    {
+      directory: "https://d.example",
+      name: "n",
+      url: shareLink("https://a.example", "abc"),
+      audio: audioLink("https://a.example", "abc"),
+      tracks: 3,
+      nowPlaying: () => "song",
+    },
+    fake,
+  );
+  await publisher.start();
+
+  // Both, and different: the phone line cannot play the one a browser opens.
+  assert.equal(bodies[0]?.["url"], "https://a.example/s/abc");
+  assert.equal(bodies[0]?.["audio"], "https://a.example/api/live?k=abc");
+});
+
 test("a directory that is down does not stop the music", async () => {
   const failing = (async () => {
     throw new Error("connection refused");
@@ -174,6 +199,63 @@ function dated() {
 
 const stream = (url: string, name = "Chovy", nowPlaying = "Top Gun: Maverick") =>
   ({ name, url, tracks: 1, nowPlaying });
+
+test("an announcement carries an audio address, and only from its own server", () => {
+  // The phone line plays this into a call somebody pays for by the minute, so
+  // an announcement that could name any address on the internet could point
+  // the phone line at any of them.
+  const same = parseAnnouncement({
+    name: "Chovy",
+    url: "https://chovy.example/s/abc",
+    audio: "https://chovy.example/api/live?k=abc",
+    tracks: 1,
+    nowPlaying: "",
+  });
+  assert.equal(same?.audio, "https://chovy.example/api/live?k=abc");
+
+  const elsewhere = parseAnnouncement({
+    name: "Chovy",
+    url: "https://chovy.example/s/abc",
+    audio: "https://somewhere-else.example/whatever.mp3",
+    tracks: 1,
+    nowPlaying: "",
+  });
+  assert.equal(elsewhere?.audio, undefined, "a different origin is not taken");
+  assert.notEqual(elsewhere, null, "but the listing itself is still fine");
+
+  // Unreachable, so no better than none at all.
+  const local = parseAnnouncement({
+    name: "Chovy",
+    url: "https://chovy.example/s/abc",
+    audio: "http://127.0.0.1:4321/api/live?k=abc",
+    tracks: 1,
+    nowPlaying: "",
+  });
+  assert.equal(local?.audio, undefined);
+
+  // An older publisher that only knows about url.
+  const old = parseAnnouncement({ name: "Chovy", url: "https://chovy.example/s/abc", tracks: 1, nowPlaying: "" });
+  assert.equal(old?.audio, undefined);
+});
+
+test("a heartbeat that omits the audio address does not blank it", () => {
+  const { dir, tick } = dated();
+  const first = dir.announce({
+    name: "Chovy",
+    url: "https://a.example/s/abc",
+    audio: "https://a.example/api/live?k=abc",
+    tracks: 1,
+    nowPlaying: "Top Gun: Maverick",
+  });
+  assert.equal(first.audio, "https://a.example/api/live?k=abc");
+
+  // Every 90 seconds for the length of a broadcast. One of them arriving
+  // without it must not leave the phone line with nothing to play.
+  tick(60_000);
+  const again = dir.announce(stream("https://a.example/s/abc"));
+  assert.equal(again.audio, "https://a.example/api/live?k=abc");
+  assert.equal(dir.liveByCode(first.code)?.audio, "https://a.example/api/live?k=abc");
+});
 
 test("a stream gets a six digit code, and keeps it while it runs", () => {
   const { dir, tick } = dated();

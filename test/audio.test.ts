@@ -18,6 +18,16 @@ test("audio extensions are recognised case-insensitively", () => {
   assert.equal(isAudio("a.txt"), false);
   assert.equal(isAudio("noextension"), false);
   assert.equal(isAudio(".hidden"), false);
+
+  // A film is a long track. ffmpeg decodes the container and -vn drops the
+  // picture, so the only thing that ever stopped a library of these from
+  // playing was the extension not being on the list.
+  assert.equal(isAudio("Sneakers 1992 Remastered.mkv"), true);
+  assert.equal(isAudio("a.MKV"), true);
+  assert.equal(isAudio("a.avi"), true);
+  assert.equal(isAudio("a.mov"), true);
+  // Not a container: a source tree is somebody's music folder often enough.
+  assert.equal(isAudio("server.ts"), false);
 });
 
 test("findAudio walks a tree, skips dotfiles, and takes a single file", () => {

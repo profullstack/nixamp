@@ -40,6 +40,21 @@ export interface Listing {
   ownerId: string;
   /** The listen link, which is what a browser opens. */
   url: string;
+  /**
+   * The same stream as bytes, for something that is not a browser.
+   *
+   * `url` is a share link: it answers 302, sets a cookie and redirects to the
+   * player page. That is exactly right for a person and useless to anything
+   * that cannot hold a cookie -- the phone line hands this address to Telnyx
+   * to play into a call, and Telnyx fetches it once, anonymously, and expects
+   * audio back. Handed the share link it gets a 401 in JSON and the caller
+   * hears silence after being told the stream is about to start.
+   *
+   * So a publisher announces both: the link a person opens, and the address
+   * that answers with audio/mpeg to a plain GET. Empty when the publisher is
+   * an older nixamp that only knows about `url`.
+   */
+  audio: string;
   tracks: number;
   nowPlaying: string;
   /** Set by the directory from the request, never by the publisher. */
@@ -78,6 +93,8 @@ export interface Announcement {
   id?: string;
   name: string;
   url: string;
+  /** Where the audio actually is. See `Listing.audio`. */
+  audio?: string;
   tracks: number;
   nowPlaying: string;
 }
@@ -119,7 +136,16 @@ export function parseAnnouncement(input: unknown): Announcement | null {
   const record = input as Record<string, unknown>;
 
   const url = typeof record["url"] === "string" ? record["url"] : "";
-  if (publishable(url) === null) return null;
+  const listen = publishable(url);
+  if (listen === null) return null;
+
+  // The audio address has to be the same server as the listen link. This one
+  // is played into a telephone call that somebody pays for by the minute, and
+  // an announcement that could name any address on the internet could point
+  // the phone line at any of them. Same origin, or we do not take it.
+  const offered = typeof record["audio"] === "string" ? record["audio"] : "";
+  const parsed = offered ? publishable(offered) : null;
+  const audio = parsed !== null && parsed.origin === listen.origin ? offered : "";
 
   const name = clean(record["name"], MAX_NAME);
   const tracks = Number(record["tracks"]);
@@ -127,6 +153,7 @@ export function parseAnnouncement(input: unknown): Announcement | null {
     ...(typeof record["id"] === "string" ? { id: clean(record["id"], 40) } : {}),
     name: name || "a nixamp",
     url,
+    ...(audio ? { audio } : {}),
     tracks: Number.isFinite(tracks) && tracks >= 0 ? Math.min(1_000_000, Math.floor(tracks)) : 0,
     nowPlaying: clean(record["nowPlaying"], MAX_TRACK),
   };
@@ -207,6 +234,10 @@ export class Directory {
       // it cannot orphan a listing people are following.
       ownerId: ownerId || existing?.ownerId || previously?.ownerId || "",
       url: announcement.url,
+      // A heartbeat that omits it keeps what we had, the same as the owner: an
+      // older publisher renewing an entry should not blank the address the
+      // phone line is playing from.
+      audio: announcement.audio ?? existing?.audio ?? "",
       tracks: announcement.tracks,
       nowPlaying: announcement.nowPlaying,
       updatedAt: this.now(),
