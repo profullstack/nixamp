@@ -111,7 +111,7 @@ test("an ended stream is echoed as it is remembered, and dropped when it returns
   dir.persistTo({ save: (i) => void saved.push(i), drop: (id) => void dropped.push(id) });
 
   const live = dir.announce(
-    { name: "Chovy", url: "https://a.example/v/1", tracks: 1, nowPlaying: "x" },
+    { name: "Chovy", url: "https://a.example/v/1", tracks: () => 1, nowPlaying: "x" },
     "owner-1",
   );
 
@@ -122,7 +122,7 @@ test("an ended stream is echoed as it is remembered, and dropped when it returns
   assert.equal(saved[0]?.ownerId, "owner-1");
 
   // It came back, so the row is no longer something to tell a caller about.
-  dir.announce({ name: "Chovy", url: "https://a.example/v/1", tracks: 1, nowPlaying: "x" }, "owner-1");
+  dir.announce({ name: "Chovy", url: "https://a.example/v/1", tracks: () => 1, nowPlaying: "x" }, "owner-1");
   assert.deepEqual(dropped, [live.id]);
 });
 
@@ -145,7 +145,7 @@ test("a restarted process remembers the streams that had ended", () => {
 test("seeding never overwrites what this process already knows", () => {
   let at = NOW;
   const dir = new Directory(4 * 60 * 1000, () => at, () => "482917");
-  dir.announce({ name: "Fresh", url: "https://a.example/v/1", tracks: 1, nowPlaying: "" }, "o1");
+  dir.announce({ name: "Fresh", url: "https://a.example/v/1", tracks: () => 1, nowPlaying: "" }, "o1");
   at += 5 * 60 * 1000;
   dir.list();
 

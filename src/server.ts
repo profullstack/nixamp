@@ -3394,9 +3394,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         name: options.name || hostname(),
         url: listen,
         audio,
-        // Asked of the engine rather than a variable, because the library is
-        // now read after the port opens and may still be arriving.
-        tracks: engine.snapshot(false).trackCount,
+        // Asked at every heartbeat rather than once, because the library is
+        // read after the port opens and is still arriving when this is made.
+        tracks: () => engine.snapshot(false).trackCount,
         // From `nixamp login`. The directory will not list a stream it cannot
         // attribute to somebody, because a listing is now a phone code that
         // costs money to answer.
