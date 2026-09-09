@@ -79,6 +79,31 @@ export function since(ms: number): string {
   return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
+/**
+ * A key name rather than something somebody typed: "up", "f7", "ctrl+c".
+ * Letters and digits only, so anything with a colon or a slash in it is text.
+ */
+const NAMED_KEY = /^(?:[a-z]+\d*|(?:ctrl|alt|shift|meta)\+.+)$/;
+
+/**
+ * What a keypress contributes to a field being typed into.
+ *
+ * A paste is one event carrying the whole string, not a burst of single
+ * characters, so a handler that only accepted `key.length === 1` accepted
+ * nothing at all from a paste -- which is how you find you cannot put a URL in
+ * the box by any means except typing it out.
+ *
+ * The ambiguity is real and unavoidable: a pasted word of bare letters is
+ * indistinguishable from a key name, and loses. A URL or a path never is,
+ * because neither is spelled with letters alone.
+ */
+export function typed(key: string): string {
+  if (key.length === 1) return key >= " " && key !== "\u007f" ? key : "";
+  if (NAMED_KEY.test(key)) return "";
+  // A paste. Control characters and newlines are not part of an address.
+  return key.replace(/[\u0000-\u001f\u007f]/g, "");
+}
+
 export function bytes(value: number): string {
   const units = ["B", "KiB", "MiB", "GiB"];
   let n = value;
@@ -142,8 +167,7 @@ export async function admin(argv: string[]): Promise<void> {
         restreaming = "";
         if (url) void restream(target, headers, url).then(() => refresh());
       } else if (key === "backspace") restreaming = restreaming.slice(0, -1);
-      // A printable key is a character; everything else is a name like "f1".
-      else if (key.length === 1) restreaming += key;
+      else restreaming += typed(key);
       app.invalidate();
       return;
     }

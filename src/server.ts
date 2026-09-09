@@ -752,6 +752,12 @@ export interface HandlerOptions {
    */
   load: (source: string) => Promise<Track[]>;
   /**
+   * The same source, with its tags, read without holding the event loop. Called
+   * after `load` and never awaited: the titles arrive into a player that is
+   * already playing.
+   */
+  tag?: (source: string) => Promise<Track[]>;
+  /**
    * The public directory, on the instance that hosts one. Only nixamp.com
    * passes this; a nixamp on your laptop is a publisher, not a registry.
    */
@@ -1916,6 +1922,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           return;
         }
         engine.replace(tracks, source);
+        // Names now, tags later, here as much as at startup: re-streaming a
+        // directory of five thousand files used to read every tag before it
+        // answered, with the event loop held the whole time.
+        if (options.tag) {
+          void options
+            .tag(source)
+            .then((tagged) => engine.retag(tagged, source))
+            .catch(() => {});
+        }
         json(response, 200, engine.snapshot());
       } catch (error) {
         json(response, 422, { error: (error as Error).message.replace(/^nixamp: /, "") });
@@ -2577,7 +2592,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ffmpeg: tools.ffmpeg,
     ffprobe: tools.ffprobe,
     ...(tls ? { tls } : {}),
-    load: (next) => loadSource(tools, next),
+    // Untagged, so a directory of five thousand files answers at once; the
+    // tags follow through `tag` below.
+    load: (next) => loadSource(tools, next, false),
+    tag: (next) => loadTagged(tools, next),
     ...(directory ? { directory } : {}),
     ...(follows ? { follows, vapidPublicKey } : {}),
     ...(partyLine ? { partyLine } : {}),

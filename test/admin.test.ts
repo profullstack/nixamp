@@ -4,7 +4,7 @@ import type { IncomingMessage } from "node:http";
 import { Connections, networkOf, normaliseAddress, shortAgent } from "../src/connections.ts";
 import { alive, daemonUrl, type DaemonState } from "../src/daemon.ts";
 import { renderToText } from "@profullstack/hqtui/testing";
-import { bytes, draw, resolveTarget, since, type View } from "../src/admin.ts";
+import { bytes, draw, resolveTarget, since, typed, type View } from "../src/admin.ts";
 
 const request = (address: string, agent?: string): IncomingMessage =>
   ({ socket: { remoteAddress: address }, headers: agent ? { "user-agent": agent } : {} }) as unknown as IncomingMessage;
@@ -166,4 +166,27 @@ test("pointed somewhere by hand, that address is the only one there is", () => {
   assert.equal(target.url, "http://192.168.1.5:4321");
   assert.deepEqual(target.links, [{ label: "there", url: "http://192.168.1.5:4321" }]);
   assert.equal(target.source, "", "a server somewhere else has not told us what it is playing");
+});
+
+test("a pasted URL goes in the box, because a paste is one event not many keys", () => {
+  // The bug: the handler only accepted key.length === 1, and a terminal
+  // delivers a paste as the whole string at once. Nothing went in at all.
+  assert.equal(typed("http://104.152.209.195:4321"), "http://104.152.209.195:4321");
+  assert.equal(typed("/home/ubuntu/Downloads/done"), "/home/ubuntu/Downloads/done");
+  assert.equal(typed("~/Music"), "~/Music");
+
+  // One character at a time still works, which is how it is normally used.
+  assert.equal(typed("h"), "h");
+  assert.equal(typed(" "), " ");
+
+  // Key names are not text. This is the ambiguity: a pasted word of bare
+  // letters looks exactly like one, and loses.
+  assert.equal(typed("up"), "");
+  assert.equal(typed("f7"), "");
+  assert.equal(typed("pagedown"), "");
+  assert.equal(typed("ctrl+c"), "");
+
+  // Control characters are not part of an address.
+  assert.equal(typed("\u0001"), "");
+  assert.equal(typed("http://x\nhttp://y"), "http://xhttp://y");
 });
