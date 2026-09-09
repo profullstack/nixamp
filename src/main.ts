@@ -75,6 +75,7 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp login [--with github]  sign in to nixamp.com, in a browser or here
   nixamp logout / whoami        forget it, or check it
   nixamp token create|list|revoke  tokens for a machine that cannot sign in
+  nixamp server list|add|remove  the machines you run, kept against your account
   nixamp update [version]        re-run the installer, keeping your choices
   nixamp uninstall [--yes]       remove everything the installer created
 
@@ -197,6 +198,18 @@ keeps serving its browser remote. One per user.
 
 From inside the player, d hands the music to a daemon without stopping it.
 `,
+  server: `nixamp server -- the machines you run.
+
+  nixamp server list             every server on your account
+  nixamp server add --here       remember the daemon on this machine
+  nixamp server add URL --name x remember one somewhere else
+  nixamp server remove ID        forget it
+
+A share link printed in a terminal you have since closed is a server you have
+lost. This keeps the address against your account, so the answer is the same
+here, in the browser and in the desktop app. The share key is kept with it only
+if you pass one, since it is the secret that opens the machine.
+`,
   attach: `nixamp attach — the player, in front of the running daemon.
 
 The same view and the same keys as the local player, except that the music is
@@ -311,6 +324,11 @@ export async function main(): Promise<void> {
   if (first === "login" || first === "signup") {
     const { login } = await import("./session.ts");
     process.exitCode = await login(first === "signup" ? [...rest, "--signup"] : rest);
+    return;
+  }
+  if (first === "server" || first === "servers") {
+    const { servers } = await import("./session.ts");
+    process.exitCode = await servers(rest);
     return;
   }
   if (first === "token" || first === "tokens") {

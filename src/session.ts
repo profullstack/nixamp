@@ -549,3 +549,113 @@ export async function whoami(fetcher: typeof fetch = fetch): Promise<number> {
     return 0;
   }
 }
+
+/**
+ * `nixamp server list|add|remove`, the account's own list of machines.
+ *
+ * A share link printed in a terminal you have since closed is a server you
+ * have lost: the daemon is still playing and nothing can tell you where. This
+ * keeps the address against the account, so the answer is the same here, in
+ * the browser and in the desktop app.
+ */
+export async function servers(argv: string[], fetcher: typeof fetch = fetch): Promise<number> {
+  const session = readSession();
+  if (session === null) {
+    console.error("nixamp: not signed in. Try `nixamp login`.");
+    return 1;
+  }
+  const [command = "list", ...rest] = argv;
+  const where = `${session.site}/api/v1/servers`;
+  const headers = { authorization: `Bearer ${session.token}`, "content-type": "application/json" };
+  const at = (flag: string): string | undefined => {
+    const index = rest.indexOf(flag);
+    return index === -1 ? undefined : rest[index + 1];
+  };
+
+  try {
+    if (command === "add" || command === "register") {
+      // `--here` is the common case: the daemon on this machine, with the
+      // address and key it already printed, rather than retyped by hand.
+      let url = rest.find((a) => /^https?:\/\//.test(a)) ?? at("--url") ?? "";
+      let key = at("--key") ?? "";
+      if (rest.includes("--here")) {
+        const daemon = await import("./daemon.ts");
+        const state = daemon.readState();
+        if (state === null) {
+          console.error("nixamp: no daemon is running here. Start one, or pass a URL.");
+          return 1;
+        }
+        // The address worth remembering is the one somebody else can open.
+        const reachable = state.urls?.find((u) => u.label === "on the internet") ?? state.urls?.[0];
+        url = reachable?.url ?? "";
+        key = key || (state.key ?? "");
+      }
+      if (!url) {
+        console.error("nixamp: which server? Give a URL, or --here for the daemon on this machine.");
+        return 64;
+      }
+
+      const answer = await fetcher(where, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ url, name: at("--name") ?? "", ...(key ? { key } : {}) }),
+      });
+      const body = (await answer.json().catch(() => ({}))) as { server?: ServerRow; error?: string };
+      if (!answer.ok || !body.server) {
+        console.error(`nixamp: ${body.error ?? `could not add it (${answer.status})`}`);
+        return 1;
+      }
+      console.log(`${body.server.id}  ${body.server.name}  ${body.server.url}`);
+      return 0;
+    }
+
+    if (command === "remove" || command === "rm" || command === "forget") {
+      const id = rest.find((a) => !a.startsWith("-")) ?? "";
+      if (!id) {
+        console.error("nixamp: which one? `nixamp server list` shows their ids.");
+        return 64;
+      }
+      const answer = await fetcher(`${where}/${encodeURIComponent(id)}`, { method: "DELETE", headers });
+      if (!answer.ok) {
+        console.error(`nixamp: ${answer.status === 404 ? "no server with that id" : "could not remove it"}`);
+        return 1;
+      }
+      console.log(`Forgot ${id}.`);
+      return 0;
+    }
+
+    if (command === "list" || command === "ls") {
+      const answer = await fetcher(where, { headers });
+      const body = (await answer.json().catch(() => ({}))) as { servers?: ServerRow[]; error?: string };
+      if (!answer.ok) {
+        console.error(`nixamp: ${body.error ?? `could not list them (${answer.status})`}`);
+        return 1;
+      }
+      const rows = body.servers ?? [];
+      if (rows.length === 0) {
+        console.log("No servers yet. `nixamp server add --here` remembers the one on this machine.");
+        return 0;
+      }
+      const width = Math.max(...rows.map((row) => row.name.length));
+      for (const row of rows) {
+        const link = row.key ? `${row.url}/s/${row.key}` : row.url;
+        console.log(`${row.id}  ${row.name.padEnd(width)}  ${link}`);
+      }
+      return 0;
+    }
+
+    console.error(`nixamp: no such server command: ${command}`);
+    return 64;
+  } catch (error) {
+    console.error(`nixamp: could not reach ${session.site}: ${(error as Error).message}`);
+    return 69;
+  }
+}
+
+/** One row of the account's server list, as the API sends it. */
+interface ServerRow {
+  id: string;
+  name: string;
+  url: string;
+  key: string;
+}

@@ -20,6 +20,7 @@ import {
 } from "../src/oauth.ts";
 import { BAD_KEY_LIMIT, callerOf, Guard, SIGN_IN_LIMIT } from "../src/guard.ts";
 import { createServer, EmptyEngine } from "../src/server.ts";
+import { cleanName, cleanUrl, Servers } from "../src/servers.ts";
 import { hashSecret, mintToken, splitToken, Tokens } from "../src/tokens.ts";
 import {
   askWays,
@@ -912,4 +913,89 @@ test("a password cannot be guessed at leisure", async () => {
     assert.ok(Number(stopped.headers.get("retry-after")) > 0, "and says how long to wait");
     assert.match((await stopped.json()).error, /too many attempts/);
   }, POLL_INTERVAL_SECONDS, refusing);
+});
+
+// --- the servers an account runs --------------------------------------------
+
+test("a stored address is one a browser can open, and nothing else", () => {
+  assert.equal(cleanUrl("http://104.152.209.195:4321"), "http://104.152.209.195:4321");
+  assert.equal(cleanUrl("https://nixamp.example.com/"), "https://nixamp.example.com");
+  // Anything after the origin is dropped: a nixamp is a host and a port.
+  assert.equal(cleanUrl("http://box.local:4321/s/KEY?x=1"), "http://box.local:4321");
+
+  // These end up in somebody else's href, so only the two schemes that mean
+  // "a server" get through.
+  assert.equal(cleanUrl("javascript:alert(1)"), "");
+  assert.equal(cleanUrl("data:text/html,<script>"), "");
+  assert.equal(cleanUrl("file:///etc/passwd"), "");
+  assert.equal(cleanUrl("not a url"), "");
+  assert.equal(cleanUrl(""), "");
+  assert.equal(cleanUrl(42), "");
+});
+
+test("a server without a name still has one", () => {
+  assert.equal(cleanName("  Living room  ", "http://x:1"), "Living room");
+  // The host beats "untitled", and is what somebody would have typed anyway.
+  // With the port, so two nixamps on one machine are not both called "box".
+  assert.equal(cleanName("", "http://box.local:4321"), "box.local:4321");
+  assert.equal(cleanName(undefined, "http://104.152.209.195:4321"), "104.152.209.195:4321");
+  assert.equal(cleanName("", "not a url"), "a nixamp");
+  assert.equal(cleanName("x".repeat(200), "http://x:1").length, 60);
+});
+
+test("the server list is the account's, and nobody else's", async () => {
+  const rows = new Map<string, Record<string, unknown>>();
+  const db = {
+    async query(text: string, values: unknown[] = []) {
+      const sql = text.trim().replace(/\s+/g, " ");
+      if (sql.startsWith("CREATE TABLE")) return { rows: [] };
+      if (sql.startsWith("INSERT INTO nixamp_servers")) {
+        const [id, user_id, name, url, share_key] = values;
+        // The upsert is on (user_id, url), which is what a daemon announcing
+        // itself twice depends on.
+        const existing = [...rows.values()].find((r) => r["user_id"] === user_id && r["url"] === url);
+        const row = existing ?? { id, user_id, url, created_at: "2026-01-01", updated_at: "2026-01-01" };
+        row["name"] = name;
+        row["share_key"] = share_key;
+        rows.set(String(row["id"]), row);
+        return { rows: [row] };
+      }
+      if (sql.startsWith("SELECT id, name, url, share_key")) {
+        return { rows: [...rows.values()].filter((r) => r["user_id"] === values[0]) };
+      }
+      if (sql.startsWith("DELETE FROM nixamp_servers")) {
+        const gone: Record<string, unknown>[] = [];
+        for (const [id, row] of rows) {
+          if (row["user_id"] === values[0] && id === String(values[1])) {
+            gone.push(row);
+            rows.delete(id);
+          }
+        }
+        return { rows: gone };
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    },
+  };
+
+  const servers = new Servers(db);
+  const mine = { id: "u1", email: "a@b.com" };
+  const added = await servers.add(mine, { url: "http://box.local:4321", name: "Living room", key: "K" });
+  assert.equal(added?.name, "Living room");
+  assert.equal(added?.url, "http://box.local:4321");
+
+  // Adding the same address again moves the entry forward rather than failing,
+  // because that is what a daemon does after a restart.
+  const again = await servers.add(mine, { url: "http://box.local:4321/", name: "Kitchen" });
+  assert.equal(again?.id, added?.id);
+  assert.equal((await servers.list("u1")).length, 1);
+  assert.equal((await servers.list("u1"))[0]?.name, "Kitchen");
+
+  // An address that is not one is refused rather than stored.
+  assert.equal(await servers.add(mine, { url: "javascript:alert(1)" }), null);
+
+  // Somebody else's list is empty, and their id deletes nothing of ours.
+  assert.deepEqual(await servers.list("u2"), []);
+  assert.equal(await servers.remove("u2", added?.id ?? ""), false);
+  assert.equal(await servers.remove("u1", added?.id ?? ""), true);
+  assert.deepEqual(await servers.list("u1"), []);
 });
