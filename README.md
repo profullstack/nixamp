@@ -268,6 +268,27 @@ Start writes down where it went and the key it minted, waits until the server
 is actually answering before saying it started, and prints the share link. It is
 one daemon per user, and the state lives in `$XDG_STATE_HOME/nixamp`.
 
+### Somewhere the rest of the world can reach
+
+The addresses nixamp prints are the ones its own interfaces have, so a machine
+behind NAT only ever sees `192.168.x` -- no use to anybody else, and nothing it
+can publish. Tell it the address it answers on from outside:
+
+```
+nixamp serve ~/Music --public-url https://nixamp.example.com   # or NIXAMP_PUBLIC_URL
+```
+
+That address is what the share links print and what the directory listing
+carries. Getting one is your business, not nixamp's: a forwarded port, a reverse
+proxy, or a tunnel, e.g.
+
+```
+cloudflared tunnel --url http://localhost:8420
+```
+
+Without it, `--publish` is skipped entirely rather than listing a stream nobody
+outside the house can open.
+
 ### Detaching, and coming back
 
 `d` in the player hands the music to a daemon and gives you your terminal back.

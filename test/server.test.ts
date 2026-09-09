@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import {
-  contentType, createServer, DEFAULT_PORT, EmptyEngine,
+  contentType, createServer, DEFAULT_PORT, EmptyEngine, PlayerEngine,
   parseRange, parseServeArgs, safeJoin, toRemoteTracks,
   type Engine,
 } from "../src/server.ts";
 import { emptySnapshot, parseCommand, remoteName, type Command, type Snapshot } from "../src/protocol.ts";
+import { reachableAddresses } from "../src/share.ts";
 
 test("serve flags parse, and a bad one is a message rather than a NaN", () => {
   // A platform that hands out the port would otherwise change what "default"
@@ -300,4 +301,52 @@ test("with no library the server still answers, and says so", async () => {
       body: JSON.stringify({ type: "play" }),
     })).status, 200);
   });
+});
+
+test("a public address can be given, because a machine behind NAT cannot know it", () => {
+  const told = reachableAddresses("0.0.0.0", 8420, "https://nixamp.example.com/");
+  // First, so it is the address the listing is published under rather than a
+  // guess from an interface, and with no trailing slash to double up on.
+  assert.deepEqual(told[0], { label: "on the internet", url: "https://nixamp.example.com" });
+  assert.ok(told.some((a) => a.label === "here"));
+
+  // Pinned to one host it is still offered, next to that host.
+  const pinned = reachableAddresses("127.0.0.1", 8420, "https://nixamp.example.com");
+  assert.equal(pinned[0]?.label, "on the internet");
+  assert.deepEqual(pinned[1], { label: "here", url: "http://127.0.0.1:8420" });
+
+  // Unchanged when nobody says: this is what every nixamp on a LAN still sees.
+  assert.equal(reachableAddresses("0.0.0.0", 8420)[0]?.label, "here");
+});
+
+test("--public-url has to be a URL, since the failure is otherwise a dead listing", () => {
+  assert.equal(parseServeArgs(["--public-url", "https://x.example.com/"]).publicUrl, "https://x.example.com");
+  assert.equal(parseServeArgs(["--public-url", "http://1.2.3.4:8420"]).publicUrl, "http://1.2.3.4:8420");
+  assert.equal(parseServeArgs([]).publicUrl, "");
+  assert.throws(() => parseServeArgs(["--public-url", "nixamp.example.com"]), /must be a URL/);
+  assert.throws(() => parseServeArgs(["--public-url"]), /needs a value/);
+});
+
+test("tags arrive later without stopping what is playing", () => {
+  const paths = ["/m/a.flac", "/m/b.mp3"];
+  const bare = paths.map((path) => ({ path, title: path, artist: "", album: "", duration: 0 }));
+  const engine = new PlayerEngine(bare, "/m", { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null });
+  try {
+    const tagged = [
+      { path: "/m/a.flac", title: "Bleed", artist: "Meshuggah", album: "obZen", duration: 447 },
+      { path: "/m/b.mp3", title: "Aerials", artist: "SOAD", album: "Toxicity", duration: 235 },
+    ];
+    engine.retag(tagged, "/m");
+    assert.equal(engine.snapshot().tracks[0]?.title, "Bleed");
+    assert.equal(engine.snapshot().tracks[0]?.duration, 447);
+
+    // A list that is not this list belongs to somebody else: a re-stream landed
+    // while the tagging was still running, and these tags describe nothing here.
+    engine.retag([{ path: "/other/z.mp3", title: "Z", artist: "", album: "", duration: 1 }], "/m");
+    assert.equal(engine.snapshot().tracks.length, 2);
+    engine.retag(tagged, "/somewhere-else");
+    assert.equal(engine.snapshot().tracks[0]?.title, "Bleed");
+  } finally {
+    engine.stop();
+  }
 });
