@@ -912,6 +912,10 @@ export function start(): void {
     dom.adminPanel.hidden = !allowed;
     if (adminTimer) clearInterval(adminTimer);
     adminTimer = null;
+    // Whether you may administer this server decides whether Go live is
+    // offered, and this is the answer to that question -- so the share panel
+    // is drawn again now rather than from whatever was known before it.
+    void loadShare();
     if (!allowed) return;
 
     dom.adminNote.textContent = as === "owner" ? "You own this server." : "You hold this server's control link.";
@@ -1571,7 +1575,9 @@ export function start(): void {
    * needs no browser at all. The call is not another way to hear the stream:
    * it is the room where the people watching talk to each other.
    */
-  const loadShare = async (): Promise<void> => {
+  // A declaration, not a const: checkAdmin runs during startup, well before
+  // this line is reached, and an arrow assigned here would not exist yet.
+  async function loadShare(): Promise<void> {
     if (mode !== "remote" || remote.shareLink === "") {
       dom.sharePanel.hidden = true;
       return;
@@ -1640,7 +1646,7 @@ export function start(): void {
       document.createTextNode(". That is a room with everyone else watching — not the stream itself."),
     );
     dom.shareSend.hidden = false;
-  };
+  }
 
   const setLive = async (on: boolean): Promise<void> => {
     dom.goLive.disabled = true;

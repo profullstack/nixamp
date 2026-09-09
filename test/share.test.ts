@@ -13,6 +13,7 @@ import {
   portCommands,
   reachableAddresses,
   shareLink,
+  rememberedKeys,
 } from "../src/share.ts";
 import { parseServeArgs } from "../src/server.ts";
 
@@ -140,4 +141,65 @@ test("elevation declines rather than hanging on a password prompt", () => {
   );
   // sudo -n fails: it would have asked, and nobody is there to answer.
   assert.equal(elevate(io(nothing, () => ({ status: 1, stdout: "" })), command), null);
+});
+
+test("a share link survives a restart, and --new-key is how you revoke one", () => {
+  // Keys were minted on every start, so every link anybody had been given died
+  // the moment the server was restarted -- and a server is restarted to pick
+  // up a new version, which is to say often. A link you cannot rely on is not
+  // a link you can share.
+  const files = new Map<string, string>();
+  const io = {
+    read: (path: string): string | null => files.get(path) ?? null,
+    write: (path: string, body: string): void => {
+      files.set(path, body);
+    },
+  };
+
+  const first = rememberedKeys("/state", 4321, false, io);
+  assert.match(first.key, /^[\w-]{20,}$/);
+  // Two keys, and never the same one: the second is handed to listeners and
+  // must not be able to drive anything.
+  assert.notEqual(first.key, first.listenKey);
+
+  // Restarted. The same link still works.
+  assert.deepEqual(rememberedKeys("/state", 4321, false, io), first);
+
+  // A second server on the same machine is a different audience, so it must
+  // not be handed the first one's key.
+  const other = rememberedKeys("/state", 4322, false, io);
+  assert.notEqual(other.key, first.key);
+  // And remembering the second did not forget the first.
+  assert.deepEqual(rememberedKeys("/state", 4321, false, io), first);
+
+  // A key that got out is revoked by asking for a new one, and the old one is
+  // gone rather than kept alongside.
+  const fresh = rememberedKeys("/state", 4321, true, io);
+  assert.notEqual(fresh.key, first.key);
+  assert.deepEqual(rememberedKeys("/state", 4321, false, io), fresh);
+});
+
+test("unreadable key state is replaced rather than fatal", () => {
+  // Losing a key costs a link. Refusing to start costs the whole server.
+  const files = new Map<string, string>([["/state/keys.json", "{ this is not json"]]);
+  const io = {
+    read: (path: string): string | null => files.get(path) ?? null,
+    write: (path: string, body: string): void => {
+      files.set(path, body);
+    },
+  };
+  const made = rememberedKeys("/state", 4321, false, io);
+  assert.match(made.key, /^[\w-]{20,}$/);
+  assert.deepEqual(rememberedKeys("/state", 4321, false, io), made);
+});
+
+test("a key that cannot be written still serves, it just will not survive", () => {
+  const io = {
+    read: (): string | null => null,
+    write: (): void => {
+      throw new Error("read-only file system");
+    },
+  };
+  const made = rememberedKeys("/state", 4321, false, io);
+  assert.match(made.key, /^[\w-]{20,}$/);
 });

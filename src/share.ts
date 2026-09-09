@@ -11,6 +11,8 @@
  * every EventSource and every `<audio src>` on its own.
  */
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { IncomingMessage } from "node:http";
 import { networkInterfaces } from "node:os";
 
@@ -36,6 +38,79 @@ export const KEY_HEADER = "x-nixamp-key";
 export function newKey(): string {
   return randomBytes(16).toString("base64url");
 }
+
+/** The pair of keys a server hands out: one that drives, one that only hears. */
+export interface KeyPair {
+  key: string;
+  listenKey: string;
+}
+
+/**
+ * The keys this port used last time, or a new pair remembered for next time.
+ *
+ * Keys used to be minted on every start, so every link anybody had been given
+ * died the moment the server was restarted -- and a server gets restarted to
+ * pick up a new version, which is to say often. A link you cannot rely on is
+ * not a link you can share, which was most of why sharing did not feel like it
+ * worked.
+ *
+ * Kept per port, because two servers on one machine are two different
+ * audiences, and a single remembered key would hand each of them the other's.
+ *
+ * The trade is that a key which never changes is a key that stays valid if it
+ * leaks, so `fresh` mints a new pair and forgets the old one -- which is what
+ * `--new-key` is for.
+ */
+export function rememberedKeys(
+  dir: string,
+  port: number,
+  fresh = false,
+  io: {
+    read: (path: string) => string | null;
+    write: (path: string, body: string) => void;
+  } = defaultKeyStore,
+): KeyPair {
+  const path = `${dir}/keys.json`;
+  let all: Record<string, KeyPair> = {};
+  const existing = io.read(path);
+  if (existing !== null) {
+    try {
+      const parsed = JSON.parse(existing) as Record<string, KeyPair>;
+      if (parsed && typeof parsed === "object") all = parsed;
+    } catch {
+      // A file we cannot read is a file we replace. Losing a key costs a link;
+      // refusing to start costs the whole server.
+    }
+  }
+
+  const held = all[String(port)];
+  if (!fresh && held && typeof held.key === "string" && typeof held.listenKey === "string") return held;
+
+  const minted: KeyPair = { key: newKey(), listenKey: newKey() };
+  all[String(port)] = minted;
+  try {
+    io.write(path, JSON.stringify(all, null, 2));
+  } catch {
+    // Unwritable state is a key that will not survive a restart, which is how
+    // it behaved before this existed. Not a reason to refuse to serve.
+  }
+  return minted;
+}
+
+const defaultKeyStore = {
+  read: (path: string): string | null => {
+    try {
+      return readFileSync(path, "utf8");
+    } catch {
+      return null;
+    }
+  },
+  write: (path: string, body: string): void => {
+    mkdirSync(dirname(path), { recursive: true });
+    // Readable only by its owner: it is the password to this server.
+    writeFileSync(path, body, { mode: 0o600 });
+  },
+};
 
 /** Compare without leaking where two keys first differ. */
 export function keysMatch(a: string, b: string): boolean {
