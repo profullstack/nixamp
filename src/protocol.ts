@@ -21,6 +21,14 @@ export interface RemoteTrack {
    * a browser could show played its soundtrack over a blank panel.
    */
   video?: boolean;
+  /**
+   * The source this track came in with, when it was not part of the library.
+   *
+   * Absent means it belongs to whatever this server was started on. Present
+   * means somebody added a folder or an album afterwards, and the name is what
+   * a client puts at the top of that block so the two are not one soup.
+   */
+  group?: string;
 }
 
 /** Everything a remote needs to draw the player. */

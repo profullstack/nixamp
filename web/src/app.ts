@@ -71,6 +71,7 @@ export function start(): void {
     adminNote: need<HTMLParagraphElement>("admin-note"),
     adminConnections: need<HTMLTableElement>("admin-connections"),
     adminRestream: need<HTMLFormElement>("admin-restream"),
+    adminReplace: need<HTMLInputElement>("admin-replace"),
     adminSource: need<HTMLInputElement>("admin-source"),
     directory: need<HTMLElement>("directory"),
     recentNote: need<HTMLParagraphElement>("recent-note"),
@@ -338,14 +339,28 @@ export function start(): void {
 
   let renderedFor = "";
   function renderPlaylist(): void {
-    const names = mode === "remote"
-      ? snapshot.tracks.map((t) => [displayName(t), t.duration] as const)
-      : local.map((t) => [displayName(t), t.duration] as const);
+    // A row is a name, a length, and which pile it is in. The pile is why this
+    // list is not one flat run any more: a server with an album added to it
+    // has the album's tracks on the end, and without a heading over them
+    // nobody could tell whose files they were about to play.
+    const rows = mode === "remote"
+      ? snapshot.tracks.map((t) => ({ name: displayName(t), seconds: t.duration, group: t.group ?? "" }))
+      : local.map((t) => ({ name: displayName(t), seconds: t.duration, group: "" }));
     // Durations are part of the key: a picked file learns its own length late.
-    const key = `${mode}:${names.map(([n, d]) => `${n}@${d}`).join("|")}`;
+    const key = `${mode}:${rows.map((r) => `${r.name}@${r.seconds}@${r.group}`).join("|")}`;
     if (key !== renderedFor) {
       renderedFor = key;
-      dom.playlist.replaceChildren(...names.map(([name, seconds], i) => {
+      const children: HTMLElement[] = [];
+      let heading = "";
+      // Only worth a heading over the library itself if something else is
+      // here too; on an ordinary server every track is the library and a
+      // heading saying so is noise.
+      const grouped = rows.some((row) => row.group !== "");
+      rows.forEach((row, i) => {
+        if (row.group !== heading && (grouped || row.group !== "")) {
+          heading = row.group;
+          children.push(groupHeading(row.group));
+        }
         const item = document.createElement("li");
         item.className = "row";
         item.dataset.index = String(i);
@@ -354,23 +369,75 @@ export function start(): void {
         n.textContent = String(i + 1).padStart(2, " ");
         const label = document.createElement("span");
         label.className = "name";
-        label.textContent = name;
+        label.textContent = row.name;
         const time = document.createElement("span");
         time.className = "time";
-        time.textContent = seconds > 0 ? formatTime(seconds) : "--:--";
+        time.textContent = row.seconds > 0 ? formatTime(row.seconds) : "--:--";
         item.append(n, label, time);
-        return item;
-      }));
+        children.push(item);
+      });
+      dom.playlist.replaceChildren(...children);
     }
     const active = at();
     const live = playing();
-    Array.from(dom.playlist.children).forEach((child, i) => {
+    let selected: HTMLElement | undefined;
+    for (const child of Array.from(dom.playlist.children)) {
       const row = child as HTMLElement;
-      row.classList.toggle("selected", i === active);
-      row.classList.toggle("playing", i === active && live);
-    });
-    const selected = dom.playlist.children[active] as HTMLElement | undefined;
+      // By the index it carries, not by where it sits: headings are rows in
+      // the list too, and counting them as tracks lit up the wrong one.
+      const index = Number(row.dataset.index);
+      const isActive = Number.isInteger(index) && index === active;
+      row.classList.toggle("selected", isActive);
+      row.classList.toggle("playing", isActive && live);
+      if (isActive) selected = row;
+    }
     selected?.scrollIntoView({ block: "nearest" });
+  }
+
+  /**
+   * The heading over a block of the playlist.
+   *
+   * An empty name is the library -- what this server was started on -- and it
+   * cannot be removed from here, because removing it is not a playlist edit;
+   * it is what the command line is for.
+   */
+  function groupHeading(group: string): HTMLElement {
+    const item = document.createElement("li");
+    item.className = "group";
+    const label = document.createElement("span");
+    label.className = "group-name";
+    label.textContent = group === "" ? "This server's library" : group;
+    item.append(label);
+    if (group !== "" && !dom.adminPanel.hidden) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "group-remove";
+      remove.textContent = "×";
+      remove.title = `Remove ${group} from the playlist`;
+      remove.setAttribute("aria-label", `Remove ${group} from the playlist`);
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void removeGroup(group);
+      });
+      item.append(remove);
+    }
+    return item;
+  }
+
+  async function removeGroup(group: string): Promise<void> {
+    try {
+      const answer = await fetch(remote.url("/api/source/remove"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ group }),
+      });
+      const body = (await answer.json()) as { error?: string; removed?: number };
+      dom.adminNote.textContent = answer.ok
+        ? `Removed ${body.removed ?? 0} tracks from ${group}.`
+        : (body.error ?? "that did not work");
+    } catch {
+      dom.adminNote.textContent = "could not reach the server";
+    }
   }
 
   function frame(): void {
@@ -700,15 +767,24 @@ export function start(): void {
     event.preventDefault();
     const source = dom.adminSource.value.trim();
     if (!source) return;
+    // Adding is the default, because adding an album is what people do and
+    // losing a five-thousand-track library to it is not what they meant.
+    const replace = dom.adminReplace.checked;
     void (async () => {
       try {
         const answer = await fetch(remote.url("/api/source"), {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ source }),
+          body: JSON.stringify({ source, ...(replace ? { replace: true } : {}) }),
         });
-        const body = (await answer.json()) as { error?: string };
-        dom.adminNote.textContent = answer.ok ? `Now serving ${source}.` : (body.error ?? "that did not work");
+        const body = (await answer.json()) as { error?: string; added?: number };
+        dom.adminNote.textContent = !answer.ok
+          ? (body.error ?? "that did not work")
+          : replace
+            ? `Now serving ${source}.`
+            : body.added === 0
+              ? "Everything there was already in the playlist."
+              : `Added ${body.added ?? 0} tracks from ${source}.`;
         if (answer.ok) dom.adminSource.value = "";
       } catch {
         dom.adminNote.textContent = "could not reach the server";

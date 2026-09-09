@@ -137,10 +137,14 @@
           <p class="hint" id="admin-note">Checking…</p>
           <table class="admin-table" id="admin-connections"></table>
           <form id="admin-restream" class="picker">
-            <input id="admin-source" type="text" placeholder="a URL or a path to re-stream"
-                   aria-label="Source to re-stream" />
-            <button type="submit" class="button">Re-stream</button>
+            <input id="admin-source" type="text" placeholder="a folder, an album URL, a file"
+                   aria-label="Something to add to the playlist" />
+            <button type="submit" class="button">Add</button>
           </form>
+          <label class="check">
+            <input id="admin-replace" type="checkbox" />
+            Replace the playlist instead of adding to it
+          </label>
         </section>
 
         <section class="panel player-only" data-title="Remote">

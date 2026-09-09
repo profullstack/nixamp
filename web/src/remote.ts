@@ -95,6 +95,9 @@ export function parseSnapshot(input: unknown): Snapshot | null {
           // Rebuilding a track field by field drops anything not listed, and
           // this one is the difference between a film and its soundtrack.
           ...(t.video === true ? { video: true } : {}),
+          // Which pile this track is in. Dropped here, the playlist goes back
+          // to being one undifferentiated list of everything.
+          ...(typeof t.group === "string" && t.group !== "" ? { group: t.group } : {}),
         };
       })
     : undefined;

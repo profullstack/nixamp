@@ -341,10 +341,12 @@ test("tags arrive later without stopping what is playing", () => {
     assert.equal(engine.snapshot().tracks[0]?.title, "Bleed");
     assert.equal(engine.snapshot().tracks[0]?.duration, 447);
 
-    // A list that is not this list belongs to somebody else: a re-stream landed
-    // while the tagging was still running, and these tags describe nothing here.
+    // Tags for tracks that are not here match nothing and change nothing --
+    // which is the protection, now that tags are applied by path rather than
+    // by the list being exactly the one that was sent away for tagging.
     engine.retag([{ path: "/other/z.mp3", title: "Z", artist: "", album: "", duration: 1 }], "/m");
     assert.equal(engine.snapshot().tracks.length, 2);
+    assert.equal(engine.snapshot().tracks[0]?.title, "Bleed");
     engine.retag(tagged, "/somewhere-else");
     assert.equal(engine.snapshot().tracks[0]?.title, "Bleed");
   } finally {
@@ -497,4 +499,156 @@ test("a certificate makes it https, and half a pair is refused early", () => {
   // speak http to them.
   const links = reachableAddresses("0.0.0.0", 4321, "", "https");
   assert.equal(links[0]?.url, "https://localhost:4321");
+});
+
+/** A track with nothing filled in, which is all these tests need of one. */
+const track = (path: string) => ({ path, title: path, artist: "", album: "", duration: 0 });
+
+test("adding an album keeps the library it was added to", () => {
+  const library = ["/m/a.mp3", "/m/b.mp3"].map(track);
+  const engine = new PlayerEngine(library, "/m", { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null });
+  try {
+    const album = ["https://x.test/al/1.mp3", "https://x.test/al/2.mp3"].map(track);
+    assert.equal(engine.add(album, "https://x.test/al/"), 2);
+
+    const after = engine.snapshot().tracks;
+    // The whole bug in one assertion: the library used to be gone here, and
+    // clicking your own file played a stranger's.
+    assert.equal(after.length, 4);
+    assert.equal(engine.trackPath(0), "/m/a.mp3");
+    assert.equal(engine.trackPath(2), "https://x.test/al/1.mp3");
+
+    // The library says nothing about a group; what was added says where from.
+    assert.equal(after[0]?.group, undefined);
+    assert.equal(after[2]?.group, "al");
+    assert.deepEqual(engine.groups(), ["al"]);
+
+    // The same album again is not two copies of it.
+    assert.equal(engine.add(album, "https://x.test/al/"), 0);
+    assert.equal(engine.snapshot().tracks.length, 4);
+  } finally {
+    engine.stop();
+  }
+});
+
+test("an added album can be taken back out, and the library cannot", () => {
+  const engine = new PlayerEngine(
+    ["/m/a.mp3", "/m/b.mp3"].map(track),
+    "/m",
+    { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+  );
+  try {
+    engine.add(["https://x.test/al/1.mp3"].map(track), "https://x.test/al/");
+    // Sitting on the library's second track while an album hangs off the end.
+    engine.command({ type: "select", index: 1 });
+
+    assert.equal(engine.drop("al"), 1);
+    assert.equal(engine.snapshot().tracks.length, 2);
+    // Followed by path, not by number: dropping from below must not move the
+    // listener off the track they were on.
+    assert.equal(engine.snapshot().index, 1);
+    assert.deepEqual(engine.groups(), []);
+
+    // Nothing in the library carries a group, so no group name reaches it.
+    assert.equal(engine.drop("m"), 0);
+    assert.equal(engine.drop(""), 0);
+    assert.equal(engine.snapshot().tracks.length, 2);
+  } finally {
+    engine.stop();
+  }
+});
+
+test("dropping the group the listener is inside stops rather than plays on", () => {
+  const engine = new PlayerEngine(
+    ["/m/a.mp3"].map(track),
+    "/m",
+    { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+  );
+  try {
+    engine.add(["https://x.test/al/1.mp3"].map(track), "https://x.test/al/");
+    engine.command({ type: "select", index: 1 });
+    engine.drop("al");
+    assert.equal(engine.snapshot().playing, false);
+    // Still a real index into what is left, rather than one past the end.
+    assert.equal(engine.snapshot().index, 0);
+    assert.equal(engine.trackPath(engine.snapshot().index), "/m/a.mp3");
+  } finally {
+    engine.stop();
+  }
+});
+
+test("tags for the library still land after an album was added underneath", () => {
+  const engine = new PlayerEngine(
+    ["/m/a.mp3", "/m/b.mp3"].map(track),
+    "/m",
+    { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+  );
+  try {
+    // The race this exists for: startup lists filenames and reads tags in the
+    // background, and somebody adds an album before the tags come back. A
+    // retag that insisted on the same list would have thrown all of them away.
+    engine.add(["https://x.test/al/1.mp3"].map(track), "https://x.test/al/");
+    engine.retag([{ path: "/m/a.mp3", title: "Bleed", artist: "Meshuggah", album: "obZen", duration: 447 }], "/m");
+
+    const after = engine.snapshot().tracks;
+    assert.equal(after[0]?.title, "Bleed");
+    assert.equal(after.length, 3);
+    // And the album keeps its heading; the tagger has no opinion about that.
+    assert.equal(after[2]?.group, "al");
+  } finally {
+    engine.stop();
+  }
+});
+
+test("POST /api/source adds, and only says so when asked to replace", async () => {
+  const engine = new PlayerEngine(
+    ["/m/a.mp3", "/m/b.mp3"].map(track),
+    "/m",
+    { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+  );
+  const server = createServer(engine, {
+    web: null,
+    media: false,
+    version: "test",
+    load: async (from: string) => [track(`${from}1.mp3`), track(`${from}2.mp3`)],
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+  const post = (body: unknown, path = "/api/source"): Promise<Response> =>
+    fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  try {
+    const added = await post({ source: "https://x.test/album/" });
+    assert.equal(added.status, 200);
+    const first = (await added.json()) as { added: number; trackCount: number; groups: string[] };
+    assert.equal(first.added, 2);
+    // Four, not two: the default is to add, because losing a library to a
+    // pasted URL is not what anybody meant by pasting one.
+    assert.equal(first.trackCount, 4);
+    assert.deepEqual(first.groups, ["album"]);
+
+    const again = await post({ source: "https://x.test/album/" });
+    const second = (await again.json()) as { added: number; trackCount: number };
+    assert.equal(second.added, 0);
+    assert.equal(second.trackCount, 4);
+
+    const gone = await post({ group: "album" }, "/api/source/remove");
+    assert.equal(gone.status, 200);
+    assert.equal(((await gone.json()) as { trackCount: number }).trackCount, 2);
+    assert.equal((await post({ group: "album" }, "/api/source/remove")).status, 404);
+
+    const replaced = await post({ source: "https://x.test/other/", replace: true });
+    const third = (await replaced.json()) as { replaced: boolean; trackCount: number };
+    assert.equal(third.replaced, true);
+    assert.equal(third.trackCount, 2);
+    assert.equal(engine.trackPath(0), "https://x.test/other/1.mp3");
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
 });

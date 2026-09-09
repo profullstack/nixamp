@@ -146,6 +146,9 @@ export async function admin(argv: string[]): Promise<void> {
   let snapshot: Snapshot | null = null;
   let error = "";
   let restreaming = "";
+  // Which of the two things typing a source means. Adding is the ordinary one
+  // and has its own key; replacing throws the library away, so it has another.
+  let replacing = false;
   let typing = false;
 
   const app = await createApp({ theme: themes.matrix, title: "nixamp admin", quitKeys: ["ctrl+c"] });
@@ -164,24 +167,27 @@ export async function admin(argv: string[]): Promise<void> {
   app.on("key", (event: KeyEvent) => {
     const key = event.key;
     if (typing) {
-      if (key === "escape") { typing = false; restreaming = ""; }
+      if (key === "escape") { typing = false; restreaming = ""; replacing = false; }
       else if (key === "enter") {
         const url = restreaming.trim();
+        const asReplacement = replacing;
         typing = false;
         restreaming = "";
-        if (url) void restream(target, headers, url).then(() => refresh());
+        replacing = false;
+        if (url) void restream(target, headers, url, asReplacement).then(() => refresh());
       } else if (key === "backspace") restreaming = restreaming.slice(0, -1);
       else restreaming += typed(key);
       app.invalidate();
       return;
     }
     if (key === "q") { app.quit(); return; }
-    if (key === "r") { typing = true; app.invalidate(); }
+    if (key === "a") { typing = true; replacing = false; app.invalidate(); }
+    if (key === "r") { typing = true; replacing = true; app.invalidate(); }
   });
 
   app.on("exit", () => clearInterval(timer));
   app.render(({ ui, theme }) => draw(ui, theme, {
-    url: target.url, report, snapshot, error, typing, restreaming,
+    url: target.url, report, snapshot, error, typing, restreaming, replacing,
     links: target.links, key: target.key, source: target.source,
   }));
 
@@ -189,13 +195,24 @@ export async function admin(argv: string[]): Promise<void> {
   clearInterval(timer);
 }
 
-/** Ask the server to play something else, which is what re-streaming is. */
-async function restream(target: AdminOptions, headers: Record<string, string>, url: string): Promise<void> {
+/**
+ * Hand the server something else to play.
+ *
+ * Two different asks down one route: adding puts an album on the end of the
+ * playlist, replacing points the server somewhere else entirely. The server
+ * adds unless told otherwise, so only the second one says anything.
+ */
+async function restream(
+  target: AdminOptions,
+  headers: Record<string, string>,
+  url: string,
+  replacing = false,
+): Promise<void> {
   try {
     await fetch(`${target.url}/api/source`, {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({ source: url }),
+      body: JSON.stringify({ source: url, ...(replacing ? { replace: true } : {}) }),
     });
   } catch {
     // The next refresh reports the server being unreachable; this is not the
@@ -210,6 +227,8 @@ export interface View {
   error: string;
   typing: boolean;
   restreaming: string;
+  /** Whether what is being typed replaces the playlist rather than joining it. */
+  replacing?: boolean;
   /** Labelled addresses, and the key that makes them work. */
   links: { label: string; url: string }[];
   key: string | null;
@@ -296,15 +315,21 @@ export function draw(ui: Container, theme: Theme, view: View): void {
   });
 
   if (view.typing) {
-    ui.panel({ title: "Re-stream a URL or a path", size: 4 }, (p) => {
+    ui.panel({
+      title: view.replacing ? "Replace the playlist with a URL or a path" : "Add a URL or a path",
+      size: 4,
+    }, (p) => {
       p.text(`${view.restreaming}_`, { fg: theme.accent });
-      p.label("Enter plays it here. Escape forgets it.");
+      p.label(view.replacing
+        ? "Enter drops this library and serves that instead. Escape forgets it."
+        : "Enter adds it to the playlist. Escape forgets it.");
     });
   }
 
   ui.statusBar({
     items: [
-      { key: "r", label: "Re-stream" },
+      { key: "a", label: "Add" },
+      { key: "r", label: "Replace" },
       { key: "q", label: "Quit" },
     ],
     right: [{ key: "", label: report ? `${report.connections.length} seen` : "connecting" }],

@@ -59,7 +59,7 @@ import {
   type PaywallConfig,
   paywallFromEnv,
 } from "./paywall.ts";
-import { isRemote, playsInBrowser } from "./sources.ts";
+import { isRemote, playsInBrowser, sourceLabel } from "./sources.ts";
 import { codecsOf, videoArgs } from "./audio.ts";
 import {
   allowedForListening,
@@ -389,6 +389,16 @@ export function safeJoin(rootDir: string, urlPath: string): string | null {
   return full;
 }
 
+/**
+ * A track and the source it arrived with.
+ *
+ * The library a server was started on has no group: it is simply what this
+ * machine has. Anything added afterwards carries the name of the folder or
+ * album it came from, which is what lets a client draw the two apart instead
+ * of running them together.
+ */
+export type Loaded = Track & { group?: string };
+
 /** What the HTTP layer needs from a player. Tests hand it a fake. */
 export interface Engine {
   /** `withTracks` false leaves the library out, for a frame that is only motion. */
@@ -398,11 +408,29 @@ export interface Engine {
   /** Absolute path of a track, or undefined when the index is not one. */
   trackPath(index: number): string | undefined;
   /**
-   * Play something else instead. Re-streaming is the whole reason the admin
-   * view exists: point a running server at a URL without restarting it and
-   * dropping every listener.
+   * Play something else instead of everything here.
+   *
+   * The big hammer, and no longer what adding a folder does: this is "point
+   * this server somewhere else", which throws the library away on purpose.
    */
   replace(tracks: Track[], root: string): void;
+  /**
+   * Play something as well as everything here.
+   *
+   * What somebody means by putting a folder in a box: the album shows up at
+   * the bottom of the playlist under its own name, and the music that was
+   * already there is still there. Answers how many tracks were new.
+   */
+  add(tracks: Track[], from: string): number;
+  /**
+   * Take an added source back out again, by the name `add` gave it.
+   *
+   * Nothing that came with the library can be dropped this way; the library is
+   * what the server is, and there is a command line for changing that.
+   */
+  drop(group: string): number;
+  /** Every added source, in the order they were added. */
+  groups(): string[];
   /**
    * The same tracks, now with their tags.
    *
@@ -416,7 +444,7 @@ export interface Engine {
   stop(): void;
 }
 
-export function toRemoteTracks(tracks: Track[]): RemoteTrack[] {
+export function toRemoteTracks(tracks: Loaded[]): RemoteTrack[] {
   return tracks.map((t) => ({
     title: t.title,
     artist: t.artist,
@@ -426,6 +454,9 @@ export function toRemoteTracks(tracks: Track[]): RemoteTrack[] {
     // every track to the audio element -- a film's soundtrack over a blank
     // panel, which is exactly what it looked like.
     ...(hasPicture(t.path) ? { video: true } : {}),
+    // Only for what was added; the library's own tracks say nothing, which is
+    // how a client knows they are the library.
+    ...(t.group ? { group: t.group } : {}),
   }));
 }
 
@@ -463,7 +494,7 @@ export class PlayerEngine implements Engine {
   };
 
   constructor(
-    private tracks: Track[],
+    private tracks: Loaded[],
     private root: string,
     tools: Tools,
     /** Frames a second pushed to remotes. */
@@ -637,13 +668,85 @@ export class PlayerEngine implements Engine {
     this.push(true);
   }
 
+  /**
+   * Load something as well as what is already here.
+   *
+   * Adding a folder used to be `replace`, so pointing a server at an album on
+   * the web threw away the music on its disk: the playlist you were looking at
+   * turned into somebody else's twenty-eight tracks, and clicking your own
+   * files played theirs. Nothing about playback changes here -- whatever was
+   * playing keeps playing, at the same index, because the new tracks go on the
+   * end.
+   *
+   * Paths already loaded are skipped, so adding the same album twice is not
+   * two copies of it.
+   */
+  add(tracks: Track[], from: string): number {
+    const group = sourceLabel(from);
+    const known = new Set(this.tracks.map((track) => track.path));
+    const fresh = tracks.filter((track) => !known.has(track.path)).map((track) => ({ ...track, group }));
+    if (fresh.length === 0) return 0;
+    this.tracks = [...this.tracks, ...fresh];
+    // The list itself changed, so it has to ride this frame; a count nobody
+    // can index into is worse than no news at all.
+    this.push(true);
+    return fresh.length;
+  }
+
+  /**
+   * Take an added source back out.
+   *
+   * The track that is playing is followed rather than an index: removing an
+   * album from above the current track would otherwise slide the playlist out
+   * from under a listener mid-song. If the playing track is itself in what is
+   * being removed, playback stops -- there is nothing to keep playing.
+   */
+  drop(group: string): number {
+    if (group === "") return 0;
+    const playingPath = this.tracks[this.state.index]?.path;
+    const kept = this.tracks.filter((track) => track.group !== group);
+    const removed = this.tracks.length - kept.length;
+    if (removed === 0) return 0;
+    this.tracks = kept;
+    const stillThere = kept.findIndex((track) => track.path === playingPath);
+    if (stillThere === -1) {
+      this.halt();
+      this.state.index = this.clamp(this.state.index);
+    } else {
+      this.state.index = stillThere;
+    }
+    this.push(true);
+    return removed;
+  }
+
+  groups(): string[] {
+    const seen: string[] = [];
+    for (const track of this.tracks) {
+      if (track.group && !seen.includes(track.group)) seen.push(track.group);
+    }
+    return seen;
+  }
+
   retag(tracks: Track[], root: string): void {
-    // Dropped rather than applied if the library moved underneath: somebody
-    // re-streamed while the tagging was still running, and these tags describe
-    // something nobody is playing any more.
-    if (root !== this.root || tracks.length !== this.tracks.length) return;
-    if (tracks.some((track, at) => track.path !== this.tracks[at]?.path)) return;
-    this.tracks = tracks;
+    // Matched by path rather than by position, because the list is no longer
+    // required to be the one that was sent for tagging: somebody can add an
+    // album while a library's tags are still being read, and an exact-shape
+    // check would throw away every tag for it. Tags that describe tracks which
+    // are no longer here simply match nothing, which is the same protection
+    // the shape check was giving.
+    void root;
+    const byPath = new Map(tracks.map((track) => [track.path, track]));
+    let changed = false;
+    const merged = this.tracks.map((track) => {
+      const tagged = byPath.get(track.path);
+      if (!tagged || tagged === track) return track;
+      changed = true;
+      // The group is ours, not the tagger's: it knows what a track is called,
+      // not which pile it is in.
+      return { ...tagged, ...(track.group ? { group: track.group } : {}) };
+    });
+    if (!changed) return;
+    this.tracks = merged;
     // No stop, no index reset: the only thing that changes is what the titles
     // say, and every remote finds out because a snapshot goes out -- carrying
     // the list, since the titles are the whole point of this one.
@@ -667,6 +770,15 @@ export class EmptyEngine implements Engine {
     return undefined;
   }
   replace(): void {}
+  add(): number {
+    return 0;
+  }
+  drop(): number {
+    return 0;
+  }
+  groups(): string[] {
+    return [];
+  }
   retag(): void {}
   stop(): void {}
 }
@@ -2030,16 +2142,50 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
-    // Re-stream: hand the running server a different source. The listeners
-    // stay connected; what they are listening to changes under them.
+    // Take an added source back out of the playlist. The library it was added
+    // to is untouched -- there is no group name that names it.
+    if (path === "/api/source/remove") {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "POST only" });
+        return;
+      }
+      let group = "";
+      try {
+        group = String((JSON.parse(await readBody(request)) as { group?: unknown }).group ?? "");
+      } catch {
+        json(response, 400, { error: "bad JSON" });
+        return;
+      }
+      if (!group) {
+        json(response, 400, { error: "no group given" });
+        return;
+      }
+      const removed = engine.drop(group);
+      if (removed === 0) {
+        json(response, 404, { error: `nothing here came from ${group}` });
+        return;
+      }
+      json(response, 200, { ...engine.snapshot(), removed, groups: engine.groups() });
+      return;
+    }
+
+    // Hand the running server another source. The listeners stay connected;
+    // by default they get more to listen to, and only an explicit `replace`
+    // swaps what this server is for something else.
     if (path === "/api/source") {
       if (request.method !== "POST") {
         json(response, 405, { error: "POST only" });
         return;
       }
       let source = "";
+      let replacing = false;
       try {
-        source = String((JSON.parse(await readBody(request)) as { source?: unknown }).source ?? "");
+        const body = JSON.parse(await readBody(request)) as { source?: unknown; replace?: unknown };
+        source = String(body.source ?? "");
+        // Adding is what somebody means by putting a folder in a box, so it is
+        // the default. Replacing is the much larger claim that this server now
+        // serves that instead, so it is the one you have to ask for.
+        replacing = body.replace === true;
       } catch {
         json(response, 400, { error: "bad JSON" });
         return;
@@ -2054,8 +2200,20 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           json(response, 422, { error: `nothing to play at ${source}` });
           return;
         }
-        engine.replace(tracks, source);
-        // Names now, tags later, here as much as at startup: re-streaming a
+        let added = tracks.length;
+        if (replacing) {
+          engine.replace(tracks, source);
+        } else {
+          added = engine.add(tracks, source);
+          if (added === 0) {
+            // Everything there was already here. Not an error -- the playlist
+            // is exactly what the caller asked for -- but worth saying, so a
+            // client can tell that apart from having added an album.
+            json(response, 200, { ...engine.snapshot(), added: 0, groups: engine.groups() });
+            return;
+          }
+        }
+        // Names now, tags later, here as much as at startup: loading a
         // directory of five thousand files used to read every tag before it
         // answered, with the event loop held the whole time.
         if (options.tag) {
@@ -2064,7 +2222,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
             .then((tagged) => engine.retag(tagged, source))
             .catch(() => {});
         }
-        json(response, 200, engine.snapshot());
+        json(response, 200, { ...engine.snapshot(), added, replaced: replacing, groups: engine.groups() });
       } catch (error) {
         json(response, 422, { error: (error as Error).message.replace(/^nixamp: /, "") });
       }

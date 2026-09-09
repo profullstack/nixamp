@@ -106,6 +106,27 @@ export function parsePls(text: string, base: string): Entry[] {
 }
 
 /** The last useful part of a path or URL, for when nothing named the track. */
+/**
+ * What to call a whole source, as a heading over the tracks it brought.
+ *
+ * `nameOf` answers for a file; this answers for the thing a person added --
+ * usually the last segment either way, but a URL that is only a host has no
+ * segment to take, and "the album at that address" reads better as the host
+ * than as the whole URL repeated over every row.
+ */
+export function sourceLabel(source: string): string {
+  const trimmed = source.replace(/\/+$/, "");
+  if (trimmed === "") return source;
+  const named = nameOf(trimmed);
+  if (named !== trimmed && named !== "") return named;
+  if (!isRemote(trimmed)) return trimmed;
+  try {
+    return new URL(trimmed).host;
+  } catch {
+    return trimmed;
+  }
+}
+
 export function nameOf(source: string): string {
   const remote = isRemote(source);
   const path = remote ? new URL(source).pathname : source;

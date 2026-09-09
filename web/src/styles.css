@@ -240,6 +240,38 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .row.selected .name { color: var(--accent); }
 .row.playing .name { color: var(--green); }
 
+/* A heading over a block of the playlist: the library, or something added to
+   it. Not clickable -- there is no track behind it. */
+.group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-top: 1px solid var(--edge);
+  margin-top: 4px;
+}
+
+.group:first-child { border-top: 0; margin-top: 0; }
+
+.group-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.group-remove {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.group-remove:hover { color: var(--accent); border-color: var(--accent); }
+
 .row .n { color: var(--muted); width: 2.4em; text-align: right; flex: none; }
 .row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .row .time { color: var(--muted); flex: none; }
