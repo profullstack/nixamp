@@ -186,16 +186,20 @@ export class Stream {
     this.decoder = spawn(ff, [
       ...ffRest,
       "-hide_banner", "-loglevel", "error",
-      // Paced to real time when nothing is draining the pipe at real time.
+      // Always paced to real time, because playing is a real-time act.
       //
-      // With speakers, ffplay pulls samples at the rate a person hears them
-      // and the decoder is held back by that. Without them -- which is every
-      // server -- nothing pushes back, ffmpeg decodes as fast as the disk
-      // allows, and `position` runs away: a film reached its end in a couple
-      // of minutes. That number is what a watch party is synchronised to, so a
-      // clock that runs at nineteen times normal speed is not a small
-      // cosmetic fault; it is the whole feature not working.
-      ...(this.tools.play === null ? ["-re"] : []),
+      // Decoding is meant to keep pace with listening, and `position` is what
+      // a watch party synchronises to. Left unpaced it runs at whatever speed
+      // the disk manages -- a film reached its end in a couple of minutes, and
+      // every viewer was handed a position the server had already raced past.
+      //
+      // This was first written as "pace only when there is no player", which
+      // looked right and was not: a server has an ffplay binary sitting there
+      // that cannot open an audio device, so it exits at once and drains
+      // nothing, while its mere existence said pacing was somebody else's job.
+      // Whether a machine can make a sound is not a thing to infer from a file
+      // being on disk. Measured with that condition in place: still 13.8x.
+      "-re",
       ...(from > 0 ? ["-ss", String(from)] : []),
       "-i", track.path,
       "-f", "f32le", "-ac", String(CHANNELS), "-ar", String(RATE), "-",
