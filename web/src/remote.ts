@@ -214,6 +214,36 @@ export async function fetchSnapshot(base: string, signal?: AbortSignal, key = ""
   }
 }
 
+/**
+ * Why this server will not talk to us, if it will not. Empty means it will.
+ *
+ * `/api/health` answers to anybody, on purpose: it is how you check a port is
+ * open. So a healthy answer is not permission, and the first request that
+ * actually needed permission was the event stream -- which cannot report a
+ * 401, only retry. The page said "reconnecting..." indefinitely about a server
+ * that had already refused it, which is the least useful true thing it could
+ * have said.
+ */
+export async function refusesUs(base: string, key = "", signal?: AbortSignal): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(apiUrl(base, "/api/state", key), { signal });
+  } catch {
+    // Unreachable is a different problem, and the caller has already found the
+    // server answering, so this is not the place to guess about it.
+    return "";
+  }
+  if (response.ok) return "";
+  if (response.status === 401) {
+    return key === ""
+      ? "That server needs its share link. Paste the whole link — the one ending in /s/… — or sign in as its owner."
+      : "That share link is not accepted by that server. It may have been restarted, which gives it a new one.";
+  }
+  if (response.status === 403) return "That link can listen but not drive this server.";
+  if (response.status === 429) return "That server is asking us to slow down. Try again in a moment.";
+  return "";
+}
+
 /** Is there a nixamp at this address? Used before committing to a connection. */
 export async function probeServer(base: string, signal?: AbortSignal, key = ""): Promise<string | null> {
   try {

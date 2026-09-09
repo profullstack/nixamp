@@ -1210,7 +1210,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       path !== "/api/directory" &&
       !isSignInPath(path)
     ) {
-      const scope = scopeOf(keyFrom(request, url), key, listenKey);
+      let scope = scopeOf(keyFrom(request, url), key, listenKey);
+      // A key is how somebody who was invited proves it. It is not the only way
+      // to be allowed in: the person who owns this server is allowed in whether
+      // or not they still have the link, and their nixamp.com session says who
+      // they are. Without this, signing in as yourself and opening your own
+      // server was refused, and the address of a machine you administer was
+      // useless without a link you had to go and find.
+      if (scope === null && options.owner) {
+        const check = await options.owner.check(false, tokenFrom(request.headers));
+        if (check.allowed) scope = "control";
+      }
       if (scope === null) {
         // Counted, not because a 128-bit key falls to guessing, but because
         // somebody hammering one should stop costing this server anything.
@@ -1221,7 +1231,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           response.end(JSON.stringify({ error: "too many attempts; wait a moment" }));
           return;
         }
-        json(response, 401, { error: "this nixamp needs the key from its share link" });
+        json(response, 401, {
+          error: "this nixamp needs the key from its share link, or sign in as its owner",
+        });
         return;
       }
       if (scope === "listen" && !allowedForListening(path)) {

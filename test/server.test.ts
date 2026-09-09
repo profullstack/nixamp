@@ -12,6 +12,7 @@ import {
 import { emptySnapshot, parseCommand, remoteName, type Command, type Snapshot } from "../src/protocol.ts";
 import { isIpAddress, lookupPublicIp, reachableAddresses } from "../src/share.ts";
 import { daemonLines } from "../src/daemon.ts";
+import { Owner } from "../src/owner.ts";
 
 test("serve flags parse, and a bad one is a message rather than a NaN", () => {
   // A platform that hands out the port would otherwise change what "default"
@@ -647,6 +648,59 @@ test("POST /api/source adds, and only says so when asked to replace", async () =
     assert.equal(third.replaced, true);
     assert.equal(third.trackCount, 2);
     assert.equal(engine.trackPath(0), "https://x.test/other/1.mp3");
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});
+
+test("the owner of a server can open it without hunting for its share link", async () => {
+  // A key is how somebody who was invited proves it. It is not the only way to
+  // be allowed in: signing in to nixamp.com as the person who owns this
+  // machine was refused outright, so the address of your own server was
+  // useless without a link you had to go and find.
+  const site = (async (_url: string | URL, init?: RequestInit) => {
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const ok = headers["authorization"] === "Bearer owners-token";
+    return { ok, json: async () => (ok ? { account: { id: "owner-1" } } : {}) } as unknown as Response;
+  }) as unknown as typeof fetch;
+
+  const engine = new PlayerEngine(
+    [{ path: "/m/a.mp3", title: "a", artist: "", album: "", duration: 0 }],
+    "/m",
+    { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+  );
+  const server = createServer(engine, {
+    web: null,
+    media: false,
+    version: "test",
+    key: "control-key",
+    owner: new Owner({ ownerId: "owner-1", site: "https://nixamp.com", fetcher: site }),
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    // Health answers anybody, which is why it is not proof of anything.
+    assert.equal((await fetch(`${base}/api/health`)).status, 200);
+
+    // No key, no account: still no.
+    assert.equal((await fetch(`${base}/api/state`)).status, 401);
+    // Somebody else's account: still no.
+    assert.equal(
+      (await fetch(`${base}/api/state`, { headers: { authorization: "Bearer someone-else" } })).status,
+      401,
+    );
+
+    // The key works, as it always did.
+    assert.equal((await fetch(`${base}/api/state?k=control-key`)).status, 200);
+    // And so does being the owner, with no key anywhere in the request.
+    const asOwner = await fetch(`${base}/api/state`, {
+      headers: { authorization: "Bearer owners-token" },
+    });
+    assert.equal(asOwner.status, 200);
+    assert.equal(((await asOwner.json()) as { trackCount: number }).trackCount, 1);
   } finally {
     await new Promise<void>((done) => server.close(() => done()));
     engine.stop();

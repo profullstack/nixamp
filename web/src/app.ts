@@ -13,7 +13,7 @@ import {
 } from "./player.ts";
 import {
   blockedAsMixedContent,
-  RemoteClient, fetchSnapshot, probeServer, splitShareLink,
+  RemoteClient, fetchSnapshot, probeServer, refusesUs, splitShareLink,
   rungName, stepDown,
   type Status,
 } from "./remote.ts";
@@ -128,6 +128,18 @@ export function start(): void {
    */
   let rung = 0;
   let stalls = 0;
+  /**
+   * Which track this device is playing off a remote, or -1 for "the server's".
+   *
+   * Watching something yourself does not move the server's cursor -- that is
+   * deliberate, because a viewer picking a film must not change what the room
+   * is hearing. But every read of "the current track" went to the server's
+   * index anyway, so picking one loaded it and then the next frame put the
+   * title, the highlight and the length back on the server's choice. The
+   * track ended and `next` stepped from the server's cursor, which is why the
+   * same video played however many times you clicked another.
+   */
+  let watching = -1;
 
   let bars: number[] = new Array<number>(BAND_COUNT).fill(0);
   let peaks: number[] = new Array<number>(BAND_COUNT).fill(0);
@@ -175,24 +187,30 @@ export function start(): void {
   // ---- playlist, whichever source is in charge -----------------------------
 
   const count = (): number => (mode === "remote" ? snapshot.tracks.length : local.length);
-  const at = (): number => (mode === "remote" ? snapshot.index : index);
+  /**
+   * The track the player is on, from whichever cursor is actually in charge.
+   *
+   * Connected but playing here, that is our own; connected and letting the
+   * server play, it is the server's; not connected at all, the local one.
+   */
+  const at = (): number => {
+    if (mode !== "remote") return index;
+    if (remoteDrives() || watching < 0) return snapshot.index;
+    return Math.min(watching, Math.max(0, snapshot.tracks.length - 1));
+  };
 
   const currentName = (): string => {
-    if (mode === "remote") {
-      const track = snapshot.tracks[snapshot.index];
-      return track ? displayName(track) : "Nothing loaded.";
-    }
-    const track = local[index];
+    const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
     return track ? displayName(track) : "Nothing loaded.";
   };
 
   const currentAlbum = (): string => {
-    const track = mode === "remote" ? snapshot.tracks[snapshot.index] : local[index];
+    const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
     return track?.album || "—";
   };
 
   const duration = (): number => {
-    if (remoteDrives()) return snapshot.tracks[snapshot.index]?.duration ?? 0;
+    if (remoteDrives()) return snapshot.tracks[at()]?.duration ?? 0;
     return player.duration;
   };
 
@@ -253,6 +271,9 @@ export function start(): void {
   async function listenTo(next: number): Promise<void> {
     const track = snapshot.tracks[next];
     if (!track) return;
+    // Ours, not the server's: this is the one place that decides what this
+    // device is playing, so it is the one place that records it.
+    watching = next;
     await player.load({
       title: track.title, artist: track.artist, album: track.album,
       duration: track.duration, url: remote.media(next, rung),
@@ -349,6 +370,8 @@ export function start(): void {
   }
 
   let renderedFor = "";
+  /** The row the list was last scrolled to, so it is only done when it moves. */
+  let scrolledTo = -1;
   function renderPlaylist(): void {
     // A row is a name, a length, and which pile it is in. The pile is why this
     // list is not one flat run any more: a server with an album added to it
@@ -402,7 +425,18 @@ export function start(): void {
       row.classList.toggle("playing", isActive && live);
       if (isActive) selected = row;
     }
-    selected?.scrollIntoView({ block: "nearest" });
+
+    // Only when the track actually changed.
+    //
+    // This used to run on every draw, and a draw happens twelve times a
+    // second, so the list dragged itself back to the playing row a moment
+    // after any attempt to scroll away from it. Scrolling up through a
+    // playlist was impossible -- it read as the list scrolling forever on its
+    // own -- and the fix is not to scroll when there is no news.
+    if (active !== scrolledTo) {
+      scrolledTo = active;
+      selected?.scrollIntoView({ block: "nearest" });
+    }
   }
 
   /**
@@ -592,6 +626,20 @@ export function start(): void {
       if (version === null) {
         remoteStatus = "error";
         remoteDetail = "no nixamp answered there";
+        mode = "local";
+        draw();
+        return;
+      }
+      // Health answers to anybody -- it is how you check a port is open -- so
+      // it says nothing about whether we may drive this server. Asked properly
+      // before connecting, because the event stream cannot report a 401: it
+      // just retries, and the page said "reconnecting..." forever about a
+      // server that had already made up its mind.
+      const refusal = await refusesUs(base, key);
+      if (refusal) {
+        remoteStatus = "error";
+        remoteDetail = refusal;
+        note = refusal;
         mode = "local";
         draw();
         return;
@@ -1369,6 +1417,7 @@ export function start(): void {
 
   dom.disconnect.addEventListener("click", () => {
     remote.close();
+    watching = -1;
     mode = "local";
     remoteStatus = "idle";
     remoteDetail = "";
@@ -1384,9 +1433,12 @@ export function start(): void {
       if (dom.listenHere.checked) {
         // "on this device" means instead of over there, not as well as.
         await remote.send({ type: "stop" });
+        // Start from wherever the server had got to, then go our own way.
         await listenTo(snapshot.index);
       } else {
         player.stop();
+        // Back to following the server's cursor.
+        watching = -1;
       }
       draw();
     })();

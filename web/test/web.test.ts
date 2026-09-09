@@ -8,9 +8,10 @@ import { fileURLToPath } from "node:url";
 import { clamp, displayName, formatTime, isVideoFile, titleFromFilename } from "../src/format.ts";
 import { bandEdges, bands, decay, holdPeaks } from "../src/spectrum.ts";
 import {
-  apiUrl, blockedAsMixedContent, mediaUrl, normalizeBase, parseSnapshot, probeServer, splitShareLink,
+  apiUrl, blockedAsMixedContent, mediaUrl, normalizeBase, parseSnapshot, probeServer, refusesUs,
+  splitShareLink,
 } from "../src/remote.ts";
-import { byName, isPlayable } from "../src/player.ts";
+import { byName, isPlayable, needsVideoElement } from "../src/player.ts";
 import { NEVER_CACHE, serviceWorkerSource } from "../scripts/sw.ts";
 import { Bitmap, crc32, drawIcon, encodePng, ICONS } from "../scripts/icons.ts";
 
@@ -401,4 +402,70 @@ test("connecting splits the link and carries the key", () => {
   // And what gets saved is the link with its key, not the bare address: a
   // reload that reconnects without the key is refused by its own server.
   assert.match(body, /setItem\(REMOTE_KEY, typed\.trim\(\)\)/);
+});
+
+test("a song goes to the audio element even when its URL says nothing", () => {
+  // The bug this exists for: a nixamp serves /api/media/12, which has no
+  // extension, so the kind comes back "unknown". Reading that as "not audio"
+  // sent every remote song to the <video> element -- which is hidden for a
+  // track with no picture. Chrome plays audio out of a display:none video;
+  // iOS Safari does not, so a phone connected to a server was silent.
+  assert.equal(needsVideoElement(false, "unknown"), false);
+  assert.equal(needsVideoElement(false, "audio"), false);
+  assert.equal(needsVideoElement(false, "mp4"), false);
+
+  // A film goes to the video element, said by the server rather than guessed.
+  assert.equal(needsVideoElement(true, "unknown"), true);
+  assert.equal(needsVideoElement(true, "mp4"), true);
+
+  // The streaming kinds want the video element whatever they carry.
+  assert.equal(needsVideoElement(false, "hls"), true);
+  assert.equal(needsVideoElement(false, "mpegts"), true);
+});
+
+test("a server that has already refused us says so instead of retrying forever", async () => {
+  const KEY = "sekrit";
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://localhost");
+    // Health answers anybody: it is how you check a port is open. This is
+    // exactly why a healthy answer is not permission.
+    if (url.pathname === "/api/health") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ name: "nixamp", version: "test" }));
+      return;
+    }
+    const offered = url.searchParams.get("k");
+    if (offered === null) {
+      response.writeHead(401).end('{"error":"needs the key"}');
+      return;
+    }
+    if (offered === "listen-only") {
+      response.writeHead(403).end('{"error":"can listen, not drive"}');
+      return;
+    }
+    if (offered !== KEY) {
+      response.writeHead(401).end('{"error":"needs the key"}');
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ revision: 1, trackCount: 0, index: 0 }));
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    // Healthy, and still refusing us. Connecting on the strength of the health
+    // check alone is what left the page saying "reconnecting..." forever: an
+    // event stream cannot report a 401, it can only retry.
+    assert.equal(await probeServer(base), "test");
+    assert.match(await refusesUs(base), /share link/);
+    assert.match(await refusesUs(base, "wrong"), /not accepted/);
+    assert.match(await refusesUs(base, "listen-only"), /listen but not drive/);
+
+    // With the right key there is nothing to say, and connecting goes ahead.
+    assert.equal(await refusesUs(base, KEY), "");
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+  }
 });

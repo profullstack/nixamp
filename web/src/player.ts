@@ -85,8 +85,23 @@ export interface PlayerHandlers {
 export const FFT_SIZE = 2048;
 
 /** Audio, or something with a picture. */
-function isAudio(kind: string): boolean {
-  return kind === "audio";
+/**
+ * Whether a track has to go into the <video> element rather than the <audio>.
+ *
+ * Decided by what the track IS, not by what its URL looks like. A nixamp
+ * serves media as `/api/media/12`, with no extension on the end, so
+ * `detectKind` can only answer "unknown" -- and treating unknown as "not
+ * audio" put every remote song into a <video> that is hidden whenever the
+ * track has no picture. Chrome will play audio out of a display:none video
+ * element; iOS Safari will not, which is why a phone connected to a server sat
+ * there silent with the bars moving.
+ *
+ * The server says which of its tracks have a picture and a picked file knows
+ * its own type, so the flag is the answer. Only the streaming kinds override
+ * it: hls and mpegts want the video element whatever they turn out to carry.
+ */
+export function needsVideoElement(video: boolean, kind: string): boolean {
+  return video || kind === "hls" || kind === "mpegts";
 }
 
 export class BrowserPlayer {
@@ -211,7 +226,7 @@ export class BrowserPlayer {
     // flag the file itself carried decides; a remote track has a real URL and
     // the package can tell.
     const kind = track.objectUrl ? (track.video ? "mp4" : "audio") : detectKind({ src: track.url });
-    const wanted = track.video || !isAudio(kind) ? this.elements.video : this.elements.audio;
+    const wanted = needsVideoElement(track.video, kind) ? this.elements.video : this.elements.audio;
     if (wanted !== this.active) {
       this.active.pause();
       this.active.removeAttribute("src");

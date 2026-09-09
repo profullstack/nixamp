@@ -96,8 +96,10 @@
                    placeholder="password" aria-label="Password" />
             <button type="submit" class="button" id="account-submit">Sign in</button>
             <button id="account-toggle" type="button" class="ghost">Create one</button>
-            <button id="account-signout" type="button" class="ghost" hidden>Sign out</button>
           </form>
+          <!-- Outside the form, because signing out is the one thing you can do
+               once the form is gone. -->
+          <button id="account-signout" type="button" class="ghost" hidden>Sign out</button>
         </section>
 
         <p class="hint player-only" id="account-elsewhere" hidden>

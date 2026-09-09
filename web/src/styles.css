@@ -18,6 +18,17 @@
 
 * { box-sizing: border-box; }
 
+/*
+ * Hidden means hidden.
+ *
+ * The UA rule is `[hidden] { display: none }`, which any class carrying a
+ * `display` beats on specificity -- and half the things this page hides are
+ * `.picker`, which is `display: flex`. So the sign-in form stayed on screen
+ * with your email in the note above it, and every other `hidden` on a
+ * `.picker` was equally decorative.
+ */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   min-height: 100%;
@@ -414,8 +425,6 @@ button.ghost { background: transparent; color: var(--muted); }
 }
 
 .directory-list button {
-  width: 100%;
-  text-align: left;
   background: transparent;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -489,9 +498,28 @@ body.route-directory .player-only { display: none; }
   align-items: stretch;
 }
 
-.directory-list li > button:first-child {
+/* Whatever leads the row takes the slack -- a button in the directory, a
+   plain label in the servers list, which is why keying this to a button left
+   the servers row's actions floating in the middle of it. */
+.directory-list li > :first-child {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* Only the row's own button fills the row. The actions after it -- Open,
+   Forget, Follow -- are as wide as their words, and stretching one of them
+   across the row is what the misalignment was. */
+.directory-list li > button:first-child {
+  width: 100%;
+  text-align: left;
+}
+
+.directory-list li > .button,
+.directory-list li > .ghost {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
 }
 
 .directory-list .follow {
