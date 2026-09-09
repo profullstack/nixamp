@@ -673,7 +673,10 @@ export function start(): void {
     let allowed = false;
     let as: string | null = null;
     try {
-      const answer = await fetch("/api/admin");
+      // The server this page is connected to, not the origin the page came
+      // from. Relative, these two calls asked nixamp.com whether somebody may
+      // administer a machine nixamp.com has never heard of.
+      const answer = await fetch(remote.url("/api/admin"));
       if (answer.ok) {
         const body = (await answer.json()) as { allowed?: boolean; as?: string | null };
         allowed = body.allowed === true;
@@ -699,7 +702,7 @@ export function start(): void {
     if (!source) return;
     void (async () => {
       try {
-        const answer = await fetch("/api/source", {
+        const answer = await fetch(remote.url("/api/source"), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ source }),

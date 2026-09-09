@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { clamp, displayName, formatTime, isVideoFile, titleFromFilename } from "../src/format.ts";
 import { bandEdges, bands, decay, holdPeaks } from "../src/spectrum.ts";
-import { apiUrl, blockedAsMixedContent, mediaUrl, normalizeBase, parseSnapshot } from "../src/remote.ts";
+import { apiUrl, blockedAsMixedContent, mediaUrl, normalizeBase, parseSnapshot, splitShareLink } from "../src/remote.ts";
 import { byName, isPlayable } from "../src/player.ts";
 import { NEVER_CACHE, serviceWorkerSource } from "../scripts/sw.ts";
 import { Bitmap, crc32, drawIcon, encodePng, ICONS } from "../scripts/icons.ts";
@@ -258,4 +258,34 @@ test("an https page cannot reach an http server, and says so before trying", () 
   assert.equal(blockedAsMixedContent("https://nixamp.example.com", "https:"), "");
   assert.equal(blockedAsMixedContent("http://192.168.1.5:4321", "http:"), "", "an http page may reach http");
   assert.equal(blockedAsMixedContent("http://localhost:4321", "file:"), "", "the desktop app is not a page");
+});
+
+test("a pasted share link is an address and a key, and both are needed", () => {
+  // What people actually paste. Kept whole it is a 404 -- there is no
+  // /s/KEY/api/state -- and with the key thrown away every request from
+  // another origin is a 401. Neither half is optional.
+  assert.deepEqual(splitShareLink("https://chovy.nixamp.com:4321/s/kk8a7LvceeVg1NassmuBwA"), {
+    base: "https://chovy.nixamp.com:4321",
+    key: "kk8a7LvceeVg1NassmuBwA",
+  });
+  // Trailing slash, and the query form the API itself takes.
+  assert.deepEqual(splitShareLink("http://box.local:4321/s/ABC/"), {
+    base: "http://box.local:4321",
+    key: "ABC",
+  });
+  assert.deepEqual(splitShareLink("http://box.local:4321/?k=ABC"), {
+    base: "http://box.local:4321",
+    key: "ABC",
+  });
+  // A plain address is a server with no key, which is what --no-key serves.
+  assert.deepEqual(splitShareLink("http://box.local:4321"), { base: "http://box.local:4321", key: "" });
+  assert.deepEqual(splitShareLink(""), { base: "", key: "" });
+
+  // The key rides in the query, because from another origin nothing else can
+  // carry it: a cookie is same-origin, and a server answering
+  // access-control-allow-origin: * is one browsers refuse to send credentials to.
+  assert.equal(apiUrl("http://box:4321", "/api/state", "K"), "http://box:4321/api/state?k=K");
+  // And it joins a query that already exists rather than starting a second one.
+  assert.equal(mediaUrl("http://box:4321", 3, 1500, "K"), "http://box:4321/api/media/3?kbps=1500&k=K");
+  assert.equal(apiUrl("http://box:4321", "/api/state"), "http://box:4321/api/state");
 });
