@@ -3447,6 +3447,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         host: options.host,
         port,
         key,
+        // The other half of the pair. Without it `nixamp admin` can only draw
+        // the links that administer, so the operator has nothing to hand
+        // somebody who should be able to watch and not to drive.
+        listenKey,
         source: root,
         urls: addresses,
         firewall,
