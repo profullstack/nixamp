@@ -21,7 +21,14 @@ export interface PublishTarget {
    * gets a 401 in JSON, which is a caller hearing nothing.
    */
   audio?: string;
-  tracks: number;
+  /**
+   * How many tracks there are, asked at every heartbeat rather than once.
+   *
+   * Taken as a number, it was read before the library had finished loading --
+   * the port opens first now -- so a server with five thousand tracks
+   * advertised nought of them for as long as it stayed up.
+   */
+  tracks: () => number;
   nowPlaying: () => string;
   /**
    * The account this stream belongs to, from `nixamp login`.
@@ -92,7 +99,7 @@ export class Publisher {
           name: this.target.name,
           url: this.target.url,
           ...(this.target.audio ? { audio: this.target.audio } : {}),
-          tracks: this.target.tracks,
+          tracks: this.target.tracks(),
           nowPlaying: this.target.nowPlaying(),
         }),
       });
