@@ -461,8 +461,11 @@ export interface Engine {
    * What somebody means by putting a folder in a box: the album shows up at
    * the bottom of the playlist under its own name, and the music that was
    * already there is still there. Answers how many tracks were new.
+   *
+   * `called` is what a person named it, which beats whatever the address ends
+   * in -- a channel is "MLB Network", not "932".
    */
-  add(tracks: Track[], from: string): number;
+  add(tracks: Track[], from: string, called?: string): number;
   /**
    * Take an added source back out again, by the name `add` gave it.
    *
@@ -500,6 +503,9 @@ export function toRemoteTracks(tracks: Loaded[]): RemoteTrack[] {
     // how a client knows they are the library.
     ...(t.group ? { group: t.group } : {}),
     ...(t.folder ? { folder: t.folder } : {}),
+    // Said plainly rather than guessed at from how it was loaded: this is
+    // what puts a channel in the live list and a film in the library.
+    ...(isRemote(t.path) ? { remote: true } : {}),
   }));
 }
 
@@ -767,8 +773,12 @@ export class PlayerEngine implements Engine {
    * Paths already loaded are skipped, so adding the same album twice is not
    * two copies of it.
    */
-  add(tracks: Track[], from: string): number {
-    const group = sourceLabel(from);
+  add(tracks: Track[], from: string, called = ""): number {
+    // What somebody called it beats what the address happens to end in. A
+    // channel at .../932 is "932" to a URL and "MLB Network" to a person, and
+    // no transport stream reliably says which -- the one in front of us calls
+    // itself "Service01".
+    const group = called || sourceLabel(from);
     const known = new Set(this.tracks.map((track) => track.path));
     const fresh = tracks
       .filter((track) => !known.has(track.path))
@@ -877,6 +887,26 @@ export class PlayerEngine implements Engine {
     // the list, since the titles are the whole point of this one.
     this.push(true);
   }
+}
+
+/**
+ * The streams a server is carrying, gathered by name.
+ *
+ * A whole re-streamed folder is one entry rather than twenty: somebody
+ * looking at what is on wants "that album from the web", not every track in
+ * it. An entry names where to start, so clicking it plays.
+ */
+export function liveOnes(engine: Engine): { name: string; at: number; tracks: number }[] {
+  const tracks = engine.snapshot().tracks ?? [];
+  const found = new Map<string, { name: string; at: number; tracks: number }>();
+  tracks.forEach((track, at) => {
+    if (track.remote !== true) return;
+    const name = track.group || track.title;
+    const already = found.get(name);
+    if (already) already.tracks += 1;
+    else found.set(name, { name, at, tracks: 1 });
+  });
+  return [...found.values()];
 }
 
 /** An engine with no library behind it, for the hosted PWA. */
@@ -2137,11 +2167,14 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         // what made moving between a channel and an album so confusing. Named
         // here with the first track it owns, so it can be played from the list
         // of what is live rather than hunted for among five thousand files.
-        restreams: engine.groups().map((name) => ({
-          name,
-          at: (engine.snapshot().tracks ?? []).findIndex((track) => track.group === name),
-          tracks: (engine.snapshot().tracks ?? []).filter((track) => track.group === name).length,
-        })),
+        // Every stream coming off the network, however it got here.
+        //
+        // This used to read the groups, which only exist for sources that were
+        // added -- so re-streaming something as a replacement produced a
+        // channel that appeared in no list anywhere, with nothing to click.
+        // What makes a thing live is where it comes from, not which button
+        // loaded it.
+        restreams: liveOnes(engine),
       });
       return;
     }
@@ -2496,10 +2529,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       let source = "";
+      let called = "";
       let replacing = false;
       try {
-        const body = JSON.parse(await readBody(request)) as { source?: unknown; replace?: unknown };
+        const body = JSON.parse(await readBody(request)) as {
+          source?: unknown; replace?: unknown; name?: unknown;
+        };
         source = String(body.source ?? "");
+        // Trimmed and capped: it is a label, and it can end up in a listing.
+        called = String(body.name ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 80);
         // Adding is what somebody means by putting a folder in a box, so it is
         // the default. Replacing is the much larger claim that this server now
         // serves that instead, so it is the one you have to ask for.
@@ -2535,11 +2573,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         );
         tracks = looked;
 
+        // Named by hand, so a single channel says what it is rather than what
+        // its URL ends in.
+        if (called !== "" && tracks.length === 1 && tracks[0]) {
+          tracks = [{ ...tracks[0], title: called }];
+        }
+
         let added = tracks.length;
         if (replacing) {
           engine.replace(tracks, source);
         } else {
-          added = engine.add(tracks, source);
+          added = engine.add(tracks, source, called);
           if (added === 0) {
             // Everything there was already here. Not an error -- the playlist
             // is exactly what the caller asked for -- but worth saying, so a

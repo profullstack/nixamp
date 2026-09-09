@@ -105,6 +105,9 @@ export function parseSnapshot(input: unknown): Snapshot | null {
           // And where it sits inside that pile, which is what makes five
           // thousand files something a person can walk through.
           ...(typeof t.folder === "string" && t.folder !== "" ? { folder: t.folder } : {}),
+          // Live or on demand -- a channel and a film in a folder belong in
+          // different lists, and this is what tells them apart.
+          ...(t.remote === true ? { remote: true } : {}),
         };
       })
     : undefined;

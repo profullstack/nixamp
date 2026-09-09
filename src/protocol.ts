@@ -39,6 +39,17 @@ export interface RemoteTrack {
    * somebody's disk is their business.
    */
   folder?: string;
+  /**
+   * Whether this comes off the network rather than off a disk.
+   *
+   * A channel and a film in a folder are different kinds of thing and belong
+   * in different lists -- one is live and one is on demand. Which it is has to
+   * be a property of the track, because it was being inferred from how it
+   * happened to be loaded: a re-stream that replaced the playlist carried no
+   * group, so it appeared in no list of live streams at all and there was
+   * nowhere to click it.
+   */
+  remote?: boolean;
 }
 
 /** Everything a remote needs to draw the player. */

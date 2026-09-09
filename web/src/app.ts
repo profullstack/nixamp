@@ -102,6 +102,7 @@ export function start(): void {
     adminRestream: need<HTMLFormElement>("admin-restream"),
     adminReplace: need<HTMLInputElement>("admin-replace"),
     adminSource: need<HTMLInputElement>("admin-source"),
+    adminName: need<HTMLInputElement>("admin-name"),
     homeNote: need<HTMLParagraphElement>("home-note"),
     loadHome: need<HTMLButtonElement>("load-home"),
     directory: need<HTMLElement>("directory"),
@@ -495,8 +496,11 @@ export function start(): void {
     const all = mode === "remote"
       ? snapshot.tracks.map((t) => ({
           name: displayName(t), seconds: t.duration, group: t.group ?? "", folder: t.folder ?? "",
+          remote: t.remote === true,
         }))
-      : local.map((t) => ({ name: displayName(t), seconds: t.duration, group: "", folder: "" }));
+      : local.map((t) => ({
+          name: displayName(t), seconds: t.duration, group: "", folder: "", remote: false,
+        }));
 
     // Only what belongs to this server. Anything re-streamed into it is a live
     // stream and lives in the list of live streams -- having the two mixed in
@@ -505,7 +509,7 @@ export function start(): void {
     const wanted = dom.filter.value.trim().toLowerCase();
     const rows = all
       .map((row, index) => ({ ...row, index }))
-      .filter((row) => row.group === "")
+      .filter((row) => !row.remote)
       .filter((row) => wanted === "" || `${row.folder}/${row.name}`.toLowerCase().includes(wanted));
 
     // Everything under the folder we are looking at, and the folders directly
@@ -1260,12 +1264,19 @@ export function start(): void {
     // Adding is the default, because adding an album is what people do and
     // losing a five-thousand-track library to it is not what they meant.
     const replace = dom.adminReplace.checked;
+    const named = dom.adminName.value.trim();
     void (async () => {
       try {
         const answer = await fetch(remote.url("/api/source"), {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ source, ...(replace ? { replace: true } : {}) }),
+          body: JSON.stringify({
+            source,
+            // Optional, and worth a lot: a channel called "932" tells nobody
+            // anything, and its own stream calls itself "Service01".
+            ...(named ? { name: named } : {}),
+            ...(replace ? { replace: true } : {}),
+          }),
         });
         const body = (await answer.json()) as { error?: string; added?: number };
         said(!answer.ok
@@ -1277,6 +1288,7 @@ export function start(): void {
               : `Added ${body.added ?? 0} tracks from ${source}.`);
         if (answer.ok) {
           dom.adminSource.value = "";
+          dom.adminName.value = "";
           // Re-streaming something is usually the moment you want people to
           // find it, and a server that is not listed is not findable -- which
           // is why the directory kept saying nobody was streaming while you
