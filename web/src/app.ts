@@ -61,6 +61,8 @@ export function start(): void {
     accountSubmit: need<HTMLButtonElement>("account-submit"),
     accountToggle: need<HTMLButtonElement>("account-toggle"),
     accountProviders: need<HTMLDivElement>("account-providers"),
+    accountPanel: need<HTMLElement>("account-panel"),
+    accountElsewhere: need<HTMLParagraphElement>("account-elsewhere"),
     accountSignOut: need<HTMLButtonElement>("account-signout"),
     accountNote: need<HTMLParagraphElement>("account-note"),
     adminPanel: need<HTMLElement>("admin-panel"),
@@ -106,7 +108,7 @@ export function start(): void {
 
   /**
    * Who is making the sound. Connected to a remote, the server plays and we
-   * only draw it — unless "Listen on this device" is ticked, and then the
+   * only draw it — unless "Play on this device" is ticked, and then the
    * server is a library rather than a player and everything happens here.
    */
   const remoteDrives = (): boolean => mode === "remote" && !dom.listenHere.checked;
@@ -1028,9 +1030,11 @@ export function start(): void {
    */
   const showProviders = async (): Promise<void> => {
     let offered: { id: string; name: string }[] = [];
+    let keepsAccounts = false;
     try {
       const answer = await fetch("/api/v1/auth/providers");
       if (answer.ok) {
+        keepsAccounts = true;
         const body = (await answer.json()) as { providers?: { id: string; name: string }[] };
         offered = body.providers ?? [];
       }
@@ -1039,6 +1043,12 @@ export function start(): void {
     }
     dom.accountProviders.replaceChildren();
     dom.accountProviders.hidden = offered.length === 0;
+    // A nixamp on your own machine keeps no accounts: its /api/v1/auth/* is
+    // not there at all, and offering a sign-in form that can only answer "no
+    // such endpoint" is worse than offering nothing. Accounts live at
+    // nixamp.com, so that is where the panel points instead.
+    dom.accountPanel.hidden = !keepsAccounts;
+    dom.accountElsewhere.hidden = keepsAccounts;
     for (const provider of offered) {
       const link = document.createElement("a");
       link.className = "button";

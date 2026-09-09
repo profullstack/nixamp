@@ -18,6 +18,7 @@ import {
   SignIn,
   STATE_TTL_MS,
 } from "../src/oauth.ts";
+import { BAD_KEY_LIMIT, callerOf, Guard, SIGN_IN_LIMIT } from "../src/guard.ts";
 import { createServer, EmptyEngine } from "../src/server.ts";
 import { hashSecret, mintToken, splitToken, Tokens } from "../src/tokens.ts";
 import {
@@ -452,6 +453,7 @@ test("signing in with a provider mints a session, and refuses an unverified one"
 async function withSignIn(
   body: (base: string, parts: { accounts: Accounts; signIn: SignIn; tick: (ms: number) => void }) => Promise<void>,
   intervalSeconds = POLL_INTERVAL_SECONDS,
+  system: AuthLike = fakeAuth(),
 ): Promise<void> {
   // The grants keep their own clock so a test can step past the interval the
   // server tells a terminal to wait, rather than waiting it out.
@@ -460,7 +462,7 @@ async function withSignIn(
   const accounts = new Accounts({
     connectionString: "",
     secret: "",
-    system: fakeAuth(),
+    system,
     adapter: {
       ...db,
       getUserByEmail: async () => null,
@@ -828,4 +830,86 @@ test("NIXAMP_TOKEN is a signed-in nixamp with no login at all", () => {
   assert.equal(session?.site, "https://nixamp.com");
   // No site named still means the one everybody means.
   assert.equal(readSession({ NIXAMP_TOKEN: "nxa_1_x" })?.site, "https://nixamp.com");
+});
+
+// --- saying no to somebody asking too often ---------------------------------
+
+test("a window allows what it allows, then refuses until it rolls", () => {
+  let now = 0;
+  const guard = new Guard(() => now);
+  const limit = { allowed: 3, windowMs: 1000 };
+
+  assert.deepEqual(guard.check("a", limit), { ok: true, left: 2, retryAfter: 1 });
+  assert.equal(guard.check("a", limit).ok, true);
+  assert.equal(guard.check("a", limit).ok, true);
+  const refused = guard.check("a", limit);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.left, 0);
+  assert.ok(refused.retryAfter >= 1, "and says how long to wait");
+
+  // One caller's window is not another's.
+  assert.equal(guard.check("b", limit).ok, true);
+
+  now += 1001;
+  assert.equal(guard.check("a", limit).ok, true, "the window rolled");
+});
+
+test("getting it right costs nothing", () => {
+  let now = 0;
+  const guard = new Guard(() => now);
+  const limit = { allowed: 2, windowMs: 1000 };
+  guard.check("a", limit);
+  guard.check("a", limit);
+  // A success wipes the slate, so ordinary use never approaches a limit.
+  guard.forget("a");
+  assert.equal(guard.check("a", limit).ok, true);
+  assert.equal(guard.check("a", limit).ok, true);
+});
+
+test("a forwarded address is believed only where there is a proxy", () => {
+  const headers = { "x-forwarded-for": "203.0.113.9, 10.0.0.1" };
+  // Behind a proxy the socket is the proxy, and the leftmost entry is who asked.
+  assert.equal(callerOf(headers, "10.0.0.1", true), "203.0.113.9");
+  // Directly reachable, the header is whatever the caller felt like sending,
+  // and believing it would hand them a fresh identity per request.
+  assert.equal(callerOf(headers, "198.51.100.4", false), "198.51.100.4");
+  assert.equal(callerOf({}, undefined, true), "unknown");
+});
+
+test("the limits are the ones the endpoints need", () => {
+  // Far more than a person mistypes, far less than a word list needs.
+  assert.equal(SIGN_IN_LIMIT.allowed, 10);
+  assert.equal(SIGN_IN_LIMIT.windowMs, 15 * 60_000);
+  assert.ok(BAD_KEY_LIMIT.allowed > SIGN_IN_LIMIT.allowed, "a stale link retries by itself");
+});
+
+test("a password cannot be guessed at leisure", async () => {
+  // The real module throws on a wrong password; the stub used everywhere else
+  // says yes to everything, which would make this test pass for no reason.
+  const refusing: AuthLike = {
+    register: async () => ({}),
+    login: async () => {
+      throw new Error("Invalid email or password");
+    },
+    validateToken: async () => null,
+  };
+  await withSignIn(async (base) => {
+    const attempt = (password: string) =>
+      fetch(`${base}/api/v1/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "a@b.com", password }),
+      });
+
+    // The module refuses each of these; the point is what happens after ten.
+    for (let tries = 0; tries < 10; tries += 1) {
+      const answer = await attempt(`wrong-guess-${tries}`);
+      assert.equal(answer.status, 401, `attempt ${tries} should be a plain refusal`);
+    }
+
+    const stopped = await attempt("wrong-guess-11");
+    assert.equal(stopped.status, 429);
+    assert.ok(Number(stopped.headers.get("retry-after")) > 0, "and says how long to wait");
+    assert.match((await stopped.json()).error, /too many attempts/);
+  }, POLL_INTERVAL_SECONDS, refusing);
 });
