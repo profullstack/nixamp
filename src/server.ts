@@ -43,6 +43,7 @@ import {
   SignIn,
 } from "./oauth.ts";
 import { needsAdmin, Owner } from "./owner.ts";
+import { playJingle } from "./jingle.ts";
 import { stateDir } from "./daemon.ts";
 import { readSession } from "./session.ts";
 import { Directory, ENDED_TTL_MS, parseAnnouncement, type Listing } from "./directory.ts";
@@ -112,6 +113,8 @@ export interface ServeOptions {
   key: boolean;
   /** Mint a new share key rather than reusing the one this port had. */
   newKey: boolean;
+  /** Start without the noise it makes when it wakes up. */
+  noJingle: boolean;
   /**
    * Ask the local firewall to let the port through, and put it back on the way
    * out. Off by default because it changes the machine, not just this process.
@@ -205,6 +208,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     media: true,
     key: true,
     newKey: false,
+    noJingle: false,
     openPort: false,
     announce: false,
     directory: false,
@@ -279,6 +283,8 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.owner = value();
     } else if (arg === "--new-key") {
       options.newKey = true;
+    } else if (arg === "--no-jingle") {
+      options.noJingle = true;
     } else if (arg === "--ingest") {
       options.ingest = true;
     } else if (arg === "--rtmp-streams") {
@@ -3052,6 +3058,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // Empty on purpose. The walk happens below, once the port is open: it is
   // the slowest part of starting and nothing about it needs to happen first.
   const engine = new PlayerEngine([], root, tools);
+
+  // A serving machine with speakers is still a player. A headless one has no
+  // ffplay, and playJingle answers that by doing nothing.
+  if (!options.noJingle) playJingle(tools);
 
   const web = options.web !== null ? resolve(options.web) : defaultWebDir();
   // The same keys this port used last time, so a link somebody was given

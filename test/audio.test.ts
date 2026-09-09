@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { videoArgs, detectTools, formatTime, peaks, probe, RATE, Stream, toMono } from "../src/audio.ts";
 import { Analyser, bandEdges, bands } from "../src/fft.ts";
+import { findJingle, playJingle } from "../src/jingle.ts";
 import { findAudio, isAudio, displayName } from "../src/playlist.ts";
 
 const tools = detectTools();
@@ -213,4 +214,81 @@ test("a transport stream never has its audio copied", () => {
   // a transport stream uses, not about AAC.
   const file = videoArgs({ video: "h264", audio: "aac", container: "mov,mp4,m4a" });
   assert.deepEqual(file.slice(0, 4), ["-c:v", "copy", "-c:a", "copy"]);
+});
+
+test("your own jingle wins, and there is one when you have none", () => {
+  const shipped = "/pkg/web/dist/nixamp.mp3";
+
+  // Yours, dropped in your home directory. Loosely matched on purpose: the
+  // point is that a file you put there is picked up, not that you named it
+  // exactly right.
+  assert.equal(
+    findJingle("/home/me", shipped, () => ["notes.txt", "NixAmp Whips the D-M-C-As.mp3"], () => true),
+    "/home/me/NixAmp Whips the D-M-C-As.mp3",
+  );
+  assert.equal(
+    findJingle("/home/me", shipped, () => ["nixamp-mine.MP3"], () => true),
+    "/home/me/nixamp-mine.MP3",
+  );
+
+  // Nothing of yours: the one that ships, so it works on a machine that has
+  // never heard of any of this.
+  assert.equal(findJingle("/home/me", shipped, () => ["holiday.jpg"], () => true), shipped);
+
+  // Not an mp3, and not something that merely mentions the name.
+  assert.equal(findJingle("/home/me", shipped, () => ["nixamp.txt", "my-nixamp.mp3"], () => true), shipped);
+
+  // No jingle anywhere is silence rather than a crash.
+  assert.equal(findJingle("/home/me", shipped, () => [], () => false), null);
+  assert.equal(findJingle("/home/me", null, () => [], () => false), null);
+
+  // A home directory that cannot be read is not a reason to fail.
+  assert.equal(findJingle("/home/me", shipped, () => { throw new Error("nope"); }, () => true), shipped);
+});
+
+test("a machine that cannot make a sound plays no jingle", () => {
+  const never = (): never => {
+    throw new Error("should not have been spawned");
+  };
+  // A headless server has no ffplay, and there is nothing to say about that.
+  assert.equal(playJingle({ ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null }, "/tmp/x.mp3", never), false);
+  // And nothing to play is nothing to play.
+  assert.equal(playJingle({ ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: ["ffplay"] }, null, never), false);
+  // Turned off on purpose stays off.
+  assert.equal(
+    playJingle({ ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: ["ffplay"] }, "/tmp/x.mp3", never,
+      { NIXAMP_NO_JINGLE: "1" }),
+    false,
+  );
+});
+
+test("the jingle is played once, without a window, and gets out of the way", () => {
+  // Asserted on the command rather than on the sound, because the machine this
+  // runs on has no speakers and neither does any build server.
+  const runs: { command: string; args: string[] }[] = [];
+  const fake = (command: string, args: string[]) => {
+    runs.push({ command, args });
+    return { on: () => undefined, unref: () => undefined };
+  };
+
+  assert.equal(
+    playJingle(
+      { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: ["mise", "exec", "ffmpeg@latest", "--", "ffplay"] },
+      "/home/me/NixAmp Whips the D-M-C-As.mp3",
+      fake,
+      {},
+    ),
+    true,
+  );
+
+  assert.equal(runs.length, 1);
+  // The player as it was found, whatever shape that took.
+  assert.equal(runs[0]?.command, "mise");
+  assert.deepEqual(runs[0]?.args.slice(0, 4), ["exec", "ffmpeg@latest", "--", "ffplay"]);
+  // No window, and it exits when the sound does rather than lingering as a
+  // process somebody has to notice and kill.
+  assert.ok(runs[0]?.args.includes("-nodisp"));
+  assert.ok(runs[0]?.args.includes("-autoexit"));
+  // The file last, and unmangled: the name has spaces and dashes in it.
+  assert.equal(runs[0]?.args.at(-1), "/home/me/NixAmp Whips the D-M-C-As.mp3");
 });

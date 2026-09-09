@@ -34,6 +34,15 @@ const VOLUME_KEY = "nixamp.volume";
  * it is one tick away.
  */
 const LISTEN_HERE_KEY = "nixamp.listenHere";
+/**
+ * Whether this tab has already made its noise.
+ *
+ * sessionStorage, not localStorage: once per new page in this tab is the
+ * behaviour somebody means by "on startup". A sound you like the first time is
+ * a sound you resent the fourth, and one that fires on every navigation is the
+ * fourth by lunchtime.
+ */
+const JINGLE_KEY = "nixamp.jingled";
 
 type Mode = "local" | "remote";
 
@@ -2368,6 +2377,45 @@ export function start(): void {
     note = "";
     remote.connect(here);
     draw();
+  })();
+
+  // The noise it makes when it wakes up.
+  //
+  // Played straight away if the browser allows it. Most will not without
+  // something from the person first -- an autoplaying page is a thing browsers
+  // spent a decade learning to refuse -- so a refusal arms it to go on the
+  // first click or keypress instead, once, and then never again this session.
+  void (() => {
+    let already = false;
+    try {
+      already = sessionStorage.getItem(JINGLE_KEY) === "1";
+    } catch {
+      // Private mode. One jingle is not worth refusing to start over.
+    }
+    if (already) return;
+
+    const jingle = new Audio("/nixamp.mp3");
+    jingle.volume = 0.7;
+    const spend = (): void => {
+      try {
+        sessionStorage.setItem(JINGLE_KEY, "1");
+      } catch { /* private mode */ }
+    };
+    const armed = (): void => {
+      document.removeEventListener("pointerdown", armed);
+      document.removeEventListener("keydown", armed);
+      spend();
+      void jingle.play().catch(() => {});
+    };
+
+    void jingle.play().then(
+      spend,
+      () => {
+        // Refused, which is ordinary. Wait for the first thing they do.
+        document.addEventListener("pointerdown", armed, { once: true });
+        document.addEventListener("keydown", armed, { once: true });
+      },
+    );
   })();
 
   draw();

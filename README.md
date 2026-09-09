@@ -363,6 +363,16 @@ until you restart it.
 An added block can be taken back out from the playlist itself: its heading
 carries an `×`.
 
+## The noise it makes
+
+nixamp plays a jingle when it starts, once per session, the way Winamp did.
+Drop your own at `~/NixAmp-anything.mp3` and it will be used instead of the one
+that ships. `--no-jingle`, or `NIXAMP_NO_JINGLE=1`, turns it off.
+
+On the web it plays on a fresh page if the browser allows it, and otherwise on
+your first click -- browsers spent a decade learning to refuse pages that make
+noise unasked, and this one does not argue with them.
+
 ## How it works
 
 One decode feeds both your speakers and the display. `ffmpeg` writes raw 32-bit float samples to a pipe; nixamp reads every sample on its way past, runs an FFT over it, and hands the same bytes to `ffplay`.
