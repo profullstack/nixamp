@@ -14,6 +14,7 @@ import {
 import {
   blockedAsMixedContent,
   RemoteClient, fetchSnapshot, normalizeBase, probeServer,
+  rungName, stepDown,
   type Status,
 } from "./remote.ts";
 import { bandEdges, bands, decay, drawSpectrum, holdPeaks } from "./spectrum.ts";
@@ -105,6 +106,16 @@ export function start(): void {
   let remoteDetail = "";
   let note = "Pick files, or connect to a nixamp running somewhere else.";
   let scrubbing = false;
+  /**
+   * How much of the link this stream is allowed to use. 0 is the original.
+   *
+   * A film at eight megabits over a link that carries under two is not slow,
+   * it is unwatchable, and no amount of buffering fixes a stream that arrives
+   * more slowly than it plays. Stalls are counted and the answer is to ask the
+   * server for less.
+   */
+  let rung = 0;
+  let stalls = 0;
 
   let bars: number[] = new Array<number>(BAND_COUNT).fill(0);
   let peaks: number[] = new Array<number>(BAND_COUNT).fill(0);
@@ -202,12 +213,32 @@ export function start(): void {
     draw();
   }
 
+  /**
+   * Ask for a smaller stream after the second stall.
+   *
+   * One stall is a seek, a hiccup, or a laptop waking from sleep. Two in the
+   * same track is the link telling you it cannot carry this, and the only
+   * useful reply is to want less of it.
+   */
+  const onStall = (): void => {
+    if (mode !== "remote" || remoteDrives()) return;
+    stalls += 1;
+    if (stalls < 2) return;
+    const next = stepDown(rung);
+    if (next === null) return;
+    rung = next;
+    stalls = 0;
+    note = `Buffering, so asking for ${rungName(rung)}.`;
+    void listenTo(snapshot.index);
+    draw();
+  };
+
   async function listenTo(next: number): Promise<void> {
     const track = snapshot.tracks[next];
     if (!track) return;
     await player.load({
       title: track.title, artist: track.artist, album: track.album,
-      duration: track.duration, url: remote.media(next),
+      duration: track.duration, url: remote.media(next, rung),
       // It was false for everything, so a film played its soundtrack over a
       // blank panel. The server says which tracks have a picture.
       video: track.video === true,

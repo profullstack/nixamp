@@ -1954,14 +1954,20 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // to it raw is bytes it cannot play. Seeking is what this route is for
       // and transcoding gives it up, but an unseekable film beats a silent
       // one -- and the seekable formats are untouched.
-      if (playsInBrowser(file)) {
+      // A ceiling the caller asked for, because only the caller knows what its
+      // link can carry. Capped at both ends: nothing below 200k is watchable,
+      // and above 20 megabits the original was always the better answer.
+      const asked = Number(url.searchParams.get("kbps") ?? "");
+      const capKbps = Number.isFinite(asked) && asked > 0 ? Math.min(20_000, Math.max(200, asked)) : 0;
+
+      if (playsInBrowser(file) && capKbps === 0) {
         sendFile(request, response, file);
       } else if (hasPicture(file)) {
         // A film. It used to arrive as MP3 with `-vn`, which is to say as a
         // soundtrack over a blank panel; what ffprobe finds inside decides how
         // little work it takes to keep the picture.
         const codecs = await codecsOf({ ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, file);
-        pipeFfmpeg(request, response, file, options.ffmpeg ?? ["ffmpeg"], videoArgs(codecs), "video/mp4");
+        pipeFfmpeg(request, response, file, options.ffmpeg ?? ["ffmpeg"], videoArgs(codecs, capKbps), "video/mp4");
       } else {
         transcode(request, response, file, options.ffmpeg ?? ["ffmpeg"]);
       }
