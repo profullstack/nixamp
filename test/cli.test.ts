@@ -35,7 +35,7 @@ test("the installed binary actually runs the CLI",
     assert.equal(help.code, 0);
     assert.match(help.out, /nixamp \[source\]/);
     assert.match(help.out, /nixamp serve/);
-    assert.match(help.out, /nixamp daemon start\|stop\|status/);
+    assert.match(help.out, /nixamp daemon start\|restart\|stop\|status/);
     assert.match(help.out, /nixamp admin/);
     assert.match(help.out, /--port/);
     assert.match(help.out, /--open-port/);

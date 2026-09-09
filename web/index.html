@@ -135,6 +135,24 @@
           <ul id="servers-list" class="directory-list"></ul>
         </section>
 
+        <!-- What to send somebody who is not technical: one link, one number,
+             one code. Everything else about this page assumes you know what a
+             server is; this part must not. -->
+        <section class="panel player-only" data-title="Share this stream" id="share-panel" hidden>
+          <p class="hint" id="share-note">Checking…</p>
+          <label class="share-line">
+            <span class="share-what">Link</span>
+            <input id="share-link" type="text" readonly aria-label="Link to this stream" />
+            <button id="share-copy" type="button" class="ghost">Copy</button>
+          </label>
+          <p class="hint" id="share-phone" hidden></p>
+          <form id="share-send" class="picker" hidden>
+            <input id="share-to" type="text" inputmode="email"
+                   placeholder="a phone number or an email" aria-label="Who to send it to" />
+            <button type="submit" class="button">Send it</button>
+          </form>
+        </section>
+
         <section class="panel player-only" data-title="Admin" id="admin-panel" hidden>
           <p class="hint" id="admin-note">Checking…</p>
           <table class="admin-table" id="admin-connections"></table>

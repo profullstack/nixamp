@@ -139,6 +139,17 @@ export class RemoteClient {
     return apiUrl(this.base, path, this.key);
   }
 
+  /**
+   * The link that gets somebody else to this stream.
+   *
+   * Put back together from the two halves it was taken apart into, because
+   * what a person passes on is the whole thing.
+   */
+  get shareLink(): string {
+    if (this.base === "") return "";
+    return this.key === "" ? this.base : `${this.base}/s/${this.key}`;
+  }
+
   get connected(): boolean {
     return this.source !== null;
   }

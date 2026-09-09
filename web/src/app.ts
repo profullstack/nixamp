@@ -102,6 +102,13 @@ export function start(): void {
     notifyPhoneNote: need<HTMLParagraphElement>("notify-phone-note"),
     directoryNote: need<HTMLParagraphElement>("directory-note"),
     directoryList: need<HTMLUListElement>("directory-list"),
+    sharePanel: need<HTMLElement>("share-panel"),
+    shareNote: need<HTMLParagraphElement>("share-note"),
+    shareLink: need<HTMLInputElement>("share-link"),
+    shareCopy: need<HTMLButtonElement>("share-copy"),
+    sharePhone: need<HTMLParagraphElement>("share-phone"),
+    shareSend: need<HTMLFormElement>("share-send"),
+    shareTo: need<HTMLInputElement>("share-to"),
     listenHere: need<HTMLInputElement>("listen-here"),
     volume: need<HTMLInputElement>("volume"),
     prev: need<HTMLButtonElement>("prev"),
@@ -140,6 +147,16 @@ export function start(): void {
    * same video played however many times you clicked another.
    */
   let watching = -1;
+  /**
+   * A stream somebody was sent, waiting on them to sign in.
+   *
+   * The whole point of an invite is that the person opening it is not
+   * technical: they get a link, they click it, and this page is the player.
+   * They still have to be signed in -- a stream can ask to be paid for, and
+   * there is nobody to charge without an account -- so the link is remembered
+   * across the sign-in rather than lost by it.
+   */
+  let invited = "";
 
   let bars: number[] = new Array<number>(BAND_COUNT).fill(0);
   let peaks: number[] = new Array<number>(BAND_COUNT).fill(0);
@@ -625,7 +642,14 @@ export function start(): void {
       const version = await probeServer(base, undefined, key);
       if (version === null) {
         remoteStatus = "error";
-        remoteDetail = "no nixamp answered there";
+        remoteDetail = "not answering";
+        // The two reasons are different problems and deserve different
+        // sentences: a machine that is off needs starting, an address that is
+        // wrong needs correcting, and "no nixamp answered there" covered both
+        // by describing neither.
+        note =
+          `Nothing answered at ${base}. If that is your machine, it is off or ` +
+          "nixamp is not running on it; otherwise check the address.";
         mode = "local";
         draw();
         return;
@@ -650,6 +674,7 @@ export function start(): void {
       // mean the next visit reconnects to a server that then refuses it.
       try { localStorage.setItem(REMOTE_KEY, typed.trim()); } catch { /* private mode */ }
       remote.connect(typed);
+      void loadShare();
       draw();
     })();
   });
@@ -959,11 +984,32 @@ export function start(): void {
         detail.textContent = entry.url;
         label.append(name, detail);
 
-        const open = document.createElement("a");
+        // Connects here rather than navigating to the server's own copy of
+        // this same page. Going there gains nothing -- it is the same player
+        // against the same server -- and it loses the account you are signed
+        // in to, which is the half that knows who you are.
+        const open = document.createElement("button");
+        open.type = "button";
         open.className = "button";
         open.textContent = "Open";
-        open.href = entry.key ? `${entry.url}/s/${entry.key}` : entry.url;
-        open.rel = "noreferrer";
+        open.addEventListener("click", () => {
+          dom.remoteUrl.value = entry.key ? `${entry.url}/s/${entry.key}` : entry.url;
+          dom.remoteForm.requestSubmit();
+        });
+
+        // Asked rather than assumed. A machine you turned off looks exactly
+        // like a machine that is up until you click Open and nothing happens,
+        // and "nothing happens" is the least useful thing a list can say.
+        void probeServer(entry.url).then((version) => {
+          if (version !== null) {
+            detail.textContent = `${entry.url} · ${version}`;
+            return;
+          }
+          detail.textContent = `${entry.url} · not answering`;
+          item.classList.add("offline");
+          open.disabled = true;
+          open.title = "That machine is not answering. Start nixamp on it.";
+        });
 
         const forget = document.createElement("button");
         forget.type = "button";
@@ -1348,7 +1394,22 @@ export function start(): void {
       meId = "";
       showAccount(null);
     }
+    openInvitedStream();
   };
+
+  /**
+   * Open the stream this page was linked to, once there is somebody to open it.
+   *
+   * Called after every answer about who is signed in, including the one that
+   * comes back after signing in, so an invited link survives the detour.
+   */
+  function openInvitedStream(): void {
+    if (invited === "" || meId === "") return;
+    const stream = invited;
+    invited = "";
+    dom.remoteUrl.value = stream;
+    dom.remoteForm.requestSubmit();
+  }
 
   dom.accountToggle.addEventListener("click", () => {
     creating = !creating;
@@ -1402,6 +1463,21 @@ export function start(): void {
     })();
   });
 
+  // Somebody was sent here to watch something, and the address is in the link.
+  // Read before anybody is asked who is signed in, because the answer to that
+  // question is what opens it: set afterwards, the invite arrived too late and
+  // the page just sat there.
+  try {
+    const asked = new URL(globalThis.location.href).searchParams.get("url") ?? "";
+    if (asked !== "") {
+      invited = asked;
+      dom.remoteUrl.value = asked;
+      note = "Sign in to watch this stream.";
+      // Not something to leave in the address bar: it carries a key.
+      globalThis.history?.replaceState(null, "", globalThis.location.pathname);
+    }
+  } catch { /* a URL we cannot read is a URL with no invite in it */ }
+
   void showProviders();
   void askWhoIsSignedIn();
   void checkAdmin();
@@ -1418,10 +1494,116 @@ export function start(): void {
   dom.disconnect.addEventListener("click", () => {
     remote.close();
     watching = -1;
+    dom.sharePanel.hidden = true;
     mode = "local";
     remoteStatus = "idle";
     remoteDetail = "";
     draw();
+  });
+
+  /**
+   * Fill in the one panel that answers "how do I send this to somebody?".
+   *
+   * Three things and no jargon: a link that opens this stream on nixamp.com, a
+   * number to call, and the code to key. The link is the important one -- most
+   * people have a browser in their hand -- and the phone is the fallback that
+   * needs no browser at all. The call is not another way to hear the stream:
+   * it is the room where the people watching talk to each other.
+   */
+  const loadShare = async (): Promise<void> => {
+    if (mode !== "remote" || remote.shareLink === "") {
+      dom.sharePanel.hidden = true;
+      return;
+    }
+    dom.sharePanel.hidden = false;
+
+    // Through this page, so the person opening it gets a player rather than a
+    // server's API. An http stream cannot be reached from an https page at
+    // all, so that one is sent as itself.
+    const stream = remote.shareLink;
+    const here = globalThis.location.origin;
+    dom.shareLink.value = stream.startsWith("https://")
+      ? `${here}/?url=${encodeURIComponent(stream)}`
+      : stream;
+
+    dom.shareNote.textContent = "Anyone with this link can watch. They sign in once, then it opens.";
+
+    // The phone number and the code come from the directory, and a stream only
+    // has a code once it has been published to one.
+    dom.sharePhone.hidden = true;
+    dom.shareSend.hidden = true;
+    try {
+      const answer = await fetch("/api/directory");
+      if (!answer.ok) return;
+      const body = (await answer.json()) as {
+        streams?: { url: string; code: string }[];
+        callIn?: string;
+      };
+      const origin = new URL(stream).origin;
+      const listing = (body.streams ?? []).find((one) => {
+        try {
+          return new URL(one.url).origin === origin;
+        } catch {
+          return false;
+        }
+      });
+      if (!listing || !body.callIn) {
+        dom.sharePhone.hidden = false;
+        dom.sharePhone.textContent =
+          "Publish this stream (nixamp serve --announce) to get a phone number and a code for it.";
+        return;
+      }
+      dom.sharePhone.hidden = false;
+      dom.sharePhone.innerHTML = "";
+      dom.sharePhone.append(
+        document.createTextNode("To talk about it, call "),
+        boldly(body.callIn),
+        document.createTextNode(" and key "),
+        boldly(listing.code),
+        document.createTextNode(". That is a room with everyone else watching — not the stream itself."),
+      );
+      dom.shareSend.hidden = false;
+    } catch {
+      // No directory here. The link on its own is still the whole point.
+    }
+  };
+
+  /** A span, because textContent on a parent would wipe the siblings. */
+  function boldly(text: string): HTMLElement {
+    const b = document.createElement("b");
+    b.textContent = text;
+    return b;
+  }
+
+  dom.shareCopy.addEventListener("click", () => {
+    dom.shareLink.select();
+    void navigator.clipboard?.writeText(dom.shareLink.value).then(
+      () => { dom.shareNote.textContent = "Copied. Send it to anybody."; },
+      () => { dom.shareNote.textContent = "Copy it from the box above."; },
+    );
+  });
+
+  dom.shareSend.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const to = dom.shareTo.value.trim();
+    if (to === "") return;
+    void (async () => {
+      dom.shareNote.textContent = "Sending…";
+      try {
+        const answer = await fetch("/api/v1/invite", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ to, stream: remote.shareLink }),
+        });
+        const body = (await answer.json()) as { error?: string; sent?: string };
+        dom.shareNote.textContent = answer.ok
+          ? `Sent to ${body.sent ?? to}.`
+          : (body.error ?? "that did not send");
+        if (answer.ok) dom.shareTo.value = "";
+      } catch {
+        dom.shareNote.textContent = "could not send that";
+      }
+    })();
   });
 
   dom.listenHere.addEventListener("change", () => {

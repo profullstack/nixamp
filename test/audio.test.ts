@@ -166,17 +166,17 @@ test("skipping a track does not report the killed decoder as a failure", async (
 test("what ffprobe found decides how much work the film is", () => {
   // Already H.264 with AAC: the container is the only thing wrong, so both
   // streams are copied and it costs nothing but the rewrap.
-  const remux = videoArgs({ video: "h264", audio: "aac" });
+  const remux = videoArgs({ video: "h264", audio: "aac", container: "matroska,webm" });
   assert.deepEqual(remux.slice(0, 4), ["-c:v", "copy", "-c:a", "copy"]);
 
   // H.264 with DTS, which no browser decodes: keep the picture, redo the sound.
-  const halfway = videoArgs({ video: "h264", audio: "dts" });
+  const halfway = videoArgs({ video: "h264", audio: "dts", container: "matroska,webm" });
   assert.deepEqual(halfway.slice(0, 2), ["-c:v", "copy"]);
   assert.ok(halfway.includes("aac"));
   assert.ok(!halfway.includes("libx264"), "re-encoding a picture nobody asked to change");
 
   // H.265, the case that actually costs something.
-  const full = videoArgs({ video: "hevc", audio: "ac3" });
+  const full = videoArgs({ video: "hevc", audio: "ac3", container: "matroska,webm" });
   assert.deepEqual(full.slice(0, 2), ["-c:v", "libx264"]);
   assert.ok(full.includes("veryfast"), "a film has to arrive at about the speed it plays");
   assert.ok(full.includes("yuv420p"), "10-bit is a picture most browsers refuse");
@@ -191,7 +191,26 @@ test("what ffprobe found decides how much work the film is", () => {
 test("nothing known about a file means transcode, not a guess", () => {
   // An empty probe is what a missing ffprobe answers, and copying streams we
   // have not identified is how a browser gets a file it cannot open.
-  const unknown = videoArgs({ video: "", audio: "" });
+  const unknown = videoArgs({ video: "", audio: "", container: "" });
   assert.deepEqual(unknown.slice(0, 2), ["-c:v", "libx264"]);
   assert.ok(unknown.includes("aac"));
+});
+
+test("a transport stream never has its audio copied", () => {
+  // Every IPTV channel is one of these. Its AAC is ADTS-framed, and copying
+  // that into MP4 makes ffmpeg say "Malformed AAC bitstream detected" and then
+  // write nothing at all -- a channel that loaded, said video/mp4, and handed
+  // over zero bytes. The filter that would fix the framing is refused by the
+  // AC-3 track the same URL offers a minute later, so the audio is re-encoded
+  // rather than argued with. Re-encoding audio is cheap; this failing is total.
+  const live = videoArgs({ video: "h264", audio: "aac", container: "mpegts" });
+  assert.deepEqual(live.slice(0, 2), ["-c:v", "copy"], "the picture is still copied");
+  assert.ok(!live.includes("copy") || live.indexOf("copy") === 1, "only the video is copied");
+  assert.deepEqual(live.slice(2, 4), ["-c:a", "aac"]);
+  assert.ok(live.includes("160k"));
+
+  // The same streams in a file are copied as before: this is about the framing
+  // a transport stream uses, not about AAC.
+  const file = videoArgs({ video: "h264", audio: "aac", container: "mov,mp4,m4a" });
+  assert.deepEqual(file.slice(0, 4), ["-c:v", "copy", "-c:a", "copy"]);
 });
