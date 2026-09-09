@@ -261,6 +261,60 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 
 /* ---- playlist ---------------------------------------------------------- */
 
+/* Finding one thing among thousands. Folders narrow by where something is;
+   this narrows by what it is called, which is the other question people ask. */
+.filter {
+  width: 100%;
+  margin-bottom: 6px;
+  background: #0a100c;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  color: var(--fg);
+  font: inherit;
+  padding: 4px 8px;
+}
+
+.filter:focus { outline: none; border-color: var(--accent); }
+
+/* Where you are in the library, and the way back out. */
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.crumbs button {
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.crumbs button:hover { text-decoration: underline; }
+.crumbs .here { color: var(--fg); }
+
+/* A folder in the list. It is not a track, so it has no number and no time --
+   what it has is how much is inside it. */
+.folder {
+  display: flex;
+  gap: 8px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--accent);
+}
+
+.folder:hover { background: #142019; }
+.folder .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.folder .count { color: var(--muted); flex: none; }
+
 .playlist {
   list-style: none;
   margin: 0;

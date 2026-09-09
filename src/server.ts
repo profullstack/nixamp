@@ -408,6 +408,8 @@ export function safeJoin(rootDir: string, urlPath: string): string | null {
  */
 export type Loaded = Track & {
   group?: string;
+  /** The folder it sits in, relative to what it was loaded from. */
+  folder?: string;
   /**
    * Whether this has a picture, when the name could not say.
    *
@@ -491,6 +493,7 @@ export function toRemoteTracks(tracks: Loaded[]): RemoteTrack[] {
     // Only for what was added; the library's own tracks say nothing, which is
     // how a client knows they are the library.
     ...(t.group ? { group: t.group } : {}),
+    ...(t.folder ? { folder: t.folder } : {}),
   }));
 }
 
@@ -500,6 +503,32 @@ const PICTURE = new Set([".mp4", ".mkv", ".avi", ".mov", ".m4v", ".webm", ".mpg"
 export function hasPicture(path: string): boolean {
   const dot = path.lastIndexOf(".");
   return dot > 0 && PICTURE.has(path.slice(dot).toLowerCase());
+}
+
+/**
+ * Where a track sits, relative to the thing it was loaded from.
+ *
+ * A library is a shelf of albums and seasons, and a flat list of five thousand
+ * files is one nobody can find anything in. This is what lets a player offer
+ * the folders as folders.
+ *
+ * Relative and never absolute: the shape of somebody's library is what a
+ * listener needs, and where it lives on their disk is not.
+ */
+export function folderOf(path: string, from: string): string {
+  const strip = (value: string): string => value.replace(/\/+$/, "");
+  const base = strip(from);
+  if (base === "" || !path.startsWith(base + "/")) return "";
+  const rest = path.slice(base.length + 1);
+  const at = rest.lastIndexOf("/");
+  if (at === -1) return "";
+  const folder = rest.slice(0, at);
+  // A URL's path is percent-encoded and a person reading a folder name is not.
+  try {
+    return isRemote(path) ? decodeURIComponent(folder) : folder;
+  } catch {
+    return folder;
+  }
 }
 
 /**
@@ -711,7 +740,7 @@ export class PlayerEngine implements Engine {
 
   replace(tracks: Track[], root: string): void {
     this.stop();
-    this.tracks = tracks;
+    this.tracks = tracks.map((track) => ({ ...track, folder: folderOf(track.path, root) }));
     this.root = root;
     this.state.index = 0;
     this.state.position = 0;
@@ -735,7 +764,9 @@ export class PlayerEngine implements Engine {
   add(tracks: Track[], from: string): number {
     const group = sourceLabel(from);
     const known = new Set(this.tracks.map((track) => track.path));
-    const fresh = tracks.filter((track) => !known.has(track.path)).map((track) => ({ ...track, group }));
+    const fresh = tracks
+      .filter((track) => !known.has(track.path))
+      .map((track) => ({ ...track, group, folder: folderOf(track.path, from) }));
     if (fresh.length === 0) return 0;
     this.tracks = [...this.tracks, ...fresh];
     // The list itself changed, so it has to ride this frame; a count nobody
@@ -805,7 +836,7 @@ export class PlayerEngine implements Engine {
     // Something is already loaded, so this is a scan that finished after
     // somebody pointed the server elsewhere. Theirs wins.
     if (this.tracks.length > 0) return;
-    this.tracks = tracks;
+    this.tracks = tracks.map((track) => ({ ...track, folder: folderOf(track.path, root) }));
     this.root = root;
     this.state.note = tracks.length === 0 ? `No audio files under ${root}.` : "";
     this.push(true);
@@ -827,7 +858,11 @@ export class PlayerEngine implements Engine {
       changed = true;
       // The group is ours, not the tagger's: it knows what a track is called,
       // not which pile it is in.
-      return { ...tagged, ...(track.group ? { group: track.group } : {}) };
+      return {
+        ...tagged,
+        ...(track.group ? { group: track.group } : {}),
+        ...(track.folder ? { folder: track.folder } : {}),
+      };
     });
     if (!changed) return;
     this.tracks = merged;
@@ -2079,6 +2114,16 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           via: one.via,
           listeners: one.listeners,
           startedAt: one.startedAt,
+        })),
+        // Anything re-streamed into this server is a live stream too, and was
+        // sitting in the middle of the playlist among the files -- which is
+        // what made moving between a channel and an album so confusing. Named
+        // here with the first track it owns, so it can be played from the list
+        // of what is live rather than hunted for among five thousand files.
+        restreams: engine.groups().map((name) => ({
+          name,
+          at: (engine.snapshot().tracks ?? []).findIndex((track) => track.group === name),
+          tracks: (engine.snapshot().tracks ?? []).filter((track) => track.group === name).length,
         })),
       });
       return;
