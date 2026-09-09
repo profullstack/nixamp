@@ -44,8 +44,8 @@ export function apiUrl(base: string, path: string, key = ""): string {
  * A share link split into the two things it is.
  *
  * People paste the link they were given, which is an address with a key on the
- * end of it: `https://host:4321/s/KEY`. As a base that is useless -- there is
- * no /s/KEY/api/state, and asking for one gets a 404 -- and thrown away it is
+ * end of it: `https://host:4321/a/KEY`. As a base that is useless -- there is
+ * no /a/KEY/api/state, and asking for one gets a 404 -- and thrown away it is
  * worse, because without the key every request from another origin is a 401.
  * So it is taken apart and both halves are kept.
  */
@@ -59,9 +59,8 @@ export function splitShareLink(input: string): { base: string; key: string } {
     return { base: "", key: "" };
   }
 
-  // Any shape a key arrives in: /a/ administers, /v/ only views, and /s/ is
-  // what both used to be -- kept because links already handed out still work.
-  const share = /^\/[avs]\/([^/]+)\/?$/.exec(url.pathname);
+  // Either shape a key arrives in: /a/ administers, /v/ only views.
+  const share = /^\/[av]\/([^/]+)\/?$/.exec(url.pathname);
   const key = share?.[1] ?? url.searchParams.get("k") ?? "";
   if (share) url.pathname = "/";
   url.searchParams.delete("k");
@@ -278,7 +277,7 @@ export async function refusesUs(base: string, key = "", signal?: AbortSignal): P
   if (response.ok) return "";
   if (response.status === 401) {
     return key === ""
-      ? "That server needs its share link. Paste the whole link — the one ending in /s/… — or sign in as its owner."
+      ? "That server needs its share link. Paste the whole link — the one with /a/ or /v/ in it — or sign in as its owner."
       : "That share link is not accepted by that server. It may have been restarted, which gives it a new one.";
   }
   if (response.status === 403) return "That link can listen but not drive this server.";

@@ -9,7 +9,7 @@ import { createApp, themes, type Container, type KeyEvent, type Theme } from "@p
 import type { Color } from "@profullstack/hqtui";
 import type { Connection } from "./connections.ts";
 import { daemonUrl, isLoopbackTls, readState } from "./daemon.ts";
-import { KEY_HEADER } from "./share.ts";
+import { KEY_HEADER, shareLink } from "./share.ts";
 
 interface Report {
   connections: Connection[];
@@ -66,7 +66,7 @@ export function resolveTarget(argv: string[]): AdminOptions {
         "  Or administer another machine, with its share link:\n" +
         "                    nixamp admin --url https://server1.you.nixamp.com:4321 --key KEY\n" +
         "  The URL and key are the two halves of the link that server printed:\n" +
-        "  https://host:4321/s/KEY",
+        "  https://host:4321/a/KEY",
     );
   }
   const url_ = daemonUrl(state);
@@ -278,7 +278,7 @@ export function draw(ui: Container, theme: Theme, view: View): void {
     const width = Math.max(...view.links.map((link) => link.label.length));
     ui.panel({ title: "Share links", size: view.links.length + (view.source ? 3 : 2) }, (p) => {
       for (const link of view.links) {
-        const full = view.key === null ? link.url : `${link.url}/s/${view.key}`;
+        const full = shareLink(link.url, view.key);
         p.text(`${link.label.padEnd(width)}  ${full}`, {
           fg: link.label === "on the internet" ? theme.accent : theme.foreground,
         });

@@ -267,14 +267,14 @@ test("an https page cannot reach an http server, and says so before trying", () 
 
 test("a pasted share link is an address and a key, and both are needed", () => {
   // What people actually paste. Kept whole it is a 404 -- there is no
-  // /s/KEY/api/state -- and with the key thrown away every request from
+  // /a/KEY/api/state -- and with the key thrown away every request from
   // another origin is a 401. Neither half is optional.
-  assert.deepEqual(splitShareLink("https://chovy.nixamp.com:4321/s/kk8a7LvceeVg1NassmuBwA"), {
+  assert.deepEqual(splitShareLink("https://chovy.nixamp.com:4321/a/kk8a7LvceeVg1NassmuBwA"), {
     base: "https://chovy.nixamp.com:4321",
     key: "kk8a7LvceeVg1NassmuBwA",
   });
   // Trailing slash, and the query form the API itself takes.
-  assert.deepEqual(splitShareLink("http://box.local:4321/s/ABC/"), {
+  assert.deepEqual(splitShareLink("http://box.local:4321/v/ABC/"), {
     base: "http://box.local:4321",
     key: "ABC",
   });
@@ -349,7 +349,7 @@ test("the installed app is padded away from every edge of the phone", () => {
 });
 
 test("a share link has to be taken apart before a server is asked anything", async () => {
-  // A nixamp with a key: the key rides in ?k=, and /s/KEY is a page for people
+  // A nixamp with a key: the key rides in ?k=, and /a/KEY is a page for people
   // rather than a prefix the API lives under.
   const KEY = "sekrit";
   const server = createServer((request, response) => {
@@ -368,11 +368,11 @@ test("a share link has to be taken apart before a server is asked anything", asy
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const { port } = server.address() as AddressInfo;
   const origin = `http://127.0.0.1:${port}`;
-  const shareLink = `${origin}/s/${KEY}`;
+  const shareLink = `${origin}/a/${KEY}`;
 
   try {
     // The bug, kept here so it cannot come back: pasted whole, the link is not
-    // an address. Probing it asks for /s/KEY/api/health, gets a 404, and the
+    // an address. Probing it asks for /a/KEY/api/health, gets a 404, and the
     // page reports "no nixamp answered there" about a server that was healthy
     // the whole time -- which is what picking your own server did.
     assert.equal(await probeServer(normalizeBase(shareLink)), null);
