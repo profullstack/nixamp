@@ -43,22 +43,31 @@ export function mediaUrl(base: string, index: number): string {
 export function parseSnapshot(input: unknown): Snapshot | null {
   if (typeof input !== "object" || input === null) return null;
   const record = input as Record<string, unknown>;
-  if (!Array.isArray(record.tracks)) return null;
   const base = emptySnapshot();
   const numeric = (value: unknown, fallback: number): number =>
     typeof value === "number" && Number.isFinite(value) ? value : fallback;
   const levels = Array.isArray(record.levels) ? record.levels : [];
+  // A frame carries the library only when it has changed, so a frame without
+  // one is ordinary rather than malformed. Refusing those would have thrown
+  // away every frame but the first.
+  const tracks = Array.isArray(record.tracks)
+    ? record.tracks.map((raw) => {
+        const t = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
+        return {
+          title: typeof t.title === "string" ? t.title : "Untitled",
+          artist: typeof t.artist === "string" ? t.artist : "",
+          album: typeof t.album === "string" ? t.album : "",
+          duration: numeric(t.duration, 0),
+          // Rebuilding a track field by field drops anything not listed, and
+          // this one is the difference between a film and its soundtrack.
+          ...(t.video === true ? { video: true } : {}),
+        };
+      })
+    : undefined;
   return {
     revision: numeric(record.revision, 0),
-    tracks: record.tracks.map((raw) => {
-      const t = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
-      return {
-        title: typeof t.title === "string" ? t.title : "Untitled",
-        artist: typeof t.artist === "string" ? t.artist : "",
-        album: typeof t.album === "string" ? t.album : "",
-        duration: numeric(t.duration, 0),
-      };
-    }),
+    ...(tracks ? { tracks } : {}),
+    trackCount: numeric(record.trackCount, tracks?.length ?? 0),
     index: numeric(record.index, 0),
     playing: record.playing === true,
     position: numeric(record.position, 0),
