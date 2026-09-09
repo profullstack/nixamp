@@ -7,6 +7,9 @@
  * apart within seconds and the bars would stop matching what you hear.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export const RATE = 44100;
 export const CHANNELS = 2;
@@ -35,14 +38,53 @@ function works(argv: string[]): boolean {
 }
 
 /**
+ * Everywhere a version manager or a package manager tends to leave ffmpeg.
+ *
+ * A daemon is started detached and inherits whatever environment happened to
+ * be around, which on a machine that installs ffmpeg through mise is a PATH
+ * with neither `ffmpeg` nor `mise` on it. Every probe then fails, and a
+ * failed probe means "no video stream" -- so a television channel arrived as
+ * its own soundtrack and nothing anywhere said why. Looking is cheaper than
+ * asking somebody to fix their PATH for a process they did not start.
+ *
+ * Newest first, so a machine with several installed uses the one it would
+ * have used anyway.
+ */
+function installedElsewhere(name: string): string[][] {
+  const home = homedir();
+  const roots = [
+    join(home, ".local", "share", "mise", "installs", "ffmpeg"),
+    join(home, ".asdf", "installs", "ffmpeg"),
+  ];
+  const found: string[][] = [];
+  for (const root of roots) {
+    let versions: string[];
+    try {
+      versions = readdirSync(root).sort().reverse();
+    } catch {
+      continue;
+    }
+    for (const version of versions) found.push([join(root, version, "bin", name)]);
+  }
+  // The ordinary absolute places, for a PATH that has been emptied rather than
+  // merely shortened.
+  for (const dir of ["/usr/local/bin", "/usr/bin", "/opt/homebrew/bin", "/snap/bin"]) {
+    found.push([join(dir, name)]);
+  }
+  return found;
+}
+
+/**
  * Find the tools. A bare `ffmpeg` on PATH is tried first; mise shims are common
  * on developer machines and need `mise exec` because the shim itself fails when
- * no version is pinned.
+ * no version is pinned. Failing both, the places these are actually installed
+ * are looked in directly, because a detached daemon's PATH is not the operator's.
  */
 export function detectTools(): Tools {
   const candidates = (name: string): string[][] => [
     [name],
     ["mise", "exec", `ffmpeg@latest`, "--", name],
+    ...installedElsewhere(name),
   ];
   const pick = (name: string): string[] | null =>
     candidates(name).find((argv) => works(argv)) ?? null;

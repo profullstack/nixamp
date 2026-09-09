@@ -59,8 +59,9 @@ export function splitShareLink(input: string): { base: string; key: string } {
     return { base: "", key: "" };
   }
 
-  // Either shape: the path a share link uses, or the query the API takes.
-  const share = /^\/s\/([^/]+)\/?$/.exec(url.pathname);
+  // Any shape a key arrives in: /a/ administers, /v/ only views, and /s/ is
+  // what both used to be -- kept because links already handed out still work.
+  const share = /^\/[avs]\/([^/]+)\/?$/.exec(url.pathname);
   const key = share?.[1] ?? url.searchParams.get("k") ?? "";
   if (share) url.pathname = "/";
   url.searchParams.delete("k");
@@ -126,6 +127,8 @@ export class RemoteClient {
   private base = "";
   /** The share key, when the address came with one. Empty is same-origin. */
   private key = "";
+  /** Which door the key was handed over at: /a/ administers, /v/ only views. */
+  private shape = "/a/";
   private lastRevision = -1;
 
   constructor(private readonly handlers: RemoteHandlers) {}
@@ -147,7 +150,9 @@ export class RemoteClient {
    */
   get shareLink(): string {
     if (this.base === "") return "";
-    return this.key === "" ? this.base : `${this.base}/s/${this.key}`;
+    // The shape it came in, so an admin link stays an admin link and a view
+    // link stays a view link rather than being quietly relabelled.
+    return this.key === "" ? this.base : `${this.base}${this.shape}${this.key}`;
   }
 
   get connected(): boolean {
@@ -161,6 +166,7 @@ export class RemoteClient {
     this.close();
     this.base = base;
     this.key = key;
+    this.shape = /\/v\/[^/]+\/?$/.test(input.trim()) ? "/v/" : "/a/";
     this.lastRevision = -1;
     this.handlers.onStatus("connecting");
     const source = new EventSource(apiUrl(base, "/api/events", key));

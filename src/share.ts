@@ -271,9 +271,36 @@ export function reachableAddresses(
   ];
 }
 
-/** The full link, key and all. */
-export function shareLink(base: string, key: string | null): string {
-  return key === null ? base : `${base}/s/${key}`;
+/**
+ * The three paths a key can arrive on, and what each one says about itself.
+ *
+ * `/s/` came first and means only "here is a key" -- which is why a person
+ * handed one of two links had no way to tell which they had, and reported the
+ * controls as missing when they were holding the listening one. `/a/` is the
+ * link that administers and `/v/` is the one that only views, so the link says
+ * what it is before anybody clicks it. All three still work: links already
+ * given out do not stop working because the naming improved.
+ */
+export const KEY_PATHS = ["/a/", "/v/", "/s/"] as const;
+
+/** The key in a share link, whichever of the three shapes it came in. */
+export function keyInPath(path: string): string | null {
+  for (const prefix of KEY_PATHS) {
+    if (!path.startsWith(prefix)) continue;
+    const rest = path.slice(prefix.length).replace(/\/+$/, "");
+    if (rest === "" || rest.includes("/")) return null;
+    try {
+      return decodeURIComponent(rest);
+    } catch {
+      return rest;
+    }
+  }
+  return null;
+}
+
+/** The full link, key and all. `admin` picks the shape that says which it is. */
+export function shareLink(base: string, key: string | null, admin = true): string {
+  return key === null ? base : `${base}${admin ? "/a/" : "/v/"}${key}`;
 }
 
 /**

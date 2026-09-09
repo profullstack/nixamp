@@ -1098,7 +1098,15 @@ export function start(): void {
             : body.added === 0
               ? "Everything there was already in the playlist."
               : `Added ${body.added ?? 0} tracks from ${source}.`);
-        if (answer.ok) dom.adminSource.value = "";
+        if (answer.ok) {
+          dom.adminSource.value = "";
+          // Re-streaming something is usually the moment you want people to
+          // find it, and a server that is not listed is not findable -- which
+          // is why the directory kept saying nobody was streaming while you
+          // were. The panel with the Go live button is redrawn here so it is
+          // in front of you rather than somewhere to go looking for.
+          void loadShare();
+        }
       } catch {
         said("could not reach the server");
       }
@@ -1754,7 +1762,11 @@ export function start(): void {
     // Through this page, so the person opening it gets a player rather than a
     // server's API. An http stream cannot be reached from an https page at
     // all, so that one is sent as itself.
-    const stream = remote.shareLink;
+    //
+    // Filled in below with the server's own view-only link when it offers one.
+    // Handing over the link you are holding would hand over the controls with
+    // it if you are an admin, which is not what "share this" means.
+    let stream = remote.shareLink;
     const here = globalThis.location.origin;
     dom.shareLink.value = stream.startsWith("https://")
       ? `${here}/?url=${encodeURIComponent(stream)}`
@@ -1777,11 +1789,17 @@ export function start(): void {
       // The page's own host keeps no directory. The link still works.
     }
 
-    interface LiveState { live: boolean; code: string; possible: boolean }
+    interface LiveState { live: boolean; code: string; possible: boolean; url?: string }
     let live: LiveState | null = null;
     try {
       const answer = await fetch(remote.url("/api/live/state"));
       if (answer.ok) live = (await answer.json()) as LiveState;
+      if (live?.url) {
+        stream = live.url;
+        dom.shareLink.value = stream.startsWith("https://")
+          ? `${here}/?url=${encodeURIComponent(stream)}`
+          : stream;
+      }
     } catch {
       // An older server, or one we may not administer.
     }
@@ -1796,7 +1814,8 @@ export function start(): void {
     dom.sharePhone.hidden = false;
     if (!live.live) {
       dom.sharePhone.textContent = live.possible
-        ? "Not listed yet. Go live to get a phone number and a code anyone can call."
+        ? "Not listed, so nobody can find this in the directory. Go live to list it, " +
+          "with a phone number and a code anyone can call."
         : "This machine has no address the world can reach, so it cannot be listed.";
       return;
     }

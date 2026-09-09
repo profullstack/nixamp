@@ -14,6 +14,7 @@ import {
   reachableAddresses,
   shareLink,
   rememberedKeys,
+  keyInPath,
 } from "../src/share.ts";
 import { parseServeArgs } from "../src/server.ts";
 
@@ -85,9 +86,29 @@ test("an address is classified by where it actually goes", () => {
   assert.equal(classify("67.205.189.229"), "public");
 });
 
-test("the share link carries the key, and without one is just the address", () => {
-  assert.equal(shareLink("http://10.0.0.5:4321", "abc"), "http://10.0.0.5:4321/s/abc");
+test("a link says which of the two it is, and the old shape still works", () => {
+  // A server hands out two links and they used to look identical -- both
+  // /s/KEY -- so somebody holding the listening one had no way to know, and
+  // reported the controls as missing when they were never going to be there.
+  assert.equal(shareLink("http://10.0.0.5:4321", "abc"), "http://10.0.0.5:4321/a/abc");
+  assert.equal(shareLink("http://10.0.0.5:4321", "abc", false), "http://10.0.0.5:4321/v/abc");
   assert.equal(shareLink("http://10.0.0.5:4321", null), "http://10.0.0.5:4321");
+
+  // All three are read, because a link somebody was already given does not
+  // stop working because the naming got better.
+  assert.equal(keyInPath("/a/abc"), "abc");
+  assert.equal(keyInPath("/v/abc"), "abc");
+  assert.equal(keyInPath("/s/abc"), "abc");
+  assert.equal(keyInPath("/a/abc/"), "abc");
+  // Percent-encoded, because a key rides in a path.
+  assert.equal(keyInPath("/a/a%2Fb"), "a/b");
+
+  // And nothing else is a key.
+  assert.equal(keyInPath("/"), null);
+  assert.equal(keyInPath("/a/"), null);
+  assert.equal(keyInPath("/a/abc/extra"), null);
+  assert.equal(keyInPath("/api/state"), null);
+  assert.equal(keyInPath("/assets/app.js"), null);
 });
 
 test("serve listens on every interface and wants a key, unless told otherwise", () => {
