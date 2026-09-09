@@ -1345,3 +1345,31 @@ test("a whole re-streamed folder is one thing on the air, not twenty", () => {
   assert.deepEqual(liveOnes(engine), [{ name: "Somebody's Album", at: 0, tracks: 3 }]);
   engine.stop();
 });
+
+test("a name somebody chose outlives what the stream says about itself", () => {
+  // Measured on the real server: "MLB Network" went in, ffprobe came back a
+  // moment later, and the channel was called "932" again. Tags are read in
+  // the background and merged in, which is right for a library and wrong for
+  // something a person named.
+  const engine = new PlayerEngine([], "/m", { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null });
+  engine.add(
+    [{
+      path: "http://x.test/live/932", title: "MLB Network",
+      artist: "", album: "", duration: 0, named: true,
+    }],
+    "http://x.test/live/932", "MLB Network",
+  );
+
+  // What ffprobe eventually has to say about it, which is nothing useful.
+  engine.retag(
+    [{ path: "http://x.test/live/932", title: "932", artist: "Service01", album: "", duration: 0 }],
+    "http://x.test/live/932",
+  );
+
+  const tracks = engine.snapshot().tracks ?? [];
+  assert.equal(tracks[0]?.title, "MLB Network");
+  // The rest of what the tagger found is welcome: only the name is spoken for.
+  assert.equal(tracks[0]?.artist, "Service01");
+  assert.deepEqual(liveOnes(engine).map((one) => one.name), ["MLB Network"]);
+  engine.stop();
+});

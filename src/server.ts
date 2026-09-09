@@ -426,6 +426,15 @@ export type Loaded = Track & {
    * the source is added, rather than guessed from a URL that has no opinion.
    */
   picture?: boolean;
+  /**
+   * Whether a person named this, rather than a tagger.
+   *
+   * Tags are read in the background and merged in when they arrive, which is
+   * right for a library and wrong for a channel: somebody called it "MLB
+   * Network", ffprobe came back a moment later with "932", and the name they
+   * chose vanished on its own.
+   */
+  named?: boolean;
 };
 
 /** What the HTTP layer needs from a player. Tests hand it a fake. */
@@ -878,6 +887,9 @@ export class PlayerEngine implements Engine {
         ...tagged,
         ...(track.group ? { group: track.group } : {}),
         ...(track.folder ? { folder: track.folder } : {}),
+        // A name somebody chose outlives whatever the stream says about
+        // itself. It called itself "932".
+        ...(track.named ? { title: track.title, named: true } : {}),
       };
     });
     if (!changed) return;
@@ -2576,7 +2588,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         // Named by hand, so a single channel says what it is rather than what
         // its URL ends in.
         if (called !== "" && tracks.length === 1 && tracks[0]) {
-          tracks = [{ ...tracks[0], title: called }];
+          tracks = [{ ...tracks[0], title: called, named: true }];
         }
 
         let added = tracks.length;
