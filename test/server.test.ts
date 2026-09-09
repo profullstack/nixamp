@@ -1047,7 +1047,10 @@ test("what is live on a server is one list, readable by anybody it let in", asyn
 
   try {
     const body = (await (await fetch(`http://127.0.0.1:${port}/api/streams`)).json()) as {
-      server: { name: string; nowPlaying: string; tracks: number; live: boolean; code: string; url: string };
+      server: {
+        name: string; nowPlaying: string; tracks: number;
+        live: boolean; listed: boolean; playing: boolean; code: string; url: string;
+      };
       channels: { id: string; name: string; via: string; listeners: number }[];
     };
 
@@ -1055,7 +1058,13 @@ test("what is live on a server is one list, readable by anybody it let in", asyn
     // link they can be sent -- the viewing one, never the one that drives.
     assert.equal(body.server.name, "chovy's box");
     assert.equal(body.server.tracks, 2);
-    assert.equal(body.server.live, true);
+
+    // Listed and live are different facts, and conflating them is what made a
+    // stopped server advertise a stream nobody could be in sync with: everyone
+    // who joined began at the beginning, alone.
+    assert.equal(body.server.listed, true, "it is in the directory");
+    assert.equal(body.server.playing, false, "and it is not playing anything");
+    assert.equal(body.server.live, false, "so there is nothing live to join");
     assert.equal(body.server.code, "482917");
     assert.match(body.server.url, /\/view\//);
     assert.ok(!body.server.url.includes("/admin/"), "the list must not hand out the controls");

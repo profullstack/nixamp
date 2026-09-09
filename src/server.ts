@@ -2108,9 +2108,20 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           nowPlaying: engine.snapshot().tracks?.[now.index]?.title ?? "",
           tracks: now.trackCount,
           playing: now.playing,
+          /**
+           * Live means playing, and it did not.
+           *
+           * It meant "listed in a directory", which is a different fact
+           * entirely -- so a stopped server advertised a live stream of a film
+           * nobody was watching, and everybody who joined started it from the
+           * beginning on their own. There is nothing to be in sync with until
+           * something is actually running.
+           */
+          live: state?.live === true && now.playing,
+          /** Findable in the directory, which is what `live` used to mean. */
+          listed: state?.live === true,
           // Only when it has been published: a code is a thing you dial, and
           // one nobody can dial is not worth showing.
-          live: state?.live === true,
           code: state?.code ?? "",
           url: state?.url ?? "",
         },

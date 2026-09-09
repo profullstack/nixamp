@@ -2045,7 +2045,7 @@ export function start(): void {
   interface OnAir {
     server: {
       name: string; nowPlaying: string; tracks: number; playing: boolean;
-      live: boolean; code: string; url: string;
+      live: boolean; listed?: boolean; code: string; url: string;
     };
     channels: { id: string; name: string; via: string; listeners: number; startedAt: number }[];
     restreams?: { name: string; at: number; tracks: number }[];
@@ -2109,22 +2109,36 @@ export function start(): void {
 
     // The server's own stream, first, because it is the one that is always
     // there and the one the directory listing points at.
+    // Whether anything is actually running is the thing worth saying first.
+    // A stopped server used to advertise a live stream of a film nobody was
+    // watching, and everybody who joined started it from the beginning on
+    // their own -- which is not a stream, it is several private screenings.
+    const running = air.server.playing;
+    const canDrive = !dom.adminPanel.hidden;
     rows.push(onAirRow({
       title: air.server.name,
-      // Deliberately not the server's own playing/stopped: that is about the
-      // speakers attached to that machine, and it reads as "this stream is
-      // stopped" to somebody who is watching it perfectly happily from here.
       detail: [
-        air.server.nowPlaying || "nothing loaded",
+        running
+          ? `playing ${air.server.nowPlaying}`
+          : air.server.nowPlaying
+            ? `stopped on ${air.server.nowPlaying}`
+            : "nothing loaded",
         `${air.server.tracks} track${air.server.tracks === 1 ? "" : "s"}`,
-        air.server.live && air.server.code ? `☎ ${air.server.code}` : "not listed",
+        air.server.code ? `☎ ${air.server.code}` : "not listed",
       ].join(" · "),
       // Joining, not starting your own copy. Everybody pointed at this sees
-      // whatever the server is playing, from where it has got to -- which is
-      // the difference between watching a film together and two people
-      // watching the same film separately.
-      playLabel: "Join live",
-      onPlay: () => { void joinLive(air.server.nowPlaying); },
+      // whatever the server is playing, from where it has got to.
+      //
+      // With nothing running there is nothing to join, so somebody who can
+      // drive this server is offered the thing that would fix that instead.
+      playLabel: running ? "Join live" : canDrive ? "Start the stream" : "Nothing playing",
+      onPlay: () => {
+        if (running) {
+          void joinLive(air.server.nowPlaying);
+          return;
+        }
+        if (canDrive) void startTheStream();
+      },
       link: air.server.live ? air.server.url : "",
     }));
 
@@ -2190,6 +2204,30 @@ export function start(): void {
     } catch {
       // Unreachable is a different problem, and already reported.
     }
+  }
+
+  /**
+   * Make the server play, so there is something to be in sync with.
+   *
+   * The room watches what the server is playing. Nothing was ever telling it
+   * to play: "Play on this device" is on by default, so choosing a track
+   * started it in your own browser and left the server stopped -- and a
+   * stopped server has no position, so everybody who joined began at zero,
+   * alone. This is the missing half.
+   */
+  async function startTheStream(): Promise<void> {
+    said("Starting the stream on the server…");
+    try {
+      await remote.send({ type: "play", index: Math.max(0, at()) });
+    } catch {
+      said("could not reach the server");
+      return;
+    }
+    // Watched from here the same way everybody else watches it, so what you
+    // see is what the room sees rather than a private copy that drifts.
+    await joinLive(snapshot.tracks[at()]?.title ?? "");
+    said("Playing to the room. Anybody with the view link sees this.");
+    await loadOnAir();
   }
 
   async function joinLive(title: string): Promise<void> {

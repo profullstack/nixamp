@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { videoArgs, detectTools, formatTime, peaks, probe, RATE, Stream, toMono } from "../src/audio.ts";
 import { Analyser, bandEdges, bands } from "../src/fft.ts";
@@ -312,4 +313,24 @@ test("the jingle is played once, without a window, and gets out of the way", () 
   assert.ok(runs[0]?.args.includes("-autoexit"));
   // The file last, and unmangled: the name has spaces and dashes in it.
   assert.equal(runs[0]?.args.at(-1), "/home/me/NixAmp Whips the D-M-C-As.mp3");
+});
+
+test("a server with no speakers decodes at real time, or its clock is a lie", () => {
+  // With speakers, ffplay pulls samples at the rate a person hears them and the
+  // decoder is held back by that. Without them -- which is every server --
+  // nothing pushes back and ffmpeg decodes as fast as the disk allows.
+  //
+  // That matters because `position` is what a watch party synchronises to. A
+  // film reached its end in a couple of minutes and every viewer who joined
+  // was handed a position the server had already raced past, so nobody was
+  // ever with anybody. Measured before the fix: 231 seconds of film in 12
+  // seconds of wall clock.
+  // Read off the source rather than run ffmpeg: a real decode needs a real
+  // file and a real clock, and what is wrong or right here is one flag.
+  const source = readFileSync(join(fileURLToPath(new URL("..", import.meta.url)), "src/audio.ts"), "utf8");
+  assert.match(source, /this\.tools\.play === null \? \["-re"\] : \[\]/);
+  // Before -i, because it paces the reading of the input.
+  const at = source.indexOf('"-re"');
+  const input = source.indexOf('"-i", track.path');
+  assert.ok(at > 0 && at < input, "-re must come before -i or it paces nothing");
 });
