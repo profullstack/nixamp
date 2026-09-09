@@ -88,6 +88,64 @@ export async function readPlaylist(source: string): Promise<Entry[]> {
 }
 
 /**
+ * The audio linked from a directory listing a web server generated.
+ *
+ * A seedbox or a plain Apache with autoindex on serves a folder as an HTML page
+ * of relative links. Handed one of those, nixamp used to make a single track of
+ * the page itself and give it to ffmpeg, which is asked to decode HTML and says
+ * so in a way nobody reads. It is a folder; it should behave like one.
+ *
+ * Not recursive, deliberately: one page is one album, the subdirectory links are
+ * on it, and walking a stranger's whole tree from a text box is a different and
+ * much larger thing to ask for.
+ */
+export async function readRemoteIndex(source: string, send: typeof fetch = fetch): Promise<Entry[]> {
+  let answer: Response;
+  try {
+    answer = await send(source, {
+      redirect: "follow",
+      headers: { accept: "text/html,*/*" },
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    return [];
+  }
+  if (!answer.ok) return [];
+  // Anything that is not a page is the thing itself, and the caller plays it.
+  if (!/^text\/html/i.test(answer.headers.get("content-type") ?? "")) return [];
+
+  const html = await answer.text().catch(() => "");
+  const found: Entry[] = [];
+  const seen = new Set<string>();
+  for (const match of html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)) {
+    const href = match[1];
+    // The sort links an index puts at the top of every column, and anchors.
+    if (!href || href.startsWith("?") || href.startsWith("#")) continue;
+    let url: URL;
+    try {
+      // Relative to the page, which is how an index writes them.
+      url = new URL(href.replace(/&amp;/g, "&"), source);
+    } catch {
+      continue;
+    }
+    if (!isAudio(url.pathname)) continue;
+    const link = url.toString();
+    if (seen.has(link)) continue;
+    seen.add(link);
+    found.push({
+      source: link,
+      // The name as a person wrote it, not as a URL spells it.
+      title: decodeURIComponent(url.pathname.split("/").pop() ?? link),
+      duration: 0,
+    });
+  }
+  // Server order is by whatever column the index sorted on; by name is what
+  // somebody handing over an album meant.
+  found.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
+  return found;
+}
+
+/**
  * Everything `nixamp <thing>` can be handed: a directory, a file, a playlist,
  * or a URL to any of those.
  *
@@ -112,9 +170,18 @@ export async function loadSource(tools: Tools, source: string, probeTags = true)
     );
   }
 
-  // A bare URL is one remote thing to play. Whether it is a song or a live
-  // stream is ffmpeg's problem, and it is good at it.
-  if (isRemote(source)) return [bare({ source, title: nameOf(source), duration: 0 })];
+  if (isRemote(source)) {
+    // A URL that names no file is probably a folder, and a folder served over
+    // http is a page of links. Asked only when it could be one: a stream URL
+    // must not pay for a fetch that will tell us nothing.
+    if (!isAudio(new URL(source).pathname)) {
+      const listed = await readRemoteIndex(source);
+      if (listed.length > 0) return listed.map(bare);
+    }
+    // A bare URL is one remote thing to play. Whether it is a song or a live
+    // stream is ffmpeg's problem, and it is good at it.
+    return [bare({ source, title: nameOf(source), duration: 0 })];
+  }
 
   return loadPlaylist(tools, source, probeTags);
 }

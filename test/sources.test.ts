@@ -13,7 +13,7 @@ import {
   playsInBrowser,
   resolveEntry,
 } from "../src/sources.ts";
-import { loadTagged, readPlaylist } from "../src/playlist.ts";
+import { loadTagged, readPlaylist, readRemoteIndex } from "../src/playlist.ts";
 
 test("http and https are remote, and nothing else is", () => {
   assert.equal(isRemote("https://example.com/a.mp3"), true);
@@ -184,4 +184,42 @@ test("and the same test fails when the loop does not yield", async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a folder served over http is a folder, not a page to decode", async () => {
+  // What an Apache autoindex actually looks like: relative links, sort links
+  // at the top of every column, and a parent directory nobody wants.
+  const html = `<html><body>
+    <a href="?C=N&amp;O=D">Name</a><a href="?C=S;O=A">Size</a>
+    <a href="/parent/">Parent Directory</a>
+    <a href="02%20-%20Boston%20Chicken.mp3">02 - Boston Chicken.mp3</a>
+    <a href="01%20-%20I%27ve%20Got%20No%20Darkside.mp3">01 …</a>
+    <a href="cover.jpg">cover.jpg</a>
+    <a href="Disc%202/">Disc 2/</a>
+  </body></html>`;
+  const send = (async () =>
+    new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } })) as unknown as typeof fetch;
+
+  const found = await readRemoteIndex("http://box.example:19499/Album%20Name/", send);
+  assert.deepEqual(
+    found.map((entry) => entry.title),
+    ["01 - I've Got No Darkside.mp3", "02 - Boston Chicken.mp3"],
+    "audio only, named as a person wrote them, in order rather than in the server's",
+  );
+  // Resolved against the page, which is how an index writes its links.
+  assert.equal(found[1]?.source, "http://box.example:19499/Album%20Name/02%20-%20Boston%20Chicken.mp3");
+
+  // Anything that is not a page is the thing itself, and the caller plays it.
+  const audio = (async () =>
+    new Response("", { headers: { "content-type": "audio/mpeg" } })) as unknown as typeof fetch;
+  assert.deepEqual(await readRemoteIndex("http://box.example/live", audio), []);
+
+  // A server having a bad day is nothing to play, not an exception to handle
+  // three layers up.
+  const refused = (async () => new Response("no", { status: 404 })) as unknown as typeof fetch;
+  assert.deepEqual(await readRemoteIndex("http://box.example/gone/", refused), []);
+  const offline = (async () => {
+    throw new Error("ECONNREFUSED");
+  }) as unknown as typeof fetch;
+  assert.deepEqual(await readRemoteIndex("http://box.example/gone/", offline), []);
 });
