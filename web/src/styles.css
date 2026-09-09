@@ -490,6 +490,8 @@ button.ghost { background: transparent; color: var(--muted); }
   margin-top: 0.3rem;
 }
 
+.publish-list li.in-use .slot { color: var(--green); }
+
 .publish-list .slot {
   flex: 0 0 auto;
   color: var(--muted);

@@ -183,7 +183,13 @@ export async function loadSource(tools: Tools, source: string, probeTags = true)
     return [bare({ source, title: nameOf(source), duration: 0 })];
   }
 
-  return loadPlaylist(tools, source, probeTags);
+  // The walk yields, because by the time this runs at startup the port is
+  // already open and a synchronous walk of a large library answers nobody for
+  // as long as it takes.
+  const paths = await findAudioAsync(source);
+  return paths.map((path) =>
+    probeTags ? probe(tools, path) : { path, title: path.split("/").pop() ?? path, artist: "", album: "", duration: 0 },
+  );
 }
 
 /**
@@ -218,11 +224,19 @@ export async function loadTagged(
   source: string,
   /** Injected by the test, which must not depend on ffprobe being installed. */
   probeOne: (tools: Tools, path: string) => Promise<Track> = probeAsync,
+  /**
+   * The files, when the caller has already found them.
+   *
+   * Startup walks the library to list it and then walked it again to tag it --
+   * twice through a large tree, and the second walk was the one that happened
+   * after the port was open, so it was the one people waited on.
+   */
+  known?: string[],
 ): Promise<Track[]> {
   // A URL is one thing and is never probed; a playlist carries its own titles.
   if (isRemote(source) || isPlaylistFile(source)) return loadSource(tools, source, true);
 
-  const paths = findAudio(source);
+  const paths = known ?? (await findAudioAsync(source));
   const tracks: Track[] = [];
   for (const path of paths) {
     // Awaiting a child process, not blocking on one. Yielding between files
@@ -232,6 +246,61 @@ export async function loadTagged(
     tracks.push(await probeOne(tools, path));
   }
   return tracks;
+}
+
+/**
+ * The same walk, without stopping everything for the length of it.
+ *
+ * `findAudio` is readdirSync and statSync all the way down, so on a large
+ * library it holds the event loop for its entire duration: the socket keeps
+ * accepting connections, the kernel completes their handshakes, and the
+ * process answers none of them. From outside that is indistinguishable from a
+ * server that has hung -- 417 gigabytes of downloads took long enough that
+ * requests timed out while the log said the server was up.
+ *
+ * Yielding every few hundred entries costs a few milliseconds over the whole
+ * walk and means a request waits for one directory rather than for the disk.
+ */
+export async function findAudioAsync(root: string, every = 200): Promise<string[]> {
+  const out: string[] = [];
+  let stats;
+  try {
+    stats = statSync(root);
+  } catch {
+    return out;
+  }
+  if (stats.isFile()) return isAudio(root) ? [root] : out;
+
+  let since = 0;
+  const breathe = async (): Promise<void> => {
+    if (++since < every) return;
+    since = 0;
+    await new Promise((done) => setImmediate(done));
+  };
+
+  const walk = async (dir: string): Promise<void> => {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir).sort();
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.startsWith(".")) continue;
+      const full = join(dir, entry);
+      await breathe();
+      let stat;
+      try {
+        stat = statSync(full);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) await walk(full);
+      else if (isAudio(full)) out.push(full);
+    }
+  };
+  await walk(root);
+  return out;
 }
 
 export function displayName(track: Track): string {

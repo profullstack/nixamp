@@ -160,8 +160,6 @@
         <section class="panel player-only col-a" data-title="Admin" id="admin-panel" hidden>
           <p class="hint" id="admin-note">Checking…</p>
           <table class="admin-table" id="admin-connections"></table>
-          <p class="hint" id="publish-note" hidden></p>
-          <ul id="publish-list" class="publish-list"></ul>
           <form id="admin-restream" class="picker">
             <input id="admin-source" type="text" placeholder="a folder, an album URL, a file"
                    aria-label="Something to add to the playlist" />
@@ -173,7 +171,12 @@
           </label>
         </section>
 
-        <section class="panel player-only col-b" data-title="Remote">
+        <section class="panel player-only col-b" data-title="Publish into this server" id="publish-panel" hidden>
+          <p class="hint" id="publish-note"></p>
+          <ul id="publish-list" class="publish-list"></ul>
+        </section>
+
+        <section class="panel player-only col-a" data-title="Remote">
           <p class="hint">Run <code>nixamp serve ~/Music --host 0.0.0.0</code> and drive it from here.</p>
           <form id="remote-form" class="picker">
             <input id="remote-url" type="text" inputmode="url" placeholder="192.168.1.7:4321" aria-label="nixamp server address" />
