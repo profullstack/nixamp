@@ -132,23 +132,55 @@ test("reading a local m3u gives its entries, and an HLS one gives itself", async
 });
 
 test("tagging yields, so a server can answer while it reads its library", async () => {
-  // probe() is a spawnSync per file. Read inside one async function it never
-  // gives the event loop a turn: the socket keeps accepting connections and
-  // the process answers none of them until the last file, which from outside
-  // is a connection that opens and then says nothing. This is the regression
-  // test for that -- it fails if the loop stops yielding.
+  // The invariant is that the loop awaits once per file, so anything else
+  // waiting on the event loop gets a turn between them. Asserted by watching
+  // the order things actually happen in rather than by racing a timer against
+  // real ffprobes, which is only a race at all on a machine that has ffprobe:
+  // CI does not, the probes resolved instantly, and the race flipped.
   const dir = mkdtempSync(join(tmpdir(), "nixamp-tagging-"));
   try {
-    for (let at = 0; at < 40; at += 1) writeFileSync(join(dir, `s${at}.mp3`), "");
+    for (let at = 0; at < 5; at += 1) writeFileSync(join(dir, `s${at}.mp3`), "");
+
+    const order: string[] = [];
+    const probeOne = async (_tools: unknown, path: string) => {
+      await new Promise<void>((done) => setTimeout(done, 0));
+      order.push("file");
+      return { path, title: path, artist: "", album: "", duration: 0 };
+    };
+    setTimeout(() => order.push("loop"), 0);
 
     const tools = { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null };
-    const loopGotATurn = new Promise<string>((done) => setTimeout(() => done("loop"), 0));
-    const tagging = loadTagged(tools, dir).then(() => "tags");
+    const tagged = await loadTagged(tools, dir, probeOne as never);
 
-    // Whichever finishes first. Blocking the loop means the timer cannot fire
-    // until tagging is done, so "tags" would win.
-    assert.equal(await Promise.race([loopGotATurn, tagging]), "loop");
-    assert.equal(await tagging, "tags", "and it still finishes");
+    assert.equal(tagged.length, 5, "and it still reads every file");
+    // The loop got its turn while the pass was running, not after it.
+    assert.ok(order.includes("loop"), "the event loop never ran");
+    assert.ok(order.indexOf("loop") < order.length - 1, "it only ran once everything was done");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("and the same test fails when the loop does not yield", async () => {
+  // Guarding the guard: a probe that resolves without ever reaching a
+  // macrotask is what a synchronous pass looks like from here, and the
+  // assertion above has to notice.
+  const dir = mkdtempSync(join(tmpdir(), "nixamp-tagging-sync-"));
+  try {
+    for (let at = 0; at < 5; at += 1) writeFileSync(join(dir, `s${at}.mp3`), "");
+    const order: string[] = [];
+    const instant = async (_tools: unknown, path: string) => {
+      order.push("file");
+      return { path, title: path, artist: "", album: "", duration: 0 };
+    };
+    setTimeout(() => order.push("loop"), 0);
+
+    const tools = { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null };
+    await loadTagged(tools, dir, instant as never);
+
+    // Every file was read before the event loop got anywhere near a timer,
+    // which is precisely the failure the other test is there to catch.
+    assert.deepEqual(order, ["file", "file", "file", "file", "file"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

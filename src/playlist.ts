@@ -146,7 +146,12 @@ export function loadPlaylist(tools: Tools, root: string, probeTags = true): Trac
  * ffprobe rather than for the whole library, and the tagging still finishes in
  * about the time it did.
  */
-export async function loadTagged(tools: Tools, source: string): Promise<Track[]> {
+export async function loadTagged(
+  tools: Tools,
+  source: string,
+  /** Injected by the test, which must not depend on ffprobe being installed. */
+  probeOne: (tools: Tools, path: string) => Promise<Track> = probeAsync,
+): Promise<Track[]> {
   // A URL is one thing and is never probed; a playlist carries its own titles.
   if (isRemote(source) || isPlaylistFile(source)) return loadSource(tools, source, true);
 
@@ -157,7 +162,7 @@ export async function loadTagged(tools: Tools, source: string): Promise<Track[]>
     // was not enough: each spawnSync still stopped everything for as long as
     // one ffprobe took, which on a large file is long enough to strangle a
     // stream being served at the same time.
-    tracks.push(await probeAsync(tools, path));
+    tracks.push(await probeOne(tools, path));
   }
   return tracks;
 }
