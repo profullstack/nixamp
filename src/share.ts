@@ -128,6 +128,24 @@ export async function lookupPublicIp(send: typeof fetch = fetch, timeoutMs = 250
  * somewhere else can open. It is labelled for what it is, because the key in
  * the link is then the only thing between a stranger and the library.
  */
+/**
+ * Whether a browser could ever verify a certificate for this address.
+ *
+ * A certificate is issued for a name. Handed an https link to a bare IP, a
+ * browser has nothing to match it against and refuses the connection before it
+ * asks anything -- and from the page it looks identical to a machine that is
+ * switched off. Offering such a link is offering one that cannot work, so the
+ * links are labelled and the ones that can work go first.
+ */
+export function certifiable(url: string): boolean {
+  if (!url.startsWith("https://")) return true;
+  try {
+    return !isIpAddress(new URL(url).hostname.replace(/^\[|\]$/g, ""));
+  } catch {
+    return true;
+  }
+}
+
 export function reachableAddresses(
   host: string,
   port: number,
@@ -161,10 +179,20 @@ export function reachableAddresses(
   }
   const order = { private: 0, cgnat: 1, public: 2 } as const;
   found.sort((x, y) => order[x.kind] - order[y.kind]);
-  return [
+  const all = [
     ...told,
     { label: "here", url: `${scheme}://localhost:${port}` },
     ...found.map(({ label, url }) => ({ label, url })),
+  ];
+  // Serving https, an address that is a bare IP cannot be verified by anyone,
+  // so it is said last and said differently rather than handed out as though
+  // it were a link somebody could use.
+  if (scheme !== "https") return all;
+  return [
+    ...all.filter((entry) => certifiable(entry.url)),
+    ...all
+      .filter((entry) => !certifiable(entry.url))
+      .map((entry) => ({ label: `${entry.label} (no certificate for an IP)`, url: entry.url })),
   ];
 }
 

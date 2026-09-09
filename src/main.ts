@@ -634,7 +634,11 @@ export function view(
 
 if (import.meta.main) {
   main().catch((error) => {
-    console.error(error);
+    // The same rule the installed launcher uses: a message we wrote is one the
+    // reader can act on, and printing a stack over it buries the sentence that
+    // says what to do.
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(message.startsWith("nixamp:") ? message : error);
     process.exit(1);
   });
 }

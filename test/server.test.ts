@@ -10,7 +10,7 @@ import {
   type Engine,
 } from "../src/server.ts";
 import { emptySnapshot, parseCommand, remoteName, type Command, type Snapshot } from "../src/protocol.ts";
-import { isIpAddress, lookupPublicIp, reachableAddresses } from "../src/share.ts";
+import { certifiable, isIpAddress, lookupPublicIp, reachableAddresses } from "../src/share.ts";
 import { daemonLines } from "../src/daemon.ts";
 import { Owner } from "../src/owner.ts";
 
@@ -763,4 +763,80 @@ test("restarting a daemon replays the flags it was started with", async () => {
     else process.env["XDG_STATE_HOME"] = before;
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("the admin report carries where OBS should point, one URL per stream", async () => {
+  // Printed at startup since RTMP was added, which is no use to somebody
+  // looking at the admin panel a day later. And there is deliberately no
+  // single link: ffmpeg's RTMP listener takes one connection per process, so
+  // three publishers at once is three ports and three URLs.
+  const engine = new PlayerEngine(
+    [{ path: "/m/a.mp3", title: "a", artist: "", album: "", duration: 0 }],
+    "/m",
+    { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+  );
+  const slots = [
+    { id: "live", url: "rtmp://box:1935/live/KEY" },
+    { id: "live-2", url: "rtmp://box:1936/live/KEY" },
+  ];
+  const server = createServer(engine, {
+    web: null,
+    media: false,
+    version: "test",
+    publishUrls: () => slots,
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+
+  try {
+    const body = (await (await fetch(`http://127.0.0.1:${port}/api/connections`)).json()) as {
+      publish?: { id: string; url: string }[];
+    };
+    assert.deepEqual(body.publish, slots);
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});
+
+test("a server that takes no RTMP reports no publish URLs rather than a wrong one", async () => {
+  const engine = new PlayerEngine([], "/m", { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null });
+  const server = createServer(engine, { web: null, media: false, version: "test" });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  try {
+    const body = (await (await fetch(`http://127.0.0.1:${port}/api/connections`)).json()) as {
+      publish?: unknown[];
+    };
+    assert.deepEqual(body.publish, []);
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});
+
+test("an https link to a bare IP is offered last, and said to be uncertifiable", () => {
+  // A certificate is issued for a name. Handed https://104.152.209.195:4321 a
+  // browser has nothing to match it against and refuses before it asks
+  // anything -- which from a page looks exactly like a machine that is off.
+  // The server was printing those links beside the working one.
+  assert.equal(certifiable("https://server1.chovy.nixamp.com:4321"), true);
+  assert.equal(certifiable("https://104.152.209.195:4321"), false);
+  assert.equal(certifiable("https://[2a0a:4cc0::1]:4321"), false);
+  // Plain http never had a certificate to fail, so nothing is claimed.
+  assert.equal(certifiable("http://104.152.209.195:4321"), true);
+
+  const listed = reachableAddresses("0.0.0.0", 4321, "https://server1.chovy.nixamp.com:4321", "https");
+  const names = listed.filter((entry) => certifiable(entry.url));
+  const bare = listed.filter((entry) => !certifiable(entry.url));
+
+  // The name this server actually has a certificate for comes first.
+  assert.equal(listed[0]?.url, "https://server1.chovy.nixamp.com:4321");
+  // Every address a browser could verify is offered before any it could not.
+  assert.deepEqual(listed.slice(0, names.length), names);
+  for (const entry of bare) assert.match(entry.label, /no certificate for an IP/);
+
+  // Over http the order is untouched: there is no certificate to fail.
+  const plain = reachableAddresses("0.0.0.0", 4321, "", "http");
+  assert.ok(plain.every((entry) => !/no certificate/.test(entry.label)));
 });

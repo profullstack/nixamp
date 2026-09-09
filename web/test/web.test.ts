@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 import { clamp, displayName, formatTime, isVideoFile, titleFromFilename } from "../src/format.ts";
 import { bandEdges, bands, decay, holdPeaks } from "../src/spectrum.ts";
 import {
-  apiUrl, blockedAsMixedContent, mediaUrl, normalizeBase, parseSnapshot, probeServer, refusesUs,
-  splitShareLink,
+  apiUrl, blockedAsMixedContent, mediaUrl, needsAName, normalizeBase, parseSnapshot, probeServer,
+  refusesUs, splitShareLink,
 } from "../src/remote.ts";
 import { byName, isPlayable, needsVideoElement } from "../src/player.ts";
 import { NEVER_CACHE, serviceWorkerSource } from "../scripts/sw.ts";
@@ -468,4 +468,19 @@ test("a server that has already refused us says so instead of retrying forever",
   } finally {
     await new Promise<void>((done) => server.close(() => done()));
   }
+});
+
+test("an https address for a bare IP is named as the problem it is", () => {
+  // The report this exists for: a running server, reached by its IP over
+  // https, reported as "nothing answered" -- because a browser refuses a
+  // certificate it cannot match to a name, and a refused connection and an
+  // absent machine look the same from here.
+  assert.match(needsAName("https://104.152.209.195:4321"), /certificate is issued for a name/);
+  assert.match(needsAName("https://[2a0a:4cc0::1]:4321"), /certificate is issued for a name/);
+
+  // A name is exactly what a certificate can cover, so nothing to say.
+  assert.equal(needsAName("https://server1.chovy.nixamp.com:4321"), "");
+  // And http never had a certificate to fail.
+  assert.equal(needsAName("http://104.152.209.195:4321"), "");
+  assert.equal(needsAName(""), "");
 });

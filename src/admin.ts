@@ -57,7 +57,17 @@ export function resolveTarget(argv: string[]): AdminOptions {
 
   const state = readState();
   if (state === null) {
-    throw new Error("nixamp: no daemon is running. Start one with `nixamp daemon start`, or pass --url.");
+    // Named, with an example. "or pass --url" is only an instruction if you
+    // already know what belongs after it, and the whole point of this message
+    // is that you are looking at a machine you have no handle on.
+    throw new Error(
+      "nixamp: no daemon is running on this machine.\n" +
+        "  Start one:        nixamp daemon start ~/Music\n" +
+        "  Or administer another machine, with its share link:\n" +
+        "                    nixamp admin --url https://server1.you.nixamp.com:4321 --key KEY\n" +
+        "  The URL and key are the two halves of the link that server printed:\n" +
+        "  https://host:4321/s/KEY",
+    );
   }
   const url_ = daemonUrl(state);
   // Talking to our own daemon, whose certificate names somewhere else. Nothing

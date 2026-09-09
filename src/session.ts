@@ -582,7 +582,11 @@ export async function servers(argv: string[], fetcher: typeof fetch = fetch): Pr
         const daemon = await import("./daemon.ts");
         const state = daemon.readState();
         if (state === null) {
-          console.error("nixamp: no daemon is running here. Start one, or pass a URL.");
+          console.error(
+            "nixamp: no daemon is running here.\n" +
+              "  Start one:  nixamp daemon start ~/Music\n" +
+              "  Or give the share link of the one you mean: https://host:4321/s/KEY",
+          );
           return 1;
         }
         // The address worth remembering is the one somebody else can open.

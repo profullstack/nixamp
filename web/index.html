@@ -64,7 +64,7 @@
       </section>
 
       <div class="split">
-        <section class="panel player-only" data-title="Files">
+        <section class="panel player-only col-a" data-title="Files">
           <p class="hint">Nothing is uploaded. The browser decodes your files where they are.</p>
           <div class="picker">
             <label class="button">
@@ -78,7 +78,7 @@
           </div>
         </section>
 
-        <section class="panel" data-title="Live now" id="directory" hidden>
+        <section class="panel col-b" data-title="Live now" id="directory" hidden>
           <p class="hint" id="directory-note">Looking for live streams…</p>
           <ul id="directory-list" class="directory-list"></ul>
           <p class="hint" id="recent-note" hidden>Recently live &mdash; follow them to hear next time:</p>
@@ -86,7 +86,7 @@
           <p class="hint"><a href="/" id="directory-back" hidden>Back to the player</a></p>
         </section>
 
-        <section class="panel player-only" data-title="Account" id="account-panel">
+        <section class="panel player-only col-a" data-title="Account" id="account-panel">
           <p class="hint" id="account-note">Sign in to nixamp.com to publish and get paid.</p>
           <div id="account-providers" class="picker" hidden></div>
           <form id="account-form" class="picker">
@@ -102,12 +102,12 @@
           <button id="account-signout" type="button" class="ghost" hidden>Sign out</button>
         </section>
 
-        <p class="hint player-only" id="account-elsewhere" hidden>
+        <p class="hint player-only col-a" id="account-elsewhere" hidden>
           This nixamp keeps no accounts &mdash; it is somebody's own machine.
           Accounts live at <a href="https://nixamp.com">nixamp.com</a>.
         </p>
 
-        <section class="panel player-only" data-title="Notifications" id="notify-panel" hidden>
+        <section class="panel player-only col-b" data-title="Notifications" id="notify-panel" hidden>
           <p class="hint" id="notify-note">Get told when someone you follow goes live.</p>
           <div class="picker">
             <label class="toggle">
@@ -130,7 +130,7 @@
           <ul id="following-list" class="directory-list"></ul>
         </section>
 
-        <section class="panel player-only" data-title="Your servers" id="servers-panel" hidden>
+        <section class="panel player-only col-a" data-title="Your servers" id="servers-panel" hidden>
           <p class="hint" id="servers-note">The machines on your account. Open one, or forget it.</p>
           <ul id="servers-list" class="directory-list"></ul>
         </section>
@@ -138,7 +138,7 @@
         <!-- What to send somebody who is not technical: one link, one number,
              one code. Everything else about this page assumes you know what a
              server is; this part must not. -->
-        <section class="panel player-only" data-title="Share this stream" id="share-panel" hidden>
+        <section class="panel player-only col-b" data-title="Share this stream" id="share-panel" hidden>
           <p class="hint" id="share-note">Checking…</p>
           <label class="share-line">
             <span class="share-what">Link</span>
@@ -153,9 +153,11 @@
           </form>
         </section>
 
-        <section class="panel player-only" data-title="Admin" id="admin-panel" hidden>
+        <section class="panel player-only col-a" data-title="Admin" id="admin-panel" hidden>
           <p class="hint" id="admin-note">Checking…</p>
           <table class="admin-table" id="admin-connections"></table>
+          <p class="hint" id="publish-note" hidden></p>
+          <ul id="publish-list" class="publish-list"></ul>
           <form id="admin-restream" class="picker">
             <input id="admin-source" type="text" placeholder="a folder, an album URL, a file"
                    aria-label="Something to add to the playlist" />
@@ -167,7 +169,7 @@
           </label>
         </section>
 
-        <section class="panel player-only" data-title="Remote">
+        <section class="panel player-only col-b" data-title="Remote">
           <p class="hint">Run <code>nixamp serve ~/Music --host 0.0.0.0</code> and drive it from here.</p>
           <form id="remote-form" class="picker">
             <input id="remote-url" type="text" inputmode="url" placeholder="192.168.1.7:4321" aria-label="nixamp server address" />

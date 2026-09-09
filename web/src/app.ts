@@ -13,7 +13,7 @@ import {
 } from "./player.ts";
 import {
   blockedAsMixedContent,
-  RemoteClient, fetchSnapshot, probeServer, refusesUs, splitShareLink,
+  RemoteClient, fetchSnapshot, needsAName, probeServer, refusesUs, splitShareLink,
   rungName, stepDown,
   type Status,
 } from "./remote.ts";
@@ -81,6 +81,8 @@ export function start(): void {
     adminPanel: need<HTMLElement>("admin-panel"),
     adminNote: need<HTMLParagraphElement>("admin-note"),
     adminConnections: need<HTMLTableElement>("admin-connections"),
+    publishNote: need<HTMLParagraphElement>("publish-note"),
+    publishList: need<HTMLUListElement>("publish-list"),
     adminRestream: need<HTMLFormElement>("admin-restream"),
     adminReplace: need<HTMLInputElement>("admin-replace"),
     adminSource: need<HTMLInputElement>("admin-source"),
@@ -642,14 +644,17 @@ export function start(): void {
       const version = await probeServer(base, undefined, key);
       if (version === null) {
         remoteStatus = "error";
-        remoteDetail = "not answering";
-        // The two reasons are different problems and deserve different
-        // sentences: a machine that is off needs starting, an address that is
-        // wrong needs correcting, and "no nixamp answered there" covered both
-        // by describing neither.
-        note =
-          `Nothing answered at ${base}. If that is your machine, it is off or ` +
-          "nixamp is not running on it; otherwise check the address.";
+        // A certificate cannot be issued for an IP, so this one never had a
+        // chance and the server is very likely running perfectly.
+        const nameless = needsAName(base);
+        remoteDetail = nameless ? "needs the server's name" : "not answering";
+        // The reasons are different problems and deserve different sentences:
+        // a machine that is off needs starting, an address that is wrong needs
+        // correcting, and an https link to an IP needs a name.
+        note = nameless
+          ? nameless
+          : `Nothing answered at ${base}. If that is your machine, it is off or ` +
+            "nixamp is not running on it; otherwise check the address.";
         mode = "local";
         draw();
         return;
@@ -821,15 +826,68 @@ export function start(): void {
 
   const refreshAdmin = async (): Promise<void> => {
     try {
-      const answer = await fetch("/api/connections");
+      // The connected server, with its key -- not whatever origin this page
+      // was served from, which has no idea who is listening to your machine.
+      const answer = await fetch(remote.url("/api/connections"));
       if (!answer.ok) return;
-      const body = (await answer.json()) as { connections?: Parameters<typeof drawConnections>[0]; active?: number };
+      const body = (await answer.json()) as {
+        connections?: Parameters<typeof drawConnections>[0];
+        active?: number;
+        publish?: { id: string; url: string }[];
+      };
       dom.adminNote.textContent = `${body.active ?? 0} listening now.`;
       drawConnections(body.connections ?? []);
+      drawPublish(body.publish ?? []);
     } catch {
       dom.adminNote.textContent = "lost touch with the server";
     }
   };
+
+  /**
+   * Where OBS points, one row per stream this server will take.
+   *
+   * There is no single link, and that is the answer to "how would several
+   * streams work with one link" -- they would not. ffmpeg's RTMP listener
+   * takes one connection per process, so each simultaneous publisher gets its
+   * own port and its own URL, and the channel it lands on is named beside it.
+   */
+  function drawPublish(entries: { id: string; url: string }[]): void {
+    dom.publishNote.hidden = entries.length === 0;
+    if (entries.length === 0) {
+      dom.publishList.replaceChildren();
+      // Said once rather than left blank: a server that was not started with
+      // --rtmp-in cannot be published to, and the panel should say why.
+      dom.publishNote.hidden = false;
+      dom.publishNote.textContent =
+        "This server takes no RTMP. Start it with --rtmp-in 1935 to publish into it from OBS.";
+      return;
+    }
+    dom.publishNote.textContent = entries.length === 1
+      ? "Publish into this server from OBS, Larix or ffmpeg:"
+      : `Publish into this server from OBS, Larix or ffmpeg. One URL per stream — ${entries.length} at once:`;
+
+    dom.publishList.replaceChildren(...entries.map((entry) => {
+      const item = document.createElement("li");
+      const slot = document.createElement("span");
+      slot.className = "slot";
+      slot.textContent = entry.id;
+      const box = document.createElement("input");
+      box.type = "text";
+      box.readOnly = true;
+      box.value = entry.url;
+      box.setAttribute("aria-label", `RTMP URL for ${entry.id}`);
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "ghost";
+      copy.textContent = "Copy";
+      copy.addEventListener("click", () => {
+        box.select();
+        void navigator.clipboard?.writeText(entry.url).catch(() => {});
+      });
+      item.append(slot, box, copy);
+      return item;
+    }));
+  }
 
   const checkAdmin = async (): Promise<void> => {
     let allowed = false;
