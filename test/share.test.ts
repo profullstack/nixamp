@@ -94,14 +94,16 @@ test("a link says which of the two it is", () => {
   assert.equal(shareLink("http://10.0.0.5:4321", "abc", false), "http://10.0.0.5:4321/v/abc");
   assert.equal(shareLink("http://10.0.0.5:4321", null), "http://10.0.0.5:4321");
 
-  assert.equal(keyInPath("/a/abc"), "abc");
-  assert.equal(keyInPath("/v/abc"), "abc");
+  // The path says what the link is for, and that claim is checked against the
+  // key rather than taken on trust.
+  assert.deepEqual(keyInPath("/a/abc"), { key: "abc", wants: "control" });
+  assert.deepEqual(keyInPath("/v/abc"), { key: "abc", wants: "listen" });
   // And the shape that said neither is gone, rather than lingering as a third
   // way to write the same link.
   assert.equal(keyInPath("/s/abc"), null);
-  assert.equal(keyInPath("/a/abc/"), "abc");
+  assert.deepEqual(keyInPath("/a/abc/"), { key: "abc", wants: "control" });
   // Percent-encoded, because a key rides in a path.
-  assert.equal(keyInPath("/a/a%2Fb"), "a/b");
+  assert.deepEqual(keyInPath("/a/a%2Fb"), { key: "a/b", wants: "control" });
 
   // And nothing else is a key.
   assert.equal(keyInPath("/"), null);

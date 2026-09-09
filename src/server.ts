@@ -1074,10 +1074,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // cookie, so every later fetch, EventSource and <audio src> carries it
     // without the page knowing anything about keys. Either key works here, and
     // which one was used decides what the browser can then do.
-    const offeredInPath = key !== null ? keyInPath(path) : null;
-    if (offeredInPath !== null) {
-      const offered = offeredInPath;
-      if (scopeOf(offered, key, listenKey) === null) {
+    const inPath = key !== null ? keyInPath(path) : null;
+    if (inPath !== null) {
+      const offered = inPath.key;
+      // The path has to be telling the truth about the key it carries. A `/v/`
+      // link holding the control key would read as view-only to whoever you
+      // sent it to and hand them the controls, which is the whole reason for
+      // naming the two shapes in the first place.
+      //
+      // A mismatch answers exactly as a wrong key does, so nothing is learned
+      // from the difference between the two.
+      if (scopeOf(offered, key, listenKey) !== inPath.wants) {
         json(response, 404, { error: "not found" });
         return;
       }
