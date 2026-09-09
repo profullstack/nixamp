@@ -60,6 +60,7 @@ export function start(): void {
     accountPassword: need<HTMLInputElement>("account-password"),
     accountSubmit: need<HTMLButtonElement>("account-submit"),
     accountToggle: need<HTMLButtonElement>("account-toggle"),
+    accountProviders: need<HTMLDivElement>("account-providers"),
     accountSignOut: need<HTMLButtonElement>("account-signout"),
     accountNote: need<HTMLParagraphElement>("account-note"),
     adminPanel: need<HTMLElement>("admin-panel"),
@@ -1005,6 +1006,7 @@ export function start(): void {
       dom.recentList.replaceChildren();
     }
     dom.accountForm.hidden = signedIn;
+    dom.accountProviders.hidden = signedIn || dom.accountProviders.childElementCount === 0;
     dom.accountSignOut.hidden = !signedIn;
     dom.accountNote.textContent = signedIn
       ? `Signed in as ${email}.`
@@ -1014,6 +1016,36 @@ export function start(): void {
     dom.accountSubmit.textContent = creating ? "Create account" : "Sign in";
     dom.accountToggle.textContent = creating ? "I have one" : "Create one";
     dom.accountPassword.autocomplete = creating ? "new-password" : "current-password";
+  };
+
+  /**
+   * The providers this deployment can sign you in with.
+   *
+   * An account made by signing in with GitHub has no password at all, so
+   * without these buttons its owner could use the terminal and never the site.
+   * Each one is a plain link out to the server, which sets the session cookie
+   * and sends the browser back here.
+   */
+  const showProviders = async (): Promise<void> => {
+    let offered: { id: string; name: string }[] = [];
+    try {
+      const answer = await fetch("/api/v1/auth/providers");
+      if (answer.ok) {
+        const body = (await answer.json()) as { providers?: { id: string; name: string }[] };
+        offered = body.providers ?? [];
+      }
+    } catch {
+      // A nixamp on a laptop keeps no accounts and answers nothing here.
+    }
+    dom.accountProviders.replaceChildren();
+    dom.accountProviders.hidden = offered.length === 0;
+    for (const provider of offered) {
+      const link = document.createElement("a");
+      link.className = "button";
+      link.href = `/api/v1/${encodeURIComponent(provider.id)}/oauth/start`;
+      link.textContent = `Continue with ${provider.name}`;
+      dom.accountProviders.append(link);
+    }
   };
 
   const askWhoIsSignedIn = async (): Promise<void> => {
@@ -1080,6 +1112,7 @@ export function start(): void {
     })();
   });
 
+  void showProviders();
   void askWhoIsSignedIn();
   void checkAdmin();
 

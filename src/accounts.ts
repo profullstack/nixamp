@@ -15,9 +15,14 @@
  *   would be nothing to click.
  *
  * No magic link: a link in an inbox is no use on a television or a phone that
- * is not the one you read mail on.
+ * is not the one you read mail on. There is now a third way in that suits a
+ * terminal better than either -- OAuth 2.0 reached through the device grant in
+ * device.ts -- and what it ends with is a token from tokens.ts.
  */
 import { createAuthSystem, PostgresAdapter } from "@profullstack/auth-system";
+import { Identities, type Identity, type Users } from "./oauth.ts";
+import type { Queryable } from "./follows.ts";
+import { type IssuedToken, looksLikeToken, type TokenKind, type TokenRecord, Tokens } from "./tokens.ts";
 
 export interface Account {
   id: string;
@@ -47,7 +52,16 @@ export interface AccountsOptions {
   secret: string;
   /** Injected by the tests, which have no database. */
   system?: AuthLike;
+  /** Also injected by the tests: the storage tokens and identities sit in. */
+  adapter?: AdapterLike;
 }
+
+/**
+ * The slice of the auth module's storage adapter the rest of this file needs.
+ * It is the same Postgres pool the users table lives in, which is why nixamp's
+ * two tables need no connection of their own.
+ */
+export interface AdapterLike extends Queryable, Users {}
 
 /** The slice of the auth system nixamp uses. */
 export interface AuthLike {
@@ -93,14 +107,27 @@ export function checkCredentials(email: unknown, password: unknown): string {
 
 export class Accounts {
   private readonly system: AuthLike;
+  /** Null only where a test injected an auth system and no storage. */
+  readonly tokens: Tokens | null;
+  private readonly identities: Identities | null;
 
   constructor(options: AccountsOptions) {
+    // The adapter is kept rather than only handed over: tokens and provider
+    // identities are nixamp's own tables in the same database, and a second
+    // pool for two small tables would be a second thing to configure.
+    const adapter =
+      options.adapter ??
+      (options.system
+        ? null
+        : (new PostgresAdapter({ connectionString: options.connectionString }) as unknown as AdapterLike));
     this.system =
       options.system ??
       (createAuthSystem({
-        adapter: new PostgresAdapter({ connectionString: options.connectionString }),
+        adapter,
         jwtSecret: options.secret,
       }) as AuthLike);
+    this.tokens = adapter ? new Tokens(adapter) : null;
+    this.identities = adapter ? new Identities(adapter, adapter) : null;
   }
 
   async signUp(email: unknown, password: unknown): Promise<AuthResult> {
@@ -146,12 +173,86 @@ export class Accounts {
     }
   }
 
+  /**
+   * Who a token belongs to, whichever kind of token it is.
+   *
+   * A `nxa_` token is one this server issued and can withdraw, so it is looked
+   * up. Anything else is a JWT from the auth module, which is self-describing
+   * and cannot be. Both answer the same shape, so nothing downstream has to
+   * know which door the caller came in by.
+   */
   async whoIs(token: string): Promise<Account | null> {
     if (!token) return null;
+    if (looksLikeToken(token)) {
+      if (this.tokens === null) return null;
+      try {
+        return await this.tokens.verify(token);
+      } catch {
+        return null;
+      }
+    }
     try {
       return readClaims(await this.system.validateToken(token));
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * The token a signed-in caller carries away.
+   *
+   * A revocable token is preferred to the module's JWT wherever there is
+   * storage to keep one in, because signing out of a laptop you no longer have
+   * should mean something. The JWT is the fallback, and the only difference to
+   * a caller is that one of the two can be taken away.
+   */
+  async sessionFor(account: Account, fallback = ""): Promise<string> {
+    if (this.tokens === null) return fallback;
+    try {
+      return (await this.tokens.issue({ account, kind: "session" })).token;
+    } catch {
+      return fallback;
+    }
+  }
+
+  /** Sign in as whoever a provider says this is, making the account if it is new. */
+  async signInWith(identity: Identity): Promise<AuthResult> {
+    if (this.identities === null) return { ...NO_ACCOUNT, error: "this nixamp does not keep accounts" };
+    let account: Account | null = null;
+    try {
+      account = await this.identities.resolve(identity);
+    } catch {
+      account = null;
+    }
+    if (account === null) {
+      return { ...NO_ACCOUNT, error: `${identity.provider} did not give a verified email address` };
+    }
+    const token = await this.sessionFor(account);
+    if (!token) return { ...NO_ACCOUNT, error: "could not start a session" };
+    return { ok: true, account, token, error: "" };
+  }
+
+  /** A token a person made on purpose, for a script that cannot sign in. */
+  async mintCliToken(account: Account, name: string, ttlMs: number | null = null): Promise<IssuedToken | null> {
+    return this.tokens === null ? null : this.tokens.issue({ account, kind: "cli", name, ttlMs });
+  }
+
+  async listTokens(userId: string, kind?: TokenKind): Promise<TokenRecord[]> {
+    return this.tokens === null ? [] : this.tokens.list(userId, kind);
+  }
+
+  async revokeToken(userId: string, id: string): Promise<boolean> {
+    return this.tokens === null ? false : this.tokens.revoke(userId, id);
+  }
+
+  /** Signing out ends this session and leaves every other token alone. */
+  async endSession(token: string): Promise<void> {
+    if (this.tokens === null || !looksLikeToken(token)) return;
+    try {
+      await this.tokens.revokeToken(token);
+    } catch {
+      // A session that cannot be deleted still expires, and refusing to sign
+      // somebody out because the database blinked would be worse.
     }
   }
 }
