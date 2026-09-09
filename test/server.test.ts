@@ -1181,3 +1181,41 @@ test("only the account that published a stream can take it off the list", async 
     await new Promise<void>((done) => server.close(() => done()));
   }
 });
+
+test("an administrator is told where a server's own files are, and a viewer is not", async () => {
+  // Replacing the playlist with a stream leaves nothing pointing at the
+  // library the server was started on, and its address is a path on a machine
+  // you may never have logged into -- so there was no way back to it short of
+  // restarting the daemon. It is reported, so there can be a button.
+  const engine = new PlayerEngine([], "http://x.test/live/932", {
+    ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null,
+  });
+  const server = createServer(engine, {
+    web: null,
+    media: false,
+    version: "test",
+    serverName: "chovy's box",
+    homeSource: "/home/ubuntu/Downloads/done",
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    const report = (await (await fetch(`${base}/api/connections`)).json()) as {
+      home?: string; root?: string;
+    };
+    assert.equal(report.home, "/home/ubuntu/Downloads/done");
+    // And what is loaded right now, so the page can tell whether the library
+    // is in the playlist or has been replaced by something else.
+    assert.equal(report.root, "http://x.test/live/932");
+
+    // A filesystem path is an administrator's business. What a viewer is shown
+    // names streams and how to reach them, and nothing about the disk.
+    const streams = await (await fetch(`${base}/api/streams`)).text();
+    assert.equal(streams.includes("/home/ubuntu"), false, "a path leaked to the viewing side");
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});

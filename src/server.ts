@@ -989,6 +989,18 @@ export interface HandlerOptions {
   /** What this server calls itself, for the list of what is live on it. */
   serverName?: string;
   /**
+   * The source this server was started on -- its own library.
+   *
+   * Replacing the playlist with a stream leaves no way back to it: the address
+   * is a path on somebody else's machine, and a person looking at a player has
+   * no reason to know it. Reported to an administrator so there can be a
+   * button rather than a thing you have to remember and retype.
+   *
+   * Admin-only, because it is a filesystem path and a viewer has no business
+   * with it.
+   */
+  homeSource?: string;
+  /**
    * Going live: whether this server is listed, and how to change that.
    *
    * Listing used to be a question asked once at startup and never again, so a
@@ -2330,6 +2342,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         // And which of those slots somebody is already on, because the
         // question you have in front of three addresses is which one is free.
         channels: options.channels?.list().map(({ id, name, via }) => ({ id, name, via })) ?? [],
+        // What this server's own library is, and whether it is loaded, so
+        // there can be a way back to it that is not retyping a path.
+        home: options.homeSource ?? "",
+        root: engine.snapshot(false).root,
       });
       return;
     }
@@ -3174,6 +3190,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     channels,
     publishUrls: () => publishUrls,
     serverName: options.name || hostname(),
+    homeSource: root,
     live: {
       status: () => ({
         live: publisher !== null,
