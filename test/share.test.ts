@@ -86,19 +86,19 @@ test("an address is classified by where it actually goes", () => {
   assert.equal(classify("67.205.189.229"), "public");
 });
 
-test("a link says which of the two it is, and the old shape still works", () => {
-  // A server hands out two links and they used to look identical -- both
-  // /s/KEY -- so somebody holding the listening one had no way to know, and
+test("a link says which of the two it is", () => {
+  // A server hands out two links and they used to look identical -- both of
+  // them /s/KEY -- so somebody holding the viewing one had no way to know, and
   // reported the controls as missing when they were never going to be there.
   assert.equal(shareLink("http://10.0.0.5:4321", "abc"), "http://10.0.0.5:4321/a/abc");
   assert.equal(shareLink("http://10.0.0.5:4321", "abc", false), "http://10.0.0.5:4321/v/abc");
   assert.equal(shareLink("http://10.0.0.5:4321", null), "http://10.0.0.5:4321");
 
-  // All three are read, because a link somebody was already given does not
-  // stop working because the naming got better.
   assert.equal(keyInPath("/a/abc"), "abc");
   assert.equal(keyInPath("/v/abc"), "abc");
-  assert.equal(keyInPath("/s/abc"), "abc");
+  // And the shape that said neither is gone, rather than lingering as a third
+  // way to write the same link.
+  assert.equal(keyInPath("/s/abc"), null);
   assert.equal(keyInPath("/a/abc/"), "abc");
   // Percent-encoded, because a key rides in a path.
   assert.equal(keyInPath("/a/a%2Fb"), "a/b");

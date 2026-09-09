@@ -272,16 +272,15 @@ export function reachableAddresses(
 }
 
 /**
- * The three paths a key can arrive on, and what each one says about itself.
+ * The two paths a key can arrive on, and what each one says about itself.
  *
- * `/s/` came first and means only "here is a key" -- which is why a person
- * handed one of two links had no way to tell which they had, and reported the
- * controls as missing when they were holding the listening one. `/a/` is the
- * link that administers and `/v/` is the one that only views, so the link says
- * what it is before anybody clicks it. All three still work: links already
- * given out do not stop working because the naming improved.
+ * `/a/` administers and `/v/` only views. There used to be a `/s/` that meant
+ * neither -- just "here is a key" -- which is why somebody handed one of two
+ * identical-looking links had no way to tell which they were holding, and
+ * reported the controls as missing when they were never going to be there.
+ * A link should say what it is before anybody clicks it.
  */
-export const KEY_PATHS = ["/a/", "/v/", "/s/"] as const;
+export const KEY_PATHS = ["/a/", "/v/"] as const;
 
 /** The key in a share link, whichever of the three shapes it came in. */
 export function keyInPath(path: string): string | null {

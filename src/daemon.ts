@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { type Firewall, portCommands } from "./share.ts";
+import { type Firewall, portCommands, shareLink } from "./share.ts";
 
 export interface DaemonState {
   pid: number;
@@ -164,7 +164,8 @@ function spell(ms: number): string {
  * typed the command.
  */
 export function daemonLines(state: DaemonState, uptimeMs?: number): string[] {
-  const link = (url: string): string => (state.key ? `${url}/s/${state.key}` : url);
+  // The daemon's own key is the one that administers, so it is an /a/ link.
+  const link = (url: string): string => shareLink(url, state.key ?? null);
   // A state file written by an older nixamp has no list, so host and port
   // still stand in rather than printing nothing at all.
   const addresses = state.urls ?? [{ label: "here", url: daemonUrl(state) }];

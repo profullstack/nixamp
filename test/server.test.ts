@@ -375,8 +375,8 @@ test("the daemon prints every address it has, not the one nobody can use", () =>
 
   // The complaint this fixes: one loopback link, and nothing you could send
   // to a phone in another room.
-  assert.match(out, /on your network\s+http:\/\/192\.168\.1\.5:4321\/s\/KEY/);
-  assert.match(out, /on the internet\s+https:\/\/nixamp\.example\.com\/s\/KEY/);
+  assert.match(out, /on your network\s+http:\/\/192\.168\.1\.5:4321\/a\/KEY/);
+  assert.match(out, /on the internet\s+https:\/\/nixamp\.example\.com\/a\/KEY/);
   assert.match(out, /source\s+\/home\/ubuntu\/Music/);
 
   // "did you open the firewall port?" -- it did not, and it says so with the
@@ -404,8 +404,8 @@ test("a state file from an older nixamp still prints something", () => {
     pid: 7, host: "0.0.0.0", port: 4321, key: null, source: "/m", startedAt: 0, log: "/tmp/l",
   }).join("\n");
   assert.match(out, /here\s+http:\/\/127\.0\.0\.1:4321/);
-  // No key means no /s/ suffix, because there is nothing to put after it.
-  assert.doesNotMatch(out, /\/s\//);
+  // No key means no /v/ suffix, because there is nothing to put after it.
+  assert.doesNotMatch(out, /\/a\//);
 });
 
 test("an address looked up outside is an address, or it is nothing", async () => {
@@ -445,7 +445,7 @@ test("a guessed public address is printed as the claim it is", () => {
     guessedPublic: true,
   }).join("\n");
 
-  assert.match(out, /on the internet\s+http:\/\/67\.205\.189\.229:4321\/s\/KEY/);
+  assert.match(out, /on the internet\s+http:\/\/67\.205\.189\.229:4321\/a\/KEY/);
   // The honest part: knowing the router's address says nothing about whether
   // anything reaches this port.
   assert.match(out, /router, not this port/);
@@ -473,7 +473,7 @@ test("status says where it is and how long it has been there", () => {
     ],
   }, 222_000).join("\n");
 
-  assert.match(out, /on the internet\s+http:\/\/104\.152\.209\.195:4321\/s\/KEY/);
+  assert.match(out, /on the internet\s+http:\/\/104\.152\.209\.195:4321\/a\/KEY/);
   assert.match(out, /source\s+\/home\/ubuntu\/Downloads\/done/);
   assert.match(out, /up\s+3m 42s/);
 
@@ -856,12 +856,12 @@ test("going live is something an admin does, not something startup asked once", 
         live,
         code: live ? "482917" : "",
         name: "chovy",
-        url: "https://server1.chovy.nixamp.com:4321/s/KEY",
+        url: "https://server1.chovy.nixamp.com:4321/v/KEY",
         possible: true,
       }),
       start: async () => {
         live = true;
-        return { live: true, code: "482917", name: "chovy", url: "https://server1.chovy.nixamp.com:4321/s/KEY" };
+        return { live: true, code: "482917", name: "chovy", url: "https://server1.chovy.nixamp.com:4321/v/KEY" };
       },
       stop: async () => {
         live = false;

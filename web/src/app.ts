@@ -655,7 +655,7 @@ export function start(): void {
     event.preventDefault();
     const typed = dom.remoteUrl.value;
     // What people paste is a share link: an address with a key on the end of
-    // it. Taken whole it is not an address -- there is no /s/KEY/api/health,
+    // it. Taken whole it is not an address -- there is no /a/KEY/api/health,
     // and asking for one gets a 404 that reads as "no nixamp answered there",
     // which is how connecting to your own server failed while the server was
     // healthy the entire time. The directory's Listen button hands this the
@@ -1219,7 +1219,8 @@ export function start(): void {
         open.className = "button";
         open.textContent = "Open";
         open.addEventListener("click", () => {
-          dom.remoteUrl.value = entry.key ? `${entry.url}/s/${entry.key}` : entry.url;
+          // The key kept against your account is the one that administers.
+          dom.remoteUrl.value = entry.key ? `${entry.url}/a/${entry.key}` : entry.url;
           dom.remoteForm.requestSubmit();
         });
 

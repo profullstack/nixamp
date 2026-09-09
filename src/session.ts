@@ -23,6 +23,7 @@ import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import { stateDir } from "./daemon.ts";
 import { DEFAULT_DIRECTORY } from "./directory.ts";
+import { shareLink } from "./share.ts";
 
 export interface Session {
   site: string;
@@ -585,7 +586,7 @@ export async function servers(argv: string[], fetcher: typeof fetch = fetch): Pr
           console.error(
             "nixamp: no daemon is running here.\n" +
               "  Start one:  nixamp daemon start ~/Music\n" +
-              "  Or give the share link of the one you mean: https://host:4321/s/KEY",
+              "  Or give the share link of the one you mean: https://host:4321/a/KEY",
           );
           return 1;
         }
@@ -642,7 +643,7 @@ export async function servers(argv: string[], fetcher: typeof fetch = fetch): Pr
       }
       const width = Math.max(...rows.map((row) => row.name.length));
       for (const row of rows) {
-        const link = row.key ? `${row.url}/s/${row.key}` : row.url;
+        const link = shareLink(row.url, row.key ?? null);
         console.log(`${row.id}  ${row.name.padEnd(width)}  ${link}`);
       }
       return 0;

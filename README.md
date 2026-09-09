@@ -147,7 +147,7 @@ publish:
 
 ```
   List this stream at https://nixamp.com/directory so anyone can find it?
-  It publishes http://198.51.100.7:4321/s/Lk1EM_mP977e1VT — listen only,
+  It publishes http://198.51.100.7:4321/v/Lk1EM_mP977e1VT — listen only,
   not the controls. [Y/n]
 ```
 

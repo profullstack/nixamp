@@ -5,15 +5,15 @@ import { Publisher, confirm } from "../src/publish.ts";
 import { allowedForListening, audioLink, scopeOf, shareLink } from "../src/share.ts";
 
 test("a listing has to point somewhere a stranger can actually go", () => {
-  assert.notEqual(publishable("https://nixamp.example.com/s/abc"), null);
-  assert.notEqual(publishable("http://67.205.189.229:4321/s/abc"), null);
+  assert.notEqual(publishable("https://nixamp.example.com/v/abc"), null);
+  assert.notEqual(publishable("http://67.205.189.229:4321/v/abc"), null);
 
   // Reachable only from the machine that published it, so listing it is an
   // entry nobody else can ever open.
-  assert.equal(publishable("http://localhost:4321/s/abc"), null);
-  assert.equal(publishable("http://127.0.0.1:4321/s/abc"), null);
-  assert.equal(publishable("http://[::1]:4321/s/abc"), null);
-  assert.equal(publishable("http://169.254.1.1:4321/s/abc"), null);
+  assert.equal(publishable("http://localhost:4321/v/abc"), null);
+  assert.equal(publishable("http://127.0.0.1:4321/v/abc"), null);
+  assert.equal(publishable("http://[::1]:4321/v/abc"), null);
+  assert.equal(publishable("http://169.254.1.1:4321/v/abc"), null);
   // Not something a browser opens.
   assert.equal(publishable("file:///etc/passwd"), null);
   assert.equal(publishable("javascript:alert(1)"), null);
@@ -34,18 +34,18 @@ test("text from a publisher cannot draw in someone's terminal", () => {
 test("an announcement is sanitised, and a nameless one still gets a name", () => {
   const ok = parseAnnouncement({
     name: "  Anthony's box  ",
-    url: "https://nixamp.example.com/s/abc",
+    url: "https://nixamp.example.com/v/abc",
     tracks: 12.7,
     nowPlaying: "A Song",
   });
   assert.equal(ok?.name, "Anthony's box");
   assert.equal(ok?.tracks, 12);
 
-  assert.equal(parseAnnouncement({ name: "x", url: "http://127.0.0.1/s/a", tracks: 1, nowPlaying: "" }), null);
+  assert.equal(parseAnnouncement({ name: "x", url: "http://127.0.0.1/v/a", tracks: 1, nowPlaying: "" }), null);
   assert.equal(parseAnnouncement(null), null);
   assert.equal(parseAnnouncement({ name: "x" }), null);
 
-  const nameless = parseAnnouncement({ url: "https://a.example.com/s/a", tracks: -5, nowPlaying: "" });
+  const nameless = parseAnnouncement({ url: "https://a.example.com/v/a", tracks: -5, nowPlaying: "" });
   assert.equal(nameless?.name, "a nixamp");
   assert.equal(nameless?.tracks, 0);
 });
@@ -53,11 +53,11 @@ test("an announcement is sanitised, and a nameless one still gets a name", () =>
 test("the directory forgets what stops renewing", () => {
   let now = 1_000_000;
   const dir = new Directory(1000, () => now);
-  const a = dir.announce({ name: "A", url: "https://a.example.com/s/1", tracks: 1, nowPlaying: "" });
+  const a = dir.announce({ name: "A", url: "https://a.example.com/v/1", tracks: 1, nowPlaying: "" });
   assert.equal(dir.list().length, 1);
 
   now += 500;
-  dir.announce({ id: a.id, name: "A", url: "https://a.example.com/s/1", tracks: 1, nowPlaying: "still here" });
+  dir.announce({ id: a.id, name: "A", url: "https://a.example.com/v/1", tracks: 1, nowPlaying: "still here" });
   now += 800;
   // Renewed at 500, so at 1300 it is 800 old and still inside the TTL.
   assert.equal(dir.list().length, 1);
@@ -69,8 +69,8 @@ test("the directory forgets what stops renewing", () => {
 
 test("announcing the same URL twice replaces the entry rather than doubling it", () => {
   const dir = new Directory();
-  const first = dir.announce({ name: "A", url: "https://a.example.com/s/1", tracks: 1, nowPlaying: "one" });
-  const again = dir.announce({ name: "A restarted", url: "https://a.example.com/s/1", tracks: 2, nowPlaying: "two" });
+  const first = dir.announce({ name: "A", url: "https://a.example.com/v/1", tracks: 1, nowPlaying: "one" });
+  const again = dir.announce({ name: "A restarted", url: "https://a.example.com/v/1", tracks: 2, nowPlaying: "two" });
 
   assert.equal(dir.list().length, 1);
   assert.equal(first.id, again.id);
@@ -79,9 +79,9 @@ test("announcing the same URL twice replaces the entry rather than doubling it",
 
 test("a publisher cannot claim an id that is not its own", () => {
   const dir = new Directory();
-  const mine = dir.announce({ name: "Mine", url: "https://a.example.com/s/1", tracks: 1, nowPlaying: "" });
+  const mine = dir.announce({ name: "Mine", url: "https://a.example.com/v/1", tracks: 1, nowPlaying: "" });
   // Someone else announces a different URL while quoting my id.
-  const theirs = dir.announce({ id: mine.id, name: "Theirs", url: "https://b.example.com/s/2", tracks: 1, nowPlaying: "" });
+  const theirs = dir.announce({ id: mine.id, name: "Theirs", url: "https://b.example.com/v/2", tracks: 1, nowPlaying: "" });
 
   assert.notEqual(theirs.id, mine.id);
   assert.equal(dir.list().length, 2);
@@ -90,7 +90,7 @@ test("a publisher cannot claim an id that is not its own", () => {
 
 test("withdrawing takes it out at once", () => {
   const dir = new Directory();
-  const listing = dir.announce({ name: "A", url: "https://a.example.com/s/1", tracks: 1, nowPlaying: "" });
+  const listing = dir.announce({ name: "A", url: "https://a.example.com/v/1", tracks: 1, nowPlaying: "" });
   dir.withdraw(listing.id);
   assert.equal(dir.list().length, 0);
   // Withdrawing something already gone is not an error.
@@ -136,7 +136,7 @@ test("a publisher keeps the id the directory gave it, and leaves on stop", async
   }) as unknown as typeof fetch;
 
   const publisher = new Publisher(
-    { directory: "https://d.example", name: "n", url: "https://a.example/s/1", tracks: 3, nowPlaying: () => "song" },
+    { directory: "https://d.example", name: "n", url: "https://a.example/v/1", tracks: 3, nowPlaying: () => "song" },
     fake,
   );
 
@@ -186,7 +186,7 @@ test("a directory that is down does not stop the music", async () => {
   }) as unknown as typeof fetch;
 
   const publisher = new Publisher(
-    { directory: "https://d.example", name: "n", url: "https://a.example/s/1", tracks: 0, nowPlaying: () => "" },
+    { directory: "https://d.example", name: "n", url: "https://a.example/v/1", tracks: 0, nowPlaying: () => "" },
     failing,
   );
   assert.equal(await publisher.start(), null);
@@ -213,7 +213,7 @@ test("an announcement carries an audio address, and only from its own server", (
   // the phone line at any of them.
   const same = parseAnnouncement({
     name: "Chovy",
-    url: "https://chovy.example/s/abc",
+    url: "https://chovy.example/v/abc",
     audio: "https://chovy.example/api/live?k=abc",
     tracks: 1,
     nowPlaying: "",
@@ -222,7 +222,7 @@ test("an announcement carries an audio address, and only from its own server", (
 
   const elsewhere = parseAnnouncement({
     name: "Chovy",
-    url: "https://chovy.example/s/abc",
+    url: "https://chovy.example/v/abc",
     audio: "https://somewhere-else.example/whatever.mp3",
     tracks: 1,
     nowPlaying: "",
@@ -233,7 +233,7 @@ test("an announcement carries an audio address, and only from its own server", (
   // Unreachable, so no better than none at all.
   const local = parseAnnouncement({
     name: "Chovy",
-    url: "https://chovy.example/s/abc",
+    url: "https://chovy.example/v/abc",
     audio: "http://127.0.0.1:4321/api/live?k=abc",
     tracks: 1,
     nowPlaying: "",
@@ -241,7 +241,7 @@ test("an announcement carries an audio address, and only from its own server", (
   assert.equal(local?.audio, undefined);
 
   // An older publisher that only knows about url.
-  const old = parseAnnouncement({ name: "Chovy", url: "https://chovy.example/s/abc", tracks: 1, nowPlaying: "" });
+  const old = parseAnnouncement({ name: "Chovy", url: "https://chovy.example/v/abc", tracks: 1, nowPlaying: "" });
   assert.equal(old?.audio, undefined);
 });
 
@@ -249,7 +249,7 @@ test("a heartbeat that omits the audio address does not blank it", () => {
   const { dir, tick } = dated();
   const first = dir.announce({
     name: "Chovy",
-    url: "https://a.example/s/abc",
+    url: "https://a.example/v/abc",
     audio: "https://a.example/api/live?k=abc",
     tracks: 1,
     nowPlaying: "Top Gun: Maverick",
@@ -259,7 +259,7 @@ test("a heartbeat that omits the audio address does not blank it", () => {
   // Every 90 seconds for the length of a broadcast. One of them arriving
   // without it must not leave the phone line with nothing to play.
   tick(60_000);
-  const again = dir.announce(stream("https://a.example/s/abc"));
+  const again = dir.announce(stream("https://a.example/v/abc"));
   assert.equal(again.audio, "https://a.example/api/live?k=abc");
   assert.equal(dir.liveByCode(first.code)?.audio, "https://a.example/api/live?k=abc");
 });
@@ -363,7 +363,7 @@ test("a publisher signs its announcements, because the directory now asks who", 
     {
       directory: "https://d.example",
       name: "n",
-      url: "https://a.example/s/1",
+      url: "https://a.example/v/1",
       tracks: 1,
       nowPlaying: () => "",
       token: "tok-from-nixamp-login",
@@ -389,7 +389,7 @@ test("a publisher with no account is told once, not every heartbeat", async () =
     {
       directory: "https://d.example",
       name: "n",
-      url: "https://a.example/s/1",
+      url: "https://a.example/v/1",
       tracks: 1,
       nowPlaying: () => "",
       onRefused: () => (refusals += 1),
@@ -415,7 +415,7 @@ test("a directory being down is not the same as a directory saying no", async ()
     {
       directory: "https://d.example",
       name: "n",
-      url: "https://a.example/s/1",
+      url: "https://a.example/v/1",
       tracks: 1,
       nowPlaying: () => "",
       onRefused: () => (refusals += 1),
@@ -435,14 +435,14 @@ test("followers are told once when a stream starts, not every ninety seconds", (
   const live: string[] = [];
   const dir = new Directory(4 * 60 * 1000, () => at, () => "482917", (l) => live.push(l.name));
 
-  dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" }, "owner-1");
+  dir.announce({ name: "Chovy", url: "https://a.example/v/1", tracks: 1, nowPlaying: "" }, "owner-1");
   assert.deepEqual(live, ["Chovy"]);
 
   // The publisher renews every 90 seconds for as long as it is up. Telling
   // followers on each of those would be telling them forty times an hour.
   for (let beat = 0; beat < 5; beat += 1) {
     at += 90_000;
-    dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "x" }, "owner-1");
+    dir.announce({ name: "Chovy", url: "https://a.example/v/1", tracks: 1, nowPlaying: "x" }, "owner-1");
   }
   assert.deepEqual(live, ["Chovy"], "five heartbeats, still one notification");
 });
@@ -452,9 +452,9 @@ test("a stream that stopped and came back is a new thing to be told about", () =
   const live: string[] = [];
   const dir = new Directory(4 * 60 * 1000, () => at, () => "482917", (l) => live.push(l.name));
 
-  dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" }, "owner-1");
+  dir.announce({ name: "Chovy", url: "https://a.example/v/1", tracks: 1, nowPlaying: "" }, "owner-1");
   at += 5 * 60 * 1000;            // past the TTL: it stopped
-  dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" }, "owner-1");
+  dir.announce({ name: "Chovy", url: "https://a.example/v/1", tracks: 1, nowPlaying: "" }, "owner-1");
 
   assert.equal(live.length, 2, "a second run is a second broadcast");
 });
@@ -463,24 +463,24 @@ test("the owner comes from the token and survives a heartbeat that omits it", ()
   let at = 1_788_928_020_000;
   const dir = new Directory(4 * 60 * 1000, () => at, () => "482917");
 
-  const first = dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" }, "owner-1");
+  const first = dir.announce({ name: "Chovy", url: "https://a.example/v/1", tracks: 1, nowPlaying: "" }, "owner-1");
   assert.equal(first.ownerId, "owner-1");
 
   // A heartbeat with no owner must not orphan a listing people follow.
   at += 90_000;
-  const beat = dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" });
+  const beat = dir.announce({ name: "Chovy", url: "https://a.example/v/1", tracks: 1, nowPlaying: "" });
   assert.equal(beat.ownerId, "owner-1");
 
   // And it survives the stream stopping and returning.
   at += 5 * 60 * 1000;
-  const back = dir.announce({ name: "Chovy", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" });
+  const back = dir.announce({ name: "Chovy", url: "https://a.example/v/1", tracks: 1, nowPlaying: "" });
   assert.equal(back.ownerId, "owner-1");
 });
 
 test("an unowned listing notifies nobody, because there is nobody to follow", () => {
   const live: { ownerId: string }[] = [];
   const dir = new Directory(4 * 60 * 1000, () => 1, () => "482917", (l) => live.push(l));
-  dir.announce({ name: "anon", url: "https://a.example/s/1", tracks: 1, nowPlaying: "" });
+  dir.announce({ name: "anon", url: "https://a.example/v/1", tracks: 1, nowPlaying: "" });
   // It still fires; the caller is what declines to send, because an empty
   // owner has no audience to look up.
   assert.equal(live[0]?.ownerId, "");

@@ -19,6 +19,7 @@ import { displayName, loadSource, loadTagged } from "./playlist.ts";
 import { isRemote } from "./sources.ts";
 import { DEFAULT_PORT } from "./server.ts";
 import type { DaemonState } from "./daemon.ts";
+import { shareLink } from "./share.ts";
 
 const FFT_SIZE = 2048;
 export const BAND_COUNT = 24;
@@ -515,7 +516,7 @@ export async function main(): Promise<void> {
   const handed = handoff.to;
   if (handed !== null) {
     console.log(`Detached. Still playing as pid ${handed.daemon.pid}.`);
-    console.log(`  ${handed.daemon.key ? `${handed.url}/s/${handed.daemon.key}` : handed.url}`);
+    console.log(`  ${shareLink(handed.url, handed.daemon.key ?? null)}`);
     console.log("  nixamp attach       come back to it");
     console.log("  nixamp daemon stop  when you are done");
   }
