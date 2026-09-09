@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import { Connections, networkOf, normaliseAddress, shortAgent } from "../src/connections.ts";
-import { alive, daemonUrl, type DaemonState } from "../src/daemon.ts";
+import { alive, daemonUrl, isLoopbackTls, type DaemonState } from "../src/daemon.ts";
 import { renderToText } from "@profullstack/hqtui/testing";
 import { bytes, draw, resolveTarget, since, typed, type View } from "../src/admin.ts";
 
@@ -189,4 +189,42 @@ test("a pasted URL goes in the box, because a paste is one event not many keys",
   // Control characters are not part of an address.
   assert.equal(typed("\u0001"), "");
   assert.equal(typed("http://x\nhttp://y"), "http://xhttp://y");
+});
+
+test("a daemon with a certificate is asked for by the name on it", () => {
+  // Turning TLS on pointed every local tool at https://localhost, and a
+  // certificate for chovy.nixamp.com does not name localhost. `nixamp admin`
+  // and `nixamp attach` stopped working the moment the daemon got a cert.
+  const secure: DaemonState = {
+    pid: 1, host: "0.0.0.0", port: 4321, key: "K", source: "/m", startedAt: 0, log: "/tmp/l",
+    urls: [
+      { label: "on the internet", url: "https://chovy.nixamp.com:4321" },
+      { label: "here", url: "https://localhost:4321" },
+    ],
+  };
+  assert.equal(daemonUrl(secure), "https://chovy.nixamp.com:4321");
+
+  // Plain http is unchanged: loopback is right, and cheaper than a round trip
+  // out to the internet and back.
+  const plain: DaemonState = {
+    pid: 1, host: "0.0.0.0", port: 4321, key: "K", source: "/m", startedAt: 0, log: "/tmp/l",
+    urls: [{ label: "here", url: "http://localhost:4321" }],
+  };
+  assert.equal(daemonUrl(plain), "http://127.0.0.1:4321");
+
+  // A state file from before any of this still answers something usable.
+  const old: DaemonState = {
+    pid: 1, host: "0.0.0.0", port: 4321, key: "K", source: "/m", startedAt: 0, log: "/tmp/l",
+  };
+  assert.equal(daemonUrl(old), "http://127.0.0.1:4321");
+});
+
+test("loopback over TLS has nothing for a certificate to prove", () => {
+  assert.equal(isLoopbackTls("https://localhost:4321"), true);
+  assert.equal(isLoopbackTls("https://127.0.0.1:4321"), true);
+  // Somewhere else entirely: the certificate is the only thing saying you
+  // reached the right machine, so it must be checked.
+  assert.equal(isLoopbackTls("https://chovy.nixamp.com:4321"), false);
+  assert.equal(isLoopbackTls("http://localhost:4321"), false, "no TLS, nothing to relax");
+  assert.equal(isLoopbackTls("not a url"), false);
 });
