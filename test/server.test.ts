@@ -11,6 +11,7 @@ import {
 } from "../src/server.ts";
 import { emptySnapshot, parseCommand, remoteName, type Command, type Snapshot } from "../src/protocol.ts";
 import { reachableAddresses } from "../src/share.ts";
+import { daemonLines } from "../src/daemon.ts";
 
 test("serve flags parse, and a bad one is a message rather than a NaN", () => {
   // A platform that hands out the port would otherwise change what "default"
@@ -349,4 +350,57 @@ test("tags arrive later without stopping what is playing", () => {
   } finally {
     engine.stop();
   }
+});
+
+test("the daemon prints every address it has, not the one nobody can use", () => {
+  const state = {
+    pid: 42,
+    host: "0.0.0.0",
+    port: 4321,
+    key: "KEY",
+    source: "/home/ubuntu/Music",
+    startedAt: 0,
+    log: "/tmp/daemon.log",
+    urls: [
+      { label: "here", url: "http://localhost:4321" },
+      { label: "on your network", url: "http://192.168.1.5:4321" },
+      { label: "on the internet", url: "https://nixamp.example.com" },
+    ],
+    firewall: "ufw" as const,
+  };
+  const out = daemonLines(state).join("\n");
+
+  // The complaint this fixes: one loopback link, and nothing you could send
+  // to a phone in another room.
+  assert.match(out, /on your network\s+http:\/\/192\.168\.1\.5:4321\/s\/KEY/);
+  assert.match(out, /on the internet\s+https:\/\/nixamp\.example\.com\/s\/KEY/);
+  assert.match(out, /source\s+\/home\/ubuntu\/Music/);
+
+  // "did you open the firewall port?" -- it did not, and it says so with the
+  // command, rather than writing that into a log nobody reads.
+  assert.match(out, /ufw is running/);
+  assert.match(out, /sudo ufw allow 4321\/tcp/);
+  // There is a public address here, so the tunnel advice would be noise.
+  assert.doesNotMatch(out, /--public-url/);
+});
+
+test("with nothing public, the daemon says so and how to fix it", () => {
+  const out = daemonLines({
+    pid: 42, host: "0.0.0.0", port: 4321, key: "KEY", source: "/m", startedAt: 0, log: "/tmp/l",
+    urls: [{ label: "here", url: "http://localhost:4321" }],
+  }).join("\n");
+  assert.match(out, /None of those work from outside/);
+  assert.match(out, /--public-url https:\/\/your-tunnel/);
+  // No firewall reported means no firewall warning invented.
+  assert.doesNotMatch(out, /is running, so nothing else/);
+});
+
+test("a state file from an older nixamp still prints something", () => {
+  // No urls: host and port stand in rather than printing nothing at all.
+  const out = daemonLines({
+    pid: 7, host: "0.0.0.0", port: 4321, key: null, source: "/m", startedAt: 0, log: "/tmp/l",
+  }).join("\n");
+  assert.match(out, /here\s+http:\/\/127\.0\.0\.1:4321/);
+  // No key means no /s/ suffix, because there is nothing to put after it.
+  assert.doesNotMatch(out, /\/s\//);
 });

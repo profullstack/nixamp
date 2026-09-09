@@ -2390,8 +2390,34 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     },
   };
 
+  // The link, not the address. Without the key the address is a 401, so
+  // printing a bare host:port would be printing something that does not work.
+  const addresses = reachableAddresses(options.host, port, options.publicUrl);
+
+  // Listening on every interface proves the socket is open here and nothing
+  // about the path between here and the phone.
+  const listening = options.host === "0.0.0.0" || options.host === "::";
+  const firewall = listening ? firewallInUse(io) : null;
+
   if (options.announce) {
-    console.log(JSON.stringify({ nixamp: "listening", host: options.host, port, key, source: root }));
+    // Everything `nixamp daemon start` needs to print what this would have
+    // printed. Without the addresses it could only reconstruct host and port,
+    // which for a server bound to every interface means it printed 127.0.0.1 --
+    // an address that works on exactly the machine you are already sitting at.
+    // The firewall matters for the same reason: the warning was going into a
+    // log file nobody reads instead of to the person who just typed the
+    // command.
+    console.log(
+      JSON.stringify({
+        nixamp: "listening",
+        host: options.host,
+        port,
+        key,
+        source: root,
+        urls: addresses,
+        firewall,
+      }),
+    );
   }
 
   // The other half of "names now, tags later". It runs while the banner is
@@ -2410,9 +2436,6 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   console.log(`nixamp serve — ${tracks.length} tracks under ${root}`);
   console.log("");
 
-  // The link, not the address. Without the key the address is a 401, so
-  // printing a bare host:port would be printing something that does not work.
-  const addresses = reachableAddresses(options.host, port, options.publicUrl);
   const width = Math.max(...addresses.map((a) => a.label.length));
   for (const { label, url } of addresses) {
     console.log(`  ${label.padEnd(width)}  ${shareLink(url, key)}`);
@@ -2469,10 +2492,6 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   }
   if (web === null) console.log("  No built PWA found, so / has nothing to serve: run `bun run web:build`.");
 
-  // Listening on every interface proves the socket is open here and nothing
-  // about the path between here and the phone.
-  const listening = options.host === "0.0.0.0" || options.host === "::";
-  const firewall = listening ? firewallInUse(io) : null;
   let closePort: (() => void) | null = null;
 
   if (firewall !== null) {
