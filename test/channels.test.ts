@@ -170,3 +170,75 @@ test("publishing needs an administrator; listening does not", () => {
   assert.equal(needsAdmin("/api/channels/phone/chunk", "POST"), true);
   assert.equal(needsAdmin("/api/channels", "GET"), false);
 });
+
+/** An MP4 box, for the pulled-channel tests below. */
+function box(type: string, body = ""): Buffer {
+  const inside = Buffer.from(body, "utf8");
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(8 + inside.length, 0);
+  head.write(type, 4, "latin1");
+  return Buffer.concat([head, inside]);
+}
+
+/** A fake ffmpeg that prints an opening and one fragment, then stays up. */
+function fakeVideoFfmpeg(): string[] {
+  const bytes = Buffer.concat([
+    box("ftyp", "isom"), box("moov", "tracks"), box("moof", "one"), box("mdat", "picture"),
+  ]).toString("base64");
+  return ["sh", "-c", `printf %s ${bytes} | base64 -d; sleep 30`, "--"];
+}
+
+test("two pulled channels run at once, each with its own audience", async () => {
+  // The thing this exists for. A re-stream used to become a playlist track,
+  // and a server plays one track at a time -- so the second channel you added
+  // sat there saying "stopped" and two tabs could not have one each.
+  const set = new Channels({ ffmpeg: fakeVideoFfmpeg() });
+  const news = set.pull("news", "CNN", "http://x.test/301", [], "video");
+  const ball = set.pull("ball", "MLB Network", "http://x.test/932", [], "video");
+  assert.ok(news && ball);
+  assert.equal(set.count, 2);
+
+  const watching = collector();
+  const alsoWatching = collector();
+  news?.listen(watching);
+  ball?.listen(alsoWatching);
+
+  await new Promise((done) => setTimeout(done, 400));
+
+  // Each got its own stream, not a share of one.
+  assert.ok(watching.chunks.length > 0);
+  assert.ok(alsoWatching.chunks.length > 0);
+  assert.deepEqual(set.list().map((c) => c.name).sort(), ["CNN", "MLB Network"]);
+  assert.equal(set.contentType("news"), "video/mp4");
+
+  // Ending one leaves the other on the air.
+  assert.equal(set.stop("news"), true);
+  assert.equal(set.count, 1);
+  assert.equal(set.list()[0]?.name, "MLB Network");
+  set.stopAll();
+});
+
+test("somebody who arrives late is told what the stream is", async () => {
+  // Fragmented MP4 cannot be joined blind: the fragments reference tracks
+  // described in an ftyp and a moov that went past before this listener
+  // existed. Without them a browser shows a blank panel and no error.
+  const set = new Channels({ ffmpeg: fakeVideoFfmpeg() });
+  const channel = set.pull("late", "MLB Network", "http://x.test/932", [], "video");
+  await new Promise((done) => setTimeout(done, 400));
+
+  const latecomer = collector();
+  channel?.listen(latecomer);
+  const first = Buffer.concat(latecomer.chunks);
+  assert.equal(first.toString("latin1", 4, 8), "ftyp");
+  assert.ok(first.includes("moov"));
+  set.stopAll();
+});
+
+test("a channel carrying only sound says so", () => {
+  const set = new Channels({ ffmpeg: ["true"] });
+  set.pull("radio", "A Station", "http://x.test/stream.mp3", [], "audio");
+  assert.equal(set.contentType("radio"), "audio/mpeg");
+  // And a channel nobody has heard of is not called video on a guess.
+  assert.equal(set.contentType("nothing"), "audio/mpeg");
+  set.stopAll();
+});

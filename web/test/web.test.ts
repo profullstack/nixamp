@@ -508,10 +508,20 @@ test("an admin action says what it did somewhere that is not overwritten", () =>
   // Every answer to an action goes through the helper, and none of them are
   // written into the polled line.
   assert.match(app, /function said\(message: string\): void/);
-  const restream = app.slice(app.indexOf('dom.adminRestream.addEventListener'));
-  const upTo = restream.slice(0, restream.indexOf("\n  });"));
-  assert.match(upTo, /said\(/);
-  assert.equal(/dom\.adminNote\.textContent/.test(upTo), false, "an action wrote to the polled status line");
+
+  // Each thing an admin can start, and what it says about how it went. Named
+  // rather than sliced out of one handler: putting something on the air and
+  // adding it to the library are two actions now, and both have to answer.
+  for (const action of ["function goLive(", "dom.adminAdd.addEventListener"]) {
+    const from = app.indexOf(action);
+    assert.notEqual(from, -1, `${action} is gone`);
+    const body = app.slice(from, from + 3000);
+    assert.match(body, /said\(/);
+    assert.equal(
+      /dom\.adminNote\.textContent/.test(body), false,
+      `${action} wrote to the polled status line`,
+    );
+  }
 });
 
 test("full screen is offered for a film and not for a song", () => {

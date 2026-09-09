@@ -103,6 +103,7 @@ export function start(): void {
     adminReplace: need<HTMLInputElement>("admin-replace"),
     adminSource: need<HTMLInputElement>("admin-source"),
     adminName: need<HTMLInputElement>("admin-name"),
+    adminAdd: need<HTMLButtonElement>("admin-add"),
     homeNote: need<HTMLParagraphElement>("home-note"),
     loadHome: need<HTMLButtonElement>("load-home"),
     directory: need<HTMLElement>("directory"),
@@ -1256,8 +1257,57 @@ export function start(): void {
     adminTimer = setInterval(() => void refreshAdmin(), 2000);
   };
 
+  /**
+   * Put something on the air, as a channel of its own.
+   *
+   * Not as a playlist track. A server plays one track at a time, so a second
+   * re-stream added that way sat there saying "stopped" -- and two people
+   * could not watch two different things, which is most of the point of a
+   * server that carries streams. A channel is its own process with its own
+   * audience and its own address, and a server carries as many as it can
+   * decode.
+   */
+  function goLive(source: string, named: string, at?: number): void {
+    // Named by hand where possible, because a URL ending in /932 is not a
+    // name and the stream calls itself Service01.
+    const id = (named || source)
+      .toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40)
+      || `s${Math.random().toString(16).slice(2, 8)}`;
+    said(`Starting ${named || source}…`);
+    void (async () => {
+      try {
+        const answer = await fetch(remote.url(`/api/channels/${encodeURIComponent(id)}/pull`), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...(at === undefined ? { source } : { at }),
+            ...(named ? { name: named } : {}),
+          }),
+        });
+        const body = (await answer.json()) as { error?: string; channel?: { name: string } };
+        if (!answer.ok) {
+          said(body.error ?? "that did not work");
+          return;
+        }
+        said(`${body.channel?.name || named || source} is on the air.`);
+        dom.adminSource.value = "";
+        dom.adminName.value = "";
+        void loadShare();
+        void loadOnAir();
+      } catch {
+        said("could not reach the server");
+      }
+    })();
+  }
+
   dom.adminRestream.addEventListener("submit", (event) => {
     event.preventDefault();
+    const source = dom.adminSource.value.trim();
+    if (!source) return;
+    goLive(source, dom.adminName.value.trim());
+  });
+
+  dom.adminAdd.addEventListener("click", () => {
     const source = dom.adminSource.value.trim();
     if (!source) return;
     said(`Reading ${source}…`);
@@ -2059,7 +2109,10 @@ export function start(): void {
       name: string; nowPlaying: string; tracks: number; playing: boolean;
       live: boolean; listed?: boolean; code: string; url: string;
     };
-    channels: { id: string; name: string; via: string; listeners: number; startedAt: number }[];
+    channels: {
+      id: string; name: string; via: string; listeners: number; startedAt: number;
+      kind?: "audio" | "video"; source?: string;
+    }[];
     restreams?: { name: string; at: number; tracks: number }[];
   }
 
@@ -2170,20 +2223,37 @@ export function start(): void {
     }
 
     for (const channel of air.channels) {
+      const watching = channel.kind !== "audio";
       rows.push(onAirRow({
         title: channel.name,
-        detail: `live over ${channel.via} · ${channel.listeners} listening`,
+        detail: channel.via === "pull"
+          ? `on the air · ${channel.listeners} watching`
+          : `live over ${channel.via} · ${channel.listeners} listening`,
         // A channel is its own address, so playing it is pointing the player
-        // at that rather than at a track number.
+        // at that rather than at a track number -- and that address is the
+        // whole reason two of these can play in two tabs at once.
         onPlay: () => {
           void player.load({
             title: channel.name, artist: "", album: "", duration: 0,
             url: remote.url(`/api/channels/${encodeURIComponent(channel.id)}`),
-            video: true, objectUrl: false,
+            video: watching, objectUrl: false,
           }, true);
-          showVideo(true);
+          showVideo(watching);
         },
-        link: "",
+        // The address on its own, for a second tab or a panel of a multiview.
+        link: remote.url(`/api/channels/${encodeURIComponent(channel.id)}`),
+        // Taking something off the air is administering the server, so the
+        // button is only there for somebody who may.
+        onStop: !dom.adminPanel.hidden
+          ? () => {
+              void (async () => {
+                await fetch(remote.url(`/api/channels/${encodeURIComponent(channel.id)}`), {
+                  method: "DELETE",
+                }).catch(() => undefined);
+                void loadOnAir();
+              })();
+            }
+          : undefined,
       }));
     }
     dom.onairList.replaceChildren(...rows);
@@ -2262,6 +2332,7 @@ export function start(): void {
   /** One row of what is live: what it is, and the two things you can do. */
   function onAirRow(row: {
     title: string; detail: string; onPlay: () => void; link: string; playLabel?: string;
+    onStop?: () => void;
   }): HTMLElement {
     const item = document.createElement("li");
     const label = document.createElement("span");
@@ -2296,6 +2367,15 @@ export function start(): void {
         void navigator.clipboard?.writeText(full).catch(() => {});
       });
       item.append(copy);
+    }
+
+    if (row.onStop) {
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.className = "ghost";
+      stop.textContent = "Stop";
+      stop.addEventListener("click", row.onStop);
+      item.append(stop);
     }
     return item;
   }
