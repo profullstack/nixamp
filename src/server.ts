@@ -426,6 +426,8 @@ export interface Engine {
    * this server somewhere else", which throws the library away on purpose.
    */
   replace(tracks: Track[], root: string): void;
+  /** The library, arriving after the server was already listening. */
+  fill(tracks: Track[], root: string): void;
   /**
    * Play something as well as everything here.
    *
@@ -757,6 +759,30 @@ export class PlayerEngine implements Engine {
     return seen;
   }
 
+  /**
+   * The library, arriving after the server was already listening.
+   *
+   * Walking a directory is the slow part of starting -- eighty thousand files
+   * under a home directory takes far longer than the fifteen seconds
+   * `nixamp daemon start` waits for the server to say it is up, so starting a
+   * daemon with no source given looked exactly like hanging and then failed
+   * about a server that was working. The port opens first now and this puts
+   * the library in behind it.
+   *
+   * Unlike `replace` it stops nothing and clears no listeners: whoever
+   * connected in the first second is still connected, and simply sees the
+   * playlist appear.
+   */
+  fill(tracks: Loaded[], root: string): void {
+    // Something is already loaded, so this is a scan that finished after
+    // somebody pointed the server elsewhere. Theirs wins.
+    if (this.tracks.length > 0) return;
+    this.tracks = tracks;
+    this.root = root;
+    this.state.note = tracks.length === 0 ? `No audio files under ${root}.` : "";
+    this.push(true);
+  }
+
   retag(tracks: Track[], root: string): void {
     // Matched by path rather than by position, because the list is no longer
     // required to be the one that was sent for tagging: somebody can add an
@@ -800,6 +826,7 @@ export class EmptyEngine implements Engine {
     return undefined;
   }
   replace(): void {}
+  fill(): void {}
   add(): number {
     return 0;
   }
@@ -930,6 +957,15 @@ export interface HandlerOptions {
   broadcaster?: Broadcaster;
   /** Where a broadcast should send, and what it should look like. */
   broadcast?: () => { destinations: Destination[]; settings: EncoderSettings };
+  /**
+   * Where OBS should point, one entry per stream this server will accept.
+   *
+   * There is deliberately no single link. ffmpeg's RTMP listener serves one
+   * connection per process, so three people going live at once is three ports
+   * and three URLs -- and a panel offering one address for all of them would
+   * be offering an address that works exactly once.
+   */
+  publishUrls?: () => { id: string; url: string }[];
   /** Accounts, on the instance that keeps them. Only nixamp.com passes this. */
   accounts?: Accounts;
   /** Providers to sign in with, and the terminals waiting to be connected. */
@@ -2141,6 +2177,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         active: tracker.active,
         startedAt: started,
         now: Date.now(),
+        // Where to point OBS. Printed at startup since RTMP was added, which
+        // is no use at all to somebody looking at the admin panel a day later.
+        publish: options.publishUrls?.() ?? [],
       });
       return;
     }
@@ -2726,10 +2765,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   //
   // So the filenames are enough to start: the server is up and answering in the
   // time it takes to walk the directory, and the titles fill in behind it.
-  const tracks = await loadSource(tools, root, false);
-  const engine: Engine = tracks.length > 0
-    ? new PlayerEngine(tracks, root, tools)
-    : new EmptyEngine(`No audio files under ${root}.`);
+  // Empty on purpose. The walk happens below, once the port is open: it is
+  // the slowest part of starting and nothing about it needs to happen first.
+  const engine = new PlayerEngine([], root, tools);
 
   const web = options.web !== null ? resolve(options.web) : defaultWebDir();
   const key = options.key ? newKey() : null;
@@ -2947,11 +2985,17 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       })()
     : undefined;
 
+  // Filled in below, when the RTMP listeners are opened. Read through a
+  // function so the handler sees the list rather than the empty array it was
+  // built with.
+  let publishUrls: { id: string; url: string }[] = [];
+
   const server = createServer(engine, {
     web,
     media: options.media,
     owner,
     channels,
+    publishUrls: () => publishUrls,
     ...(ingest ? { ingest } : {}),
     broadcaster,
     broadcast: () => ({ destinations, settings: DEFAULT_ENCODER }),
@@ -3077,20 +3121,30 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     );
   }
 
-  // The other half of "names now, tags later". It runs while the banner is
-  // printed and while the publish prompt waits, and it is deliberately not
-  // awaited: nothing downstream needs it, and a library that takes a minute to
-  // read should cost nobody a minute of silence.
-  if (tracks.length > 0 && !isRemote(root)) {
-    void loadTagged(tools, root)
-      .then((tagged) => engine.retag(tagged, root))
-      .catch(() => {
-        // Filenames are a working player. A failure here is worth nothing but
-        // titles that stay as they are.
-      });
-  }
+  // Names now, tags later, and both after the door is open. Not awaited:
+  // nothing below needs the library, and a directory that takes a minute to
+  // walk should cost nobody a minute of not being able to connect.
+  void loadSource(tools, root, false)
+    .then((found) => {
+      engine.fill(found, root);
+      if (found.length === 0) {
+        console.log(`nixamp serve — no audio files under ${root}`);
+        return;
+      }
+      console.log(`nixamp serve — ${found.length} tracks under ${root}`);
+      if (isRemote(root)) return;
+      return loadTagged(tools, root)
+        .then((tagged) => engine.retag(tagged, root))
+        .catch(() => {
+          // Filenames are a working player. A failure here is worth nothing
+          // but titles that stay as they are.
+        });
+    })
+    .catch((error: unknown) => {
+      console.log(`nixamp: could not read ${root}: ${(error as Error).message}`);
+    });
 
-  console.log(`nixamp serve — ${tracks.length} tracks under ${root}`);
+  console.log(`nixamp serve — reading ${root}`);
   console.log("");
 
   const width = Math.max(...addresses.map((a) => a.label.length));
@@ -3145,9 +3199,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     rtmp = new RtmpListeners(channels, tools.ffmpeg, listenKey ?? "live");
     rtmp.listen(slots);
 
+    publishUrls = slots.map((slot) => ({
+      id: slot.id,
+      url: `rtmp://${host}:${slot.port}/live/${listenKey ?? "live"}`,
+    }));
+
     console.log("  Or publish from OBS, Larix or ffmpeg, one per URL:");
-    for (const slot of slots) {
-      console.log(`    rtmp://${host}:${slot.port}/live/${listenKey ?? "live"}   -> "${slot.id}"`);
+    for (const entry of publishUrls) {
+      console.log(`    ${entry.url}   -> "${entry.id}"`);
     }
   }
   if (destinations.length > 0) {
@@ -3211,7 +3270,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         name: options.name || hostname(),
         url: listen,
         audio,
-        tracks: tracks.length,
+        // Asked of the engine rather than a variable, because the library is
+        // now read after the port opens and may still be arriving.
+        tracks: engine.snapshot(false).trackCount,
         // From `nixamp login`. The directory will not list a stream it cannot
         // attribute to somebody, because a listing is now a phone code that
         // costs money to answer.

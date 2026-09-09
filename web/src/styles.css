@@ -118,10 +118,31 @@ body {
   display: grid;
   grid-template-columns: 1.3fr 1fr;
   gap: 10px;
+  /* Every panel keeps its column, whatever else is on screen.
+   *
+   * Auto-placement fills left to right in document order, so a panel that
+   * appears or disappears -- and half of these do, on connecting, signing in,
+   * or turning out to be an admin -- pushed every panel after it across to the
+   * other side. Panels arriving and leaving is expected; the ones that stayed
+   * jumping columns underneath you is not. Fixed here, so they only ever move
+   * up and down within their own column.
+   *
+   * Counted including hidden panels, which is what makes the assignment stable
+   * rather than a function of what happens to be visible. */
 }
+
+/* Named rather than counted. Most of these panels are hidden most of the
+   time, so odd-and-even would have put every panel that is visible by default
+   in the same column and left the other one empty. */
+.split > .col-a { grid-column: 1; }
+.split > .col-b { grid-column: 2; }
 
 @media (max-width: 720px) {
   .split { grid-template-columns: 1fr; }
+  /* One column, so document order is the only order and a panel assigned to
+     column 2 would be assigned to a column that does not exist. */
+  .split > .col-a,
+  .split > .col-b { grid-column: auto; }
 }
 
 /* ---- now playing ------------------------------------------------------- */
@@ -452,6 +473,33 @@ button.ghost { background: transparent; color: var(--muted); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Where OBS points. One row per stream, because one URL takes one publisher:
+   ffmpeg's RTMP listener serves a single connection per process. */
+.publish-list {
+  list-style: none;
+  margin: 0.3rem 0 0;
+  padding: 0;
+}
+
+.publish-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 0.3rem;
+}
+
+.publish-list .slot {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 4.5em;
+}
+
+.publish-list input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* A machine that is not answering. Still listed -- it is still yours -- but

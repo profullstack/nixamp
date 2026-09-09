@@ -226,6 +226,31 @@ export async function fetchSnapshot(base: string, signal?: AbortSignal, key = ""
 }
 
 /**
+ * Why an https link to a bare IP cannot work, when that is what it is.
+ *
+ * A certificate is issued for a name, so a browser handed `https://1.2.3.4`
+ * has nothing to check it against and refuses before it asks anything. From
+ * here that is indistinguishable from a machine that is switched off, and
+ * telling somebody their running server is off is worse than saying nothing.
+ */
+export function needsAName(base: string): string {
+  if (!/^https:\/\//i.test(base)) return "";
+  let host: string;
+  try {
+    host = new URL(base).hostname.replace(/^\[|\]$/g, "");
+  } catch {
+    return "";
+  }
+  const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":");
+  if (!isIp) return "";
+  return (
+    "That is an https address for a bare IP, and a certificate is issued for a name — " +
+    "a browser refuses it before it asks anything. Use the server's name instead " +
+    "(the address it printed first), or connect over http."
+  );
+}
+
+/**
  * Why this server will not talk to us, if it will not. Empty means it will.
  *
  * `/api/health` answers to anybody, on purpose: it is how you check a port is
