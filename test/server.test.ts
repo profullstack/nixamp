@@ -481,3 +481,20 @@ test("status says where it is and how long it has been there", () => {
   }).join("\n");
   assert.doesNotMatch(starting, /\bup\b/);
 });
+
+test("a certificate makes it https, and half a pair is refused early", () => {
+  assert.equal(parseServeArgs([]).tlsCert, "");
+  const secure = parseServeArgs(["--tls-cert", "/etc/cert.pem", "--tls-key", "/etc/key.pem"]);
+  assert.equal(secure.tlsCert, "/etc/cert.pem");
+  assert.equal(secure.tlsKey, "/etc/key.pem");
+
+  // Half a pair cannot serve anything, and finding that out at listen time is
+  // finding it out too late.
+  assert.throws(() => parseServeArgs(["--tls-cert", "/etc/cert.pem"]), /go together/);
+  assert.throws(() => parseServeArgs(["--tls-key", "/etc/key.pem"]), /go together/);
+
+  // The links have to say https, or they are links to a port that will not
+  // speak http to them.
+  const links = reachableAddresses("0.0.0.0", 4321, "", "https");
+  assert.equal(links[0]?.url, "https://localhost:4321");
+});

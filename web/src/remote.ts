@@ -178,3 +178,20 @@ export async function probeServer(base: string, signal?: AbortSignal): Promise<s
     return null;
   }
 }
+
+/**
+ * Why this page cannot reach that address, when the reason is the page itself.
+ *
+ * A browser refuses every request from an https page to an http one -- fetch,
+ * event stream, and audio and video alike, which it upgrades to https and then
+ * gives up on. Nothing on either server lifts that, so a nixamp opened from
+ * nixamp.com cannot talk to a nixamp on plain http however healthy both are.
+ * Saying so beats a spinner that never resolves.
+ */
+export function blockedAsMixedContent(base: string, pageProtocol = globalThis.location?.protocol): string {
+  if (pageProtocol !== "https:" || !/^http:\/\//i.test(base.trim())) return "";
+  return (
+    "This page is https, and a browser refuses every request from an https page to an http one. " +
+    "Open that address directly, or give the server a certificate: nixamp serve --tls-cert cert.pem --tls-key key.pem."
+  );
+}

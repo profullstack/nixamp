@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { clamp, displayName, formatTime, isVideoFile, titleFromFilename } from "../src/format.ts";
 import { bandEdges, bands, decay, holdPeaks } from "../src/spectrum.ts";
-import { apiUrl, mediaUrl, normalizeBase, parseSnapshot } from "../src/remote.ts";
+import { apiUrl, blockedAsMixedContent, mediaUrl, normalizeBase, parseSnapshot } from "../src/remote.ts";
 import { byName, isPlayable } from "../src/player.ts";
 import { NEVER_CACHE, serviceWorkerSource } from "../scripts/sw.ts";
 import { Bitmap, crc32, drawIcon, encodePng, ICONS } from "../scripts/icons.ts";
@@ -245,4 +245,17 @@ test("the service worker can receive a push and act on a click", () => {
   // copy of the app, which is what openWindow-every-time does.
   assert.match(source, /matchAll\(/);
   assert.match(source, /openWindow\(/);
+});
+
+test("an https page cannot reach an http server, and says so before trying", () => {
+  // The browser refuses this without sending it, so "no nixamp answered there"
+  // would be a lie about a server that is answering perfectly well.
+  const why = blockedAsMixedContent("http://104.152.209.195:4321", "https:");
+  assert.match(why, /https page/);
+  assert.match(why, /--tls-cert/);
+
+  // Everything else is somebody else's problem, and is left alone.
+  assert.equal(blockedAsMixedContent("https://nixamp.example.com", "https:"), "");
+  assert.equal(blockedAsMixedContent("http://192.168.1.5:4321", "http:"), "", "an http page may reach http");
+  assert.equal(blockedAsMixedContent("http://localhost:4321", "file:"), "", "the desktop app is not a page");
 });

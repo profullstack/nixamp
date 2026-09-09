@@ -11,6 +11,7 @@
  */
 import { createReadStream, statSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { hostname, networkInterfaces } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -132,6 +133,18 @@ export interface ServeOptions {
    */
   publicUrl: string;
   /**
+   * A certificate and its key, to serve https rather than http.
+   *
+   * Needed by anybody whose nixamp is opened from a page that is itself https:
+   * a browser refuses every request from an https page to an http one --
+   * fetch, event stream and media alike -- and no header on either side lifts
+   * that. It is deliberately not required: a nixamp on 192.168.1.5 cannot have
+   * a certificate for that address, and forcing one would put a browser
+   * warning in front of everybody at home to fix a problem they do not have.
+   */
+  tlsCert: string;
+  tlsKey: string;
+  /**
    * Ask an outside service what this machine's public address is, when no
    * interface holds one and none was given. Behind NAT that is the only way to
    * learn it, and it is one short request at startup.
@@ -188,6 +201,8 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     name: "",
     publicUrl: process.env["NIXAMP_PUBLIC_URL"] ?? "",
     lookup: true,
+    tlsCert: process.env["NIXAMP_TLS_CERT"] ?? "",
+    tlsKey: process.env["NIXAMP_TLS_KEY"] ?? "",
     x402: false,
     owner: "",
     ingest: false,
@@ -196,6 +211,11 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     rtmp: [],
   };
   let sawRoot = false;
+  const bothOrNeither = (): void => {
+    if (Boolean(options.tlsCert) !== Boolean(options.tlsKey)) {
+      throw new Error("nixamp serve: --tls-cert and --tls-key go together");
+    }
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string;
     const value = (): string => {
@@ -236,6 +256,10 @@ export function parseServeArgs(argv: string[]): ServeOptions {
         throw new Error("nixamp serve: --public-url must be a URL, e.g. https://nixamp.example.com");
       }
       options.publicUrl = given.replace(/\/+$/, "");
+    } else if (arg === "--tls-cert") {
+      options.tlsCert = value();
+    } else if (arg === "--tls-key") {
+      options.tlsKey = value();
     } else if (arg === "--no-lookup") {
       options.lookup = false;
     } else if (arg === "--name") {
@@ -271,6 +295,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       sawRoot = true;
     }
   }
+  bothOrNeither();
   return options;
 }
 
@@ -739,6 +764,8 @@ export interface HandlerOptions {
   signIn?: SignIn;
   /** True when this instance is reached over https, for the cookie's Secure. */
   secureCookies?: boolean;
+  /** A certificate and key in PEM, when this server is to speak https itself. */
+  tls?: { cert: string; key: string };
   /**
    * True when a proxy sits in front, so `x-forwarded-for` names the caller.
    * False everywhere else on purpose: the header is trivially forged, and
@@ -2201,12 +2228,19 @@ function sendFile(request: IncomingMessage, response: ServerResponse, file: stri
 
 export function createServer(engine: Engine, options: HandlerOptions): Server {
   const handle = createHandler(engine, options);
-  return createHttpServer((request, response) => {
+  const onRequest = (request: IncomingMessage, response: ServerResponse): void => {
     handle(request, response).catch(() => {
       if (!response.headersSent) json(response, 500, { error: "server error" });
       else response.end();
     });
-  });
+  };
+
+  // https when there is a certificate to serve it with, and the same handler
+  // either way: nothing above this line knows or cares which it got.
+  if (options.tls) {
+    return createHttpsServer({ cert: options.tls.cert, key: options.tls.key }, onRequest) as unknown as Server;
+  }
+  return createHttpServer(onRequest);
 }
 
 
@@ -2434,6 +2468,18 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       });
   }
 
+  // Read before listening, so a missing or unreadable certificate is a sentence
+  // now rather than a connection that resets later.
+  const tls = options.tlsCert
+    ? (() => {
+        try {
+          return { cert: readFileSync(options.tlsCert, "utf8"), key: readFileSync(options.tlsKey, "utf8") };
+        } catch (error) {
+          throw new Error(`nixamp serve: could not read the certificate: ${(error as Error).message}`);
+        }
+      })()
+    : undefined;
+
   const server = createServer(engine, {
     web,
     media: options.media,
@@ -2449,6 +2495,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     paywall,
     ffmpeg: tools.ffmpeg,
     ffprobe: tools.ffprobe,
+    ...(tls ? { tls } : {}),
     load: (next) => loadSource(tools, next),
     ...(directory ? { directory } : {}),
     ...(follows ? { follows, vapidPublicKey } : {}),
@@ -2514,13 +2561,18 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // is and nothing local looks public, ask. What comes back is a fact about the
   // router and not about this port -- the port still has to be forwarded -- so
   // it is marked as a guess and everything that prints it says so.
-  const localAddresses = reachableAddresses(options.host, port, options.publicUrl);
+  const localAddresses = reachableAddresses(options.host, port, options.publicUrl, tls ? "https" : "http");
   const guessedPublic =
     options.lookup && !options.publicUrl && !localAddresses.some((a) => a.label === "on the internet")
       ? await lookupPublicIp()
       : "";
   const addresses = guessedPublic
-    ? reachableAddresses(options.host, port, `http://${guessedPublic.includes(":") ? `[${guessedPublic}]` : guessedPublic}:${port}`)
+    ? reachableAddresses(
+        options.host,
+        port,
+        `${tls ? "https" : "http"}://${guessedPublic.includes(":") ? `[${guessedPublic}]` : guessedPublic}:${port}`,
+        tls ? "https" : "http",
+      )
     : localAddresses;
 
   // Listening on every interface proves the socket is open here and nothing
