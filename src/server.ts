@@ -2713,22 +2713,32 @@ function pipeFfmpeg(
   // pipe, and an EPIPE nobody is listening for takes the process down.
   child.stdout.on("error", () => child.kill("SIGKILL"));
   response.on("error", () => child.kill("SIGKILL"));
-  child.stdout.pipe(response);
+  // `end: false`, because a pipe that closes the response also commits its
+  // headers -- and ffmpeg failing instantly ends stdout without ever writing a
+  // byte. The response would go out as an empty 200, and the close handler
+  // below would then try to send a 502 over it and throw
+  // ERR_HTTP_HEADERS_SENT from a child-process callback, which is not a place
+  // an exception can be caught: it killed the whole server. A URL that ffmpeg
+  // cannot read is an ordinary thing for a person to paste, and it took every
+  // listener down with it.
+  child.stdout.pipe(response, { end: false });
 
   child.on("error", (error) => {
     console.error(`nixamp: ffmpeg could not start: ${error.message}`);
     if (!response.headersSent) json(response, 500, { error: "ffmpeg could not start" });
-    else response.end();
+    else if (!response.writableEnded) response.end();
   });
   child.on("close", (code) => {
     const message = failed.trim();
     if (code !== 0 && code !== null) console.error(`nixamp: ffmpeg exited ${code}: ${message}`);
-    if (!started) {
+    // Asked of the response rather than of our own flag: the truth about
+    // whether a status can still be sent belongs to the response.
+    if (!started && !response.headersSent) {
       // Nothing was ever produced, so the status can still tell the truth.
       json(response, 502, { error: "could not decode that source", detail: message.split("\n").pop() ?? "" });
       return;
     }
-    response.end();
+    if (!response.writableEnded) response.end();
   });
 
   // A listener that closes the tab should not leave an ffmpeg decoding into
@@ -3427,6 +3437,21 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     console.log("");
     console.log("  --publish needs an address the world can reach. This machine has none.");
   }
+
+  // A last resort, not a licence.
+  //
+  // Every throw reachable from a request should be caught where it happens,
+  // and one that is not is a bug worth fixing. But the alternative to catching
+  // it here is that node prints a stack and exits -- and a music server
+  // exiting drops every listener, forgets what was added, and leaves ffmpeg
+  // children behind. That happened twice from one bad URL. Whatever is wrong
+  // with one response, everybody else is still listening.
+  process.on("uncaughtException", (error) => {
+    console.error(`nixamp: kept going after an unexpected error: ${error.stack ?? error.message}`);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error(`nixamp: kept going after an unhandled rejection: ${String(reason)}`);
+  });
 
   const shutdown = (): void => {
     rtmp?.stop();
