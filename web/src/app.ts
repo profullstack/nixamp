@@ -110,6 +110,9 @@ export function start(): void {
     shareCopy: need<HTMLButtonElement>("share-copy"),
     sharePhone: need<HTMLParagraphElement>("share-phone"),
     shareSend: need<HTMLFormElement>("share-send"),
+    liveControls: need<HTMLDivElement>("live-controls"),
+    goLive: need<HTMLButtonElement>("go-live"),
+    stopLive: need<HTMLButtonElement>("stop-live"),
     shareTo: need<HTMLInputElement>("share-to"),
     listenHere: need<HTMLInputElement>("listen-here"),
     volume: need<HTMLInputElement>("volume"),
@@ -1586,45 +1589,82 @@ export function start(): void {
 
     dom.shareNote.textContent = "Anyone with this link can watch. They sign in once, then it opens.";
 
-    // The phone number and the code come from the directory, and a stream only
-    // has a code once it has been published to one.
+    // The phone code comes from being listed, and being listed is something
+    // the server either is or is not -- so it is asked, rather than guessed at
+    // by hunting a directory this stream may not be in.
     dom.sharePhone.hidden = true;
     dom.shareSend.hidden = true;
+    dom.liveControls.hidden = true;
+
+    let callIn = "";
     try {
       const answer = await fetch("/api/directory");
-      if (!answer.ok) return;
-      const body = (await answer.json()) as {
-        streams?: { url: string; code: string }[];
-        callIn?: string;
-      };
-      const origin = new URL(stream).origin;
-      const listing = (body.streams ?? []).find((one) => {
-        try {
-          return new URL(one.url).origin === origin;
-        } catch {
-          return false;
-        }
-      });
-      if (!listing || !body.callIn) {
-        dom.sharePhone.hidden = false;
-        dom.sharePhone.textContent =
-          "Publish this stream (nixamp serve --announce) to get a phone number and a code for it.";
-        return;
-      }
-      dom.sharePhone.hidden = false;
-      dom.sharePhone.innerHTML = "";
-      dom.sharePhone.append(
-        document.createTextNode("To talk about it, call "),
-        boldly(body.callIn),
-        document.createTextNode(" and key "),
-        boldly(listing.code),
-        document.createTextNode(". That is a room with everyone else watching — not the stream itself."),
-      );
-      dom.shareSend.hidden = false;
+      if (answer.ok) callIn = ((await answer.json()) as { callIn?: string }).callIn ?? "";
     } catch {
-      // No directory here. The link on its own is still the whole point.
+      // The page's own host keeps no directory. The link still works.
+    }
+
+    interface LiveState { live: boolean; code: string; possible: boolean }
+    let live: LiveState | null = null;
+    try {
+      const answer = await fetch(remote.url("/api/live/state"));
+      if (answer.ok) live = (await answer.json()) as LiveState;
+    } catch {
+      // An older server, or one we may not administer.
+    }
+    if (!live) return;
+
+    // Only somebody who can administer this server may list it, and only a
+    // machine the world can reach can be listed at all.
+    dom.liveControls.hidden = dom.adminPanel.hidden || !live.possible;
+    dom.goLive.hidden = live.live;
+    dom.stopLive.hidden = !live.live;
+
+    dom.sharePhone.hidden = false;
+    if (!live.live) {
+      dom.sharePhone.textContent = live.possible
+        ? "Not listed yet. Go live to get a phone number and a code anyone can call."
+        : "This machine has no address the world can reach, so it cannot be listed.";
+      return;
+    }
+    if (!callIn) {
+      dom.sharePhone.textContent = `Listed. The code for the phone line is ${live.code}.`;
+      dom.shareSend.hidden = false;
+      return;
+    }
+    dom.sharePhone.replaceChildren(
+      document.createTextNode("To talk about it, call "),
+      boldly(callIn),
+      document.createTextNode(" and key "),
+      boldly(live.code),
+      document.createTextNode(". That is a room with everyone else watching — not the stream itself."),
+    );
+    dom.shareSend.hidden = false;
+  };
+
+  const setLive = async (on: boolean): Promise<void> => {
+    dom.goLive.disabled = true;
+    dom.stopLive.disabled = true;
+    dom.shareNote.textContent = on ? "Going live…" : "Taking it off the list…";
+    try {
+      const answer = await fetch(remote.url(on ? "/api/live/start" : "/api/live/stop"), { method: "POST" });
+      const body = (await answer.json()) as { error?: string; code?: string };
+      dom.shareNote.textContent = !answer.ok
+        ? (body.error ?? "that did not work")
+        : on
+          ? `Live. Anyone can call and key ${body.code ?? ""} to talk about it.`
+          : "Taken off the list. The link still works for anybody who has it.";
+    } catch {
+      dom.shareNote.textContent = "could not reach the server";
+    } finally {
+      dom.goLive.disabled = false;
+      dom.stopLive.disabled = false;
+      await loadShare();
     }
   };
+
+  dom.goLive.addEventListener("click", () => void setLive(true));
+  dom.stopLive.addEventListener("click", () => void setLive(false));
 
   /** A span, because textContent on a parent would wipe the siblings. */
   function boldly(text: string): HTMLElement {

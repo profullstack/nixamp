@@ -65,6 +65,7 @@ import {
   allowedForListening,
   elevate,
   firewallInUse,
+  certifiable,
   keyCookie,
   keyFrom,
   keysMatch,
@@ -957,6 +958,19 @@ export interface HandlerOptions {
   broadcaster?: Broadcaster;
   /** Where a broadcast should send, and what it should look like. */
   broadcast?: () => { destinations: Destination[]; settings: EncoderSettings };
+  /**
+   * Going live: whether this server is listed, and how to change that.
+   *
+   * Listing used to be a question asked once at startup and never again, so a
+   * server started with --no-publish had no listing, no phone code, and no
+   * link to hand anybody -- and no way to change its mind short of stopping
+   * and starting it. It is an action now, because that is what it is.
+   */
+  live?: {
+    status: () => { live: boolean; code: string; name: string; url: string; possible: boolean };
+    start: () => Promise<{ live: boolean; code: string; name: string; url: string; error?: string }>;
+    stop: () => Promise<void>;
+  };
   /**
    * Where OBS should point, one entry per stream this server will accept.
    *
@@ -2171,6 +2185,37 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
 
     // Everything the admin view draws, in one request: who is connected, and
     // what this server is.
+    // Going live, and coming back off. Admin-gated by ADMIN_PATHS, because
+    // listing somebody's machine in a public directory is not a thing a
+    // listener gets to do.
+    if (path === "/api/live/state") {
+      if (!options.live) {
+        json(response, 200, { live: false, possible: false, code: "", name: "", url: "" });
+        return;
+      }
+      json(response, 200, options.live.status());
+      return;
+    }
+
+    if (path === "/api/live/start" || path === "/api/live/stop") {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "POST only" });
+        return;
+      }
+      if (!options.live) {
+        json(response, 409, { error: "this nixamp cannot be listed; it has no address the world can reach" });
+        return;
+      }
+      if (path === "/api/live/stop") {
+        await options.live.stop();
+        json(response, 200, options.live.status());
+        return;
+      }
+      const started = await options.live.start();
+      json(response, started.error ? 502 : 200, started);
+      return;
+    }
+
     if (path === "/api/connections") {
       json(response, 200, {
         connections: tracker.list(),
@@ -2990,12 +3035,55 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // built with.
   let publishUrls: { id: string; url: string }[] = [];
 
+  // Declared up here, not beside the publishing below: the port opens before
+  // that code runs, so an admin asking to go live in the first moments would
+  // otherwise reach a binding that has not been initialised.
+  let publisher: Publisher | null = null;
+  let listing: Listing | null = null;
+  let publishable_: { label: string; url: string } | undefined;
+
   const server = createServer(engine, {
     web,
     media: options.media,
     owner,
     channels,
     publishUrls: () => publishUrls,
+    live: {
+      status: () => ({
+        live: publisher !== null,
+        code: listing?.code ?? "",
+        name: listing?.name ?? (options.name || hostname()),
+        url: listing?.url ?? (publishable_ ? shareLink(publishable_.url, listenKey) : ""),
+        // Whether going live is even possible here. A laptop behind a router
+        // with no address the world can reach cannot be listed, and a button
+        // that could only fail is worse than one that is not offered.
+        possible: publishable_ !== undefined,
+      }),
+      start: async () => {
+        if (publisher === null) publisher = makePublisher();
+        if (publisher === null) {
+          return { live: false, code: "", name: "", url: "", error: "this machine has no address the world can reach" };
+        }
+        const first = await publisher.start();
+        if (first === null) {
+          // Nothing was listed, so nothing should claim to be: a publisher
+          // left running here would heartbeat at a directory that refused it.
+          await publisher.stop();
+          publisher = null;
+          return {
+            live: false, code: "", name: "", url: "",
+            error: `${DEFAULT_DIRECTORY} would not list this stream. Run \`nixamp login\` on that machine.`,
+          };
+        }
+        listing = first;
+        return { live: true, code: first.code, name: first.name, url: first.url };
+      },
+      stop: async () => {
+        await publisher?.stop();
+        publisher = null;
+        listing = null;
+      },
+    },
     ...(ingest ? { ingest } : {}),
     broadcaster,
     broadcast: () => ({ destinations, settings: DEFAULT_ENCODER }),
@@ -3250,22 +3338,28 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 
   // The listing carries the listen link, and only ever a public address: an
   // entry pointing at 192.168.1.5 is one nobody outside that house can open.
-  const publishable_ = addresses.find((a) => a.label === "on the internet")
+  // Never a bare IP over https: a certificate is issued for a name, so a
+  // listing pointing at one is a listing nobody can open.
+  publishable_ = addresses.find((a) => a.label === "on the internet" && certifiable(a.url))
+    ?? addresses.find((a) => a.label === "on tailscale" && certifiable(a.url))
+    ?? addresses.find((a) => a.label === "on the internet")
     ?? addresses.find((a) => a.label === "on tailscale");
-  let publisher: Publisher | null = null;
 
-  if (options.publish !== "no" && publishable_) {
+  /**
+   * Make a publisher for this server. Called at startup when the operator says
+   * yes, and again whenever somebody goes live from the admin panel.
+   *
+   * A declaration rather than an assignment, so it exists from the moment the
+   * function is entered -- the port is open well before this line is reached.
+   */
+  function makePublisher(): Publisher | null {
+    if (!publishable_) return null;
     const listen = shareLink(publishable_.url, listenKey);
     // Announced next to the listen link, not instead of it: one is for a person
     // with a browser, the other for the phone line and anything else that is
     // handed one address and expected to play it.
     const audio = audioLink(publishable_.url, listenKey);
-    const wanted = options.publish === "yes"
-      ? true
-      : await confirm(`\n  List this stream at ${DEFAULT_DIRECTORY}/directory so anyone can find it?\n  It publishes ${listen} — listen only, not the controls.`);
-
-    if (wanted) {
-      publisher = new Publisher({
+    return new Publisher({
         directory: DEFAULT_DIRECTORY,
         name: options.name || hostname(),
         url: listen,
@@ -3294,8 +3388,18 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
             ? `  nixamp.com turned paid listening on: $${(next.priceCents / 100).toFixed(2)} for ${next.passMinutes} minutes, over ${FREE_LISTENERS} listeners.`
             : "  nixamp.com turned paid listening off.");
         },
-      });
-      const listing = await publisher.start();
+    });
+  }
+
+  if (options.publish !== "no" && publishable_) {
+    const listen = shareLink(publishable_.url, listenKey);
+    const wanted = options.publish === "yes"
+      ? true
+      : await confirm(`\n  List this stream at ${DEFAULT_DIRECTORY}/directory so anyone can find it?\n  It publishes ${listen} — listen only, not the controls.`);
+
+    if (wanted) {
+      publisher = makePublisher();
+      listing = (await publisher?.start()) ?? null;
       console.log("");
       console.log(listing
         ? `  Listed at ${DEFAULT_DIRECTORY}/directory as "${listing.name}". It leaves the list when this stops.`

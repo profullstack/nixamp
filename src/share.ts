@@ -232,6 +232,10 @@ export function allowedForListening(path: string): boolean {
   // and an exact check let a listen key reach /api/source/remove and delete an
   // album out of somebody else's playlist.
   if (path === "/api/source" || path.startsWith("/api/source/")) return false;
+  // Listing this machine in a public directory is not listening to it. The
+  // listen address itself, /api/live, stays open: that is the thing a listen
+  // key is for.
+  if (path === "/api/live/state" || path === "/api/live/start" || path === "/api/live/stop") return false;
   return true;
 }
 
