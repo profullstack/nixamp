@@ -456,3 +456,28 @@ test("a guessed public address is printed as the claim it is", () => {
   }).join("\n");
   assert.doesNotMatch(known, /router, not this port/);
 });
+
+test("status says where it is and how long it has been there", () => {
+  // The same links start prints: `daemon status` rebuilt the URL from host and
+  // port and so printed loopback alone, which is the address that works only
+  // on the machine you are already sitting at.
+  const out = daemonLines({
+    pid: 42, host: "0.0.0.0", port: 4321, key: "KEY", source: "/home/ubuntu/Downloads/done",
+    startedAt: 0, log: "/tmp/l",
+    urls: [
+      { label: "here", url: "http://localhost:4321" },
+      { label: "on the internet", url: "http://104.152.209.195:4321" },
+    ],
+  }, 222_000).join("\n");
+
+  assert.match(out, /on the internet\s+http:\/\/104\.152\.209\.195:4321\/s\/KEY/);
+  assert.match(out, /source\s+\/home\/ubuntu\/Downloads\/done/);
+  assert.match(out, /up\s+3m 42s/);
+
+  // Start passes no uptime, and start has none to report.
+  const starting = daemonLines({
+    pid: 42, host: "0.0.0.0", port: 4321, key: "KEY", source: "/m", startedAt: 0, log: "/tmp/l",
+    urls: [{ label: "here", url: "http://localhost:4321" }],
+  }).join("\n");
+  assert.doesNotMatch(starting, /\bup\b/);
+});

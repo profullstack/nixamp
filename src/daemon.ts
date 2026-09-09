@@ -100,8 +100,23 @@ export function daemonUrl(state: DaemonState): string {
 }
 
 /**
- * What `nixamp daemon start` prints, as lines, so it can be tested without
- * starting a daemon.
+ * How long it has been up, as a person would say it. Written here rather than
+ * borrowed from admin.ts, which would drag the whole terminal UI into a code
+ * path that only prints four lines.
+ */
+function spell(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+/**
+ * What `nixamp daemon start` and `nixamp daemon status` print, as lines, so it
+ * can be tested without starting a daemon.
  *
  * Every address the server found, not one loopback link: the point of a daemon
  * is the phone in the other room, and 127.0.0.1 is the single address that
@@ -109,7 +124,7 @@ export function daemonUrl(state: DaemonState): string {
  * server writes that into a log file nobody reads, not to the person who just
  * typed the command.
  */
-export function daemonLines(state: DaemonState): string[] {
+export function daemonLines(state: DaemonState, uptimeMs?: number): string[] {
   const link = (url: string): string => (state.key ? `${url}/s/${state.key}` : url);
   // A state file written by an older nixamp has no list, so host and port
   // still stand in rather than printing nothing at all.
@@ -119,6 +134,7 @@ export function daemonLines(state: DaemonState): string[] {
   const lines = [`nixamp daemon running (pid ${state.pid})`];
   for (const { label, url } of addresses) lines.push(`  ${label.padEnd(width)}  ${link(url)}`);
   lines.push(`  ${"source".padEnd(width)}  ${state.source}`);
+  if (uptimeMs !== undefined) lines.push(`  ${"up".padEnd(width)}  ${spell(uptimeMs)}`);
 
   if (state.guessedPublic) {
     lines.push(
