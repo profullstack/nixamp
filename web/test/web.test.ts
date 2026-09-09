@@ -560,3 +560,31 @@ test("an invited link waiting on a sign-in says so where it will be seen", () =>
   // And signing in opens it, rather than leaving them to find it again.
   assert.match(app, /\/\/ And it is what an invited link was waiting for\.\n\s*openInvitedStream\(\);/);
 });
+
+test("the jingle plays on every page load, not once per tab", () => {
+  // It was kept in sessionStorage, so refreshing was silent -- and refreshing
+  // is exactly how somebody checks whether the thing they asked for works.
+  // A load is a load.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  assert.equal(app.includes("nixamp.jingled"), false, "still remembering across loads");
+  assert.match(app, /let jingled = false;/);
+
+  // One per page, though: a refused autoplay arms a listener for the first
+  // click, and that must not fire twice on the same page.
+  assert.match(app, /if \(jingled\) return;/);
+});
+
+test("signing out lets go of the server as well as the account", () => {
+  // It cleared the account and nothing else, so you stayed connected to
+  // somebody's machine with its address still saved -- which is a reasonable
+  // thing to be alarmed by when you have just logged out.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const out = app.slice(app.indexOf('dom.accountSignOut.addEventListener'));
+  const body = out.slice(0, out.indexOf("\n  });"));
+  assert.match(body, /remote\.close\(\)/);
+  assert.match(body, /mode = "local"/);
+  assert.match(body, /removeItem\(REMOTE_KEY\)/);
+  // And the panels that belong to a server go with it.
+  assert.match(body, /adminPanel\.hidden = true/);
+  assert.match(body, /sharePanel\.hidden = true/);
+});
