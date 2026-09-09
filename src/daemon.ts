@@ -18,6 +18,13 @@ export interface DaemonState {
   port: number;
   /** The share key, so `nixamp admin` can talk to it without being told. */
   key: string | null;
+  /**
+   * The key that only views, for handing to somebody who should watch.
+   *
+   * Absent on a state file written by an older nixamp, and absent on a server
+   * running with no key at all.
+   */
+  listenKey?: string | null;
   source: string;
   startedAt: number;
   /** Where its output went, for when it died and you want to know why. */
@@ -164,8 +171,11 @@ function spell(ms: number): string {
  * typed the command.
  */
 export function daemonLines(state: DaemonState, uptimeMs?: number): string[] {
-  // The daemon's own key is the one that administers, so it is an /a/ link.
+  // Two links per address: the one that drives this server and the one that
+  // only watches it. Printing just the first left the operator with nothing to
+  // hand anybody -- and handing over the wrong one hands over the controls.
   const link = (url: string): string => shareLink(url, state.key ?? null);
+  const viewLink = (url: string): string => shareLink(url, state.listenKey ?? null, false);
   // A state file written by an older nixamp has no list, so host and port
   // still stand in rather than printing nothing at all.
   const addresses = state.urls ?? [{ label: "here", url: daemonUrl(state) }];
@@ -174,6 +184,16 @@ export function daemonLines(state: DaemonState, uptimeMs?: number): string[] {
   const lines = [`nixamp daemon running (pid ${state.pid})`];
   for (const { label, url } of addresses) lines.push(`  ${label.padEnd(width)}  ${link(url)}`);
   lines.push(`  ${"source".padEnd(width)}  ${state.source}`);
+
+  // The viewing links, said separately and said as what they are. Somebody who
+  // should be able to watch your library should not be handed the link that
+  // re-streams it, and the operator had nothing else to give them.
+  if (state.listenKey) {
+    lines.push("", "  To share -- these watch and listen, and change nothing:");
+    for (const { label, url } of addresses) {
+      lines.push(`  ${label.padEnd(width)}  ${viewLink(url)}`);
+    }
+  }
   if (uptimeMs !== undefined) lines.push(`  ${"up".padEnd(width)}  ${spell(uptimeMs)}`);
 
   if (state.guessedPublic) {
@@ -300,6 +320,7 @@ async function waitForAnnounce(
             host: String(parsed["host"]),
             port: Number(parsed["port"]),
             key: (parsed["key"] as string | null) ?? null,
+            ...(typeof parsed["listenKey"] === "string" ? { listenKey: parsed["listenKey"] } : {}),
             source: String(parsed["source"]),
             ...(Array.isArray(urls) ? { urls: urls as { label: string; url: string }[] } : {}),
             ...(typeof parsed["firewall"] === "string" ? { firewall: parsed["firewall"] } : {}),

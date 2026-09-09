@@ -38,6 +38,14 @@ export interface AdminOptions {
    * anybody. These are the ones worth reading off the screen.
    */
   links: { label: string; url: string }[];
+  /**
+   * The key that only watches, when this server has one.
+   *
+   * The links built from it are the ones to hand other people. Absent when
+   * pointed at a server by hand, since a listening key is not something you
+   * can work out from a control one.
+   */
+  listenKey?: string | null;
   /** What it is serving, so the admin view says so without being asked. */
   source: string;
 }
@@ -76,6 +84,7 @@ export function resolveTarget(argv: string[]): AdminOptions {
   return {
     url: url_,
     key: key ?? state.key,
+    ...(state.listenKey ? { listenKey: state.listenKey } : {}),
     // A state file written before 0.5.3 has no list; loopback stands in.
     links: state.urls ?? [{ label: "here", url: daemonUrl(state) }],
     source: state.source,
@@ -198,7 +207,7 @@ export async function admin(argv: string[]): Promise<void> {
   app.on("exit", () => clearInterval(timer));
   app.render(({ ui, theme }) => draw(ui, theme, {
     url: target.url, report, snapshot, error, typing, restreaming, replacing,
-    links: target.links, key: target.key, source: target.source,
+    links: target.links, key: target.key, listenKey: target.listenKey, source: target.source,
   }));
 
   await app.start();
@@ -242,6 +251,8 @@ export interface View {
   /** Labelled addresses, and the key that makes them work. */
   links: { label: string; url: string }[];
   key: string | null;
+  /** The key that only watches, for the links you hand to other people. */
+  listenKey?: string | null;
   source: string;
 }
 
@@ -276,12 +287,31 @@ export function draw(ui: Container, theme: Theme, view: View): void {
   // reach it. The key is on them: without it every address is a 401.
   if (view.links.length > 0) {
     const width = Math.max(...view.links.map((link) => link.label.length));
-    ui.panel({ title: "Share links", size: view.links.length + (view.source ? 3 : 2) }, (p) => {
+    // Both kinds, labelled, because they are not interchangeable and the
+    // operator had only ever been shown the one that drives. Handing that to
+    // somebody who wanted to watch hands them the controls with it, and
+    // there was nothing else to hand them.
+    // Counted rather than guessed: a heading of its own, the links, the second
+    // heading and its links when there is a viewing key, the source, and the
+    // two borders. A panel one line short silently drops the last row.
+    const rows =
+      1 + view.links.length
+      + (view.listenKey ? 1 + view.links.length : 0)
+      + (view.source ? 1 : 0);
+    ui.panel({ title: "Your links, and the ones to share", size: rows + 2 }, (p) => {
+      p.label("Yours -- these administer this server:");
       for (const link of view.links) {
-        const full = shareLink(link.url, view.key);
-        p.text(`${link.label.padEnd(width)}  ${full}`, {
+        p.text(`${link.label.padEnd(width)}  ${shareLink(link.url, view.key)}`, {
           fg: link.label === "on the internet" ? theme.accent : theme.foreground,
         });
+      }
+      if (view.listenKey) {
+        p.label("To share -- these watch and listen, and change nothing:");
+        for (const link of view.links) {
+          p.text(`${link.label.padEnd(width)}  ${shareLink(link.url, view.listenKey, false)}`, {
+            fg: link.label === "on the internet" ? theme.accent : theme.foreground,
+          });
+        }
       }
       if (view.source) p.label(view.source);
     });
