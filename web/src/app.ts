@@ -859,6 +859,17 @@ export function start(): void {
             ? "listening live"
             : kind;
 
+  /**
+   * What the last draw was of, so an unchanged poll changes nothing.
+   *
+   * These are rebuilt every two seconds. Rebuilding a table whose height
+   * depends on how many rows it has moves every panel below it, twice a
+   * minute, whether or not anything happened -- which is what "the panels jump
+   * around" was.
+   */
+  let drawnConnections = "";
+  let drawnPublish = "";
+
   const drawConnections = (rows: {
     address: string;
     network: string;
@@ -868,6 +879,10 @@ export function start(): void {
     bytes: number;
     endedAt: number | null;
   }[]): void => {
+    const key = rows.map((r) => `${r.address}|${r.kind}|${r.track}|${Math.round(r.bytes / 4096)}|${r.endedAt}`).join("~");
+    if (key === drawnConnections) return;
+    drawnConnections = key;
+
     dom.adminConnections.replaceChildren();
     const head = document.createElement("tr");
     for (const label of ["Where", "Network", "Kind", "Client", "Track", "Sent"]) {
@@ -954,6 +969,10 @@ export function start(): void {
     // A server started without --rtmp-in cannot be published to at all, so the
     // panel is not there rather than being there and saying no.
     dom.publishPanel.hidden = entries.length === 0;
+    const key = `${entries.map((e) => `${e.id}=${e.url}`).join("~")}::${busy.join(",")}`;
+    if (key === drawnPublish) return;
+    drawnPublish = key;
+
     if (entries.length === 0) {
       dom.publishList.replaceChildren();
       return;

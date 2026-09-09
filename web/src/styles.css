@@ -550,6 +550,13 @@ button.ghost { background: transparent; color: var(--muted); }
    player off the screen when a stream gets popular. */
 .admin-table {
   width: 100%;
+  /* Room for a few rows, kept whether or not they are there. Connections come
+     and go constantly, and a table that resizes with them moves everything
+     below it every couple of seconds. */
+  display: block;
+  min-height: 5.5em;
+  max-height: 12em;
+  overflow-y: auto;
   border-collapse: collapse;
   font-size: 0.85em;
   margin: 0.4rem 0;

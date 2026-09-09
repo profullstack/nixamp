@@ -915,3 +915,50 @@ test("a server that cannot be reached from outside says so rather than offering 
     engine.stop();
   }
 });
+
+test("a source ffmpeg cannot read is a 502, not the end of the server", async () => {
+  // The crash this exists for. A live .ts URL that answered with something
+  // ffmpeg could not parse made ffmpeg exit instantly without writing a byte.
+  // Piping stdout to the response ends the response when stdout ends, which
+  // commits the headers -- and the close handler then tried to send a 502 over
+  // them and threw ERR_HTTP_HEADERS_SENT from a child-process callback, where
+  // nothing can catch it. The process died and took every listener with it.
+  const engine = new PlayerEngine(
+    // Remote and named as a film, so the request reaches the video pipeline.
+    [{ path: "http://x.test/live/28441.mkv", title: "28441", artist: "", album: "", duration: 0 }],
+    "http://x.test/live/",
+    { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+  );
+  const server = createServer(engine, {
+    web: null,
+    media: true,
+    version: "test",
+    // Says there is a picture, so the video path is taken rather than audio.
+    ffprobe: ["echo", '{"streams":[{"codec_type":"video","codec_name":"h264"}]}'],
+    // Exits non-zero at once, having written nothing: exactly what ffmpeg did.
+    ffmpeg: ["false"],
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    const answer = await fetch(`${base}/api/media/0`);
+    // Either an honest failure or an empty body -- but never a dead server.
+    assert.ok(answer.status === 502 || answer.status === 200, `unexpected ${answer.status}`);
+    await answer.arrayBuffer();
+
+    // The point of the whole test: it is still here afterwards.
+    const health = await fetch(`${base}/api/health`);
+    assert.equal(health.status, 200);
+    const state = await fetch(`${base}/api/state`);
+    assert.equal(state.status, 200);
+
+    // And it survives being asked twice, because a person retries.
+    await (await fetch(`${base}/api/media/0`)).arrayBuffer();
+    assert.equal((await fetch(`${base}/api/health`)).status, 200);
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});
