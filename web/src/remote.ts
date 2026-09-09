@@ -29,15 +29,48 @@ export function normalizeBase(input: string): string {
   return `${url.origin}${path}`;
 }
 
-export function apiUrl(base: string, path: string): string {
+export function apiUrl(base: string, path: string, key = ""): string {
   const root = base === "" ? "" : normalizeBase(base);
-  return `${root}${path.startsWith("/") ? path : `/${path}`}`;
+  const url = `${root}${path.startsWith("/") ? path : `/${path}`}`;
+  if (!key) return url;
+  // The key goes in the query, which is the only place it can go from another
+  // origin. A cookie is same-origin, and the server answers with
+  // access-control-allow-origin: * -- which browsers refuse to send credentials
+  // to at all -- so a header cannot carry it either.
+  return `${url}${url.includes("?") ? "&" : "?"}k=${encodeURIComponent(key)}`;
+}
+
+/**
+ * A share link split into the two things it is.
+ *
+ * People paste the link they were given, which is an address with a key on the
+ * end of it: `https://host:4321/s/KEY`. As a base that is useless -- there is
+ * no /s/KEY/api/state, and asking for one gets a 404 -- and thrown away it is
+ * worse, because without the key every request from another origin is a 401.
+ * So it is taken apart and both halves are kept.
+ */
+export function splitShareLink(input: string): { base: string; key: string } {
+  const text = input.trim();
+  if (text === "") return { base: "", key: "" };
+  let url: URL;
+  try {
+    url = new URL(/^https?:\/\//i.test(text) ? text : `http://${text}`);
+  } catch {
+    return { base: "", key: "" };
+  }
+
+  // Either shape: the path a share link uses, or the query the API takes.
+  const share = /^\/s\/([^/]+)\/?$/.exec(url.pathname);
+  const key = share?.[1] ?? url.searchParams.get("k") ?? "";
+  if (share) url.pathname = "/";
+  url.searchParams.delete("k");
+  return { base: normalizeBase(`${url.origin}${url.pathname}`), key: decodeURIComponent(key) };
 }
 
 /** Where the browser fetches a track's bytes from, to play it here. */
-export function mediaUrl(base: string, index: number, kbps = 0): string {
+export function mediaUrl(base: string, index: number, kbps = 0, key = ""): string {
   const path = kbps > 0 ? `/api/media/${index}?kbps=${Math.round(kbps)}` : `/api/media/${index}`;
-  return apiUrl(base, path);
+  return apiUrl(base, path, key);
 }
 
 /** A snapshot off the wire is untrusted JSON; missing fields get defaults. */
@@ -88,6 +121,8 @@ export interface RemoteHandlers {
 export class RemoteClient {
   private source: EventSource | null = null;
   private base = "";
+  /** The share key, when the address came with one. Empty is same-origin. */
+  private key = "";
   private lastRevision = -1;
 
   constructor(private readonly handlers: RemoteHandlers) {}
@@ -96,17 +131,25 @@ export class RemoteClient {
     return this.base;
   }
 
+  /** Any endpoint on the connected server, with the key already on it. */
+  url(path: string): string {
+    return apiUrl(this.base, path, this.key);
+  }
+
   get connected(): boolean {
     return this.source !== null;
   }
 
   connect(input: string): void {
-    const base = normalizeBase(input);
+    // A pasted share link is an address and a key, and both are needed: the
+    // address alone is a 401 from any other origin.
+    const { base, key } = splitShareLink(input);
     this.close();
     this.base = base;
+    this.key = key;
     this.lastRevision = -1;
     this.handlers.onStatus("connecting");
-    const source = new EventSource(apiUrl(base, "/api/events"));
+    const source = new EventSource(apiUrl(base, "/api/events", key));
     this.source = source;
     source.onopen = () => this.handlers.onStatus("live");
     source.onmessage = (event: MessageEvent<string>) => {
@@ -126,7 +169,7 @@ export class RemoteClient {
 
   async send(command: Command): Promise<void> {
     if (this.base === "" && !this.connected) return;
-    const response = await fetch(apiUrl(this.base, "/api/command"), {
+    const response = await fetch(apiUrl(this.base, "/api/command", this.key), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(command),
@@ -140,7 +183,7 @@ export class RemoteClient {
   }
 
   media(index: number, kbps = 0): string {
-    return mediaUrl(this.base, index, kbps);
+    return mediaUrl(this.base, index, kbps, this.key);
   }
 
   close(): void {
@@ -158,9 +201,9 @@ function safeJson(text: string): unknown {
 }
 
 /** One snapshot, without opening a stream. */
-export async function fetchSnapshot(base: string, signal?: AbortSignal): Promise<Snapshot | null> {
+export async function fetchSnapshot(base: string, signal?: AbortSignal, key = ""): Promise<Snapshot | null> {
   try {
-    const response = await fetch(apiUrl(base, "/api/state"), { signal });
+    const response = await fetch(apiUrl(base, "/api/state", key), { signal });
     if (!response.ok) return null;
     return parseSnapshot(await response.json());
   } catch {
@@ -169,9 +212,9 @@ export async function fetchSnapshot(base: string, signal?: AbortSignal): Promise
 }
 
 /** Is there a nixamp at this address? Used before committing to a connection. */
-export async function probeServer(base: string, signal?: AbortSignal): Promise<string | null> {
+export async function probeServer(base: string, signal?: AbortSignal, key = ""): Promise<string | null> {
   try {
-    const response = await fetch(apiUrl(base, "/api/health"), { signal });
+    const response = await fetch(apiUrl(base, "/api/health", key), { signal });
     if (!response.ok) return null;
     const body = (await response.json()) as { name?: string; version?: string };
     return body.name === "nixamp" ? (body.version ?? "unknown") : null;
