@@ -27,6 +27,15 @@ import { Ingest, normaliseFormat } from "./ingest.ts";
 import { Channels, cleanId } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
+import { DeviceGrants } from "./device.ts";
+import {
+  deviceDonePage,
+  devicePage,
+  exchangeCode,
+  providersFrom,
+  signInFailedPage,
+  SignIn,
+} from "./oauth.ts";
 import { needsAdmin, Owner } from "./owner.ts";
 import { readSession } from "./session.ts";
 import { Directory, ENDED_TTL_MS, parseAnnouncement, type Listing } from "./directory.ts";
@@ -563,6 +572,26 @@ const CORS: Record<string, string> = {
   "access-control-max-age": "86400",
 };
 
+/** /api/v1/<provider>/oauth/start and .../callback, the house callback shape. */
+const OAUTH_ROUTE = /^\/api\/v1\/([a-z0-9-]+)\/oauth\/(start|callback)$/;
+
+/**
+ * Paths that are how somebody without a key gets one, so they answer before
+ * the share-key check rather than behind it.
+ */
+export function isSignInPath(path: string): boolean {
+  return path.startsWith("/api/v1/auth/") || OAUTH_ROUTE.test(path);
+}
+
+function html(response: ServerResponse, code: number, body: string): void {
+  response.writeHead(code, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": Buffer.byteLength(body),
+    "cache-control": "no-store",
+  });
+  response.end(body);
+}
+
 function json(response: ServerResponse, code: number, body: unknown): void {
   const text = JSON.stringify(body);
   response.writeHead(code, {
@@ -624,6 +653,8 @@ export interface HandlerOptions {
   broadcast?: () => { destinations: Destination[]; settings: EncoderSettings };
   /** Accounts, on the instance that keeps them. Only nixamp.com passes this. */
   accounts?: Accounts;
+  /** Providers to sign in with, and the terminals waiting to be connected. */
+  signIn?: SignIn;
   /** True when this instance is reached over https, for the cookie's Secure. */
   secureCookies?: boolean;
   /** Who may administer this server. */
@@ -918,7 +949,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       key !== null &&
       path !== "/api/health" &&
       path !== "/api/directory" &&
-      !path.startsWith("/api/v1/auth/")
+      !isSignInPath(path)
     ) {
       const scope = scopeOf(keyFrom(request, url), key, listenKey);
       if (scope === null) {
@@ -956,12 +987,171 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
 
       if (path === "/api/v1/auth/logout") {
+        // The cookie going is what the browser notices; the token going is
+        // what makes it stop working on a machine you no longer have.
+        await accounts.endSession(tokenFrom(request.headers));
         response.writeHead(200, {
           ...CORS,
           "content-type": "application/json; charset=utf-8",
           "set-cookie": clearedCookie(),
         });
         response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      // What this deployment will accept, so the CLI offers the ways in that
+      // exist here rather than a menu built from what it hopes is configured.
+      if (path === "/api/v1/auth/providers") {
+        json(response, 200, {
+          password: true,
+          device: options.signIn !== undefined,
+          providers: options.signIn?.offered ?? [],
+        });
+        return;
+      }
+
+      // --- the device grant, for a terminal with no browser ---------------
+      if (path.startsWith("/api/v1/auth/device") && options.signIn) {
+        const signIn = options.signIn;
+
+        // A terminal asks for a code to show, and starts polling.
+        if (path === "/api/v1/auth/device/code" && request.method === "POST") {
+          const grant = signIn.device.start();
+          const where = `${signIn.site}/api/v1/auth/device`;
+          json(response, 200, {
+            device_code: grant.deviceCode,
+            user_code: grant.userCode,
+            verification_uri: where,
+            // The pre-filled link is what makes this one click on a phone.
+            verification_uri_complete: `${where}?code=${encodeURIComponent(grant.userCode)}`,
+            expires_in: Math.round((grant.expiresAt - Date.now()) / 1000),
+            interval: signIn.device.interval,
+          });
+          return;
+        }
+
+        // ... and asks, at that interval, whether anybody has approved it yet.
+        if (path === "/api/v1/auth/device/token" && request.method === "POST") {
+          let body: { device_code?: unknown };
+          try {
+            body = JSON.parse(await readBody(request)) as typeof body;
+          } catch {
+            json(response, 400, { error: "bad JSON" });
+            return;
+          }
+          const status = signIn.device.poll(String(body.device_code ?? ""));
+          if (status.status === "ok") {
+            json(response, 200, { token: status.token, email: status.email });
+            return;
+          }
+          // The names are RFC 8628's, because that is what a client waiting on
+          // a device grant already knows how to read.
+          const named = {
+            pending: "authorization_pending",
+            slow_down: "slow_down",
+            expired: "expired_token",
+            denied: "access_denied",
+          } as const;
+          json(response, 400, { error: named[status.status] });
+          return;
+        }
+
+        // The page somebody opens on a device that has a keyboard.
+        if (path === "/api/v1/auth/device" && (request.method === "GET" || request.method === "HEAD")) {
+          const who = await accounts.whoIs(tokenFrom(request.headers));
+          html(response, 200, devicePage(signIn, url.searchParams.get("code") ?? "", who?.email ?? ""));
+          return;
+        }
+
+        if (path === "/api/v1/auth/device" && request.method === "POST") {
+          const form = new URLSearchParams(await readBody(request));
+          const code = form.get("code") ?? "";
+          const grant = signIn.device.find(code);
+          if (grant === null) {
+            html(response, 404, signInFailedPage("That code has expired or was already used. Ask your terminal for another."));
+            return;
+          }
+
+          // Empty means "approve as the account this browser is already signed
+          // in as"; anything else names a provider to go and ask.
+          //
+          // A form on somebody else's site posting here is what would make
+          // this dangerous, and is what SameSite=Lax on the session cookie
+          // prevents: a cross-site POST arrives with no cookie, so it is
+          // nobody, so it approves nothing.
+          const chosen = form.get("with") ?? "";
+          if (chosen === "") {
+            const who = await accounts.whoIs(tokenFrom(request.headers));
+            if (who === null) {
+              html(response, 401, signInFailedPage("Sign in first, then approve the terminal."));
+              return;
+            }
+            const token = await accounts.sessionFor(who);
+            if (!token || !signIn.device.approve(grant.userCode, { token, email: who.email })) {
+              html(response, 500, signInFailedPage("Could not start a session for that terminal."));
+              return;
+            }
+            html(response, 200, deviceDonePage(who.email));
+            return;
+          }
+
+          const provider = signIn.provider(chosen);
+          if (provider === null) {
+            html(response, 404, signInFailedPage("This nixamp cannot sign you in with that."));
+            return;
+          }
+          // The user code rides along in the state, so the callback knows it
+          // is approving a terminal rather than signing this browser in.
+          response.writeHead(302, { location: signIn.begin(provider, grant.userCode) });
+          response.end();
+          return;
+        }
+
+        json(response, 404, { error: "no such endpoint" });
+        return;
+      }
+
+      // --- tokens a person made on purpose --------------------------------
+      if (path === "/api/v1/auth/tokens" || path.startsWith("/api/v1/auth/tokens/")) {
+        const who = await accounts.whoIs(tokenFrom(request.headers));
+        if (who === null) {
+          json(response, 401, { error: "not signed in" });
+          return;
+        }
+
+        if (path === "/api/v1/auth/tokens" && request.method === "GET") {
+          json(response, 200, { tokens: await accounts.listTokens(who.id, "cli") });
+          return;
+        }
+
+        if (path === "/api/v1/auth/tokens" && request.method === "POST") {
+          let body: { name?: unknown };
+          try {
+            body = JSON.parse(await readBody(request)) as typeof body;
+          } catch {
+            json(response, 400, { error: "bad JSON" });
+            return;
+          }
+          const name = typeof body.name === "string" ? body.name.slice(0, 80) : "";
+          const made = await accounts.mintCliToken(who, name);
+          if (made === null) {
+            json(response, 501, { error: "this nixamp does not keep tokens" });
+            return;
+          }
+          // The whole token is in this answer and in no other: it is not
+          // stored, so there is nowhere to show it again from.
+          json(response, 201, { token: made.token, id: made.id, name: made.name });
+          return;
+        }
+
+        const id = path.slice("/api/v1/auth/tokens/".length);
+        if (id && request.method === "DELETE") {
+          const gone = await accounts.revokeToken(who.id, id);
+          json(response, gone ? 200 : 404, gone ? { ok: true } : { error: "no such token" });
+          return;
+        }
+
+        json(response, 405, { error: "GET, POST or DELETE" });
         return;
       }
 
@@ -993,14 +1183,92 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
 
+      // A password sign-in ends in the same revocable token an OAuth one does,
+      // falling back to the module's JWT where there is no storage to keep one
+      // in. Every way in should be a session that can be listed and ended.
+      const token = result.account
+        ? await accounts.sessionFor(result.account, result.token)
+        : result.token;
+
       // The token goes back in the body for the CLI and the desktop app, and
       // as a cookie for the browser, which then needs to know nothing about it.
       response.writeHead(200, {
         ...CORS,
         "content-type": "application/json; charset=utf-8",
-        "set-cookie": sessionCookie(result.token, secure),
+        "set-cookie": sessionCookie(token, secure),
       });
-      response.end(JSON.stringify({ account: result.account, token: result.token }));
+      response.end(JSON.stringify({ account: result.account, token }));
+      return;
+    }
+
+    // --- coming back from a provider ---------------------------------------
+    //
+    // /api/v1/<provider>/oauth/start sends a browser away, and .../callback is
+    // what the provider was told to send it back to. Both are outside the
+    // /api/v1/auth/ block because that is the URL shape registered with GitHub
+    // and Google, and a redirect URI is not something to change lightly.
+    const oauthRoute = OAUTH_ROUTE.exec(path);
+    if (oauthRoute && options.accounts && options.signIn) {
+      const accounts = options.accounts;
+      const signIn = options.signIn;
+      const secure = options.secureCookies ?? false;
+      const provider = signIn.provider(oauthRoute[1]);
+      if (provider === null) {
+        json(response, 404, { error: "this nixamp cannot sign you in with that" });
+        return;
+      }
+
+      if (oauthRoute[2] === "start") {
+        // A terminal can link straight here with the code it is showing, which
+        // is one hop shorter than the page for somebody who followed the link.
+        const grant = signIn.device.find(url.searchParams.get("device") ?? "");
+        response.writeHead(302, { location: signIn.begin(provider, grant?.userCode ?? "") });
+        response.end();
+        return;
+      }
+
+      // A callback carrying no state, or one whose state was already spent, is
+      // not a sign-in: it is somebody replaying a URL they found.
+      const pending = signIn.claim(url.searchParams.get("state"));
+      if (pending === null || pending.provider !== provider.id) {
+        html(response, 400, signInFailedPage("That sign-in link has expired. Start again."));
+        return;
+      }
+      const code = url.searchParams.get("code") ?? "";
+      if (!code) {
+        html(response, 400, signInFailedPage(url.searchParams.get("error") ?? "The provider sent no code."));
+        return;
+      }
+
+      const access = await exchangeCode(provider, code, signIn.site).catch(() => "");
+      const identity = access ? await provider.identify(access, fetch).catch(() => null) : null;
+      if (identity === null) {
+        html(response, 401, signInFailedPage(`${provider.name} did not confirm a verified email address.`));
+        return;
+      }
+
+      const result = await accounts.signInWith(identity);
+      if (!result.ok || result.account === null) {
+        html(response, 401, signInFailedPage(result.error || "Could not sign in."));
+        return;
+      }
+
+      if (pending.userCode) {
+        // This round trip was approving a terminal. The browser is finished;
+        // the session belongs to whatever is polling.
+        if (!signIn.device.approve(pending.userCode, { token: result.token, email: result.account.email })) {
+          html(response, 410, signInFailedPage("That terminal stopped waiting. Run `nixamp login` again."));
+          return;
+        }
+        html(response, 200, deviceDonePage(result.account.email));
+        return;
+      }
+
+      response.writeHead(302, {
+        "set-cookie": sessionCookie(result.token, secure),
+        location: "/",
+      });
+      response.end();
       return;
     }
 
@@ -2030,6 +2298,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
             secret: process.env["NIXAMP_JWT_SECRET"] ?? "",
           }),
           secureCookies: (process.env["NIXAMP_SITE"] ?? "").startsWith("https://"),
+          // Whichever providers this deployment was given both halves of, plus
+          // the device grant, which is worth having even with no provider at
+          // all: a browser already signed in can approve a terminal.
+          signIn: new SignIn(
+            providersFrom(process.env),
+            new DeviceGrants(),
+            process.env["NIXAMP_SITE"] ?? DEFAULT_DIRECTORY,
+          ),
         }
       : {}),
   });

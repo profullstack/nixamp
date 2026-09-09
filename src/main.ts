@@ -18,6 +18,7 @@ import { version } from "./meta.ts";
 import { displayName, loadSource } from "./playlist.ts";
 import { isRemote } from "./sources.ts";
 import { DEFAULT_PORT } from "./server.ts";
+import type { DaemonState } from "./daemon.ts";
 
 const FFT_SIZE = 2048;
 export const BAND_COUNT = 24;
@@ -69,9 +70,11 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp [source]                play it in the terminal
   nixamp serve [source] [options]  play here, and hand out a browser remote
   nixamp daemon start|stop|status  serve in the background, and let go of it
+  nixamp attach                  put the player back in front of the daemon
   nixamp admin [--url U] [--key K] who is connected, and re-stream to them
-  nixamp login [--signup]        sign in to nixamp.com
+  nixamp login [--with github]  sign in to nixamp.com, in a browser or here
   nixamp logout / whoami        forget it, or check it
+  nixamp token create|list|revoke  tokens for a machine that cannot sign in
   nixamp update [version]        re-run the installer, keeping your choices
   nixamp uninstall [--yes]       remove everything the installer created
 
@@ -95,9 +98,113 @@ Options for serve:
       --x402       charge for listening once more than 5 people are listening
       --no-x402    never charge
 
+Options for login:
+      --with NAME  sign in with a provider (github, google) in a browser
+      --device     approve in a browser, whichever way it is signed in
+      --password   ask for an address and a password here instead
+      --token T    keep a token made with \`nixamp token create\`
+      --signup     make an account with an address and a password
+      --no-browser print the URL rather than trying to open one
+      --site URL   somewhere other than https://nixamp.com
+
+NIXAMP_TOKEN in the environment is a signed-in nixamp with no login at all,
+which is what a build server wants.
+
+Keys in the player:
+  space play/pause   enter play   s stop   n/p next/previous   up/down choose
+  d     detach: hand the music to a daemon and get the terminal back
+  q     quit
+
   -v, --version    print the version
-      --help       print this
+  -h, --help       print this. \`nixamp help <command>\` says more about one
 `;
+
+/** `-h`, `--help`, or the word, which is what people type when they forget. */
+export function isHelp(arg: string | undefined): boolean {
+  return arg === "-h" || arg === "--help" || arg === "help";
+}
+
+/**
+ * Was help asked for, given what the command already means by its flags?
+ *
+ * `serve` has had `-h HOST` since the beginning, and `daemon start` passes its
+ * flags straight through, so for those two `-h` is a bind address and only the
+ * spelled-out forms ask for help. Everywhere else `-h` is help, because that
+ * is what it is everywhere else.
+ */
+export function wantsHelp(first: string | undefined, rest: string[]): boolean {
+  if (isHelp(first)) return true;
+  const shortIsHost = first === "serve" || first === "daemon";
+  return rest.some((arg) => (shortIsHost ? arg !== "-h" && isHelp(arg) : isHelp(arg)));
+}
+
+/**
+ * Longer help, one command at a time.
+ *
+ * The summary in HELP is a list of what exists; these say how each is used,
+ * which is the thing you want at the moment you ask, and the thing that makes
+ * the summary unreadable if it is folded in.
+ */
+const TOPICS: Record<string, string> = {
+  login: `nixamp login — sign in to nixamp.com.
+
+  nixamp login                 choose how: a provider in a browser, or a password
+  nixamp login --with github   go straight to a provider (github, google)
+  nixamp login --device        approve in a browser you are already signed in to
+  nixamp login --password      an address and a password, here in the terminal
+  nixamp login --token TOKEN   keep a token made with \`nixamp token create\`
+  nixamp signup                make an account with an address and a password
+
+A provider sign-in never asks this terminal for anything secret. It shows a
+short code, you approve it in a browser on whatever device has a keyboard, and
+this terminal ends up holding the session. That works over ssh, and it works on
+a television, which is why it is the default.
+
+  --no-browser  print the URL rather than trying to open one
+  --site URL    somewhere other than https://nixamp.com
+
+NIXAMP_TOKEN in the environment is a signed-in nixamp with no login at all.
+`,
+  token: `nixamp token — tokens for a machine that cannot sign in.
+
+  nixamp token create --name ci   make one, and print it once
+  nixamp token list               id, when it was made, when it was last used
+  nixamp token revoke ID          stop it working, everywhere, now
+
+A token is shown once because the server keeps only its hash. Put it in the
+environment as NIXAMP_TOKEN, or keep it here with \`nixamp login --token\`.
+Signing out does not touch it: that is what it is for.
+`,
+  daemon: `nixamp daemon — a nixamp that outlives the terminal that started it.
+
+  nixamp daemon start [source] [serve options]   start it, detached
+  nixamp daemon status                           where it is, and how long
+  nixamp daemon stop                             stop it
+
+It is \`nixamp serve\` with nobody holding its terminal, so it keeps playing and
+keeps serving its browser remote. One per user.
+
+  nixamp attach   put the player back in front of it
+  nixamp admin    who is connected, and re-stream to them
+
+From inside the player, d hands the music to a daemon without stopping it.
+`,
+  attach: `nixamp attach — the player, in front of the running daemon.
+
+The same view and the same keys as the local player, except that the music is
+the daemon's: keys are sent to it, and what you see is what it is doing. Any
+number of terminals may attach at once.
+
+  nixamp attach                    the daemon on this machine
+  nixamp attach --url URL [--key K]  a nixamp somewhere else
+
+q or d leaves; neither stops anything. \`nixamp daemon stop\` is what stops it.
+`,
+};
+
+export function helpFor(topic: string | undefined): string {
+  return (topic ? TOPICS[topic] : undefined) ?? HELP;
+}
 
 /**
  * `nixamp daemon <start|stop|status>`.
@@ -154,7 +261,14 @@ async function runDaemon(argv: string[]): Promise<number> {
     return 0;
   }
 
-  console.error(`nixamp daemon: unknown action ${action}. Try start, stop or status.`);
+  // `nixamp daemon attach` is what people try before `nixamp attach`, so it is
+  // the same thing rather than an error about a word that means what it says.
+  if (action === "attach") {
+    const { attach } = await import("./attach.ts");
+    return attach(rest);
+  }
+
+  console.error(`nixamp daemon: unknown action ${action}. Try start, stop, status or attach.`);
   return 64;
 }
 
@@ -165,6 +279,19 @@ async function runDaemon(argv: string[]): Promise<number> {
  */
 export async function main(): Promise<void> {
   const [first, ...rest] = process.argv.slice(2);
+
+  // Asked for however anybody asks for it. `nixamp help serve` and
+  // `nixamp serve --help` are the same question, so they get the same answer.
+  if (wantsHelp(first, rest)) {
+    console.log(helpFor(isHelp(first) ? rest[0] : first));
+    return;
+  }
+
+  if (first === "attach") {
+    const { attach } = await import("./attach.ts");
+    process.exitCode = await attach(rest);
+    return;
+  }
 
   if (first === "serve") {
     const { serve } = await import("./server.ts");
@@ -185,6 +312,11 @@ export async function main(): Promise<void> {
     process.exitCode = await login(first === "signup" ? [...rest, "--signup"] : rest);
     return;
   }
+  if (first === "token" || first === "tokens") {
+    const { tokens } = await import("./session.ts");
+    process.exitCode = await tokens(rest);
+    return;
+  }
   if (first === "logout" || first === "whoami") {
     const session = await import("./session.ts");
     process.exitCode = first === "logout" ? session.logout() : await session.whoami();
@@ -196,7 +328,6 @@ export async function main(): Promise<void> {
     return;
   }
   if (first === "--version" || first === "-v") { console.log(version()); return; }
-  if (first === "--help") { console.log(HELP); return; }
 
   // resolve() would turn https://host/x into /cwd/https:/host/x, so a URL is
   // left exactly as it was typed.
@@ -211,6 +342,10 @@ export async function main(): Promise<void> {
 
   const state = createState(tracks, target, tools.play === null);
   const app = await createApp({ theme: themes.matrix, title: "nixamp", quitKeys: ["ctrl+c"] });
+  // Set when d handed the music to a daemon, and printed after the TUI is
+  // gone. A field rather than a local, because a local assigned only inside a
+  // closure stays narrowed to null for the checker.
+  const handoff: { to: { daemon: DaemonState; url: string } | null } = { to: null };
 
   const analyser = new Analyser(FFT_SIZE, RATE);
   const edges = bandEdges(BAND_COUNT, RATE, FFT_SIZE);
@@ -269,9 +404,36 @@ export async function main(): Promise<void> {
     app.invalidate();
   };
 
+  /**
+   * Hand the music to a daemon and give the terminal back.
+   *
+   * The local stream is stopped first, because two processes fighting over the
+   * audio device is a worse experience than a second of silence. What comes
+   * back is where it went, so `nixamp attach` is a suggestion rather than a
+   * thing to remember.
+   */
+  const detach = async (): Promise<void> => {
+    state.note = "Handing over to a daemon...";
+    app.invalidate();
+    stream.stop();
+    state.playing = false;
+    try {
+      const d = await import("./daemon.ts");
+      const daemon = await d.start([target], fileURLToPath(new URL("./main.js", import.meta.url)));
+      handoff.to = { daemon, url: d.daemonUrl(daemon) };
+      app.quit();
+    } catch (error) {
+      // Most often: a daemon is already running, which is worth saying rather
+      // than leaving somebody looking at a player that stopped for no reason.
+      state.note = (error as Error).message;
+      app.invalidate();
+    }
+  };
+
   app.on("key", (event: KeyEvent) => {
     switch (event.key) {
       case "q": stream.stop(); app.quit(); return;
+      case "d": void detach(); return;
       case "space": state.playing ? stopAll() : play(); return;
       case "enter": play(); return;
       case "s": stopAll(); return;
@@ -291,6 +453,14 @@ export async function main(): Promise<void> {
   app.on("exit", () => stream.stop());
   app.render((args) => view(args, state));
   await app.start();
+
+  const handed = handoff.to;
+  if (handed !== null) {
+    console.log(`Detached. Still playing as pid ${handed.daemon.pid}.`);
+    console.log(`  ${handed.daemon.key ? `${handed.url}/s/${handed.daemon.key}` : handed.url}`);
+    console.log("  nixamp attach       come back to it");
+    console.log("  nixamp daemon stop  when you are done");
+  }
 }
 
 

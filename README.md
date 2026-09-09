@@ -78,21 +78,54 @@ If you would rather not pipe a script into a shell, `npm i -g nixamp` and
 ## Signing in
 
 An account on nixamp.com is what lets you publish, be paid, and administer a
-server you own. Email and password, on every surface:
+server you own. Three ways in, because a terminal is a bad place to be asked
+for a password:
 
 ```
-nixamp login              # or: nixamp signup
+nixamp login                 # choose: a provider in a browser, or a password
+nixamp login --with github   # straight to GitHub (or google)
+nixamp login --password      # an address and a password, here
 nixamp whoami
 nixamp logout
 ```
 
-The PWA and the desktop app share one form, since the desktop is that page in a
-window. The CLI keeps its token beside the daemon's state, mode 600, so signing
-in there and in the desktop app are the same thing on disk. The password is read
-with the echo off and is never written down.
+`--with github` is OAuth 2.0 through the device grant (RFC 8628), which is how
+a television has signed you in for years: the terminal shows a short code, you
+approve it in a browser on whatever device has a keyboard, and the terminal ends
+up holding the session. It never sees your password or the provider's token, and
+it works over ssh.
+
+The PWA and the desktop app offer the same providers, since an account made by
+signing in with GitHub has no password to type anywhere. The CLI keeps its token
+beside the daemon's state, mode 600, so signing in there and in the desktop app
+are the same thing on disk. A password, where one is used, is read with the echo
+off and is never written down.
 
 No magic link. A link in an inbox is no use on a television, or on a phone that
 is not the one you read mail on.
+
+### Tokens, for a machine that cannot sign in
+
+```
+nixamp token create --name ci   # printed once, and only once
+nixamp token list
+nixamp token revoke <id>
+```
+
+`NIXAMP_TOKEN` in the environment is a signed-in nixamp with no login at all,
+which is the only thing that works in CI. Tokens are stored as hashes and can be
+withdrawn from anywhere; signing out does not touch them, which is the point of
+them. Sessions are the same kind of thing with an expiry, so `nixamp logout`
+really does end one.
+
+Providers are configured per deployment, and only a provider with both halves is
+offered:
+
+```
+GITHUB_CLIENT_ID=… GITHUB_CLIENT_SECRET=… nixamp serve --directory
+```
+
+The callback to register is `https://your-site/api/v1/<provider>/oauth/callback`.
 
 Running the account side of nixamp.com needs Postgres:
 
@@ -234,6 +267,21 @@ nixamp daemon stop
 Start writes down where it went and the key it minted, waits until the server
 is actually answering before saying it started, and prints the share link. It is
 one daemon per user, and the state lives in `$XDG_STATE_HOME/nixamp`.
+
+### Detaching, and coming back
+
+`d` in the player hands the music to a daemon and gives you your terminal back.
+Nothing stops. `nixamp attach` puts the player back in front of it:
+
+```
+nixamp attach                      # the daemon on this machine
+nixamp attach --url URL --key KEY  # a nixamp somewhere else
+```
+
+An attached player is the same view and the same keys; the difference is that
+the keys are sent to the daemon and what you see is what the daemon is doing.
+Any number of terminals may attach at once. `q` or `d` leaves without stopping
+anything, which is what `nixamp daemon stop` is for.
 
 ## Who may administer a server
 
@@ -382,6 +430,7 @@ A bare `ffmpeg` on `PATH` is used when there is one; `mise` shims are detected a
 | `↑` `↓` | Move through the playlist |
 | `n` `p` (or `→` `←`) | Next and previous track |
 | `s` | Stop |
+| `d` | Detach: hand the music to a daemon and keep the terminal |
 | `q` | Quit |
 
 ## Formats
