@@ -6,12 +6,15 @@
  * again in that session -- a sound you like the first time is a sound you
  * resent the fourth.
  *
- * `~/NixAmp*.mp3` wins if it is there, so somebody can drop their own in
- * without touching anything; otherwise the one that ships is used, so it works
- * on a machine that has never heard of any of this.
+ * Yours win: any mp3 in your home directory with "nixamp" in its name, so you
+ * can drop one in without touching anything. Otherwise the ones that ship are
+ * used, so it works on a machine that has never heard of any of this.
+ *
+ * With more than one, it picks at random rather than cycling, because a
+ * rotation you can predict is one you stop hearing.
  */
 import { spawn } from "node:child_process";
-import { readdirSync, existsSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,18 +24,18 @@ import type { Tools } from "./audio.ts";
 export const OFF = "NIXAMP_NO_JINGLE";
 
 /**
- * The file to play, or null when there is none.
+ * Every jingle available, yours first, in a stable order.
  *
- * Yours first. The match is deliberately loose -- `NixAmp anything.mp3` --
- * because the point is that you can drop a file in your home directory and
- * have it picked up, not that you can name it exactly right.
+ * The match is deliberately loose -- any mp3 whose name contains "nixamp" --
+ * because the point is that a file you drop in your home directory is picked
+ * up, not that you named it exactly right. `001. NixAmp Whips the D-M-C-As.mp3`
+ * is a name a person actually uses, and an anchored pattern missed it.
  */
-export function findJingle(
+export function findJingles(
   home = homedir(),
-  packaged = defaultPackaged(),
+  packaged = packagedJingles(),
   read: (dir: string) => string[] = safeRead,
-  exists: (path: string) => boolean = existsSync,
-): string | null {
+): string[] {
   // Guarded here rather than only inside the default reader: whether a jingle
   // can be found is this function's promise to keep, and it should not depend
   // on which reader it was handed.
@@ -42,24 +45,52 @@ export function findJingle(
   } catch {
     names = [];
   }
-  const mine = names.filter((name) => /^nixamp.*\.mp3$/i.test(name)).sort();
-  const first = mine[0];
-  if (first !== undefined) return join(home, first);
-  return packaged !== null && exists(packaged) ? packaged : null;
+  const mine = names
+    .filter((name) => name.toLowerCase().endsWith(".mp3") && name.toLowerCase().includes("nixamp"))
+    .sort()
+    .map((name) => join(home, name));
+  return mine.length > 0 ? mine : packaged;
+}
+
+/**
+ * One to play, chosen at random.
+ *
+ * Random rather than in turn: a rotation you can predict is one you stop
+ * hearing, and there is no state worth keeping between runs for this.
+ */
+export function findJingle(
+  home = homedir(),
+  packaged = packagedJingles(),
+  read: (dir: string) => string[] = safeRead,
+  pick: (upTo: number) => number = (upTo) => Math.floor(Math.random() * upTo),
+): string | null {
+  const all = findJingles(home, packaged, read);
+  if (all.length === 0) return null;
+  return all[Math.min(all.length - 1, Math.max(0, pick(all.length)))] ?? null;
 }
 
 function safeRead(dir: string): string[] {
   return readdirSync(dir);
 }
 
-/** Where the shipped copy lives, next to the built web assets. */
-function defaultPackaged(): string | null {
+/**
+ * The ones that ship, read from the list the web build writes.
+ *
+ * A list rather than a name, so adding another jingle is dropping a file in
+ * and rebuilding rather than editing this.
+ */
+function packagedJingles(): string[] {
   try {
     // dist/jingle.js -> the package root -> web/dist, which is what `files`
     // in package.json actually ships.
-    return fileURLToPath(new URL("../web/dist/nixamp.mp3", import.meta.url));
+    const dir = fileURLToPath(new URL("../web/dist/jingles", import.meta.url));
+    const listed = JSON.parse(readFileSync(join(dir, "index.json"), "utf8")) as unknown;
+    if (!Array.isArray(listed)) return [];
+    return listed
+      .filter((name): name is string => typeof name === "string")
+      .map((name) => join(dir, name));
   } catch {
-    return null;
+    return [];
   }
 }
 

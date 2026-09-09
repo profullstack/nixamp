@@ -85,9 +85,9 @@ const HELP = `nixamp — it really whips the terminal's ass.
 A source is a directory, a file, an .m3u, an .m3u8, a .pls, or a URL to any
 of those.
 
-It plays a jingle when it starts. Yours from ~/NixAmp-anything.mp3 if you have
-one, otherwise the one that ships. --no-jingle, or NIXAMP_NO_JINGLE=1, for
-silence.
+It plays a jingle when it starts, picked at random. Any mp3 in your home
+directory with nixamp in the name is yours and wins; otherwise the ones that
+ship are used. --no-jingle, or NIXAMP_NO_JINGLE=1, for silence.
 
 Options for serve:
   -p, --port N     port to listen on (default ${DEFAULT_PORT})

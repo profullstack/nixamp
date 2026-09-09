@@ -2394,7 +2394,24 @@ export function start(): void {
     }
     if (already) return;
 
-    const jingle = new Audio("/nixamp.mp3");
+    // One of however many ship, at random. The list is written by the build
+    // from whatever is in the folder, so another one is a file to drop in
+    // rather than a line to remember to change.
+    const chosen = async (): Promise<string> => {
+      try {
+        const answer = await fetch("/jingles/index.json");
+        const names = (await answer.json()) as unknown;
+        if (Array.isArray(names) && names.length > 0) {
+          const pick = names[Math.floor(Math.random() * names.length)];
+          if (typeof pick === "string") return `/jingles/${pick}`;
+        }
+      } catch {
+        // An older build, or a host serving only the app. Nothing to play.
+      }
+      return "";
+    };
+
+    const jingle = new Audio();
     jingle.volume = 0.7;
     const spend = (): void => {
       try {
@@ -2408,14 +2425,18 @@ export function start(): void {
       void jingle.play().catch(() => {});
     };
 
-    void jingle.play().then(
-      spend,
-      () => {
-        // Refused, which is ordinary. Wait for the first thing they do.
-        document.addEventListener("pointerdown", armed, { once: true });
-        document.addEventListener("keydown", armed, { once: true });
-      },
-    );
+    void chosen().then((src) => {
+      if (src === "") return;
+      jingle.src = src;
+      return jingle.play().then(
+        spend,
+        () => {
+          // Refused, which is ordinary. Wait for the first thing they do.
+          document.addEventListener("pointerdown", armed, { once: true });
+          document.addEventListener("keydown", armed, { once: true });
+        },
+      );
+    });
   })();
 
   draw();

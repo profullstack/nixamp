@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { videoArgs, detectTools, formatTime, peaks, probe, RATE, Stream, toMono } from "../src/audio.ts";
 import { Analyser, bandEdges, bands } from "../src/fft.ts";
-import { findJingle, playJingle } from "../src/jingle.ts";
+import { findJingle, findJingles, playJingle } from "../src/jingle.ts";
 import { findAudio, isAudio, displayName } from "../src/playlist.ts";
 
 const tools = detectTools();
@@ -216,34 +216,55 @@ test("a transport stream never has its audio copied", () => {
   assert.deepEqual(file.slice(0, 4), ["-c:v", "copy", "-c:a", "copy"]);
 });
 
-test("your own jingle wins, and there is one when you have none", () => {
-  const shipped = "/pkg/web/dist/nixamp.mp3";
+test("your own jingles win, and there are some when you have none", () => {
+  const shipped = ["/pkg/web/dist/jingles/01.mp3", "/pkg/web/dist/jingles/02.mp3"];
 
   // Yours, dropped in your home directory. Loosely matched on purpose: the
   // point is that a file you put there is picked up, not that you named it
-  // exactly right.
-  assert.equal(
-    findJingle("/home/me", shipped, () => ["notes.txt", "NixAmp Whips the D-M-C-As.mp3"], () => true),
-    "/home/me/NixAmp Whips the D-M-C-As.mp3",
-  );
-  assert.equal(
-    findJingle("/home/me", shipped, () => ["nixamp-mine.MP3"], () => true),
-    "/home/me/nixamp-mine.MP3",
+  // exactly right -- and "001. NixAmp Whips the D-M-C-As.mp3" is a name a
+  // person actually uses, which an anchored pattern missed entirely.
+  assert.deepEqual(
+    findJingles("/home/me", shipped, () => [
+      "notes.txt",
+      "002. NixAmp Whips the D-M-C-As.mp3",
+      "001. NixAmp Whips the D-M-C-As.mp3",
+    ]),
+    ["/home/me/001. NixAmp Whips the D-M-C-As.mp3", "/home/me/002. NixAmp Whips the D-M-C-As.mp3"],
   );
 
-  // Nothing of yours: the one that ships, so it works on a machine that has
+  // Nothing of yours: the ones that ship, so it works on a machine that has
   // never heard of any of this.
-  assert.equal(findJingle("/home/me", shipped, () => ["holiday.jpg"], () => true), shipped);
+  assert.deepEqual(findJingles("/home/me", shipped, () => ["holiday.jpg"]), shipped);
 
-  // Not an mp3, and not something that merely mentions the name.
-  assert.equal(findJingle("/home/me", shipped, () => ["nixamp.txt", "my-nixamp.mp3"], () => true), shipped);
-
-  // No jingle anywhere is silence rather than a crash.
-  assert.equal(findJingle("/home/me", shipped, () => [], () => false), null);
-  assert.equal(findJingle("/home/me", null, () => [], () => false), null);
+  // An mp3 that says nothing about nixamp is somebody's music, not a jingle.
+  assert.deepEqual(findJingles("/home/me", shipped, () => ["nixamp.txt", "holiday.mp3"]), shipped);
 
   // A home directory that cannot be read is not a reason to fail.
-  assert.equal(findJingle("/home/me", shipped, () => { throw new Error("nope"); }, () => true), shipped);
+  assert.deepEqual(findJingles("/home/me", shipped, () => { throw new Error("nope"); }), shipped);
+
+  // Nothing anywhere is silence rather than a crash.
+  assert.deepEqual(findJingles("/home/me", [], () => []), []);
+  assert.equal(findJingle("/home/me", [], () => []), null);
+});
+
+test("with more than one it picks at random, and never off the end", () => {
+  // Random rather than in turn: a rotation you can predict is one you stop
+  // hearing. The pick is injected so this is about the choosing, not the dice.
+  const mine = ["001. NixAmp a.mp3", "002. NixAmp b.mp3", "003. NixAmp c.mp3"];
+  const read = (): string[] => mine;
+
+  assert.equal(findJingle("/home/me", [], read, () => 0), "/home/me/001. NixAmp a.mp3");
+  assert.equal(findJingle("/home/me", [], read, () => 2), "/home/me/003. NixAmp c.mp3");
+
+  // A generator answering badly still lands on a real file rather than
+  // undefined, because silence from an off-by-one would be a puzzle to chase.
+  assert.equal(findJingle("/home/me", [], read, () => 3), "/home/me/003. NixAmp c.mp3");
+  assert.equal(findJingle("/home/me", [], read, () => -1), "/home/me/001. NixAmp a.mp3");
+
+  // Over many draws it uses all of them.
+  const seen = new Set<string | null>();
+  for (let i = 0; i < 200; i++) seen.add(findJingle("/home/me", [], read));
+  assert.equal(seen.size, 3, "some jingle never came up");
 });
 
 test("a machine that cannot make a sound plays no jingle", () => {
