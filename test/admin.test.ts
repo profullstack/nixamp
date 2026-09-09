@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import { Connections, networkOf, normaliseAddress, shortAgent } from "../src/connections.ts";
 import { alive, daemonUrl, type DaemonState } from "../src/daemon.ts";
-import { bytes, since } from "../src/admin.ts";
+import { renderToText } from "@profullstack/hqtui/testing";
+import { bytes, draw, resolveTarget, since, type View } from "../src/admin.ts";
 
 const request = (address: string, agent?: string): IncomingMessage =>
   ({ socket: { remoteAddress: address }, headers: agent ? { "user-agent": agent } : {} }) as unknown as IncomingMessage;
@@ -120,4 +121,49 @@ test("durations and sizes read the way a person reads them", () => {
   assert.equal(bytes(999), "999 B");
   assert.equal(bytes(1024), "1.0 KiB");
   assert.equal(bytes(1024 * 1024 * 5), "5.0 MiB");
+});
+
+const view = (over: Partial<View> = {}): View => ({
+  url: "http://localhost:4321",
+  report: null,
+  snapshot: null,
+  error: "",
+  typing: false,
+  restreaming: "",
+  links: [
+    { label: "here", url: "http://localhost:4321" },
+    { label: "on tailscale", url: "http://100.96.166.75:4321" },
+    { label: "on the internet", url: "http://104.152.209.195:4321" },
+  ],
+  key: "KEY",
+  source: "/home/ubuntu/Downloads/done",
+  ...over,
+});
+
+test("the admin view shows the links you can hand out, not just loopback", () => {
+  const screen = renderToText(({ ui, theme }) => draw(ui, theme, view()), { width: 100, height: 40 });
+
+  // The complaint this fixes: it showed the one address that only works on the
+  // machine you are already sitting at.
+  assert.match(screen, /on the internet\s+http:\/\/104\.152\.209\.195:4321\/s\/KEY/);
+  assert.match(screen, /on tailscale\s+http:\/\/100\.96\.166\.75:4321\/s\/KEY/);
+  assert.match(screen, /here\s+http:\/\/localhost:4321\/s\/KEY/);
+  // And says what is being served, without being asked.
+  assert.match(screen, /Downloads\/done/);
+});
+
+test("no key means no /s/ on the end, because there is nothing to put there", () => {
+  const screen = renderToText(
+    ({ ui, theme }) => draw(ui, theme, view({ key: null, links: [{ label: "here", url: "http://localhost:4321" }] })),
+    { width: 100, height: 40 },
+  );
+  assert.match(screen, /here\s+http:\/\/localhost:4321/);
+  assert.doesNotMatch(screen, /\/s\//);
+});
+
+test("pointed somewhere by hand, that address is the only one there is", () => {
+  const target = resolveTarget(["--url", "http://192.168.1.5:4321/", "--key", "K"]);
+  assert.equal(target.url, "http://192.168.1.5:4321");
+  assert.deepEqual(target.links, [{ label: "there", url: "http://192.168.1.5:4321" }]);
+  assert.equal(target.source, "", "a server somewhere else has not told us what it is playing");
 });

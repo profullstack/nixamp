@@ -30,6 +30,16 @@ interface Snapshot {
 export interface AdminOptions {
   url: string;
   key: string | null;
+  /**
+   * Every address the server found, labelled, share key not yet applied.
+   *
+   * `url` is the one this process talks to, which for a local daemon is
+   * loopback -- correct for asking it questions and useless for handing to
+   * anybody. These are the ones worth reading off the screen.
+   */
+  links: { label: string; url: string }[];
+  /** What it is serving, so the admin view says so without being asked. */
+  source: string;
 }
 
 /** Where to point, from the flags or from the daemon that is running. */
@@ -39,13 +49,23 @@ export function resolveTarget(argv: string[]): AdminOptions {
   const url = at === -1 ? null : argv[at + 1];
   const key = keyAt === -1 ? null : (argv[keyAt + 1] ?? null);
 
-  if (url) return { url: url.replace(/\/+$/, ""), key };
+  // Pointed somewhere by hand, that address is the only one known.
+  if (url) {
+    const bare = url.replace(/\/+$/, "");
+    return { url: bare, key, links: [{ label: "there", url: bare }], source: "" };
+  }
 
   const state = readState();
   if (state === null) {
     throw new Error("nixamp: no daemon is running. Start one with `nixamp daemon start`, or pass --url.");
   }
-  return { url: daemonUrl(state), key: key ?? state.key };
+  return {
+    url: daemonUrl(state),
+    key: key ?? state.key,
+    // A state file written before 0.5.3 has no list; loopback stands in.
+    links: state.urls ?? [{ label: "here", url: daemonUrl(state) }],
+    source: state.source,
+  };
 }
 
 /** Seconds as something a person reads at a glance. */
@@ -134,6 +154,7 @@ export async function admin(argv: string[]): Promise<void> {
   app.on("exit", () => clearInterval(timer));
   app.render(({ ui, theme }) => draw(ui, theme, {
     url: target.url, report, snapshot, error, typing, restreaming,
+    links: target.links, key: target.key, source: target.source,
   }));
 
   await app.start();
@@ -161,6 +182,10 @@ export interface View {
   error: string;
   typing: boolean;
   restreaming: string;
+  /** Labelled addresses, and the key that makes them work. */
+  links: { label: string; url: string }[];
+  key: string | null;
+  source: string;
 }
 
 export function draw(ui: Container, theme: Theme, view: View): void {
@@ -188,6 +213,22 @@ export function draw(ui: Container, theme: Theme, view: View): void {
       ]);
     });
   });
+
+  // The links, because the point of a daemon is the phone in the other room
+  // and the address this process happens to talk to is the one that will not
+  // reach it. The key is on them: without it every address is a 401.
+  if (view.links.length > 0) {
+    const width = Math.max(...view.links.map((link) => link.label.length));
+    ui.panel({ title: "Share links", size: view.links.length + (view.source ? 3 : 2) }, (p) => {
+      for (const link of view.links) {
+        const full = view.key === null ? link.url : `${link.url}/s/${view.key}`;
+        p.text(`${link.label.padEnd(width)}  ${full}`, {
+          fg: link.label === "on the internet" ? theme.accent : theme.foreground,
+        });
+      }
+      if (view.source) p.label(view.source);
+    });
+  }
 
   ui.panel({ title: `Connections (${report?.active ?? 0} live)` }, (p) => {
     if (view.error) {
