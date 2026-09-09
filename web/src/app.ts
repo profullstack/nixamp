@@ -117,6 +117,7 @@ export function start(): void {
     goLive: need<HTMLButtonElement>("go-live"),
     stopLive: need<HTMLButtonElement>("stop-live"),
     shareTo: need<HTMLInputElement>("share-to"),
+    listenOnly: need<HTMLParagraphElement>("listen-only"),
     listenHere: need<HTMLInputElement>("listen-here"),
     volume: need<HTMLInputElement>("volume"),
     prev: need<HTMLButtonElement>("prev"),
@@ -1028,15 +1029,17 @@ export function start(): void {
 
     let allowed = false;
     let as: string | null = null;
+    let claimedOwner = false;
     try {
       // The server this page is connected to, not the origin the page came
       // from. Relative, these two calls asked nixamp.com whether somebody may
       // administer a machine nixamp.com has never heard of.
       const answer = await fetch(remote.url("/api/admin"));
       if (answer.ok) {
-        const body = (await answer.json()) as { allowed?: boolean; as?: string | null };
+        const body = (await answer.json()) as { allowed?: boolean; as?: string | null; claimed?: boolean };
         allowed = body.allowed === true;
         as = body.as ?? null;
+        claimedOwner = body.claimed === true;
       }
     } catch {
       allowed = false;
@@ -1049,7 +1052,23 @@ export function start(): void {
     // offered, and this is the answer to that question -- so the share panel
     // is drawn again now rather than from whatever was known before it.
     void loadShare();
-    if (!allowed) return;
+
+    // Say why, rather than leaving a gap where the controls were.
+    //
+    // A server hands out two links: one that drives it and one that only
+    // hears it. Connected with the listening one, everything works except the
+    // things that change what is playing -- and those simply were not there,
+    // with nothing to say that the link was the reason. "The re-stream option
+    // is missing" is what that looked like.
+    dom.listenOnly.hidden = allowed;
+    if (!allowed) {
+      dom.listenOnly.textContent = claimedOwner
+        ? "This is a listen-only link: you can hear this server but not change what it plays. " +
+          "Use its control link — the first one it printed — or sign in as its owner."
+        : "This is a listen-only link: you can hear this server but not change what it plays. " +
+          "Use its control link, the first one it printed.";
+      return;
+    }
 
     dom.adminNote.textContent = as === "owner" ? "You own this server." : "You hold this server's control link.";
     void refreshAdmin();
@@ -1703,6 +1722,7 @@ export function start(): void {
 
   dom.disconnect.addEventListener("click", () => {
     remote.close();
+    dom.listenOnly.hidden = true;
     watching = -1;
     dom.sharePanel.hidden = true;
     dom.publishPanel.hidden = true;
