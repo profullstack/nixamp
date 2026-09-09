@@ -55,6 +55,7 @@ import {
   paywallFromEnv,
 } from "./paywall.ts";
 import { isRemote, playsInBrowser } from "./sources.ts";
+import { codecsOf, videoArgs } from "./audio.ts";
 import {
   allowedForListening,
   elevate,
@@ -693,6 +694,8 @@ export interface HandlerOptions {
   listenKey?: string | null;
   /** How to run ffmpeg, for the sources a browser cannot play by itself. */
   ffmpeg?: string[];
+  /** Where ffprobe is, for asking what is inside a file before re-encoding it. */
+  ffprobe?: string[];
   /** Who is listening, for the admin view. */
   connections?: Connections;
   /**
@@ -1813,8 +1816,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // to it raw is bytes it cannot play. Seeking is what this route is for
       // and transcoding gives it up, but an unseekable film beats a silent
       // one -- and the seekable formats are untouched.
-      if (playsInBrowser(file)) sendFile(request, response, file);
-      else transcode(request, response, file, options.ffmpeg ?? ["ffmpeg"]);
+      if (playsInBrowser(file)) {
+        sendFile(request, response, file);
+      } else if (hasPicture(file)) {
+        // A film. It used to arrive as MP3 with `-vn`, which is to say as a
+        // soundtrack over a blank panel; what ffprobe finds inside decides how
+        // little work it takes to keep the picture.
+        const codecs = await codecsOf({ ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, file);
+        pipeFfmpeg(request, response, file, options.ffmpeg ?? ["ffmpeg"], videoArgs(codecs), "video/mp4");
+      } else {
+        transcode(request, response, file, options.ffmpeg ?? ["ffmpeg"]);
+      }
       return;
     }
 
@@ -2029,11 +2041,30 @@ function liveAudio(
  * player falls back to /api/media for a local file it can seek, and uses this
  * for everything else.
  */
+/** Audio, from whatever this is: the shape every non-browser source took. */
 function transcode(
   request: IncomingMessage,
   response: ServerResponse,
   source: string,
   ffmpeg: string[],
+): void {
+  pipeFfmpeg(request, response, source, ffmpeg, ["-vn", "-f", "mp3", "-b:a", "192k"], "audio/mpeg");
+}
+
+/**
+ * Run ffmpeg and hand its output straight to the caller.
+ *
+ * The output arguments belong to the caller, because the same plumbing carries
+ * a film and a song and the only difference is what ffmpeg is asked to write --
+ * which for a film is decided by what ffprobe found inside it.
+ */
+function pipeFfmpeg(
+  request: IncomingMessage,
+  response: ServerResponse,
+  source: string,
+  ffmpeg: string[],
+  outputArgs: string[],
+  contentType: string,
 ): void {
   const [command, ...prefix] = ffmpeg as [string, ...string[]];
   const child = spawn(
@@ -2047,9 +2078,7 @@ function transcode(
       // when they are handed to it for a file on disk.
       ...(isRemote(source) ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] : []),
       "-i", source,
-      "-vn",
-      "-f", "mp3",
-      "-b:a", "192k",
+      ...outputArgs,
       "-",
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
@@ -2067,7 +2096,7 @@ function transcode(
     started = true;
     response.writeHead(200, {
       ...CORS,
-      "content-type": "audio/mpeg",
+      "content-type": contentType,
       "cache-control": "no-store",
       // Length is unknowable up front, and a browser is happy without it.
       "transfer-encoding": "chunked",
@@ -2404,6 +2433,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     connections,
     paywall,
     ffmpeg: tools.ffmpeg,
+    ffprobe: tools.ffprobe,
     load: (next) => loadSource(tools, next),
     ...(directory ? { directory } : {}),
     ...(follows ? { follows, vapidPublicKey } : {}),
