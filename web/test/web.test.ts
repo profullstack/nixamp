@@ -547,18 +547,29 @@ test("there is nothing to administer until you are connected to something", () =
   assert.match(early, /dom\.publishPanel\.hidden = true/);
 });
 
-test("an invited link waiting on a sign-in says so where it will be seen", () => {
-  // The recipient signs in -- a stream can ask to be paid for, and there is
-  // nobody to charge without an account -- but the only thing saying so was a
-  // line at the bottom of a long page, so the link looked like it had failed.
+test("an invited link opens the stream rather than demanding an account first", () => {
+  // It waited for a sign-in, on the reasoning that a stream can ask to be paid
+  // for. But only the audio is ever gated, and only once a stream is busier
+  // than its free allowance -- so demanding a sign-up before anybody has even
+  // seen what they were sent walls off exactly the person an invite is for.
   const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
   const fn = app.slice(app.indexOf("function openInvitedStream"));
   const body = fn.slice(0, fn.indexOf("\n  }"));
-  assert.match(body, /meId === ""/);
-  assert.match(body, /accountNote\.textContent/);
-  assert.match(body, /scrollIntoView/);
-  // And signing in opens it, rather than leaving them to find it again.
-  assert.match(app, /\/\/ And it is what an invited link was waiting for\.\n\s*openInvitedStream\(\);/);
+  assert.equal(/meId === ""/.test(body), false, "still gated on an account");
+  assert.match(body, /requestSubmit\(\)/);
+});
+
+test("being asked for money is said as money, not as a broken file", () => {
+  // A media element reports "it would not play" and nothing else -- it cannot
+  // hand back a status -- so a stream that is charging looked identical to one
+  // that was broken, which is a useless thing to tell somebody about money.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const fn = app.slice(app.indexOf("async function whyItWouldNotPlay"));
+  const body = fn.slice(0, fn.indexOf("\n  }"));
+  assert.match(body, /status !== 402/);
+  // Signed out, the thing to do is sign in; signed in, it is to pay.
+  assert.match(body, /Sign in to nixamp\.com to pay/);
+  assert.match(body, /charging for a pass/);
 });
 
 test("the jingle plays on every page load, not once per tab", () => {

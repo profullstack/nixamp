@@ -205,7 +205,14 @@ export function start(): void {
     },
     onEnded: () => step(1),
     onState: () => draw(),
-    onError: (message) => { note = message; draw(); },
+    onError: (message) => {
+      note = message;
+      draw();
+      // A stream that refused to play may be a stream asking to be paid for,
+      // and "that would not play" is a useless thing to tell somebody about
+      // money. Asked rather than assumed, because most failures are not this.
+      void whyItWouldNotPlay();
+    },
   });
 
   const remote = new RemoteClient({
@@ -1803,15 +1810,15 @@ export function start(): void {
    */
   function openInvitedStream(): void {
     if (invited === "") return;
-    if (meId === "") {
-      // Waiting on a sign-in. Said where somebody will see it -- in the panel
-      // they have to use -- and scrolled to, because a line at the bottom of a
-      // long page is a line nobody reads, and the stream just sat there
-      // looking like a link that did not work.
-      dom.accountNote.textContent = "Sign in to watch the stream you were sent.";
-      dom.accountPanel.scrollIntoView({ behavior: "smooth", block: "center" });
-      return;
-    }
+    // Opened straight away, signed in or not.
+    //
+    // It used to wait for an account, on the reasoning that a stream can ask
+    // to be paid for and there is nobody to charge without one. But only the
+    // audio is ever gated, and only once a stream is busier than its free
+    // allowance -- so demanding a sign-up before anybody has even seen what
+    // they were sent walls off exactly the person an invite is for. The
+    // payment moment is when the server answers 402, and that is where the
+    // asking belongs.
     const stream = invited;
     invited = "";
     dom.remoteUrl.value = stream;
@@ -1908,7 +1915,7 @@ export function start(): void {
     if (asked !== "") {
       invited = asked;
       dom.remoteUrl.value = asked;
-      note = "Sign in to watch this stream.";
+      note = "Opening the stream you were sent…";
       // Not something to leave in the address bar: it carries a key.
       globalThis.history?.replaceState(null, "", globalThis.location.pathname);
     }
@@ -2162,6 +2169,29 @@ export function start(): void {
    * One address that keeps playing: the track changes under it when the
    * server moves on, so a room stays together instead of drifting apart.
    */
+  /**
+   * Whether the last failure was a stream asking to be paid for.
+   *
+   * A media element reports "it would not play" and nothing else -- it cannot
+   * hand back a status -- so the address is asked again plainly. A 402 is the
+   * server saying this stream is busy enough to charge for, which is a
+   * different thing from a broken file and deserves different words.
+   */
+  async function whyItWouldNotPlay(): Promise<void> {
+    if (mode !== "remote") return;
+    try {
+      const answer = await fetch(remote.media(at(), rung), { method: "GET", headers: { range: "bytes=0-1" } });
+      if (answer.status !== 402) return;
+      note = meId === ""
+        ? "This stream is busy enough to be charging for. Sign in to nixamp.com to pay for a pass."
+        : "This stream is charging for a pass. Follow the payment prompt to keep listening.";
+      if (meId === "") dom.accountPanel.scrollIntoView({ behavior: "smooth", block: "center" });
+      draw();
+    } catch {
+      // Unreachable is a different problem, and already reported.
+    }
+  }
+
   async function joinLive(title: string): Promise<void> {
     // Ours to follow, not the server's cursor: joining is a thing this device
     // is doing, and it should not look like the server moved.
