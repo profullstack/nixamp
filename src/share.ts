@@ -272,22 +272,29 @@ export function reachableAddresses(
 }
 
 /**
- * The two paths a key can arrive on, and what each one says about itself.
+ * The paths a key can arrive on, and what each one says about itself.
  *
  * `/admin/` administers and `/view/` only views. There used to be a `/s/`
- * that meant
- * neither -- just "here is a key" -- which is why somebody handed one of two
- * identical-looking links had no way to tell which they were holding, and
- * reported the controls as missing when they were never going to be there.
- * A link should say what it is before anybody clicks it.
+ * that meant neither -- just "here is a key" -- which is why somebody handed
+ * one of two identical-looking links had no way to tell which they were
+ * holding, and reported the controls as missing when they were never going to
+ * be there. A link should say what it is before anybody clicks it.
+ *
+ * `/a/` and `/v/` are the same two doors under shorter names they were briefly
+ * given. Both are read, because a link somebody was handed yesterday should
+ * not stop working because the spelling got clearer -- and because a player
+ * and the server it connects to are not upgraded on the same afternoon, which
+ * is exactly how a working server came to report itself as switched off.
+ * Links are written the long way.
  */
-export const KEY_PATHS = ["/admin/", "/view/"] as const;
+export const KEY_PATHS = ["/admin/", "/view/", "/a/", "/v/"] as const;
 
 /**
  * The key in a share link, and what the link claimed to be.
  *
- * Both halves, because a label nobody checks is a label that can lie. `/a/`
- * means this administers and `/v/` means this only views; handed the other
+ * Both halves, because a label nobody checks is a label that can lie.
+ * `/admin/` means this administers and `/view/` means this only views; given
+ * the other
  * key, a path would otherwise have said one thing and done the other -- and
  * the dangerous direction is real: a `/view/` link built around the control key
  * reads as view-only to the person you send it to and hands them the controls.
@@ -304,7 +311,7 @@ export function keyInPath(path: string): { key: string; wants: Scope } | null {
       // A key that is not valid percent-encoding is taken as written; it will
       // fail to match anything, which is the right answer either way.
     }
-    return { key, wants: prefix === "/admin/" ? "control" : "listen" };
+    return { key, wants: prefix === "/admin/" || prefix === "/a/" ? "control" : "listen" };
   }
   return null;
 }

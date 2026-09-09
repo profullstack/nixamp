@@ -1968,8 +1968,33 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       if (request.method === "DELETE") {
-        const id = url.searchParams.get("id");
-        if (id) options.directory.withdraw(id);
+        const id = url.searchParams.get("id") ?? "";
+        const listing = options.directory.list().find((one) => one.id === id);
+        if (!listing) {
+          // Already gone, or never here. Saying so plainly rather than
+          // pretending to have done something.
+          json(response, 404, { error: "no such listing" });
+          return;
+        }
+
+        // Taking a stream out of a public directory is the owner's to do.
+        //
+        // This asked nobody anything: a listing id is in every copy of the
+        // list, so anyone who could read the directory could empty it of other
+        // people's streams. The publisher already sends its token; it was
+        // simply never looked at.
+        const who = options.accounts ? await options.accounts.whoIs(tokenFrom(request.headers)) : null;
+        const mine = listing.ownerId !== "" && who !== null && who.id === listing.ownerId;
+        if (!mine) {
+          json(response, 403, {
+            error: listing.ownerId === ""
+              ? "that listing has no owner to prove; it leaves the list when it stops renewing"
+              : "only the account that published a stream can take it off the list",
+          });
+          return;
+        }
+
+        options.directory.withdraw(id);
         json(response, 200, { ok: true });
         return;
       }

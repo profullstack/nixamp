@@ -59,8 +59,12 @@ export function splitShareLink(input: string): { base: string; key: string } {
     return { base: "", key: "" };
   }
 
-  // Either shape a key arrives in: /admin/ administers, /view/ only views.
-  const share = /^\/(?:admin|view)\/([^/]+)\/?$/.exec(url.pathname);
+  // Either door, under either spelling: /admin/ and /view/ are what a link is
+  // written as, and /a/ and /v/ are the same two under shorter names they were
+  // briefly given -- still read, because a player and the server it connects
+  // to are not upgraded on the same afternoon, and a link that stops being
+  // recognised looks exactly like a server that has been switched off.
+  const share = /^\/(?:admin|view|a|v)\/([^/]+)\/?$/.exec(url.pathname);
   const key = share?.[1] ?? url.searchParams.get("k") ?? "";
   if (share) url.pathname = "/";
   url.searchParams.delete("k");
@@ -165,7 +169,7 @@ export class RemoteClient {
     this.close();
     this.base = base;
     this.key = key;
-    this.shape = /\/view\/[^/]+\/?$/.test(input.trim()) ? "/view/" : "/admin/";
+    this.shape = /\/(?:view|v)\/[^/]+\/?$/.test(input.trim()) ? "/view/" : "/admin/";
     this.lastRevision = -1;
     this.handlers.onStatus("connecting");
     const source = new EventSource(apiUrl(base, "/api/events", key));
