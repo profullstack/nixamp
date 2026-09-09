@@ -198,9 +198,14 @@ export function start(): void {
         await remote.send({ type: "play", index: next });
         return;
       }
-      // Select rather than play: the server's cursor stays in step with ours
-      // without it starting the same track on its own speakers.
-      await remote.send({ type: "select", index: next });
+      // Nothing is sent. Watching something yourself is not an instruction to
+      // the server, and it used to be one: this sent `select`, which moves the
+      // cursor everybody else is listening to. A viewer picking a film to
+      // watch privately would change what the room was hearing, and whether
+      // that worked depended only on which key they happened to hold.
+      //
+      // Driving the stream is `remoteDrives()` above, and that is refused to a
+      // listen key by the server, which is where the rule belongs.
       await listenTo(next);
       return;
     }
