@@ -26,7 +26,7 @@ import {
   redact,
 } from "./broadcast.ts";
 import { Ingest, normaliseFormat } from "./ingest.ts";
-import { Channels, cleanId } from "./channels.ts";
+import { Channels, cleanId, generatedId } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
 import { anonymousHandle, Handles } from "./handles.ts";
@@ -2212,17 +2212,32 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       if (action === undefined && request.method === "GET") {
         // Listening. The response is the fan-out target: whatever ffmpeg
         // produces for this channel is written to it until one end goes away.
-        const detach = channels.listen(id, response);
-        if (detach === null) {
+        if (!channels.has(id)) {
           json(response, 404, { error: "nothing is playing on that channel" });
           return;
         }
         watch(request, response, "stream", id);
+        // Headers first, and then the listener.
+        //
+        // Attaching first was fine while a channel only ever wrote future
+        // bytes. A video channel writes the opening boxes to a new listener
+        // the moment it joins, and those went out before this response had
+        // any headers at all -- so it committed as a bare 200 with no
+        // content-type, ended immediately, and the picture was one kilobyte
+        // long. Whether it happened depended on whether ffmpeg had produced
+        // its header yet, which is why it looked intermittent.
         response.writeHead(200, {
           ...CORS,
-          "content-type": "audio/mpeg",
+          // Asked of the channel rather than assumed: a channel carrying
+          // pictures that calls itself audio/mpeg plays as nothing at all.
+          "content-type": channels.contentType(id),
           "cache-control": "no-store",
         });
+        const detach = channels.listen(id, response);
+        if (detach === null) {
+          response.end();
+          return;
+        }
         const leave = (): void => detach();
         request.on("close", leave);
         response.on("close", leave);
@@ -2239,6 +2254,68 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
 
       if (request.method !== "POST") {
         json(response, 405, { error: "GET, POST or DELETE" });
+        return;
+      }
+
+      /**
+       * Carry a source of our own, rather than waiting to be sent one.
+       *
+       * A re-stream used to be added to the playlist, where it became one
+       * more track -- and a server plays one track at a time, so the second
+       * channel you added sat there saying "stopped". Two channels are two
+       * processes with two audiences and two addresses, which is what lets
+       * one person watch the baseball while another watches the news, in two
+       * tabs or in two panels of the same multiview.
+       */
+      if (action === "pull") {
+        let source = "";
+        let called = "";
+        try {
+          const body = JSON.parse(await readBody(request)) as {
+            source?: unknown; name?: unknown; at?: unknown;
+          };
+          called = String(body.name ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 80);
+          // A track number rather than a path: it is the server's own library
+          // either way, and a number cannot name a file outside it.
+          if (typeof body.at === "number" && Number.isInteger(body.at) && body.at >= 0) {
+            source = engine.trackPath(body.at) ?? "";
+            if (source === "") {
+              json(response, 404, { error: "no track there" });
+              return;
+            }
+          } else {
+            source = String(body.source ?? "").trim();
+          }
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+        if (source === "") {
+          json(response, 400, { error: "give a URL to carry, or a track to show" });
+          return;
+        }
+
+        const wanted = cleanId(rawId, generatedId());
+        if (channels.has(wanted)) {
+          json(response, 409, { error: "that channel is already on" });
+          return;
+        }
+
+        const probe = options.ffprobe ?? ["ffprobe"];
+        const codecs = await codecsOf({ ffmpeg: [], ffprobe: probe, play: null }, source);
+        const kind = codecs.video === "" ? "audio" : "video";
+        const encode = kind === "video"
+          ? videoArgs(codecs)
+          // No picture in it, so none is invented: MP3 is the thing every
+          // browser plays and the thing a listener can join halfway through.
+          : ["-vn", "-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"];
+
+        const channel = channels.pull(wanted, called, source, encode, kind);
+        if (!channel) {
+          json(response, 409, { error: "that channel is already on" });
+          return;
+        }
+        json(response, 200, { ok: true, channel: channel.info });
         return;
       }
 
