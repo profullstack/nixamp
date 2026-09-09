@@ -10,7 +10,7 @@ import {
   type Engine,
 } from "../src/server.ts";
 import { emptySnapshot, parseCommand, remoteName, type Command, type Snapshot } from "../src/protocol.ts";
-import { reachableAddresses } from "../src/share.ts";
+import { isIpAddress, lookupPublicIp, reachableAddresses } from "../src/share.ts";
 import { daemonLines } from "../src/daemon.ts";
 
 test("serve flags parse, and a bad one is a message rather than a NaN", () => {
@@ -403,4 +403,56 @@ test("a state file from an older nixamp still prints something", () => {
   assert.match(out, /here\s+http:\/\/127\.0\.0\.1:4321/);
   // No key means no /s/ suffix, because there is nothing to put after it.
   assert.doesNotMatch(out, /\/s\//);
+});
+
+test("an address looked up outside is an address, or it is nothing", async () => {
+  assert.equal(isIpAddress("67.205.189.229"), true);
+  assert.equal(isIpAddress("2600:3c03::f03c:91ff:fe96:1"), true);
+  assert.equal(isIpAddress("999.1.1.1"), false, "octets have a ceiling");
+  assert.equal(isIpAddress("<!doctype html>"), false);
+  assert.equal(isIpAddress("rate limit exceeded"), false);
+  assert.equal(isIpAddress(""), false);
+
+  const good = (async () => new Response("67.205.189.229\n")) as unknown as typeof fetch;
+  assert.equal(await lookupPublicIp(good), "67.205.189.229");
+
+  // A service having a bad day must not become an address in a share link.
+  const prose = (async () => new Response("too many requests")) as unknown as typeof fetch;
+  assert.equal(await lookupPublicIp(prose), "");
+  const refused = (async () => new Response("no", { status: 429 })) as unknown as typeof fetch;
+  assert.equal(await lookupPublicIp(refused), "");
+  const offline = (async () => {
+    throw new Error("ENOTFOUND");
+  }) as unknown as typeof fetch;
+  assert.equal(await lookupPublicIp(offline), "");
+});
+
+test("--no-lookup is there for anyone who would rather nixamp asked nobody", () => {
+  assert.equal(parseServeArgs([]).lookup, true);
+  assert.equal(parseServeArgs(["--no-lookup"]).lookup, false);
+});
+
+test("a guessed public address is printed as the claim it is", () => {
+  const out = daemonLines({
+    pid: 1, host: "0.0.0.0", port: 4321, key: "KEY", source: "/m", startedAt: 0, log: "/tmp/l",
+    urls: [
+      { label: "on the internet", url: "http://67.205.189.229:4321" },
+      { label: "here", url: "http://localhost:4321" },
+    ],
+    guessedPublic: true,
+  }).join("\n");
+
+  assert.match(out, /on the internet\s+http:\/\/67\.205\.189\.229:4321\/s\/KEY/);
+  // The honest part: knowing the router's address says nothing about whether
+  // anything reaches this port.
+  assert.match(out, /router, not this port/);
+  assert.match(out, /until 4321 is forwarded here/);
+
+  // An address that came from an interface or from --public-url is not a guess,
+  // and is not hedged.
+  const known = daemonLines({
+    pid: 1, host: "0.0.0.0", port: 4321, key: "KEY", source: "/m", startedAt: 0, log: "/tmp/l",
+    urls: [{ label: "on the internet", url: "https://done.example.com" }],
+  }).join("\n");
+  assert.doesNotMatch(known, /router, not this port/);
 });

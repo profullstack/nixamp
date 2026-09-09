@@ -87,6 +87,41 @@ export function classify(address: string): "private" | "cgnat" | "public" {
   return "public";
 }
 
+/** Looks like an address, rather than an error page or a rate-limit notice. */
+export function isIpAddress(value: string): boolean {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(value)) {
+    return value.split(".").every((part) => Number(part) <= 255);
+  }
+  // Enough of v6 to reject prose: hex groups and colons, nothing else. This is
+  // not a validator, it is a guard against printing an error page as an address.
+  return value.includes(":") && /^[0-9a-f:]+$/i.test(value);
+}
+
+/**
+ * The address the rest of the world sees this machine as, by asking.
+ *
+ * Behind NAT no interface holds it, so there is nobody to ask but somebody
+ * outside. It is a claim about the router, not about this port: an address
+ * discovered this way is only reachable once the router forwards the port to
+ * this machine, which is why what prints it says so.
+ *
+ * Empty string for every failure. A player must not spend its startup waiting
+ * on somebody else's web service.
+ */
+export async function lookupPublicIp(send: typeof fetch = fetch, timeoutMs = 2500): Promise<string> {
+  try {
+    const answer = await send("https://ipinfo.io/ip", {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { accept: "text/plain", "user-agent": "nixamp" },
+    });
+    if (!answer.ok) return "";
+    const found = (await answer.text()).trim();
+    return isIpAddress(found) ? found : "";
+  } catch {
+    return "";
+  }
+}
+
 /**
  * The addresses another device could actually reach this machine on, nearest
  * first. On a server the public one is the point: it is the address a phone

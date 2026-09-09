@@ -94,6 +94,8 @@ Options for serve:
       --public-url URL  the address this server is reachable at from outside,
                    when that is a tunnel or a forwarded port rather than one of
                    its own interfaces. Also NIXAMP_PUBLIC_URL
+      --no-lookup  do not ask ipinfo.io what this machine's public address is
+                   when nothing local looks public
       --ingest     accept a live stream in at POST /api/ingest
       --rtmp-in N  also listen for RTMP publishers (OBS, Larix) from port N
       --rtmp-streams N  how many may publish at once (default 3, a port each)

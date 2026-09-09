@@ -33,6 +33,11 @@ export interface DaemonState {
   urls?: { label: string; url: string }[];
   /** The firewall standing between this port and the rest of the network. */
   firewall?: string | null;
+  /**
+   * The public address was asked of an outside service rather than found on an
+   * interface, so it names the router and not this port.
+   */
+  guessedPublic?: boolean;
 }
 
 /** XDG, with the usual fallback. One daemon per user, which is one too few for nobody. */
@@ -115,6 +120,13 @@ export function daemonLines(state: DaemonState): string[] {
   for (const { label, url } of addresses) lines.push(`  ${label.padEnd(width)}  ${link(url)}`);
   lines.push(`  ${"source".padEnd(width)}  ${state.source}`);
 
+  if (state.guessedPublic) {
+    lines.push(
+      "",
+      "  That internet address is this machine's router, not this port.",
+      `  Nothing outside reaches it until ${state.port} is forwarded here.`,
+    );
+  }
   if (state.firewall) {
     const { open } = portCommands(state.firewall as Firewall, state.port);
     lines.push(
@@ -209,6 +221,7 @@ async function waitForAnnounce(
             source: String(parsed["source"]),
             ...(Array.isArray(urls) ? { urls: urls as { label: string; url: string }[] } : {}),
             ...(typeof parsed["firewall"] === "string" ? { firewall: parsed["firewall"] } : {}),
+            ...(parsed["guessedPublic"] === true ? { guessedPublic: true } : {}),
           };
         }
       } catch {
