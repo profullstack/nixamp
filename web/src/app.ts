@@ -1010,6 +1010,22 @@ export function start(): void {
   }
 
   const checkAdmin = async (): Promise<void> => {
+    // Nothing to administer until you are connected to something.
+    //
+    // Asked with no remote, this went to whichever host served the page -- and
+    // nixamp.com runs with no share key, which means "anyone who can reach
+    // this port may drive it", so it answered yes to everybody. The result was
+    // an Admin panel, for nixamp.com, sitting there before you had connected
+    // anywhere: a re-stream box that belonged to the wrong machine and did
+    // nothing useful when you typed in it.
+    if (mode !== "remote") {
+      dom.adminPanel.hidden = true;
+      dom.publishPanel.hidden = true;
+      if (adminTimer) clearInterval(adminTimer);
+      adminTimer = null;
+      return;
+    }
+
     let allowed = false;
     let as: string | null = null;
     try {
@@ -1587,7 +1603,16 @@ export function start(): void {
    * comes back after signing in, so an invited link survives the detour.
    */
   function openInvitedStream(): void {
-    if (invited === "" || meId === "") return;
+    if (invited === "") return;
+    if (meId === "") {
+      // Waiting on a sign-in. Said where somebody will see it -- in the panel
+      // they have to use -- and scrolled to, because a line at the bottom of a
+      // long page is a line nobody reads, and the stream just sat there
+      // looking like a link that did not work.
+      dom.accountNote.textContent = "Sign in to watch the stream you were sent.";
+      dom.accountPanel.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
     const stream = invited;
     invited = "";
     dom.remoteUrl.value = stream;
@@ -1625,6 +1650,8 @@ export function start(): void {
         showAccount(body.account?.email ?? email);
         // Signing in may have made you this server's owner.
         void checkAdmin();
+        // And it is what an invited link was waiting for.
+        openInvitedStream();
       } catch {
         dom.accountNote.textContent = "could not reach nixamp.com";
       } finally {

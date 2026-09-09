@@ -529,3 +529,34 @@ test("full screen is offered for a film and not for a song", () => {
   // only way a video goes full screen on an iPhone at all.
   assert.match(app, /webkitEnterFullscreen/);
 });
+
+test("there is nothing to administer until you are connected to something", () => {
+  // Asked with no remote, the admin check went to whichever host served the
+  // page -- and nixamp.com runs with no share key, which means "anyone who can
+  // reach this port may drive it", so it answered yes to everybody. An Admin
+  // panel sat there before you had connected anywhere, with a re-stream box
+  // belonging to the wrong machine that did nothing useful when you typed in
+  // it.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const check = app.slice(app.indexOf("const checkAdmin = async"));
+  const body = check.slice(0, check.indexOf("\n  };"));
+  assert.match(body, /if \(mode !== "remote"\)/);
+  // And it hides them rather than leaving whatever was last drawn on screen.
+  const early = body.slice(0, body.indexOf("return;"));
+  assert.match(early, /dom\.adminPanel\.hidden = true/);
+  assert.match(early, /dom\.publishPanel\.hidden = true/);
+});
+
+test("an invited link waiting on a sign-in says so where it will be seen", () => {
+  // The recipient signs in -- a stream can ask to be paid for, and there is
+  // nobody to charge without an account -- but the only thing saying so was a
+  // line at the bottom of a long page, so the link looked like it had failed.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const fn = app.slice(app.indexOf("function openInvitedStream"));
+  const body = fn.slice(0, fn.indexOf("\n  }"));
+  assert.match(body, /meId === ""/);
+  assert.match(body, /accountNote\.textContent/);
+  assert.match(body, /scrollIntoView/);
+  // And signing in opens it, rather than leaving them to find it again.
+  assert.match(app, /\/\/ And it is what an invited link was waiting for\.\n\s*openInvitedStream\(\);/);
+});
