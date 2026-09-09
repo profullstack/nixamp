@@ -137,6 +137,15 @@
           <ul id="servers-list" class="directory-list"></ul>
         </section>
 
+        <!-- What is on, on the server you are connected to: its own stream,
+             and anybody publishing into it. Two different things that were
+             only ever visible in two different places, so "what is on here?"
+             had no answer. -->
+        <section class="panel player-only col-b" data-title="Live on this server" id="onair-panel" hidden>
+          <p class="hint" id="onair-note"></p>
+          <ul id="onair-list" class="directory-list"></ul>
+        </section>
+
         <!-- What to send somebody who is not technical: one link, one number,
              one code. Everything else about this page assumes you know what a
              server is; this part must not. -->

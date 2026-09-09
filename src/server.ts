@@ -966,6 +966,8 @@ export interface HandlerOptions {
   broadcaster?: Broadcaster;
   /** Where a broadcast should send, and what it should look like. */
   broadcast?: () => { destinations: Destination[]; settings: EncoderSettings };
+  /** What this server calls itself, for the list of what is live on it. */
+  serverName?: string;
   /**
    * Going live: whether this server is listed, and how to change that.
    *
@@ -1985,6 +1987,45 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // After the key check: a paying listener still needs the link, and a 402
     // is a worse answer than a 401 to someone who has neither.
     if (options.paywall && (await options.paywall(request, response, path))) return;
+
+    /**
+     * What is live on this server, for somebody deciding what to watch.
+     *
+     * Two different things are, and they were only ever visible in two
+     * different places: the server's own stream -- its playlist, which is what
+     * it is listed in the directory as -- and any channels being published
+     * into it from OBS or a phone. A person connected to a server had no way
+     * to see either as a list, so "what is on here?" had no answer.
+     *
+     * Readable by anyone holding either link, because this is the viewing
+     * side: it names streams and how to reach them, and says nothing about
+     * how to change them.
+     */
+    if (path === "/api/streams") {
+      const now = engine.snapshot(false);
+      const state = options.live?.status();
+      json(response, 200, {
+        server: {
+          name: options.serverName ?? "this server",
+          nowPlaying: engine.snapshot().tracks?.[now.index]?.title ?? "",
+          tracks: now.trackCount,
+          playing: now.playing,
+          // Only when it has been published: a code is a thing you dial, and
+          // one nobody can dial is not worth showing.
+          live: state?.live === true,
+          code: state?.code ?? "",
+          url: state?.url ?? "",
+        },
+        channels: (options.channels?.list() ?? []).map((one) => ({
+          id: one.id,
+          name: one.name,
+          via: one.via,
+          listeners: one.listeners,
+          startedAt: one.startedAt,
+        })),
+      });
+      return;
+    }
 
     // --- several streams at once ------------------------------------------
     //
@@ -3082,6 +3123,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     owner,
     channels,
     publishUrls: () => publishUrls,
+    serverName: options.name || hostname(),
     live: {
       status: () => ({
         live: publisher !== null,

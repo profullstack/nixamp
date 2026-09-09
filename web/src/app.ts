@@ -107,6 +107,9 @@ export function start(): void {
     notifyPhoneNote: need<HTMLParagraphElement>("notify-phone-note"),
     directoryNote: need<HTMLParagraphElement>("directory-note"),
     directoryList: need<HTMLUListElement>("directory-list"),
+    onairPanel: need<HTMLElement>("onair-panel"),
+    onairNote: need<HTMLParagraphElement>("onair-note"),
+    onairList: need<HTMLUListElement>("onair-list"),
     sharePanel: need<HTMLElement>("share-panel"),
     shareNote: need<HTMLParagraphElement>("share-note"),
     shareLink: need<HTMLInputElement>("share-link"),
@@ -720,6 +723,8 @@ export function start(): void {
       // mean the next visit reconnects to a server that then refuses it.
       try { localStorage.setItem(REMOTE_KEY, typed.trim()); } catch { /* private mode */ }
       remote.connect(typed);
+      void loadOnAir();
+      watchOnAir(true);
       // Asked of the server we just connected to. Whether you may administer
       // it is a question about that machine, and it was being answered by
       // whatever host served this page -- so the Admin panel appeared or did
@@ -953,6 +958,7 @@ export function start(): void {
         : `${listening} listening now, and ${others} with the page open.`;
       drawConnections(body.connections ?? []);
       drawPublish(body.publish ?? [], (body.channels ?? []).map((one) => one.id));
+      void loadOnAir();
     } catch {
       dom.adminNote.textContent = "lost touch with the server";
     }
@@ -1106,6 +1112,7 @@ export function start(): void {
           // were. The panel with the Go live button is redrawn here so it is
           // in front of you rather than somewhere to go looking for.
           void loadShare();
+          void loadOnAir();
         }
       } catch {
         said("could not reach the server");
@@ -1736,6 +1743,8 @@ export function start(): void {
     dom.sharePanel.hidden = true;
     dom.publishPanel.hidden = true;
     dom.adminPanel.hidden = true;
+    dom.onairPanel.hidden = true;
+    watchOnAir(false);
     mode = "local";
     remoteStatus = "idle";
     remoteDetail = "";
@@ -1833,6 +1842,140 @@ export function start(): void {
       document.createTextNode(". That is a room with everyone else watching — not the stream itself."),
     );
     dom.shareSend.hidden = false;
+  }
+
+  interface OnAir {
+    server: {
+      name: string; nowPlaying: string; tracks: number; playing: boolean;
+      live: boolean; code: string; url: string;
+    };
+    channels: { id: string; name: string; via: string; listeners: number; startedAt: number }[];
+  }
+
+  let drawnOnAir = "";
+  /**
+   * Its own timer, because a viewer has no admin tick to ride on.
+   *
+   * Slow on purpose: this changes when somebody starts or stops publishing,
+   * which is a thing that happens a few times an hour, not a few times a
+   * second. The redraw is skipped entirely when nothing has changed.
+   */
+  let onAirTimer: ReturnType<typeof setInterval> | null = null;
+
+  const watchOnAir = (on: boolean): void => {
+    if (onAirTimer) clearInterval(onAirTimer);
+    onAirTimer = null;
+    if (!on) return;
+    onAirTimer = setInterval(() => void loadOnAir(), 6000);
+  };
+
+  /**
+   * What is live on the server you are connected to.
+   *
+   * Its own stream -- the playlist it is serving, which is what it is listed
+   * in the directory as -- and anybody publishing into it from OBS or a phone.
+   * A row is worth clicking: the server's plays what it is playing, and a
+   * channel's plays that channel.
+   */
+  async function loadOnAir(): Promise<void> {
+    if (mode !== "remote") {
+      dom.onairPanel.hidden = true;
+      return;
+    }
+    let air: OnAir;
+    try {
+      const answer = await fetch(remote.url("/api/streams"));
+      if (!answer.ok) {
+        dom.onairPanel.hidden = true;
+        return;
+      }
+      air = (await answer.json()) as OnAir;
+    } catch {
+      dom.onairPanel.hidden = true;
+      return;
+    }
+
+    dom.onairPanel.hidden = false;
+    const key = JSON.stringify(air);
+    if (key === drawnOnAir) return;
+    drawnOnAir = key;
+
+    dom.onairNote.textContent = air.channels.length === 0
+      ? "One stream, from this server's own playlist."
+      : `${air.channels.length + 1} streams: this server's playlist, and ${air.channels.length} publishing into it.`;
+
+    const rows: HTMLElement[] = [];
+
+    // The server's own stream, first, because it is the one that is always
+    // there and the one the directory listing points at.
+    rows.push(onAirRow({
+      title: air.server.name,
+      detail: [
+        air.server.nowPlaying || `${air.server.tracks} tracks`,
+        air.server.playing ? "playing" : "stopped",
+        air.server.live && air.server.code ? `☎ ${air.server.code}` : "not listed",
+      ].join(" · "),
+      onPlay: () => { void playAt(at()); },
+      link: air.server.live ? air.server.url : "",
+    }));
+
+    for (const channel of air.channels) {
+      rows.push(onAirRow({
+        title: channel.name,
+        detail: `live over ${channel.via} · ${channel.listeners} listening`,
+        // A channel is its own address, so playing it is pointing the player
+        // at that rather than at a track number.
+        onPlay: () => {
+          void player.load({
+            title: channel.name, artist: "", album: "", duration: 0,
+            url: remote.url(`/api/channels/${encodeURIComponent(channel.id)}`),
+            video: true, objectUrl: false,
+          }, true);
+          showVideo(true);
+        },
+        link: "",
+      }));
+    }
+    dom.onairList.replaceChildren(...rows);
+  }
+
+  /** One row of what is live: what it is, and the two things you can do. */
+  function onAirRow(row: { title: string; detail: string; onPlay: () => void; link: string }): HTMLElement {
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    label.className = "recent-label";
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = row.title;
+    const detail = document.createElement("span");
+    detail.className = "detail";
+    detail.textContent = row.detail;
+    label.append(name, detail);
+
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "button";
+    play.textContent = "Play";
+    play.addEventListener("click", row.onPlay);
+    item.append(label, play);
+
+    // Only when there is a link worth copying: an unlisted server has no
+    // address to hand anybody, and a button that copies nothing is a lie.
+    if (row.link) {
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "ghost";
+      copy.textContent = "Copy link";
+      copy.addEventListener("click", () => {
+        const here = globalThis.location.origin;
+        const full = row.link.startsWith("https://")
+          ? `${here}/?url=${encodeURIComponent(row.link)}`
+          : row.link;
+        void navigator.clipboard?.writeText(full).catch(() => {});
+      });
+      item.append(copy);
+    }
+    return item;
   }
 
   const setLive = async (on: boolean): Promise<void> => {
