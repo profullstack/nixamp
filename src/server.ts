@@ -12,6 +12,7 @@
 import { createReadStream, statSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
+import { randomBytes } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -28,6 +29,7 @@ import { Ingest, normaliseFormat } from "./ingest.ts";
 import { Channels, cleanId } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
+import { anonymousHandle, Handles } from "./handles.ts";
 import { Servers } from "./servers.ts";
 import { DeviceGrants } from "./device.ts";
 import { BAD_KEY_LIMIT, callerOf, Guard, SIGN_IN_LIMIT } from "./guard.ts";
@@ -692,6 +694,7 @@ export function isSignInPath(path: string): boolean {
     // rather than by a share key it has nothing to do with.
     path === "/api/v1/servers" ||
     path.startsWith("/api/v1/servers/") ||
+    path === "/api/v1/me/handle" ||
     OAUTH_ROUTE.test(path)
   );
 }
@@ -778,6 +781,8 @@ export interface HandlerOptions {
   signIn?: SignIn;
   /** The servers each account runs, on the instance that keeps accounts. */
   servers?: Servers;
+  /** The name other people see, which is never the address they signed up with. */
+  handles?: Handles;
   /** True when this instance is reached over https, for the cookie's Secure. */
   secureCookies?: boolean;
   /** A certificate and key in PEM, when this server is to speak https itself. */
@@ -1256,6 +1261,43 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
 
+      // --- the name other people see ---------------------------------------
+      //
+      // Separate from the address on purpose. The address is a credential and
+      // a way to reach somebody; publishing it in a directory listing or an
+      // invite would be publishing what they log in with.
+      if (path === "/api/v1/me/handle" && options.handles) {
+        const handles = options.handles;
+        const who = await accounts.whoIs(tokenFrom(request.headers));
+        if (who === null) {
+          json(response, 401, { error: "not signed in" });
+          return;
+        }
+
+        if (request.method === "GET") {
+          json(response, 200, { handle: await handles.of(who.id) });
+          return;
+        }
+        if (request.method === "PUT" || request.method === "POST") {
+          let body: { handle?: unknown };
+          try {
+            body = JSON.parse(await readBody(request)) as typeof body;
+          } catch {
+            json(response, 400, { error: "bad JSON" });
+            return;
+          }
+          const claimed = await handles.claim(who.id, body.handle);
+          if (claimed.error) {
+            json(response, 409, { error: claimed.error });
+            return;
+          }
+          json(response, 200, { handle: claimed.handle });
+          return;
+        }
+        json(response, 405, { error: "GET or PUT" });
+        return;
+      }
+
       // --- the servers this account runs ----------------------------------
       //
       // Kept against the account rather than the machine, so the list reads the
@@ -1412,6 +1454,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       const result = signingUp
         ? await accounts.signUp(body.email, body.password)
         : await accounts.signIn(body.email, body.password);
+
+      // A handle asked for at sign-up, or one nobody has to think about. Never
+      // derived from the address: turning anthony@… into "anthony" is the leak
+      // this whole idea exists to avoid, and it is one nobody would notice
+      // until it was already in a directory listing.
+      if (signingUp && result.ok && result.account && options.handles) {
+        const asked = (body as { handle?: unknown }).handle;
+        const claimed = await options.handles.claim(result.account.id, asked);
+        if (claimed.error) {
+          await options.handles.claim(result.account.id, anonymousHandle((size) => randomBytes(size)));
+        }
+      }
 
       // Getting it right costs nothing: the counters only exist to stop people
       // who keep getting it wrong.
@@ -2624,7 +2678,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
           // all: a browser already signed in can approve a terminal.
           // The same pool the follows and reminders use: three small tables in
           // one database do not want three sets of connections.
-          ...(pool ? { servers: new Servers(pool) } : {}),
+          ...(pool ? { servers: new Servers(pool), handles: new Handles(pool) } : {}),
           signIn: new SignIn(
             providersFrom(process.env),
             new DeviceGrants(),
