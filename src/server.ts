@@ -43,6 +43,7 @@ import {
   SignIn,
 } from "./oauth.ts";
 import { needsAdmin, Owner } from "./owner.ts";
+import { stateDir } from "./daemon.ts";
 import { readSession } from "./session.ts";
 import { Directory, ENDED_TTL_MS, parseAnnouncement, type Listing } from "./directory.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
@@ -67,6 +68,7 @@ import {
   firewallInUse,
   certifiable,
   keyCookie,
+  rememberedKeys,
   keyFrom,
   keysMatch,
   lookupPublicIp,
@@ -107,6 +109,8 @@ export interface ServeOptions {
    * port, which is what the public deployment wants and no private one does.
    */
   key: boolean;
+  /** Mint a new share key rather than reusing the one this port had. */
+  newKey: boolean;
   /**
    * Ask the local firewall to let the port through, and put it back on the way
    * out. Off by default because it changes the machine, not just this process.
@@ -199,6 +203,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     web: null,
     media: true,
     key: true,
+    newKey: false,
     openPort: false,
     announce: false,
     directory: false,
@@ -271,6 +276,8 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.name = value();
     } else if (arg === "--owner") {
       options.owner = value();
+    } else if (arg === "--new-key") {
+      options.newKey = true;
     } else if (arg === "--ingest") {
       options.ingest = true;
     } else if (arg === "--rtmp-streams") {
@@ -2815,10 +2822,15 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const engine = new PlayerEngine([], root, tools);
 
   const web = options.web !== null ? resolve(options.web) : defaultWebDir();
-  const key = options.key ? newKey() : null;
-  // Minted whether or not it is published, so `nixamp admin` and the operator
+  // The same keys this port used last time, so a link somebody was given
+  // still works after a restart -- and a server is restarted to pick up a new
+  // version, which is to say often. `--new-key` mints a fresh pair and forgets
+  // the old one, which is the way to revoke a link that got out.
+  const remembered = options.key ? rememberedKeys(stateDir(), options.port, options.newKey) : null;
+  const key = remembered?.key ?? null;
+  // Kept whether or not it is published, so `nixamp admin` and the operator
   // both have a link they can hand out without handing over the controls.
-  const listenKey = key === null ? null : newKey();
+  const listenKey = remembered?.listenKey ?? null;
   // Configuration can arrive from the directory later, so it is a box the
   // paywall reads rather than a value it was handed once.
   let paywallConfig: PaywallConfig = { ...paywallFromEnv(), enabled: options.x402 || paywallFromEnv().enabled };
