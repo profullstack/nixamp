@@ -659,3 +659,103 @@ interface ServerRow {
   url: string;
   key: string;
 }
+
+/** One row of the public open-directory list, as the API sends it. */
+interface OpenDirRow {
+  id: string;
+  url: string;
+  name: string;
+  tracks: number;
+  by: string;
+}
+
+/**
+ * `nixamp opendir list|add|remove`, the public list of folders people found.
+ *
+ * Reading needs no account, which is why `list` works signed out. Adding needs
+ * one, because a public list with nobody accountable for its rows is a list of
+ * whatever anybody felt like putting there.
+ */
+export async function opendirs(argv: string[], fetcher: typeof fetch = fetch): Promise<number> {
+  const [command = "list", ...rest] = argv;
+  const session = readSession();
+  const site = session?.site ?? DEFAULT_DIRECTORY;
+  const where = `${site}/api/v1/opendirs`;
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    ...(session ? { authorization: `Bearer ${session.token}` } : {}),
+  };
+  const at = (flag: string): string | undefined => {
+    const index = rest.indexOf(flag);
+    return index === -1 ? undefined : rest[index + 1];
+  };
+
+  try {
+    if (command === "list" || command === "ls") {
+      const answer = await fetcher(where, { headers });
+      const body = (await answer.json().catch(() => ({}))) as { opendirs?: OpenDirRow[]; error?: string };
+      if (!answer.ok) {
+        console.error(`nixamp: ${body.error ?? `could not read the list (${answer.status})`}`);
+        return 1;
+      }
+      const rows = body.opendirs ?? [];
+      if (rows.length === 0) {
+        console.log("Nothing published yet. `nixamp opendir add <url>` puts one there.");
+        return 0;
+      }
+      const width = Math.max(...rows.map((row) => row.name.length));
+      for (const row of rows) {
+        const who = row.by ? ` by ${row.by}` : "";
+        console.log(`${row.id}  ${row.name.padEnd(width)}  ${row.tracks} tracks${who}`);
+        console.log(`  ${row.url}`);
+      }
+      return 0;
+    }
+
+    if (session === null) {
+      console.error("nixamp: sign in to publish or remove one. Try `nixamp login`.");
+      return 1;
+    }
+
+    if (command === "add" || command === "publish") {
+      const target = rest.find((a) => /^https?:\/\//.test(a)) ?? "";
+      if (!target) {
+        console.error("nixamp: which folder? Give the URL of a directory listing.");
+        return 64;
+      }
+      const answer = await fetcher(where, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ url: target, name: at("--name") ?? "" }),
+      });
+      const body = (await answer.json().catch(() => ({}))) as { opendir?: OpenDirRow; error?: string };
+      if (!answer.ok || !body.opendir) {
+        console.error(`nixamp: ${body.error ?? `could not publish it (${answer.status})`}`);
+        return 1;
+      }
+      console.log(`${body.opendir.id}  ${body.opendir.name}  ${body.opendir.tracks} tracks`);
+      return 0;
+    }
+
+    if (command === "remove" || command === "rm") {
+      const id = rest.find((a) => !a.startsWith("-")) ?? "";
+      if (!id) {
+        console.error("nixamp: which one? `nixamp opendir list` shows their ids.");
+        return 64;
+      }
+      const answer = await fetcher(`${where}/${encodeURIComponent(id)}`, { method: "DELETE", headers });
+      if (!answer.ok) {
+        console.error(`nixamp: ${answer.status === 404 ? "not yours, or not there" : "could not remove it"}`);
+        return 1;
+      }
+      console.log(`Removed ${id}.`);
+      return 0;
+    }
+
+    console.error(`nixamp: no such opendir command: ${command}`);
+    return 64;
+  } catch (error) {
+    console.error(`nixamp: could not reach ${site}: ${(error as Error).message}`);
+    return 69;
+  }
+}

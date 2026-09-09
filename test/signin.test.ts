@@ -20,6 +20,8 @@ import {
 } from "../src/oauth.ts";
 import { BAD_KEY_LIMIT, callerOf, Guard, SIGN_IN_LIMIT } from "../src/guard.ts";
 import { createServer, EmptyEngine } from "../src/server.ts";
+import { anonymousHandle, cleanHandle, isReserved } from "../src/handles.ts";
+import { nameOfDir } from "../src/opendirs.ts";
 import { cleanName, cleanUrl, Servers } from "../src/servers.ts";
 import { hashSecret, mintToken, splitToken, Tokens } from "../src/tokens.ts";
 import {
@@ -998,4 +1000,44 @@ test("the server list is the account's, and nobody else's", async () => {
   assert.equal(await servers.remove("u2", added?.id ?? ""), false);
   assert.equal(await servers.remove("u1", added?.id ?? ""), true);
   assert.deepEqual(await servers.list("u1"), []);
+});
+
+// --- the name other people see ----------------------------------------------
+
+test("a handle is what a URL, a subdomain and a text message all tolerate", () => {
+  assert.equal(cleanHandle("chovy"), "chovy");
+  assert.equal(cleanHandle("  Chovy  "), "chovy", "case and space are not part of a name");
+  assert.equal(cleanHandle("bad-religion-82"), "bad-religion-82");
+
+  assert.equal(cleanHandle("a"), "", "one character is not a name");
+  assert.equal(cleanHandle("-chovy"), "", "a label cannot start with a hyphen");
+  assert.equal(cleanHandle("chovy-"), "");
+  assert.equal(cleanHandle("ch ovy"), "");
+  assert.equal(cleanHandle("chovy@home"), "");
+  // Doubled hyphens are how punycode marks an encoded label, so one here can
+  // collide with an internationalised domain.
+  assert.equal(cleanHandle("xn--foo"), "");
+  assert.equal(cleanHandle("x".repeat(31)), "");
+
+  // A subdomain carrying one of these would impersonate the service.
+  assert.equal(isReserved("www"), true);
+  assert.equal(isReserved("admin"), true);
+  assert.equal(isReserved("chovy"), false);
+});
+
+test("a default handle says nothing about the address behind it", () => {
+  const made = anonymousHandle((size) => new Uint8Array(size).fill(0xab));
+  assert.equal(made, "nixamp-abababab");
+  // The whole point: anthony@profullstack.com must never become "anthony",
+  // and it is a leak nobody notices until it is in a public listing.
+  assert.doesNotMatch(made, /anthony|profullstack/);
+});
+
+test("a folder is named after the folder, not after the URL", () => {
+  assert.equal(
+    nameOfDir("https://dev.profullstack.com/~anthony/done/BAD%20RELIGION/%5B1982%5D%20How%20Could%20Hell%20Be%20Any%20Worse/"),
+    "[1982] How Could Hell Be Any Worse",
+  );
+  assert.equal(nameOfDir("http://box.example:19499/"), "box.example:19499");
+  assert.equal(nameOfDir("not a url"), "an open directory");
 });
