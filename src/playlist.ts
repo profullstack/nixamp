@@ -132,6 +132,33 @@ export function loadPlaylist(tools: Tools, root: string, probeTags = true): Trac
     });
 }
 
+/**
+ * The same tags, read without holding the process still.
+ *
+ * `probe` is a spawnSync per file, so reading a library inside one async
+ * function never yields: the listening socket keeps accepting connections,
+ * the kernel completes their handshakes, and the process answers none of them
+ * until the last file is done. From outside that is indistinguishable from a
+ * firewall -- a connection that opens and then says nothing -- and on a library
+ * of any size it lasts minutes.
+ *
+ * One turn of the event loop per file fixes it. A request then waits for one
+ * ffprobe rather than for the whole library, and the tagging still finishes in
+ * about the time it did.
+ */
+export async function loadTagged(tools: Tools, source: string): Promise<Track[]> {
+  // A URL is one thing and is never probed; a playlist carries its own titles.
+  if (isRemote(source) || isPlaylistFile(source)) return loadSource(tools, source, true);
+
+  const paths = findAudio(source);
+  const tracks: Track[] = [];
+  for (const path of paths) {
+    tracks.push(probe(tools, path));
+    await new Promise<void>((done) => setImmediate(done));
+  }
+  return tracks;
+}
+
 export function displayName(track: Track): string {
   return track.artist ? `${track.artist} — ${track.title}` : track.title;
 }

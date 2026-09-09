@@ -76,7 +76,7 @@ import {
   type Tools, type Track,
 } from "./audio.ts";
 import { Analyser, bandEdges, bands, decay } from "./fft.ts";
-import { loadSource } from "./playlist.ts";
+import { loadSource, loadTagged } from "./playlist.ts";
 import {
   emptySnapshot, parseCommand,
   type Command, type RemoteTrack, type Snapshot,
@@ -2448,7 +2448,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // awaited: nothing downstream needs it, and a library that takes a minute to
   // read should cost nobody a minute of silence.
   if (tracks.length > 0 && !isRemote(root)) {
-    void loadSource(tools, root, true)
+    void loadTagged(tools, root)
       .then((tagged) => engine.retag(tagged, root))
       .catch(() => {
         // Filenames are a working player. A failure here is worth nothing but
