@@ -484,3 +484,48 @@ test("an https address for a bare IP is named as the problem it is", () => {
   assert.equal(needsAName("http://104.152.209.195:4321"), "");
   assert.equal(needsAName(""), "");
 });
+
+test("connecting asks the server you connected to whether you may administer it", () => {
+  // It never did. Whether the Admin panel appeared was decided by whatever
+  // host served the page at load time, which has nothing to do with the
+  // machine in front of you -- so re-streaming looked broken on any host that
+  // did not happen to answer yes.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const handler = app.slice(app.indexOf('dom.remoteForm.addEventListener("submit"'));
+  const body = handler.slice(0, handler.indexOf("\n  });"));
+  assert.match(body, /remote\.connect\(typed\);/);
+  assert.match(body, /void checkAdmin\(\);/);
+});
+
+test("an admin action says what it did somewhere that is not overwritten", () => {
+  // The status line beside it refreshes every two seconds with a listener
+  // count, so "Added 16 tracks" was replaced before it could be read -- which
+  // is what "re-streaming does not work" looked like when it had worked.
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  assert.match(html, /id="admin-said"/);
+
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // Every answer to an action goes through the helper, and none of them are
+  // written into the polled line.
+  assert.match(app, /function said\(message: string\): void/);
+  const restream = app.slice(app.indexOf('dom.adminRestream.addEventListener'));
+  const upTo = restream.slice(0, restream.indexOf("\n  });"));
+  assert.match(upTo, /said\(/);
+  assert.equal(/dom\.adminNote\.textContent/.test(upTo), false, "an action wrote to the polled status line");
+});
+
+test("full screen is offered for a film and not for a song", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  assert.match(html, /id="fullscreen"/);
+  // Hidden in the markup, because nothing is playing when the page opens.
+  assert.match(html, /id="fullscreen"[^>]*hidden/);
+
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // It appears and disappears with the picture, rather than sitting there
+  // greyed out over a song.
+  const show = app.slice(app.indexOf("function showVideo"));
+  assert.match(show.slice(0, 400), /dom\.fullscreen\.hidden = !on/);
+  // iOS Safari has no Fullscreen API on a video; webkitEnterFullscreen is the
+  // only way a video goes full screen on an iPhone at all.
+  assert.match(app, /webkitEnterFullscreen/);
+});
