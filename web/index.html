@@ -86,7 +86,7 @@
           <p class="hint"><a href="/" id="directory-back" hidden>Back to the player</a></p>
         </section>
 
-        <section class="panel player-only" data-title="Account">
+        <section class="panel player-only" data-title="Account" id="account-panel">
           <p class="hint" id="account-note">Sign in to nixamp.com to publish and get paid.</p>
           <div id="account-providers" class="picker" hidden></div>
           <form id="account-form" class="picker">
@@ -99,6 +99,11 @@
             <button id="account-signout" type="button" class="ghost" hidden>Sign out</button>
           </form>
         </section>
+
+        <p class="hint player-only" id="account-elsewhere" hidden>
+          This nixamp keeps no accounts &mdash; it is somebody's own machine.
+          Accounts live at <a href="https://nixamp.com">nixamp.com</a>.
+        </p>
 
         <section class="panel player-only" data-title="Notifications" id="notify-panel" hidden>
           <p class="hint" id="notify-note">Get told when someone you follow goes live.</p>
@@ -144,7 +149,7 @@
 
           <label class="check">
             <input id="listen-here" type="checkbox" />
-            Listen on this device
+            Play on this device
           </label>
           <p class="hint">Status: <span id="remote-state" data-status="idle">not connected</span></p>
         </section>

@@ -28,6 +28,7 @@ import { Channels, cleanId } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
 import { DeviceGrants } from "./device.ts";
+import { BAD_KEY_LIMIT, callerOf, Guard, SIGN_IN_LIMIT } from "./guard.ts";
 import {
   deviceDonePage,
   devicePage,
@@ -708,6 +709,13 @@ export interface HandlerOptions {
   signIn?: SignIn;
   /** True when this instance is reached over https, for the cookie's Secure. */
   secureCookies?: boolean;
+  /**
+   * True when a proxy sits in front, so `x-forwarded-for` names the caller.
+   * False everywhere else on purpose: the header is trivially forged, and
+   * believing it from a direct caller hands them a fresh identity per request
+   * and with it an unlimited number of password attempts.
+   */
+  behindProxy?: boolean;
   /** Who may administer this server. */
   owner?: Owner;
   /**
@@ -730,6 +738,9 @@ export interface HandlerOptions {
  * drive it with a real socket and no ffmpeg in sight.
  */
 export function createHandler(engine: Engine, options: HandlerOptions) {
+  // One per server, so the counters survive between requests and die with it.
+  const guard = new Guard();
+
   const tracker = options.connections ?? new Connections();
   const started = Date.now();
 
@@ -757,6 +768,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     const url = new URL(request.url ?? "/", "http://localhost");
     const path = url.pathname;
     const key = options.key ?? null;
+    const behindProxy = options.behindProxy ?? false;
     const listenKey = options.listenKey ?? null;
 
     if (request.method === "OPTIONS") {
@@ -1004,6 +1016,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     ) {
       const scope = scopeOf(keyFrom(request, url), key, listenKey);
       if (scope === null) {
+        // Counted, not because a 128-bit key falls to guessing, but because
+        // somebody hammering one should stop costing this server anything.
+        const who = callerOf(request.headers, request.socket.remoteAddress, behindProxy);
+        const verdict = guard.check(`key:${who}`, BAD_KEY_LIMIT);
+        if (!verdict.ok) {
+          response.writeHead(429, { ...CORS, "content-type": "application/json; charset=utf-8", "retry-after": String(verdict.retryAfter) });
+          response.end(JSON.stringify({ error: "too many attempts; wait a moment" }));
+          return;
+        }
         json(response, 401, { error: "this nixamp needs the key from its share link" });
         return;
       }
@@ -1224,9 +1245,33 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
 
+      // A password is the one secret here small enough to guess, so the
+      // attempts are counted per caller and per address being tried: one
+      // machine working through a word list and a thousand machines trying one
+      // address are the same attack, and each is stopped by its own counter.
+      const who = callerOf(request.headers, request.socket.remoteAddress, behindProxy);
+      const target = typeof body.email === "string" ? body.email.toLowerCase().slice(0, 200) : "";
+      const buckets = [`signin:${who}`, `signin:${target}`];
+      for (const bucket of buckets) {
+        const verdict = guard.check(bucket, SIGN_IN_LIMIT);
+        if (!verdict.ok) {
+          response.writeHead(429, {
+            ...CORS,
+            "content-type": "application/json; charset=utf-8",
+            "retry-after": String(verdict.retryAfter),
+          });
+          response.end(JSON.stringify({ error: "too many attempts; try again later" }));
+          return;
+        }
+      }
+
       const result = signingUp
         ? await accounts.signUp(body.email, body.password)
         : await accounts.signIn(body.email, body.password);
+
+      // Getting it right costs nothing: the counters only exist to stop people
+      // who keep getting it wrong.
+      if (result.ok) for (const bucket of buckets) guard.forget(bucket);
 
       if (!result.ok) {
         // 409 for an address that is taken, 401 for credentials that are not.
@@ -2360,6 +2405,11 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
             secret: process.env["NIXAMP_JWT_SECRET"] ?? "",
           }),
           secureCookies: (process.env["NIXAMP_SITE"] ?? "").startsWith("https://"),
+          // A deployment reached over https is one behind somebody's proxy, so
+          // the socket address is that proxy and the forwarded header is the
+          // caller. A nixamp on a laptop is reached directly and must not
+          // believe a header anybody can send.
+          behindProxy: (process.env["NIXAMP_SITE"] ?? "").startsWith("https://"),
           // Whichever providers this deployment was given both halves of, plus
           // the device grant, which is worth having even with no provider at
           // all: a browser already signed in can approve a terminal.
