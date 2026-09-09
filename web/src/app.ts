@@ -89,6 +89,8 @@ export function start(): void {
     adminRestream: need<HTMLFormElement>("admin-restream"),
     adminReplace: need<HTMLInputElement>("admin-replace"),
     adminSource: need<HTMLInputElement>("admin-source"),
+    homeNote: need<HTMLParagraphElement>("home-note"),
+    loadHome: need<HTMLButtonElement>("load-home"),
     directory: need<HTMLElement>("directory"),
     recentNote: need<HTMLParagraphElement>("recent-note"),
     recentList: need<HTMLUListElement>("recent-list"),
@@ -975,6 +977,8 @@ export function start(): void {
         active?: number;
         publish?: { id: string; url: string }[];
         channels?: { id: string }[];
+        home?: string;
+        root?: string;
       };
       // Said in full, because "0 listening now" over a table with rows in it
       // reads as a contradiction. Only media and live connections are
@@ -988,6 +992,7 @@ export function start(): void {
         : `${listening} listening now, and ${others} with the page open.`;
       drawConnections(body.connections ?? []);
       drawPublish(body.publish ?? [], (body.channels ?? []).map((one) => one.id));
+      drawHome(body.home ?? "", body.root ?? "");
       void loadOnAir();
     } catch {
       dom.adminNote.textContent = "lost touch with the server";
@@ -2010,6 +2015,55 @@ export function start(): void {
     }
     return item;
   }
+
+  /**
+   * The way back to a server's own files.
+   *
+   * Replacing the playlist with a stream leaves nothing pointing at the
+   * library the server was started on -- and its address is a path on a
+   * machine you may never have logged into, so there was no way back short of
+   * restarting the daemon. It is one button, and it adds rather than replaces,
+   * so whatever you were watching stays where it is.
+   */
+  let home = "";
+  function drawHome(source: string, currentRoot: string): void {
+    home = source;
+    const loaded = source !== "" && currentRoot === source;
+    dom.loadHome.hidden = source === "";
+    dom.homeNote.hidden = source === "";
+    if (source === "") return;
+    dom.homeNote.textContent = loaded
+      ? `This server's own files: ${source}`
+      : `This server's own files are ${source}, and are not in the playlist.`;
+    dom.loadHome.disabled = false;
+  }
+
+  dom.loadHome.addEventListener("click", () => {
+    if (home === "") return;
+    dom.loadHome.disabled = true;
+    said("Reading this server's files…");
+    void (async () => {
+      try {
+        const answer = await fetch(remote.url("/api/source"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          // Added, never replaced: you asked for the library back, not for
+          // whatever you were watching to be thrown away.
+          body: JSON.stringify({ source: home }),
+        });
+        const body = (await answer.json()) as { error?: string; added?: number };
+        said(!answer.ok
+          ? (body.error ?? "that did not work")
+          : body.added === 0
+            ? "This server's files are already in the playlist."
+            : `Loaded ${body.added ?? 0} of this server's own files.`);
+      } catch {
+        said("could not reach the server");
+      } finally {
+        dom.loadHome.disabled = false;
+      }
+    })();
+  });
 
   const setLive = async (on: boolean): Promise<void> => {
     dom.goLive.disabled = true;
