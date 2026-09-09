@@ -61,6 +61,7 @@ import {
   keyCookie,
   keyFrom,
   keysMatch,
+  lookupPublicIp,
   newKey,
   portCommands,
   reachableAddresses,
@@ -129,6 +130,12 @@ export interface ServeOptions {
    */
   publicUrl: string;
   /**
+   * Ask an outside service what this machine's public address is, when no
+   * interface holds one and none was given. Behind NAT that is the only way to
+   * learn it, and it is one short request at startup.
+   */
+  lookup: boolean;
+  /**
    * Charge for listening once the stream is busy. Off unless asked for, and
    * useless without somewhere to pay: see NIXAMP_PAY_TO.
    */
@@ -178,6 +185,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     publish: "ask",
     name: "",
     publicUrl: process.env["NIXAMP_PUBLIC_URL"] ?? "",
+    lookup: true,
     x402: false,
     owner: "",
     ingest: false,
@@ -226,6 +234,8 @@ export function parseServeArgs(argv: string[]): ServeOptions {
         throw new Error("nixamp serve: --public-url must be a URL, e.g. https://nixamp.example.com");
       }
       options.publicUrl = given.replace(/\/+$/, "");
+    } else if (arg === "--no-lookup") {
+      options.lookup = false;
     } else if (arg === "--name") {
       options.name = value();
     } else if (arg === "--owner") {
@@ -2392,7 +2402,19 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 
   // The link, not the address. Without the key the address is a 401, so
   // printing a bare host:port would be printing something that does not work.
-  const addresses = reachableAddresses(options.host, port, options.publicUrl);
+  //
+  // Behind NAT no interface holds the public address, so if nobody said what it
+  // is and nothing local looks public, ask. What comes back is a fact about the
+  // router and not about this port -- the port still has to be forwarded -- so
+  // it is marked as a guess and everything that prints it says so.
+  const localAddresses = reachableAddresses(options.host, port, options.publicUrl);
+  const guessedPublic =
+    options.lookup && !options.publicUrl && !localAddresses.some((a) => a.label === "on the internet")
+      ? await lookupPublicIp()
+      : "";
+  const addresses = guessedPublic
+    ? reachableAddresses(options.host, port, `http://${guessedPublic.includes(":") ? `[${guessedPublic}]` : guessedPublic}:${port}`)
+    : localAddresses;
 
   // Listening on every interface proves the socket is open here and nothing
   // about the path between here and the phone.
@@ -2416,6 +2438,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         source: root,
         urls: addresses,
         firewall,
+        guessedPublic: guessedPublic !== "",
       }),
     );
   }
@@ -2439,6 +2462,12 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const width = Math.max(...addresses.map((a) => a.label.length));
   for (const { label, url } of addresses) {
     console.log(`  ${label.padEnd(width)}  ${shareLink(url, key)}`);
+  }
+
+  if (guessedPublic) {
+    console.log("");
+    console.log(`  That internet address is this machine's router, not this port.`);
+    console.log(`  Nothing outside reaches it until ${port} is forwarded here.`);
   }
 
   console.log("");
