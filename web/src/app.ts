@@ -200,8 +200,13 @@ export function start(): void {
     if (!track) return;
     await player.load({
       title: track.title, artist: track.artist, album: track.album,
-      duration: track.duration, url: remote.media(next), video: false, objectUrl: false,
+      duration: track.duration, url: remote.media(next),
+      // It was false for everything, so a film played its soundtrack over a
+      // blank panel. The server says which tracks have a picture.
+      video: track.video === true,
+      objectUrl: false,
     }, true);
+    showVideo(track.video === true);
     updateMediaSession();
   }
 

@@ -13,6 +13,14 @@ export interface RemoteTrack {
   album: string;
   /** Seconds; 0 when ffprobe could not tell us. */
   duration: number;
+  /**
+   * Whether this is a film rather than a song.
+   *
+   * The server knows, because it has the path; a remote had been guessing, and
+   * guessing wrong -- every remote track went to the audio element, so a video
+   * a browser could show played its soundtrack over a blank panel.
+   */
+  video?: boolean;
 }
 
 /** Everything a remote needs to draw the player. */

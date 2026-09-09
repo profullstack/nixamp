@@ -5,6 +5,8 @@
  */
 import { isVideoFile, titleFromFilename } from "./format.ts";
 
+import { attachSource, detectKind, type AttachedSource } from "@profullstack/player";
+
 export interface LocalTrack {
   title: string;
   artist: string;
@@ -82,7 +84,15 @@ export interface PlayerHandlers {
 /** How many analyser bins we ask for. 2048 samples, as in the terminal app. */
 export const FFT_SIZE = 2048;
 
+/** Audio, or something with a picture. */
+function isAudio(kind: string): boolean {
+  return kind === "audio";
+}
+
 export class BrowserPlayer {
+  /** The engine currently feeding the element, if any. */
+  private attached: AttachedSource | null = null;
+
   private context: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private readonly wired = new WeakSet<HTMLMediaElement>();
@@ -184,16 +194,49 @@ export class BrowserPlayer {
     return [Math.min(1, mean * 2.2), Math.min(1, mean * 2.2)];
   }
 
+  /**
+   * Point an element at a track.
+   *
+   * The bytes are handed to @profullstack/player rather than assigned to
+   * `.src`, which is the difference between playing an MP4 and playing every
+   * source the fleet serves: it picks the engine, so an HLS playlist or a
+   * transport stream works here without this file knowing what either is. Its
+   * control bar is not used -- nixamp has one -- only the delivery half.
+   *
+   * The attach is awaited before play, because it is asynchronous and calling
+   * play in the same commit fails permanently rather than loudly.
+   */
   async load(track: LocalTrack, autoplay: boolean): Promise<void> {
-    const wanted = track.video ? this.elements.video : this.elements.audio;
+    // A picked file is a blob URL with nothing to read a kind from, so the
+    // flag the file itself carried decides; a remote track has a real URL and
+    // the package can tell.
+    const kind = track.objectUrl ? (track.video ? "mp4" : "audio") : detectKind({ src: track.url });
+    const wanted = track.video || !isAudio(kind) ? this.elements.video : this.elements.audio;
     if (wanted !== this.active) {
       this.active.pause();
       this.active.removeAttribute("src");
       this.active.load();
       this.active = wanted;
     }
-    this.active.src = track.url;
-    this.active.load();
+
+    this.attached?.destroy();
+    this.attached = null;
+    try {
+      this.attached = await attachSource(this.active, {
+        src: track.url,
+        kind,
+        // A film the browser has no decoder for is the ordinary case in a
+        // library of downloads, and silence is the worst way to say so.
+        unplayableAdvice: "VLC or mpv will play it; nixamp can only hand it to your browser.",
+        onError: (message) => this.handlers.onError(message),
+        onNotice: (message) => {
+          if (message) this.handlers.onError(message);
+        },
+      });
+    } catch (error) {
+      this.handlers.onError(error instanceof Error ? error.message : "that would not play");
+      return;
+    }
     if (autoplay) await this.play();
   }
 
@@ -213,6 +256,10 @@ export class BrowserPlayer {
   stop(): void {
     this.active.pause();
     this.active.currentTime = 0;
+    // The engine goes with it: an HLS or transport stream left attached keeps
+    // pulling segments long after somebody has stopped listening.
+    this.attached?.destroy();
+    this.attached = null;
   }
 
   seek(seconds: number): void {

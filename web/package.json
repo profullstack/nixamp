@@ -1,6 +1,6 @@
 {
   "name": "@nixamp/web",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "private": true,
   "description": "The nixamp PWA: a browser player, and a remote for nixamp serve.",
   "license": "MIT",
@@ -16,5 +16,8 @@
     "@types/node": "^26",
     "typescript": "^7.0.2",
     "vite": "^8.2.2"
+  },
+  "dependencies": {
+    "@profullstack/player": "^0.7.0"
   }
 }

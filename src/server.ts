@@ -391,7 +391,19 @@ export function toRemoteTracks(tracks: Track[]): RemoteTrack[] {
     artist: t.artist,
     album: t.album,
     duration: t.duration,
+    // Said out loud, because a remote cannot see the path and had been sending
+    // every track to the audio element -- a film's soundtrack over a blank
+    // panel, which is exactly what it looked like.
+    ...(hasPicture(t.path) ? { video: true } : {}),
   }));
+}
+
+/** Video containers, as opposed to the songs that are most of a library. */
+const PICTURE = new Set([".mp4", ".mkv", ".avi", ".mov", ".m4v", ".webm", ".mpg", ".mpeg", ".wmv", ".flv"]);
+
+export function hasPicture(path: string): boolean {
+  const dot = path.lastIndexOf(".");
+  return dot > 0 && PICTURE.has(path.slice(dot).toLowerCase());
 }
 
 /**

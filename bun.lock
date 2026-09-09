@@ -20,7 +20,7 @@
     },
     "desktop": {
       "name": "@nixamp/desktop",
-      "version": "0.3.0",
+      "version": "0.5.8",
       "devDependencies": {
         "electron": "^44.2.0",
         "electron-builder": "^26.15.3",
@@ -28,7 +28,10 @@
     },
     "web": {
       "name": "@nixamp/web",
-      "version": "0.3.0",
+      "version": "0.5.8",
+      "dependencies": {
+        "@profullstack/player": "^0.7.0",
+      },
       "devDependencies": {
         "@types/node": "^26",
         "typescript": "^7.0.2",
@@ -85,6 +88,8 @@
     "@profullstack/auth-system": ["@profullstack/auth-system@0.6.0", "", { "dependencies": { "bcryptjs": "^2.4.3", "jsonwebtoken": "^9.0.2", "uuid": "^11.1.0" }, "optionalDependencies": { "@supabase/supabase-js": "^2.49.4", "mongodb": "^6.5.0", "mysql2": "^3.9.2", "pg": "^8.11.3", "pocketbase": "^0.21.1" } }, "sha512-3vzsWMbhQJqbxAAaC7YTbG8d33ypD2YAIk7ZF3vP0A/Rw/uwqcFTMm3SKuHfWj5q1fmi8MXDdIiu2gxM5VUW/g=="],
 
     "@profullstack/hqtui": ["@profullstack/hqtui@0.3.0", "", { "bin": { "hqtui": "bin/hqtui.mjs" } }, "sha512-ceiLIarditlryaHqYW1V2VCkF7mlV+u9LJoNB3zEW6FSnRzvugjgLkju4qEsWZSkojeE+lEir5W6nxtuuGzmXw=="],
+
+    "@profullstack/player": ["@profullstack/player@0.7.0", "", { "dependencies": { "hls.js": "^1.7.1", "mpegts.js": "^1.8.2" }, "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-DmshIcHTrWVl0A2p4DpuV7kI5hXPdaSL7zHesJVszA93cGyucaYppvvRm8S1eCC7GgyA8X0iRFKFdcF0P3LUrw=="],
 
     "@profullstack/x402-gateway": ["@profullstack/x402-gateway@0.4.0", "", {}, "sha512-Rk3dtpwgi5rOIcHvsRqv7XvbT8rEHyhN/d3zdtsPe8zQfhhYWEjuFuvd/2bIWoWZ6fILQRQOCbejOe2VCRlsNg=="],
 
@@ -356,9 +361,13 @@
 
     "es6-error": ["es6-error@4.1.1", "", {}, "sha512-Um/+FxMr9CISWh0bi5Zv0iOD+4cFh5qLeks1qhAopKVAJw3drgKbKySikp7wGhDL0HPeaja0P5ULZrxLkniUVg=="],
 
+    "es6-promise": ["es6-promise@4.2.8", "", {}, "sha512-HJDGx5daxeIvxdBxvG2cb9g4tEvwIk3i8+nhX0yGrYmZUzbkdg8QbDevheDB8gd0//uPj4c1EQua8Q+MViT0/w=="],
+
     "escalade": ["escalade@3.2.0", "", {}, "sha512-WUj2qlxaQtO4g6Pq5c29GTcWGDyd8itL8zTlipgECz3JesAiiOKotd8JU6otB3PACgG6xkJUyVhboMS+bje/jA=="],
 
     "escape-string-regexp": ["escape-string-regexp@4.0.0", "", {}, "sha512-TtpcNJ3XAzx3Gq8sWRzJaVajRs0uVxA2YAkdb1jm2YkPz4G6egUFAyA3n5vtEIZefPk5Wa4UXbKuS5fKkJWdgA=="],
+
+    "events": ["events@3.3.0", "", {}, "sha512-mQw+2fkQbALzQ7V0MY0IqdnXNOeTtP4r0lN9z7AAawCXgqea7bDii20AYrIBrFd/Hx0M2Ocz6S111CaFkUcb0Q=="],
 
     "exponential-backoff": ["exponential-backoff@3.1.3", "", {}, "sha512-ZgEeZXj30q+I0EN+CbSSpIyPaJ5HVQD18Z1m+u1FXbAeT94mr1zw50q4q6jiiC447Nl/YTcIYSAftiGqetwXCA=="],
 
@@ -411,6 +420,8 @@
     "has-tostringtag": ["has-tostringtag@1.0.2", "", { "dependencies": { "has-symbols": "^1.0.3" } }, "sha512-NqADB8VjPFLM2V0VvHUewwwsw0ZWBaIdgo+ieHtK3hasLz4qeCRjYcqfB6AQrBggRKppKF8L52/VqdVsO47Dlw=="],
 
     "hasown": ["hasown@2.0.4", "", { "dependencies": { "function-bind": "^1.1.2" } }, "sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A=="],
+
+    "hls.js": ["hls.js@1.7.2", "", {}, "sha512-CW/pPvSOFIRsosbwxrYaE9ERmpTo5fbTqL7wCvuCFlqW1Bmb1K5fXsY7yiH95rmlr4rVuA7UXHbM/cIXQ6AXwg=="],
 
     "hosted-git-info": ["hosted-git-info@4.1.0", "", { "dependencies": { "lru-cache": "^6.0.0" } }, "sha512-kyCuEOWjJqZuDbRHzL8V93NzQhwIB71oFWSyzVo+KPZI+pnQPPxucdkrOZvkLRnrf5URsQM+IJ09Dw29cRALIA=="],
 
@@ -545,6 +556,8 @@
     "mongodb": ["mongodb@6.21.0", "", { "dependencies": { "@mongodb-js/saslprep": "^1.3.0", "bson": "^6.10.4", "mongodb-connection-string-url": "^3.0.2" }, "peerDependencies": { "@aws-sdk/credential-providers": "^3.188.0", "@mongodb-js/zstd": "^1.1.0 || ^2.0.0", "gcp-metadata": "^5.2.0", "kerberos": "^2.0.1", "mongodb-client-encryption": ">=6.0.0 <7", "snappy": "^7.3.2", "socks": "^2.7.1" }, "optionalPeers": ["@aws-sdk/credential-providers", "@mongodb-js/zstd", "gcp-metadata", "kerberos", "mongodb-client-encryption", "snappy", "socks"] }, "sha512-URyb/VXMjJ4da46OeSXg+puO39XH9DeQpWCslifrRn9JWugy0D+DvvBvkm2WxmHe61O/H19JM66p1z7RHVkZ6A=="],
 
     "mongodb-connection-string-url": ["mongodb-connection-string-url@3.0.2", "", { "dependencies": { "@types/whatwg-url": "^11.0.2", "whatwg-url": "^14.1.0 || ^13.0.0" } }, "sha512-rMO7CGo/9BFwyZABcKAWL8UJwH/Kc2x0g72uhDWzG48URRax5TCIcJ7Rc3RZqffZzO/Gwff/jyKwCU9TN8gehA=="],
+
+    "mpegts.js": ["mpegts.js@1.8.2", "", { "dependencies": { "es6-promise": "^4.2.8", "events": "^3.3.0" } }, "sha512-cZYMa5muASH55wrS6JK5IGkUqnCA96c0f+WdnW91jIK9s/N6NzjmTQDJNYg9A5u/G2Q5nj2b3w1Zwzze/9guxA=="],
 
     "ms": ["ms@2.1.3", "", {}, "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="],
 
