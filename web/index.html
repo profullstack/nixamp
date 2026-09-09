@@ -96,8 +96,10 @@
                    placeholder="password" aria-label="Password" />
             <button type="submit" class="button" id="account-submit">Sign in</button>
             <button id="account-toggle" type="button" class="ghost">Create one</button>
-            <button id="account-signout" type="button" class="ghost" hidden>Sign out</button>
           </form>
+          <!-- Outside the form, because signing out is the one thing you can do
+               once the form is gone. -->
+          <button id="account-signout" type="button" class="ghost" hidden>Sign out</button>
         </section>
 
         <p class="hint player-only" id="account-elsewhere" hidden>
@@ -137,10 +139,14 @@
           <p class="hint" id="admin-note">Checking…</p>
           <table class="admin-table" id="admin-connections"></table>
           <form id="admin-restream" class="picker">
-            <input id="admin-source" type="text" placeholder="a URL or a path to re-stream"
-                   aria-label="Source to re-stream" />
-            <button type="submit" class="button">Re-stream</button>
+            <input id="admin-source" type="text" placeholder="a folder, an album URL, a file"
+                   aria-label="Something to add to the playlist" />
+            <button type="submit" class="button">Add</button>
           </form>
+          <label class="check">
+            <input id="admin-replace" type="checkbox" />
+            Replace the playlist instead of adding to it
+          </label>
         </section>
 
         <section class="panel player-only" data-title="Remote">
@@ -153,9 +159,13 @@
           </form>
 
           <label class="check">
-            <input id="listen-here" type="checkbox" />
+            <input id="listen-here" type="checkbox" checked />
             Play on this device
           </label>
+          <p class="hint">
+            Off means the server plays through its own speakers and this is only a
+            remote control for it.
+          </p>
           <p class="hint">Status: <span id="remote-state" data-status="idle">not connected</span></p>
         </section>
       </div>

@@ -354,8 +354,14 @@ anywhere else with `--url` and `--key`.
 ╰───────────────────────────────────────────────────────────────────────╯
 ```
 
-Press `r` to re-stream: hand the running server a different URL or path and the
-listeners stay connected while what they are hearing changes under them.
+Press `a` to add: hand the running server a folder, an album URL or a file and
+it joins the playlist under its own heading, with the library still there and
+the listeners still connected. Press `r` to replace instead, which is the
+bigger thing — this server now serves that, and the library it had is gone
+until you restart it.
+
+An added block can be taken back out from the playlist itself: its heading
+carries an `×`.
 
 ## How it works
 

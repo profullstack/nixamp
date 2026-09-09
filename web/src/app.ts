@@ -13,7 +13,7 @@ import {
 } from "./player.ts";
 import {
   blockedAsMixedContent,
-  RemoteClient, fetchSnapshot, normalizeBase, probeServer,
+  RemoteClient, fetchSnapshot, probeServer, refusesUs, splitShareLink,
   rungName, stepDown,
   type Status,
 } from "./remote.ts";
@@ -23,6 +23,17 @@ import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../sr
 export const BAND_COUNT = 24;
 const REMOTE_KEY = "nixamp.remote";
 const VOLUME_KEY = "nixamp.volume";
+/**
+ * Whether a connected server plays here or plays over there.
+ *
+ * On by default, which it was not: connecting a phone to your own server used
+ * to make sound come out of the server's speakers and nothing at all out of
+ * the phone, so picking your server from the directory looked like a player
+ * that was simply broken. Playing here is what a person means by opening a
+ * player; driving the machine in the other room is the specialised thing, and
+ * it is one tick away.
+ */
+const LISTEN_HERE_KEY = "nixamp.listenHere";
 
 type Mode = "local" | "remote";
 
@@ -71,6 +82,7 @@ export function start(): void {
     adminNote: need<HTMLParagraphElement>("admin-note"),
     adminConnections: need<HTMLTableElement>("admin-connections"),
     adminRestream: need<HTMLFormElement>("admin-restream"),
+    adminReplace: need<HTMLInputElement>("admin-replace"),
     adminSource: need<HTMLInputElement>("admin-source"),
     directory: need<HTMLElement>("directory"),
     recentNote: need<HTMLParagraphElement>("recent-note"),
@@ -116,6 +128,18 @@ export function start(): void {
    */
   let rung = 0;
   let stalls = 0;
+  /**
+   * Which track this device is playing off a remote, or -1 for "the server's".
+   *
+   * Watching something yourself does not move the server's cursor -- that is
+   * deliberate, because a viewer picking a film must not change what the room
+   * is hearing. But every read of "the current track" went to the server's
+   * index anyway, so picking one loaded it and then the next frame put the
+   * title, the highlight and the length back on the server's choice. The
+   * track ended and `next` stepped from the server's cursor, which is why the
+   * same video played however many times you clicked another.
+   */
+  let watching = -1;
 
   let bars: number[] = new Array<number>(BAND_COUNT).fill(0);
   let peaks: number[] = new Array<number>(BAND_COUNT).fill(0);
@@ -163,24 +187,30 @@ export function start(): void {
   // ---- playlist, whichever source is in charge -----------------------------
 
   const count = (): number => (mode === "remote" ? snapshot.tracks.length : local.length);
-  const at = (): number => (mode === "remote" ? snapshot.index : index);
+  /**
+   * The track the player is on, from whichever cursor is actually in charge.
+   *
+   * Connected but playing here, that is our own; connected and letting the
+   * server play, it is the server's; not connected at all, the local one.
+   */
+  const at = (): number => {
+    if (mode !== "remote") return index;
+    if (remoteDrives() || watching < 0) return snapshot.index;
+    return Math.min(watching, Math.max(0, snapshot.tracks.length - 1));
+  };
 
   const currentName = (): string => {
-    if (mode === "remote") {
-      const track = snapshot.tracks[snapshot.index];
-      return track ? displayName(track) : "Nothing loaded.";
-    }
-    const track = local[index];
+    const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
     return track ? displayName(track) : "Nothing loaded.";
   };
 
   const currentAlbum = (): string => {
-    const track = mode === "remote" ? snapshot.tracks[snapshot.index] : local[index];
+    const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
     return track?.album || "—";
   };
 
   const duration = (): number => {
-    if (remoteDrives()) return snapshot.tracks[snapshot.index]?.duration ?? 0;
+    if (remoteDrives()) return snapshot.tracks[at()]?.duration ?? 0;
     return player.duration;
   };
 
@@ -241,6 +271,9 @@ export function start(): void {
   async function listenTo(next: number): Promise<void> {
     const track = snapshot.tracks[next];
     if (!track) return;
+    // Ours, not the server's: this is the one place that decides what this
+    // device is playing, so it is the one place that records it.
+    watching = next;
     await player.load({
       title: track.title, artist: track.artist, album: track.album,
       duration: track.duration, url: remote.media(next, rung),
@@ -337,15 +370,31 @@ export function start(): void {
   }
 
   let renderedFor = "";
+  /** The row the list was last scrolled to, so it is only done when it moves. */
+  let scrolledTo = -1;
   function renderPlaylist(): void {
-    const names = mode === "remote"
-      ? snapshot.tracks.map((t) => [displayName(t), t.duration] as const)
-      : local.map((t) => [displayName(t), t.duration] as const);
+    // A row is a name, a length, and which pile it is in. The pile is why this
+    // list is not one flat run any more: a server with an album added to it
+    // has the album's tracks on the end, and without a heading over them
+    // nobody could tell whose files they were about to play.
+    const rows = mode === "remote"
+      ? snapshot.tracks.map((t) => ({ name: displayName(t), seconds: t.duration, group: t.group ?? "" }))
+      : local.map((t) => ({ name: displayName(t), seconds: t.duration, group: "" }));
     // Durations are part of the key: a picked file learns its own length late.
-    const key = `${mode}:${names.map(([n, d]) => `${n}@${d}`).join("|")}`;
+    const key = `${mode}:${rows.map((r) => `${r.name}@${r.seconds}@${r.group}`).join("|")}`;
     if (key !== renderedFor) {
       renderedFor = key;
-      dom.playlist.replaceChildren(...names.map(([name, seconds], i) => {
+      const children: HTMLElement[] = [];
+      let heading = "";
+      // Only worth a heading over the library itself if something else is
+      // here too; on an ordinary server every track is the library and a
+      // heading saying so is noise.
+      const grouped = rows.some((row) => row.group !== "");
+      rows.forEach((row, i) => {
+        if (row.group !== heading && (grouped || row.group !== "")) {
+          heading = row.group;
+          children.push(groupHeading(row.group));
+        }
         const item = document.createElement("li");
         item.className = "row";
         item.dataset.index = String(i);
@@ -354,23 +403,86 @@ export function start(): void {
         n.textContent = String(i + 1).padStart(2, " ");
         const label = document.createElement("span");
         label.className = "name";
-        label.textContent = name;
+        label.textContent = row.name;
         const time = document.createElement("span");
         time.className = "time";
-        time.textContent = seconds > 0 ? formatTime(seconds) : "--:--";
+        time.textContent = row.seconds > 0 ? formatTime(row.seconds) : "--:--";
         item.append(n, label, time);
-        return item;
-      }));
+        children.push(item);
+      });
+      dom.playlist.replaceChildren(...children);
     }
     const active = at();
     const live = playing();
-    Array.from(dom.playlist.children).forEach((child, i) => {
+    let selected: HTMLElement | undefined;
+    for (const child of Array.from(dom.playlist.children)) {
       const row = child as HTMLElement;
-      row.classList.toggle("selected", i === active);
-      row.classList.toggle("playing", i === active && live);
-    });
-    const selected = dom.playlist.children[active] as HTMLElement | undefined;
-    selected?.scrollIntoView({ block: "nearest" });
+      // By the index it carries, not by where it sits: headings are rows in
+      // the list too, and counting them as tracks lit up the wrong one.
+      const index = Number(row.dataset.index);
+      const isActive = Number.isInteger(index) && index === active;
+      row.classList.toggle("selected", isActive);
+      row.classList.toggle("playing", isActive && live);
+      if (isActive) selected = row;
+    }
+
+    // Only when the track actually changed.
+    //
+    // This used to run on every draw, and a draw happens twelve times a
+    // second, so the list dragged itself back to the playing row a moment
+    // after any attempt to scroll away from it. Scrolling up through a
+    // playlist was impossible -- it read as the list scrolling forever on its
+    // own -- and the fix is not to scroll when there is no news.
+    if (active !== scrolledTo) {
+      scrolledTo = active;
+      selected?.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  /**
+   * The heading over a block of the playlist.
+   *
+   * An empty name is the library -- what this server was started on -- and it
+   * cannot be removed from here, because removing it is not a playlist edit;
+   * it is what the command line is for.
+   */
+  function groupHeading(group: string): HTMLElement {
+    const item = document.createElement("li");
+    item.className = "group";
+    const label = document.createElement("span");
+    label.className = "group-name";
+    label.textContent = group === "" ? "This server's library" : group;
+    item.append(label);
+    if (group !== "" && !dom.adminPanel.hidden) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "group-remove";
+      remove.textContent = "×";
+      remove.title = `Remove ${group} from the playlist`;
+      remove.setAttribute("aria-label", `Remove ${group} from the playlist`);
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void removeGroup(group);
+      });
+      item.append(remove);
+    }
+    return item;
+  }
+
+  async function removeGroup(group: string): Promise<void> {
+    try {
+      const answer = await fetch(remote.url("/api/source/remove"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ group }),
+      });
+      const body = (await answer.json()) as { error?: string; removed?: number };
+      dom.adminNote.textContent = answer.ok
+        ? `Removed ${body.removed ?? 0} tracks from ${group}.`
+        : (body.error ?? "that did not work");
+    } catch {
+      dom.adminNote.textContent = "could not reach the server";
+    }
   }
 
   function frame(): void {
@@ -481,7 +593,14 @@ export function start(): void {
 
   dom.remoteForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    const base = normalizeBase(dom.remoteUrl.value);
+    const typed = dom.remoteUrl.value;
+    // What people paste is a share link: an address with a key on the end of
+    // it. Taken whole it is not an address -- there is no /s/KEY/api/health,
+    // and asking for one gets a 404 that reads as "no nixamp answered there",
+    // which is how connecting to your own server failed while the server was
+    // healthy the entire time. The directory's Listen button hands this the
+    // same shape, so it failed the same way.
+    const { base, key } = splitShareLink(typed);
     if (base === "") {
       note = "That is not an address.";
       draw();
@@ -501,7 +620,9 @@ export function start(): void {
         draw();
         return;
       }
-      const version = await probeServer(base);
+      // With the key, because a keyed server answers 401 to everything without
+      // it -- including the health check that decides whether to go on.
+      const version = await probeServer(base, undefined, key);
       if (version === null) {
         remoteStatus = "error";
         remoteDetail = "no nixamp answered there";
@@ -509,10 +630,26 @@ export function start(): void {
         draw();
         return;
       }
+      // Health answers to anybody -- it is how you check a port is open -- so
+      // it says nothing about whether we may drive this server. Asked properly
+      // before connecting, because the event stream cannot report a 401: it
+      // just retries, and the page said "reconnecting..." forever about a
+      // server that had already made up its mind.
+      const refusal = await refusesUs(base, key);
+      if (refusal) {
+        remoteStatus = "error";
+        remoteDetail = refusal;
+        note = refusal;
+        mode = "local";
+        draw();
+        return;
+      }
       mode = "remote";
       note = "";
-      try { localStorage.setItem(REMOTE_KEY, base); } catch { /* private mode */ }
-      remote.connect(base);
+      // The link as it was given, key and all: saving the bare address would
+      // mean the next visit reconnects to a server that then refuses it.
+      try { localStorage.setItem(REMOTE_KEY, typed.trim()); } catch { /* private mode */ }
+      remote.connect(typed);
       draw();
     })();
   });
@@ -700,15 +837,24 @@ export function start(): void {
     event.preventDefault();
     const source = dom.adminSource.value.trim();
     if (!source) return;
+    // Adding is the default, because adding an album is what people do and
+    // losing a five-thousand-track library to it is not what they meant.
+    const replace = dom.adminReplace.checked;
     void (async () => {
       try {
         const answer = await fetch(remote.url("/api/source"), {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ source }),
+          body: JSON.stringify({ source, ...(replace ? { replace: true } : {}) }),
         });
-        const body = (await answer.json()) as { error?: string };
-        dom.adminNote.textContent = answer.ok ? `Now serving ${source}.` : (body.error ?? "that did not work");
+        const body = (await answer.json()) as { error?: string; added?: number };
+        dom.adminNote.textContent = !answer.ok
+          ? (body.error ?? "that did not work")
+          : replace
+            ? `Now serving ${source}.`
+            : body.added === 0
+              ? "Everything there was already in the playlist."
+              : `Added ${body.added ?? 0} tracks from ${source}.`;
         if (answer.ok) dom.adminSource.value = "";
       } catch {
         dom.adminNote.textContent = "could not reach the server";
@@ -1271,6 +1417,7 @@ export function start(): void {
 
   dom.disconnect.addEventListener("click", () => {
     remote.close();
+    watching = -1;
     mode = "local";
     remoteStatus = "idle";
     remoteDetail = "";
@@ -1278,14 +1425,20 @@ export function start(): void {
   });
 
   dom.listenHere.addEventListener("change", () => {
+    try {
+      localStorage.setItem(LISTEN_HERE_KEY, dom.listenHere.checked ? "1" : "0");
+    } catch { /* private mode */ }
     if (mode !== "remote") return;
     void (async () => {
       if (dom.listenHere.checked) {
         // "on this device" means instead of over there, not as well as.
         await remote.send({ type: "stop" });
+        // Start from wherever the server had got to, then go our own way.
         await listenTo(snapshot.index);
       } else {
         player.stop();
+        // Back to following the server's cursor.
+        watching = -1;
       }
       draw();
     })();
@@ -1327,6 +1480,8 @@ export function start(): void {
     }
     const saved = localStorage.getItem(REMOTE_KEY);
     if (saved) dom.remoteUrl.value = saved;
+    // Only an explicit "no" turns it off; an absent setting keeps the default.
+    if (localStorage.getItem(LISTEN_HERE_KEY) === "0") dom.listenHere.checked = false;
   } catch { /* private mode */ }
 
   // Served by a nixamp of its own? Then it has a library to show — but only

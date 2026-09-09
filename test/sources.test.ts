@@ -12,6 +12,7 @@ import {
   parsePls,
   playsInBrowser,
   resolveEntry,
+  sourceLabel,
 } from "../src/sources.ts";
 import { loadTagged, readPlaylist, readRemoteIndex } from "../src/playlist.ts";
 
@@ -222,4 +223,17 @@ test("a folder served over http is a folder, not a page to decode", async () => 
     throw new Error("ECONNREFUSED");
   }) as unknown as typeof fetch;
   assert.deepEqual(await readRemoteIndex("http://box.example/gone/", offline), []);
+});
+
+test("a source is named by what it is, not by the whole URL", () => {
+  // The heading over a block of the playlist, so it has to read like the name
+  // of the thing somebody added.
+  assert.equal(sourceLabel("https://x.test/music/%5B1982%5D%20How%20Could%20Hell/"), "[1982] How Could Hell");
+  assert.equal(sourceLabel("https://x.test/music/album"), "album");
+  assert.equal(sourceLabel("/home/me/Downloads/done"), "done");
+  assert.equal(sourceLabel("/home/me/Downloads/done/"), "done");
+  // A URL with nothing but a host has no last segment to take, and repeating
+  // the whole address over every row is not a heading.
+  assert.equal(sourceLabel("https://x.test/"), "x.test");
+  assert.equal(sourceLabel("https://x.test"), "x.test");
 });

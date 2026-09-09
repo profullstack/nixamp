@@ -199,7 +199,11 @@ export function scopeOf(offered: string | null, control: string | null, listen: 
 
 /** Paths a listen key may have. Everything else needs the control key. */
 export function allowedForListening(path: string): boolean {
-  if (path === "/api/command" || path === "/api/source") return false;
+  if (path === "/api/command") return false;
+  // Prefix, not equality: everything under this changes what the server plays,
+  // and an exact check let a listen key reach /api/source/remove and delete an
+  // album out of somebody else's playlist.
+  if (path === "/api/source" || path.startsWith("/api/source/")) return false;
   return true;
 }
 

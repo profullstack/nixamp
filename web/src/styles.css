@@ -18,6 +18,17 @@
 
 * { box-sizing: border-box; }
 
+/*
+ * Hidden means hidden.
+ *
+ * The UA rule is `[hidden] { display: none }`, which any class carrying a
+ * `display` beats on specificity -- and half the things this page hides are
+ * `.picker`, which is `display: flex`. So the sign-in form stayed on screen
+ * with your email in the note above it, and every other `hidden` on a
+ * `.picker` was equally decorative.
+ */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   min-height: 100%;
@@ -36,7 +47,14 @@ body {
 #app {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  /* Every inset, not just the bottom one. Installed on an iPhone this runs
+     under the status bar and the home indicator both, and without the top
+     inset the header sat behind the clock. */
+  padding:
+    calc(12px + env(safe-area-inset-top))
+    calc(12px + env(safe-area-inset-right))
+    calc(16px + env(safe-area-inset-bottom))
+    calc(12px + env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -148,6 +166,11 @@ input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   flex: 1;
+  /* A flex item will not shrink below its own content by default, and a range
+     input's default width is about 130px. That is what pushed the transport
+     row 23px past the edge of a phone -- and a page wider than the screen is
+     a page iOS will not let you scroll straight down. */
+  min-width: 0;
   height: 14px;
   background: transparent;
   cursor: pointer;
@@ -240,6 +263,38 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .row.selected .name { color: var(--accent); }
 .row.playing .name { color: var(--green); }
 
+/* A heading over a block of the playlist: the library, or something added to
+   it. Not clickable -- there is no track behind it. */
+.group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-top: 1px solid var(--edge);
+  margin-top: 4px;
+}
+
+.group:first-child { border-top: 0; margin-top: 0; }
+
+.group-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.group-remove {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.group-remove:hover { color: var(--accent); border-color: var(--accent); }
+
 .row .n { color: var(--muted); width: 2.4em; text-align: right; flex: none; }
 .row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .row .time { color: var(--muted); flex: none; }
@@ -249,6 +304,10 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .transport {
   display: flex;
   align-items: center;
+  /* Wrapping is the honest answer on a narrow screen: four transport buttons
+     and a volume slider do not fit across a phone, and the alternative is a
+     row that overflows the viewport. */
+  flex-wrap: wrap;
   gap: 8px;
   border: 1px solid var(--edge);
   border-radius: 6px;
@@ -273,7 +332,15 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 button.primary { color: var(--green); border-color: var(--green-dim); min-width: 64px; }
 button.ghost { background: transparent; color: var(--muted); }
 
-.volume { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 1; max-width: 220px; }
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex: 1;
+  min-width: 120px;
+  max-width: 220px;
+}
 .vol { color: var(--muted); font-size: 12px; letter-spacing: 0.08em; }
 
 /* ---- pickers ----------------------------------------------------------- */
@@ -358,8 +425,6 @@ button.ghost { background: transparent; color: var(--muted); }
 }
 
 .directory-list button {
-  width: 100%;
-  text-align: left;
   background: transparent;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -433,9 +498,28 @@ body.route-directory .player-only { display: none; }
   align-items: stretch;
 }
 
-.directory-list li > button:first-child {
+/* Whatever leads the row takes the slack -- a button in the directory, a
+   plain label in the servers list, which is why keying this to a button left
+   the servers row's actions floating in the middle of it. */
+.directory-list li > :first-child {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* Only the row's own button fills the row. The actions after it -- Open,
+   Forget, Follow -- are as wide as their words, and stretching one of them
+   across the row is what the misalignment was. */
+.directory-list li > button:first-child {
+  width: 100%;
+  text-align: left;
+}
+
+.directory-list li > .button,
+.directory-list li > .ghost {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
 }
 
 .directory-list .follow {

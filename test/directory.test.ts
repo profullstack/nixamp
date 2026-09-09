@@ -109,6 +109,9 @@ test("the listen key may hear but not drive", () => {
   assert.equal(allowedForListening("/api/events"), true);
   assert.equal(allowedForListening("/api/command"), false);
   assert.equal(allowedForListening("/api/source"), false);
+  // Everything under it too: removing an album from somebody else's playlist
+  // is not listening, and an exact match had left that door open.
+  assert.equal(allowedForListening("/api/source/remove"), false);
 });
 
 test("nobody to ask is not consent", async () => {
