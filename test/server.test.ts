@@ -13,6 +13,7 @@ import { emptySnapshot, parseCommand, remoteName, type Command, type Snapshot } 
 import { certifiable, isIpAddress, lookupPublicIp, reachableAddresses } from "../src/share.ts";
 import { daemonLines } from "../src/daemon.ts";
 import { Owner } from "../src/owner.ts";
+import { Directory } from "../src/directory.ts";
 
 test("serve flags parse, and a bad one is a message rather than a NaN", () => {
   // A platform that hands out the port would otherwise change what "default"
@@ -1118,5 +1119,65 @@ test("a track that turns out to have a picture stops claiming to be a song", asy
   } finally {
     await new Promise<void>((done) => server.close(() => done()));
     engine.stop();
+  }
+});
+
+test("only the account that published a stream can take it off the list", async () => {
+  // A listing id is in every copy of the directory, and delisting asked
+  // nobody anything -- so anyone who could read the list could empty it of
+  // other people's streams. The publisher was already sending its token; it
+  // was simply never looked at.
+  const directory = new Directory({ now: () => 1_000 });
+  const accounts = {
+    whoIs: async (token: string) =>
+      token === "mine" ? { id: "owner-1", email: "me@example.com" }
+        : token === "theirs" ? { id: "owner-2", email: "them@example.com" }
+          : null,
+  } as unknown as Parameters<typeof createServer>[1]["accounts"];
+
+  const server = createServer(new EmptyEngine(), {
+    web: null,
+    media: false,
+    version: "test",
+    directory,
+    accounts,
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  const mine = directory.announce(
+    { name: "chovy", url: "https://a.example/view/k", tracks: 1, nowPlaying: "x" },
+    "owner-1",
+  );
+  const ownerless = directory.announce(
+    { name: "nobody", url: "https://b.example/view/k", tracks: 1, nowPlaying: "x" },
+    "",
+  );
+
+  const remove = (id: string, token?: string): Promise<Response> =>
+    fetch(`${base}/api/directory?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      ...(token ? { headers: { authorization: `Bearer ${token}` } } : {}),
+    });
+
+  try {
+    // A stranger, and somebody else's account: neither may.
+    assert.equal((await remove(mine.id)).status, 403);
+    assert.equal((await remove(mine.id, "theirs")).status, 403);
+    assert.equal(directory.list().length, 2, "a refused delete must not delete");
+
+    // A listing nobody can prove they own is nobody's to remove either; it
+    // leaves on its own when it stops renewing.
+    assert.equal((await remove(ownerless.id, "mine")).status, 403);
+
+    // The account that published it may.
+    assert.equal((await remove(mine.id, "mine")).status, 200);
+    assert.equal(directory.list().find((one) => one.id === mine.id), undefined);
+
+    // And asking again says so rather than pretending.
+    assert.equal((await remove(mine.id, "mine")).status, 404);
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
   }
 });

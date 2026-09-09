@@ -813,6 +813,36 @@ export function start(): void {
       if (stream.ownerId && meId && stream.ownerId !== meId) {
         item.append(followButton(stream.ownerId, stream.name));
       }
+      // Your own, on the other hand, you can take down. A listing outlives the
+      // server that made it by up to a couple of minutes, and a machine that
+      // was stopped without saying goodbye leaves one sitting there for
+      // everybody to click on and get nothing from.
+      if (stream.ownerId && meId && stream.ownerId === meId) {
+        const stop = document.createElement("button");
+        stop.type = "button";
+        stop.className = "ghost";
+        stop.textContent = "Take off the list";
+        stop.addEventListener("click", (event) => {
+          event.stopPropagation();
+          stop.disabled = true;
+          void (async () => {
+            try {
+              const answer = await fetch(`/api/directory?id=${encodeURIComponent(stream.id)}`, {
+                method: "DELETE",
+              });
+              const body = (await answer.json().catch(() => ({}))) as { error?: string };
+              dom.directoryNote.textContent = answer.ok
+                ? `${stream.name} is off the list.`
+                : (body.error ?? "that did not work");
+            } catch {
+              dom.directoryNote.textContent = "could not reach the directory";
+            } finally {
+              await loadDirectory();
+            }
+          })();
+        });
+        item.append(stop);
+      }
       dom.directoryList.append(item);
     }
   };
