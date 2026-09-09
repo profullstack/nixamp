@@ -504,6 +504,15 @@ button.ghost { background: transparent; color: var(--muted); }
   min-width: 0;
 }
 
+/* What the panel just did, kept apart from what it is polling. A status line
+   that refreshes every two seconds is no place to put an answer somebody
+   needs to read: "Added 16 tracks" was replaced by a listener count before it
+   could be read, which is why adding a folder felt like it had done nothing. */
+.said {
+  color: var(--accent);
+  margin: 0.3rem 0 0;
+}
+
 /* A machine that is not answering. Still listed -- it is still yours -- but
    said plainly rather than left to be discovered by clicking Open. */
 .directory-list li.offline .recent-label { opacity: 0.55; }

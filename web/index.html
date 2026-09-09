@@ -35,6 +35,8 @@
           <span id="elapsed" class="time">00:00</span>
           <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" disabled />
           <span id="total" class="time muted">--:--</span>
+          <button id="fullscreen" type="button" class="ghost" hidden
+                  title="Full screen" aria-label="Full screen">⛶</button>
         </div>
       </section>
 
@@ -159,6 +161,7 @@
 
         <section class="panel player-only col-a" data-title="Admin" id="admin-panel" hidden>
           <p class="hint" id="admin-note">Checking…</p>
+          <p class="said" id="admin-said" hidden></p>
           <table class="admin-table" id="admin-connections"></table>
           <form id="admin-restream" class="picker">
             <input id="admin-source" type="text" placeholder="a folder, an album URL, a file"

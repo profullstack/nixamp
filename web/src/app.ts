@@ -55,6 +55,7 @@ export function start(): void {
     elapsed: need<HTMLElement>("elapsed"),
     total: need<HTMLElement>("total"),
     seek: need<HTMLInputElement>("seek"),
+    fullscreen: need<HTMLButtonElement>("fullscreen"),
     canvas: need<HTMLCanvasElement>("spectrum"),
     glyphs: need<HTMLElement>("glyphs"),
     levels: need<HTMLElement>("levels"),
@@ -80,6 +81,7 @@ export function start(): void {
     accountNote: need<HTMLParagraphElement>("account-note"),
     adminPanel: need<HTMLElement>("admin-panel"),
     adminNote: need<HTMLParagraphElement>("admin-note"),
+    adminSaid: need<HTMLParagraphElement>("admin-said"),
     adminConnections: need<HTMLTableElement>("admin-connections"),
     publishPanel: need<HTMLElement>("publish-panel"),
     publishNote: need<HTMLParagraphElement>("publish-note"),
@@ -500,11 +502,11 @@ export function start(): void {
         body: JSON.stringify({ group }),
       });
       const body = (await answer.json()) as { error?: string; removed?: number };
-      dom.adminNote.textContent = answer.ok
+      said(answer.ok
         ? `Removed ${body.removed ?? 0} tracks from ${group}.`
-        : (body.error ?? "that did not work");
+        : (body.error ?? "that did not work"));
     } catch {
-      dom.adminNote.textContent = "could not reach the server";
+      said("could not reach the server");
     }
   }
 
@@ -552,6 +554,9 @@ export function start(): void {
 
   function showVideo(on: boolean): void {
     dom.video.hidden = !on;
+    // The button goes with the picture. Over a song there is nothing to make
+    // full screen, and a control that can only do nothing is worse than none.
+    dom.fullscreen.hidden = !on;
   }
 
   function updateMediaSession(): void {
@@ -574,6 +579,37 @@ export function start(): void {
     const row = (event.target as HTMLElement).closest("li");
     const chosen = Number(row?.dataset.index);
     if (Number.isInteger(chosen)) void playAt(chosen);
+  });
+
+  /**
+   * Fill the screen with the picture.
+   *
+   * Offered only when there is a picture to fill it with, which is why it is
+   * hidden alongside the video element rather than sitting there greyed out
+   * over a song.
+   *
+   * iOS Safari has no Fullscreen API on a <video>; it has
+   * webkitEnterFullscreen, which is the native player and the only way a video
+   * goes full screen on an iPhone at all. Asked for in that order, because the
+   * standard one exists on iPad and the WebKit one does not always.
+   */
+  dom.fullscreen.addEventListener("click", () => {
+    const video = dom.video as HTMLVideoElement & {
+      webkitEnterFullscreen?: () => void;
+      webkitSupportsFullscreen?: boolean;
+    };
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {});
+      return;
+    }
+    if (typeof video.requestFullscreen === "function") {
+      video.requestFullscreen().catch(() => {
+        // Refused, or not allowed from here. The iPhone path is the fallback.
+        video.webkitEnterFullscreen?.();
+      });
+      return;
+    }
+    video.webkitEnterFullscreen?.();
   });
 
   dom.prev.addEventListener("click", () => void step(-1));
@@ -683,6 +719,11 @@ export function start(): void {
       // mean the next visit reconnects to a server that then refuses it.
       try { localStorage.setItem(REMOTE_KEY, typed.trim()); } catch { /* private mode */ }
       remote.connect(typed);
+      // Asked of the server we just connected to. Whether you may administer
+      // it is a question about that machine, and it was being answered by
+      // whatever host served this page -- so the Admin panel appeared or did
+      // not for reasons that had nothing to do with the server in front of you.
+      void checkAdmin();
       void loadShare();
       draw();
     })();
@@ -859,6 +900,19 @@ export function start(): void {
     }
   };
 
+  /**
+   * Report what an admin action just did, somewhere it will still be there.
+   *
+   * The status line above it refreshes every two seconds with a listener
+   * count, so an answer written there was gone before it could be read --
+   * which made adding a folder look like it had done nothing at all, even
+   * though it had.
+   */
+  function said(message: string): void {
+    dom.adminSaid.textContent = message;
+    dom.adminSaid.hidden = message === "";
+  }
+
   const refreshAdmin = async (): Promise<void> => {
     try {
       // The connected server, with its key -- not whatever origin this page
@@ -971,6 +1025,7 @@ export function start(): void {
     event.preventDefault();
     const source = dom.adminSource.value.trim();
     if (!source) return;
+    said(`Reading ${source}…`);
     // Adding is the default, because adding an album is what people do and
     // losing a five-thousand-track library to it is not what they meant.
     const replace = dom.adminReplace.checked;
@@ -982,16 +1037,16 @@ export function start(): void {
           body: JSON.stringify({ source, ...(replace ? { replace: true } : {}) }),
         });
         const body = (await answer.json()) as { error?: string; added?: number };
-        dom.adminNote.textContent = !answer.ok
+        said(!answer.ok
           ? (body.error ?? "that did not work")
           : replace
             ? `Now serving ${source}.`
             : body.added === 0
               ? "Everything there was already in the playlist."
-              : `Added ${body.added ?? 0} tracks from ${source}.`;
+              : `Added ${body.added ?? 0} tracks from ${source}.`);
         if (answer.ok) dom.adminSource.value = "";
       } catch {
-        dom.adminNote.textContent = "could not reach the server";
+        said("could not reach the server");
       }
     })();
   });
@@ -1604,6 +1659,8 @@ export function start(): void {
     remote.close();
     watching = -1;
     dom.sharePanel.hidden = true;
+    dom.publishPanel.hidden = true;
+    dom.adminPanel.hidden = true;
     mode = "local";
     remoteStatus = "idle";
     remoteDetail = "";
