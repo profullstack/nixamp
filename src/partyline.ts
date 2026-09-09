@@ -239,15 +239,6 @@ export class PartyLine {
       this.reminders.set(code, set);
     }
   }
-  /**
-   * Legs listening to a stream, by its code.
-   *
-   * Separate from the rooms because a stream listener is not in a conference:
-   * they are a leg with an MP3 playing into it. Nothing else was counting
-   * them, so the directory had no way to say how many people were on the
-   * phone for a broadcast.
-   */
-  private readonly streamLegs = new Map<string, Set<string>>();
   private readonly key: ReturnType<typeof createPublicKey> | null;
   private readonly fetch: typeof globalThis.fetch;
   private readonly now: () => number;
@@ -414,6 +405,14 @@ export class PartyLine {
    * room code still works: this line was a party line before it was a way into
    * a broadcast, and a code that means nothing to the directory should still
    * mean a room.
+   *
+   * Keying a stream's code puts you in a room with the other people watching
+   * it. It does not play the stream at you, which is what it used to do: this
+   * is the phone line beside a broadcast, the way a podcast has an 800 number
+   * -- the show is on your screen and the phone is where you talk about it.
+   * Playing the audio down the phone was both the worse half of the idea and
+   * the one that kept failing, because a share link answers a 302 and a cookie
+   * rather than an MP3.
    */
   private async stream(leg: string, code: string): Promise<boolean> {
     const streams = this.options.streams;
@@ -422,42 +421,13 @@ export class PartyLine {
     const live = streams.liveByCode(code);
     if (live !== undefined) {
       const what = live.nowPlaying ? ` of ${live.nowPlaying}` : "";
-
-      // The share link is not playable. It answers 302 with a cookie and sends
-      // a browser to the player page; Telnyx fetches once with no cookie jar
-      // and gets a 401 in JSON. Playing it means a caller who is told "here it
-      // is" and then hears nothing at all, which is how this was found. Say
-      // what is true instead, and hang up rather than bill for silence.
-      if (!live.audio) {
-        await this.command(leg, "speak", {
-          payload:
-            `${live.name} is live right now${what}, but this stream cannot be played over the phone. ` +
-            "You can listen to it at nixamp dot com slash directory. Goodbye.",
-          voice: this.voice,
-        });
-        await this.command(leg, "hangup", {});
-        this.options.onEvent?.(`  ${code} is live but announced no audio address; nothing to play.`);
-        return true;
-      }
-
       await this.command(leg, "speak", {
-        payload: `Welcome to ${live.name}'s live stream${what}. It started at ${pacificTime(live.startedAt)}. Here it is.`,
+        payload:
+          `You're on the line for ${live.name}${what}. ` +
+          "Everyone here is watching it too. Say hello.",
         voice: this.voice,
       });
-      // A nixamp stream is an MP3 over HTTP and Telnyx will play a URL into a
-      // call, so listening by phone costs no audio handling here at all.
-      const playing = await this.command(leg, "playback_start", {
-        audio_url: live.audio,
-        loop: "infinity",
-      });
-      // Counted only once the audio is actually going. A leg we failed to
-      // start is not somebody listening, and the directory would be saying so.
-      if (playing) {
-        const legs = this.streamLegs.get(code) ?? new Set<string>();
-        legs.add(leg);
-        this.streamLegs.set(code, legs);
-        this.options.onEvent?.(`  a caller is listening to ${code} (${legs.size} on the phone).`);
-      }
+      await this.join(leg, code);
       return true;
     }
 
@@ -608,16 +578,19 @@ export class PartyLine {
     this.options.onEvent?.(`  a caller joined a room (${room.callers} on the line).`);
   }
 
-  /** How many people are listening to a stream by phone. */
+  /**
+   * How many people are on the phone for a stream.
+   *
+   * The room's own count, now that a stream's code is a room like any other.
+   * It used to count legs with an MP3 playing into them, which is a thing that
+   * no longer happens.
+   */
   listenersOn(code: string): number {
-    return this.streamLegs.get(code)?.size ?? 0;
+    return this.rooms.get(code)?.callers ?? 0;
   }
 
   /** A leg that hung up or was dropped, wherever it was. */
   private release(leg: string): void {
-    for (const [code, legs] of this.streamLegs) {
-      if (legs.delete(leg) && legs.size === 0) this.streamLegs.delete(code);
-    }
     const code = this.legRoom.get(leg);
     this.legRoom.delete(leg);
     if (code === undefined) return;

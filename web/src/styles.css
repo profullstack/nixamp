@@ -454,6 +454,34 @@ button.ghost { background: transparent; color: var(--muted); }
   white-space: nowrap;
 }
 
+/* One line of the share panel: what it is, the thing itself, and a copy. */
+.share-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0.4rem 0;
+}
+
+.share-what {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.share-line input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#share-phone {
+  font-size: 1.05em;
+  color: var(--fg);
+}
+
+#share-phone b { color: var(--accent); }
+
 /* The admin table. Small, dense, and scrollable rather than pushing the
    player off the screen when a stream gets popular. */
 .admin-table {

@@ -397,7 +397,19 @@ export function safeJoin(rootDir: string, urlPath: string): string | null {
  * album it came from, which is what lets a client draw the two apart instead
  * of running them together.
  */
-export type Loaded = Track & { group?: string };
+export type Loaded = Track & {
+  group?: string;
+  /**
+   * Whether this has a picture, when the name could not say.
+   *
+   * A file on disk is named `film.mkv` and that is answer enough. A live
+   * stream is `http://host/tipoffsport/KEY/301`, which says nothing at all --
+   * so it was treated as audio, transcoded with `-vn`, and arrived as a
+   * football match somebody could only listen to. Asked of ffprobe once, when
+   * the source is added, rather than guessed from a URL that has no opinion.
+   */
+  picture?: boolean;
+};
 
 /** What the HTTP layer needs from a player. Tests hand it a fake. */
 export interface Engine {
@@ -453,7 +465,8 @@ export function toRemoteTracks(tracks: Loaded[]): RemoteTrack[] {
     // Said out loud, because a remote cannot see the path and had been sending
     // every track to the audio element -- a film's soundtrack over a blank
     // panel, which is exactly what it looked like.
-    ...(hasPicture(t.path) ? { video: true } : {}),
+    // The name when it says something, what ffprobe found when it does not.
+    ...(t.picture ?? hasPicture(t.path) ? { video: true } : {}),
     // Only for what was added; the library's own tracks say nothing, which is
     // how a client knows they are the library.
     ...(t.group ? { group: t.group } : {}),
@@ -466,6 +479,23 @@ const PICTURE = new Set([".mp4", ".mkv", ".avi", ".mov", ".m4v", ".webm", ".mpg"
 export function hasPicture(path: string): boolean {
   const dot = path.lastIndexOf(".");
   return dot > 0 && PICTURE.has(path.slice(dot).toLowerCase());
+}
+
+/**
+ * Whether the name of a source tells us anything about what is inside it.
+ *
+ * A remote address with no extension -- an IPTV channel, a stream key, a
+ * redirect -- is the case where it does not, and the only way to find out is
+ * to look.
+ */
+export function nameSaysNothing(path: string): boolean {
+  if (!isRemote(path)) return false;
+  try {
+    const last = new URL(path).pathname.split("/").pop() ?? "";
+    return !last.includes(".");
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -792,6 +822,15 @@ const CORS: Record<string, string> = {
   "access-control-allow-headers": "content-type",
   "access-control-max-age": "86400",
 };
+
+/**
+ * How many nameless addresses are worth an ffprobe when a source is added.
+ *
+ * One is the ordinary case -- somebody pasting a channel -- and a directory
+ * listing of thousands must not turn into thousands of probes for an answer
+ * that only changes which element a browser uses.
+ */
+const PROBE_BY_HAND = 8;
 
 /** /api/v1/<provider>/oauth/start and .../callback, the house callback shape. */
 const OAUTH_ROUTE = /^\/api\/v1\/([a-z0-9-]+)\/oauth\/(start|callback)$/;
@@ -2207,11 +2246,28 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       try {
-        const tracks = await options.load(source);
+        let tracks: Loaded[] = await options.load(source);
         if (tracks.length === 0) {
           json(response, 422, { error: `nothing to play at ${source}` });
           return;
         }
+        // A handful of addresses whose names say nothing get asked what they
+        // are, so a live channel arrives as a picture rather than as its own
+        // soundtrack. Capped, because a playlist of five thousand of them is
+        // five thousand ffprobes and the answer only matters for the few a
+        // person adds by hand.
+        const looked = await Promise.all(
+          tracks.map(async (track, at) => {
+            if (at >= PROBE_BY_HAND || !nameSaysNothing(track.path)) return track;
+            const codecs = await codecsOf(
+              { ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null },
+              track.path,
+            );
+            return codecs.video === "" ? track : { ...track, picture: true };
+          }),
+        );
+        tracks = looked;
+
         let added = tracks.length;
         if (replacing) {
           engine.replace(tracks, source);
@@ -2265,15 +2321,21 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
 
       if (playsInBrowser(file) && capKbps === 0) {
         sendFile(request, response, file);
-      } else if (hasPicture(file)) {
-        // A film. It used to arrive as MP3 with `-vn`, which is to say as a
-        // soundtrack over a blank panel; what ffprobe finds inside decides how
-        // little work it takes to keep the picture.
-        const codecs = await codecsOf({ ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, file);
-        pipeFfmpeg(request, response, file, options.ffmpeg ?? ["ffmpeg"], videoArgs(codecs, capKbps), "video/mp4");
-      } else {
-        transcode(request, response, file, options.ffmpeg ?? ["ffmpeg"]);
+        return;
       }
+      // A film, or something whose name refuses to say. A live channel at
+      // .../301 used to fall through to the audio branch and arrive as MP3
+      // with `-vn` -- a match you could only listen to.
+      if (hasPicture(file) || nameSaysNothing(file)) {
+        // What ffprobe finds inside decides how little work it takes to keep
+        // the picture, and whether there is a picture to keep at all.
+        const codecs = await codecsOf({ ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, file);
+        if (codecs.video !== "") {
+          pipeFfmpeg(request, response, file, options.ffmpeg ?? ["ffmpeg"], videoArgs(codecs, capKbps), "video/mp4");
+          return;
+        }
+      }
+      transcode(request, response, file, options.ffmpeg ?? ["ffmpeg"]);
       return;
     }
 

@@ -2,9 +2,11 @@
  * Asking somebody to watch, when that somebody is not technical.
  *
  * A share link is a URL with a key in it, which is fine for the person who
- * runs the server and useless as a thing to text your mother. An invite is the
- * three ways in, written as a sentence: a link that opens a player, a phone
- * number, and the code to key once it answers.
+ * runs the server and useless as a thing to text your mother. An invite is two
+ * things written as a sentence: a link that opens a player, and a phone number
+ * with a code, which is the line where everyone watching talks to each other.
+ * The phone is not another way to hear the stream -- it is the 800 number
+ * beside a podcast. The show is on the screen; the call is the company.
  *
  * The sender is signed in, because sending is an action with a cost: a text
  * message is money and somebody's phone. The recipient signs in too, but only
@@ -22,7 +24,7 @@ export interface Invite {
   link: string;
   /** The phone number, when this stream is one the line knows about. */
   phone: string;
-  /** The six digits that reach this stream, when it has been published. */
+  /** The six digits that reach this stream's room, once it has been published. */
   code: string;
 }
 
@@ -47,7 +49,10 @@ export function isEmail(value: string): boolean {
 export function inviteText(invite: Invite): string {
   const lines = [`${invite.name} is streaming.`, "", `Watch: ${invite.link}`];
   if (invite.phone && invite.code) {
-    lines.push("", `Or call ${invite.phone} and key ${invite.code} to listen.`);
+    // "to talk about it", not "to listen": the line is a room full of the
+    // other people watching, and telling somebody they will hear the stream
+    // down the phone is telling them something that is not true.
+    lines.push("", `To talk about it: call ${invite.phone} and key ${invite.code}.`);
   }
   return lines.join("\n");
 }

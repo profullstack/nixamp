@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -704,5 +704,63 @@ test("the owner of a server can open it without hunting for its share link", asy
   } finally {
     await new Promise<void>((done) => server.close(() => done()));
     engine.stop();
+  }
+});
+
+test("restarting a daemon replays the flags it was started with", async () => {
+  // The daemons worth restarting are the ones with the most flags -- a
+  // certificate, a key, a public URL -- and finding them again meant shell
+  // history or `ps`. What it was started with is recorded, so restarting it is
+  // one word.
+  const home = mkdtempSync(join(tmpdir(), "nixamp-daemon-"));
+  const before = process.env["XDG_STATE_HOME"];
+  process.env["XDG_STATE_HOME"] = home;
+  try {
+    const d = await import("../src/daemon.ts");
+    const dir = join(home, "nixamp");
+    const started: string[][] = [];
+
+    const state = {
+      // Not this process, and not anything else: restarting stops what the
+      // state file names first, and naming the test runner stops the test run.
+      pid: 2_147_483_646,
+      host: "127.0.0.1",
+      port: 4321,
+      key: "k",
+      source: "/music",
+      startedAt: 0,
+      log: join(dir, "daemon.log"),
+      argv: ["/music", "--tls-cert", "cert.pem", "--tls-key", "key.pem"],
+    };
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "daemon.json"), JSON.stringify(state));
+
+    // Nothing is really spawned: what is being checked is which arguments the
+    // restart would hand over.
+    const fakeStart = async (argv: string[]) => {
+      started.push(argv);
+      return { ...state, argv };
+    };
+
+    await d.restart([], "entry.js", fakeStart);
+    assert.deepEqual(started[0], ["/music", "--tls-cert", "cert.pem", "--tls-key", "key.pem"]);
+
+    // Given arguments of its own it uses those, which is how you change one
+    // thing without stopping and starting by hand.
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "daemon.json"), JSON.stringify(state));
+    await d.restart(["/other"], "entry.js", fakeStart);
+    assert.deepEqual(started[1], ["/other"]);
+
+    // A state file from an older nixamp recorded no flags, so restarting it
+    // would be starting something else. It says so instead.
+    mkdirSync(dir, { recursive: true });
+    const { argv: _dropped, ...older } = state;
+    writeFileSync(join(dir, "daemon.json"), JSON.stringify(older));
+    await assert.rejects(() => d.restart([], "entry.js", fakeStart), /did not record its flags/);
+  } finally {
+    if (before === undefined) delete process.env["XDG_STATE_HOME"];
+    else process.env["XDG_STATE_HOME"] = before;
+    rmSync(home, { recursive: true, force: true });
   }
 });

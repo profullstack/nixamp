@@ -69,7 +69,7 @@ const HELP = `nixamp — it really whips the terminal's ass.
 
   nixamp [source]                play it in the terminal
   nixamp serve [source] [options]  play here, and hand out a browser remote
-  nixamp daemon start|stop|status  serve in the background, and let go of it
+  nixamp daemon start|restart|stop|status  serve in the background, and let go of it
   nixamp attach                  put the player back in front of the daemon
   nixamp admin [--url U] [--key K] who is connected, and re-stream to them
   nixamp login [--with github]  sign in to nixamp.com, in a browser or here
@@ -188,8 +188,12 @@ Signing out does not touch it: that is what it is for.
   daemon: `nixamp daemon — a nixamp that outlives the terminal that started it.
 
   nixamp daemon start [source] [serve options]   start it, detached
+  nixamp daemon restart [source] [serve options] stop it and start it again
   nixamp daemon status                           where it is, and how long
   nixamp daemon stop                             stop it
+
+Restart with no arguments replays the ones it was started with, certificate
+and public URL included, so picking up a new version costs one command.
 
 It is \`nixamp serve\` with nobody holding its terminal, so it keeps playing and
 keeps serving its browser remote. One per user.
@@ -257,6 +261,17 @@ async function runDaemon(argv: string[]): Promise<number> {
     return 0;
   }
 
+  if (action === "restart") {
+    try {
+      const state = await d.restart(rest, entry);
+      for (const line of d.daemonLines(state)) console.log(line);
+      return 0;
+    } catch (error) {
+      console.error((error as Error).message);
+      return 1;
+    }
+  }
+
   if (action === "status") {
     const { running, state } = d.status();
     if (!state) {
@@ -283,7 +298,7 @@ async function runDaemon(argv: string[]): Promise<number> {
     return attach(rest);
   }
 
-  console.error(`nixamp daemon: unknown action ${action}. Try start, stop, status or attach.`);
+  console.error(`nixamp daemon: unknown action ${action}. Try start, restart, stop, status or attach.`);
   return 64;
 }
 

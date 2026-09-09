@@ -192,8 +192,8 @@ test("the listing publishes the code, because a listing you cannot dial is nothi
   assert.ok(!String(created?.body["name"]).includes("482917"));
 });
 
-test("phone listeners on a stream are counted, so the directory can say how many", async () => {
-  const { fetch } = recorder();
+test("people on the phone for a stream are counted, so the directory can say how many", async () => {
+  const { fetch } = recorder(conferenceReplies());
   const live = {
     name: "Chovy",
     url: "https://chovy.example/s/iqGqDaKSSLXwXnST3bwgkg",
@@ -208,9 +208,9 @@ test("phone listeners on a stream are counted, so the directory can say how many
   await party.handle(keyed("leg-2", "482917"));
   assert.equal(party.listenersOn("482917"), 2);
 
-  // A listener is a leg with audio playing, not a conference member, so
-  // nothing else was counting them.
-  assert.deepEqual(party.list(), [], "a stream is not a room");
+  // They are in a room together, which is the whole point: the phone beside a
+  // stream is where the people watching it talk to each other.
+  assert.equal(party.list().length, 1, "a stream's callers are in one room");
 
   await party.handle({ event_type: "call.hangup", payload: { call_control_id: "leg-1" } });
   assert.equal(party.listenersOn("482917"), 1);
@@ -372,8 +372,8 @@ test("a time is read in Pacific, spelled out", () => {
   assert.equal(pacificTime(NINE_TWENTY_SEVEN), "9:27 PM Pacific");
 });
 
-test("a code that is a live stream plays the stream", async () => {
-  const { calls, fetch } = recorder();
+test("a code that is a live stream puts you in the room, and plays nothing", async () => {
+  const { calls, fetch } = recorder(conferenceReplies());
   const party = line(fetch, "", {
     streams: streams({
       "482917": {
@@ -393,23 +393,22 @@ test("a code that is a live stream plays the stream", async () => {
   await party.handle(keyed("leg-1", "482917"));
 
   const spoke = calls.find((c) => c.path === "/calls/leg-1/actions/speak");
-  assert.match(String(spoke?.body["payload"]), /Welcome to Chovy's live stream of Top Gun: Maverick/);
-  assert.match(String(spoke?.body["payload"]), /started at 9:27 PM Pacific/);
+  assert.match(String(spoke?.body["payload"]), /on the line for Chovy of Top Gun: Maverick/);
+  assert.match(String(spoke?.body["payload"]), /watching it too/);
 
-  const play = calls.find((c) => c.path === "/calls/leg-1/actions/playback_start");
-  // The audio address, never the share link. Telnyx fetches this once with no
-  // cookie jar; handed the /s/ link it gets a 401 and the caller hears silence.
-  assert.equal(play?.body["audio_url"], "https://chovy.example/api/live?k=iqGqDaKSSLXwXnST3bwgkg");
-  assert.ok(!String(play?.body["audio_url"]).includes("/s/"));
-  // A stream is not a conference; nothing should have been opened.
-  assert.equal(calls.filter((c) => c.path === "/conferences").length, 0);
+  // The show is on your screen; the phone is where you talk about it. Playing
+  // the stream down the line was the wrong idea and the half that kept
+  // failing, because a share link answers a 302 and a cookie, not an MP3.
+  assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/playback_start").length, 0);
+  // A conference was opened for it, which is what a room is.
+  assert.equal(calls.filter((c) => c.path === "/conferences").length, 1);
+  assert.equal(party.listenersOn("482917"), 1);
 });
 
-test("a live stream that announced no audio address is said so, not played", async () => {
-  // An older publisher, which only ever sent the share link. Playing that is
-  // what "here it is" followed by silence sounded like, and silence somebody
-  // is paying for by the minute is worse than being told the truth.
-  const { calls, fetch } = recorder();
+test("a stream with no audio address is still somewhere to call", async () => {
+  // It used to be turned away at the door: with nothing to play down the line
+  // there was nothing to offer. There is now -- the other people watching it.
+  const { calls, fetch } = recorder(conferenceReplies());
   const party = line(fetch, "", {
     streams: streams({
       "482917": {
@@ -426,12 +425,10 @@ test("a live stream that announced no audio address is said so, not played", asy
 
   assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/playback_start").length, 0);
   const spoke = calls.find((c) => c.path === "/calls/leg-1/actions/speak");
-  assert.match(String(spoke?.body["payload"]), /cannot be played over the phone/);
-  assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/hangup").length, 1);
-  // Nobody is hearing it, so the directory must not say somebody is.
-  assert.equal(party.listenersOn("482917"), 0);
-  // And it is a stream, so it must not fall through into a stranger's room.
-  assert.equal(calls.filter((c) => c.path === "/conferences").length, 0);
+  assert.match(String(spoke?.body["payload"]), /on the line for Chovy/);
+  // Nobody is hung up on for want of an MP3 any more.
+  assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/hangup").length, 0);
+  assert.equal(party.listenersOn("482917"), 1);
 });
 
 test("a code whose stream has ended says when, and offers a text", async () => {

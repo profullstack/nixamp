@@ -38,6 +38,15 @@ export interface DaemonState {
    * interface, so it names the router and not this port.
    */
   guessedPublic?: boolean;
+  /**
+   * What it was started with, so it can be started that way again.
+   *
+   * A daemon serving TLS on a public name is six flags, and restarting it
+   * meant finding them again -- from shell history, or from `ps`, or not at
+   * all. Absent on a state file written by an older nixamp, which is why
+   * `restart` says so rather than starting something different.
+   */
+  argv?: string[];
 }
 
 /** XDG, with the usual fallback. One daemon per user, which is one too few for nobody. */
@@ -234,9 +243,35 @@ export async function start(argv: string[], entry: string): Promise<DaemonState>
     throw new Error(`nixamp: the daemon did not start. See ${log}`);
   }
 
-  const state: DaemonState = { ...announced, pid: child.pid, startedAt: Date.now(), log };
+  const state: DaemonState = { ...announced, pid: child.pid, startedAt: Date.now(), log, argv };
   writeState(state);
   return state;
+}
+
+/**
+ * Stop it and start it again, the way it was started.
+ *
+ * The flags are replayed from the state file rather than retyped, because the
+ * interesting daemons are the ones with the most flags: a certificate, a key,
+ * a public URL. Given arguments of its own it uses those instead, which is how
+ * you change one thing without stopping and starting by hand.
+ */
+export async function restart(
+  argv: string[],
+  entry: string,
+  /** Injected so a test can see which arguments would be replayed. */
+  starter: typeof start = start,
+): Promise<DaemonState> {
+  const { state } = status();
+  const before = state?.argv;
+  if (argv.length === 0 && before === undefined && state !== null) {
+    throw new Error(
+      "nixamp: this daemon was started by an older nixamp, which did not record its flags. " +
+        "Stop it and start it again with the flags you want.",
+    );
+  }
+  await stop();
+  return starter(argv.length > 0 ? argv : (before ?? []), entry);
 }
 
 /** Poll the log for the announce line. */

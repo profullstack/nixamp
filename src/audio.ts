@@ -314,6 +314,17 @@ export interface Codecs {
   video: string;
   /** e.g. "aac", "ac3", "dts". Empty when there is no audio stream. */
   audio: string;
+  /**
+   * What is wrapped around them: "mpegts", "matroska,webm", "mov,mp4,...".
+   *
+   * It matters for one reason. A transport stream -- which is what every IPTV
+   * channel is -- frames its AAC as ADTS, and copying that into MP4 needs a
+   * bitstream filter or ffmpeg refuses the whole muxing and writes nothing.
+   * They also tend to carry several audio tracks, so the one ffmpeg picks can
+   * be AC-3 on the same URL that offered AAC a minute earlier, and AC-3 in MP4
+   * is a track no browser will play.
+   */
+  container: string;
 }
 
 /**
@@ -325,7 +336,7 @@ export interface Codecs {
  */
 export async function codecsOf(tools: Tools, path: string): Promise<Codecs> {
   const [cmd, ...rest] = tools.ffprobe;
-  const empty: Codecs = { video: "", audio: "" };
+  const empty: Codecs = { video: "", audio: "", container: "" };
   if (!cmd) return empty;
 
   return new Promise<Codecs>((done) => {
@@ -335,7 +346,7 @@ export async function codecsOf(tools: Tools, path: string): Promise<Codecs> {
         ...rest,
         "-v", "quiet",
         "-print_format", "json",
-        "-show_entries", "stream=codec_type,codec_name",
+        "-show_entries", "format=format_name:stream=codec_type,codec_name",
         path,
       ],
       { stdio: ["ignore", "pipe", "ignore"] },
@@ -347,11 +358,15 @@ export async function codecsOf(tools: Tools, path: string): Promise<Codecs> {
     child.on("error", () => done(empty));
     child.on("close", () => {
       try {
-        const parsed = JSON.parse(out) as { streams?: { codec_type?: string; codec_name?: string }[] };
+        const parsed = JSON.parse(out) as {
+          streams?: { codec_type?: string; codec_name?: string }[];
+          format?: { format_name?: string };
+        };
         const streams = parsed.streams ?? [];
         return done({
           video: streams.find((s) => s.codec_type === "video")?.codec_name ?? "",
           audio: streams.find((s) => s.codec_type === "audio")?.codec_name ?? "",
+          container: parsed.format?.format_name ?? "",
         });
       } catch {
         return done(empty);
@@ -376,7 +391,13 @@ export function videoArgs(codecs: Codecs, capKbps = 0): string[] {
 
   // What a browser can play inside MP4 without help.
   const keepVideo = codecs.video === "h264";
-  const keepAudio = codecs.audio === "aac" || codecs.audio === "mp3";
+  // A transport stream's audio is never copied. Its AAC is ADTS-framed, which
+  // MP4 refuses without a bitstream filter -- ffmpeg writes nothing at all and
+  // says "Malformed AAC bitstream detected" -- and the track ffmpeg picks off
+  // a channel with several of them can be AC-3, which that filter rejects and
+  // no browser plays. Re-encoding audio is cheap; this failing is total.
+  const transportStream = codecs.container.includes("mpegts");
+  const keepAudio = !transportStream && (codecs.audio === "aac" || codecs.audio === "mp3");
   return [
     "-c:v", keepVideo ? "copy" : "libx264",
     ...(keepVideo ? [] : ["-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]),
