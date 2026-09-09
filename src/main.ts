@@ -15,7 +15,7 @@ import {
 } from "./audio.ts";
 import { Analyser, bandEdges, bands, decay } from "./fft.ts";
 import { version } from "./meta.ts";
-import { displayName, loadSource } from "./playlist.ts";
+import { displayName, loadSource, loadTagged } from "./playlist.ts";
 import { isRemote } from "./sources.ts";
 import { DEFAULT_PORT } from "./server.ts";
 import type { DaemonState } from "./daemon.ts";
@@ -352,7 +352,7 @@ export async function main(): Promise<void> {
   // The titles, arriving into a player that is already up. Not awaited, and
   // applied only if the list is still the one it describes.
   if (!isRemote(target)) {
-    void loadSource(tools, target, true)
+    void loadTagged(tools, target)
       .then((tagged) => {
         if (tagged.length !== state.tracks.length) return;
         if (tagged.some((track, at) => track.path !== state.tracks[at]?.path)) return;

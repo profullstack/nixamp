@@ -13,7 +13,7 @@ import {
   playsInBrowser,
   resolveEntry,
 } from "../src/sources.ts";
-import { readPlaylist } from "../src/playlist.ts";
+import { loadTagged, readPlaylist } from "../src/playlist.ts";
 
 test("http and https are remote, and nothing else is", () => {
   assert.equal(isRemote("https://example.com/a.mp3"), true);
@@ -126,6 +126,29 @@ test("reading a local m3u gives its entries, and an HLS one gives itself", async
     const hls = join(dir, "live.m3u8");
     writeFileSync(hls, "#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:9.0,\nseg1.ts\n");
     assert.deepEqual(await readPlaylist(hls), [{ source: hls, title: "live.m3u8", duration: 0 }]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("tagging yields, so a server can answer while it reads its library", async () => {
+  // probe() is a spawnSync per file. Read inside one async function it never
+  // gives the event loop a turn: the socket keeps accepting connections and
+  // the process answers none of them until the last file, which from outside
+  // is a connection that opens and then says nothing. This is the regression
+  // test for that -- it fails if the loop stops yielding.
+  const dir = mkdtempSync(join(tmpdir(), "nixamp-tagging-"));
+  try {
+    for (let at = 0; at < 40; at += 1) writeFileSync(join(dir, `s${at}.mp3`), "");
+
+    const tools = { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null };
+    const loopGotATurn = new Promise<string>((done) => setTimeout(() => done("loop"), 0));
+    const tagging = loadTagged(tools, dir).then(() => "tags");
+
+    // Whichever finishes first. Blocking the loop means the timer cannot fire
+    // until tagging is done, so "tags" would win.
+    assert.equal(await Promise.race([loopGotATurn, tagging]), "loop");
+    assert.equal(await tagging, "tags", "and it still finishes");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
