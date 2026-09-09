@@ -962,3 +962,46 @@ test("a source ffmpeg cannot read is a 502, not the end of the server", async ()
     engine.stop();
   }
 });
+
+test("a link cannot claim to be one thing and carry the other", async () => {
+  // `/a/` administers and `/v/` only views, and the point of naming them is
+  // that somebody can tell which they were sent. A path that accepted either
+  // key would make that a label rather than a fact -- and the dangerous
+  // direction is real: a `/v/` link built around the control key reads as
+  // view-only to whoever you send it to and hands them the controls.
+  const engine = new PlayerEngine([], "/m", { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null });
+  const server = createServer(engine, {
+    web: null,
+    media: false,
+    version: "test",
+    key: "control-key",
+    listenKey: "listen-key",
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+  const open = (path: string): Promise<Response> => fetch(`${base}${path}`, { redirect: "manual" });
+
+  try {
+    // Each key at its own door.
+    assert.equal((await open("/a/control-key")).status, 302);
+    assert.equal((await open("/v/listen-key")).status, 302);
+
+    // And at the other one, refused -- the view link may not carry the
+    // controls, and the admin link is not what a viewer was given.
+    assert.equal((await open("/v/control-key")).status, 404);
+    assert.equal((await open("/a/listen-key")).status, 404);
+
+    // Answered exactly as a key that is simply wrong, so the difference
+    // between "wrong key" and "wrong door" tells an attacker nothing.
+    assert.equal((await open("/a/nonsense")).status, 404);
+    assert.equal((await open("/v/nonsense")).status, 404);
+
+    // The shape that said neither is gone. It is an ordinary path now, and an
+    // ordinary path without a key is a 401.
+    assert.equal((await open("/s/control-key")).status, 401);
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});

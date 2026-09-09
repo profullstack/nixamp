@@ -282,17 +282,28 @@ export function reachableAddresses(
  */
 export const KEY_PATHS = ["/a/", "/v/"] as const;
 
-/** The key in a share link, whichever of the three shapes it came in. */
-export function keyInPath(path: string): string | null {
+/**
+ * The key in a share link, and what the link claimed to be.
+ *
+ * Both halves, because a label nobody checks is a label that can lie. `/a/`
+ * means this administers and `/v/` means this only views; handed the other
+ * key, a path would otherwise have said one thing and done the other -- and
+ * the dangerous direction is real: a `/v/` link built around the control key
+ * reads as view-only to the person you send it to and hands them the controls.
+ */
+export function keyInPath(path: string): { key: string; wants: Scope } | null {
   for (const prefix of KEY_PATHS) {
     if (!path.startsWith(prefix)) continue;
     const rest = path.slice(prefix.length).replace(/\/+$/, "");
     if (rest === "" || rest.includes("/")) return null;
+    let key = rest;
     try {
-      return decodeURIComponent(rest);
+      key = decodeURIComponent(rest);
     } catch {
-      return rest;
+      // A key that is not valid percent-encoding is taken as written; it will
+      // fail to match anything, which is the right answer either way.
     }
+    return { key, wants: prefix === "/a/" ? "control" : "listen" };
   }
   return null;
 }
