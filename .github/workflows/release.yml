@@ -40,6 +40,18 @@ jobs:
       - run: bun run web:build
       - run: bun test test web/test
       - run: bun run pack:cli
+      # Run what we are about to ship, somewhere else, with the Node a user
+      # has rather than the bun that built it. 0.3.0 and 0.4.0 both published a
+      # tarball whose node_modules held one of its five dependencies, and both
+      # installed perfectly and then died on the first import. Everything else
+      # in this job passed for both.
+      - name: The tarball runs
+        run: |
+          set -eu
+          mkdir -p /tmp/cli-check
+          tar -xzf release/nixamp-cli-*.tar.gz -C /tmp/cli-check
+          cd /tmp/cli-check/nixamp-cli-*
+          test "$(node bin/nixamp.mjs --version)" = "$(node -p "require('./package.json').version")"
       - name: Publish to npm
         run: npm publish --provenance --access public
         env:
