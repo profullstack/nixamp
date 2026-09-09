@@ -3423,7 +3423,18 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 
   if (options.publish !== "no" && publishable_) {
     const listen = shareLink(publishable_.url, listenKey, false);
-    const wanted = options.publish === "yes"
+    // Listed unless told otherwise.
+    //
+    // It used to ask, and a daemon has nobody to ask -- so a server started in
+    // the background was never listed, which meant nobody could find it, which
+    // meant it could not be paid for either. A stream that nobody can find is
+    // not a stream. What is published is the listening link, never the one
+    // that drives, and `--no-publish` is there for a server that should not be
+    // public at all.
+    //
+    // Still asked when a person is at the terminal to answer, because that is
+    // somebody who can say no.
+    const wanted = options.publish === "yes" || !process.stdin.isTTY
       ? true
       : await confirm(`\n  List this stream at ${DEFAULT_DIRECTORY}/directory so anyone can find it?\n  It publishes ${listen} — listen only, not the controls.`);
 

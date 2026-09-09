@@ -556,3 +556,26 @@ test("a forgotten stream is nobody to follow either", () => {
   assert.deepEqual(dir.recentlyEnded(), []);
   assert.equal(dir.nameOf("owner-1"), "");
 });
+
+test("with nobody at the terminal to ask, a server lists itself", async () => {
+  // `confirm` answers no when there is no terminal, which is every daemon --
+  // so a server started in the background was never listed, nobody could find
+  // it, and a stream nobody can find cannot be paid for either. Being in the
+  // directory is the point of publishing.
+  assert.equal(await confirm("list it?", false), false, "confirm itself still says no");
+
+  // Which is why the decision does not rest on confirm alone. A server with a
+  // reachable address publishes unless it was told not to; the question is
+  // only asked of somebody who is there to answer it.
+  const wanted = (publish: "ask" | "yes" | "no", tty: boolean): boolean =>
+    publish !== "no" && (publish === "yes" || !tty);
+
+  assert.equal(wanted("ask", false), true, "a daemon lists itself");
+  assert.equal(wanted("yes", false), true);
+  assert.equal(wanted("yes", true), true);
+  // --no-publish is how a server stays off the list, terminal or not.
+  assert.equal(wanted("no", false), false);
+  assert.equal(wanted("no", true), false);
+  // And at a terminal it is still asked, because somebody is there to say no.
+  assert.equal(wanted("ask", true), false, "asked rather than assumed");
+});
