@@ -142,6 +142,31 @@ export class Directory {
   /** Streams that stopped, so the phone line can say when. */
   private readonly ended = new Map<string, Ended>();
   private sequence = 0;
+  /**
+   * Somewhere to echo the ended list, so it survives a restart.
+   *
+   * Attached after construction rather than taken as a constructor argument:
+   * this is a mirror, not a dependency, and the directory works exactly as it
+   * did without one.
+   */
+  private mirror: { save: (item: Ended) => void; drop: (id: string) => void } | null = null;
+
+  /** Start echoing ended streams somewhere durable. */
+  persistTo(mirror: { save: (item: Ended) => void; drop: (id: string) => void }): void {
+    this.mirror = mirror;
+  }
+
+  /**
+   * Put back what a previous process knew.
+   *
+   * Only fills gaps: anything already here was announced since we started and
+   * is newer than a row written before the restart.
+   */
+  seedEnded(items: readonly Ended[]): void {
+    for (const item of items) {
+      if (!this.ended.has(item.id) && !this.items.has(item.id)) this.ended.set(item.id, item);
+    }
+  }
 
   constructor(
     private readonly ttl = TTL_MS,
@@ -169,7 +194,10 @@ export class Directory {
     const previously = existing ?? this.endedByUrl(announcement.url);
     const id = previously?.id ?? `s${++this.sequence}${this.now().toString(36)}`;
     const code = previously?.code ?? this.freeCode();
-    if (this.ended.has(id)) this.ended.delete(id);
+    if (this.ended.has(id)) {
+      this.ended.delete(id);
+      this.mirror?.drop(id);
+    }
 
     const listing: Listing = {
       id,
@@ -256,7 +284,7 @@ export class Directory {
   }
 
   private remember(item: Listing): void {
-    this.ended.set(item.id, {
+    const record: Ended = {
       id: item.id,
       code: item.code,
       name: item.name,
@@ -265,7 +293,9 @@ export class Directory {
       nowPlaying: item.nowPlaying,
       startedAt: item.startedAt,
       endedAt: item.updatedAt,
-    });
+    };
+    this.ended.set(item.id, record);
+    this.mirror?.save(record);
   }
 
   /** A code no live and no recently-ended stream is using. */
@@ -292,7 +322,10 @@ export class Directory {
     }
     const forget = this.now() - ENDED_TTL_MS;
     for (const [id, item] of this.ended) {
-      if (item.endedAt < forget) this.ended.delete(id);
+      if (item.endedAt < forget) {
+        this.ended.delete(id);
+        this.mirror?.drop(id);
+      }
     }
   }
 }

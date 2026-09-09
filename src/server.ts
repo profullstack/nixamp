@@ -29,11 +29,12 @@ import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
 import { needsAdmin, Owner } from "./owner.ts";
 import { readSession } from "./session.ts";
-import { Directory, parseAnnouncement, type Listing } from "./directory.ts";
+import { Directory, ENDED_TTL_MS, parseAnnouncement, type Listing } from "./directory.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
 import { CALL_IN_NUMBER, OPT_IN_PATH, optInPage } from "./optin.ts";
 import pg from "pg";
 import { Follows, phoneFrom } from "./follows.ts";
+import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
@@ -1693,10 +1694,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // pocket can administer it from anywhere by signing in as the same person.
   // Following outlives every stream, so unlike the rest of this it wants a
   // database. Only where there is one: a nixamp on a laptop has no followers.
-  const follows =
+  const pool =
     options.directory && process.env["DATABASE_URL"]
-      ? new Follows(new pg.Pool({ connectionString: process.env["DATABASE_URL"] }))
+      ? new pg.Pool({ connectionString: process.env["DATABASE_URL"] })
       : undefined;
+  const follows = pool ? new Follows(pool) : undefined;
+  // The two things that were promises kept only in memory: a caller who was
+  // told they would be texted, and the ended stream a code still points at.
+  const durable = pool ? new Durable(pool, (message) => console.log(message)) : undefined;
 
   const vapidPublicKey = process.env["VAPID_PUBLIC_KEY"] ?? "";
   const vapidPrivateKey = process.env["VAPID_PRIVATE_KEY"] ?? "";
@@ -1764,11 +1769,84 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ? new Directory(undefined, undefined, undefined, tellFollowers)
     : undefined;
 
+  if (directory && durable) {
+    // Echoed rather than awaited: the directory answers from memory, so a
+    // database that is briefly unreachable should cost the durability and not
+    // the request.
+    directory.persistTo({
+      save: (item) => void durable.saveEnded(item),
+      drop: (id) => void durable.dropEnded(id),
+    });
+    // And put back what the last process knew, without holding up the listen.
+    void durable
+      .loadEnded(Date.now() - ENDED_TTL_MS)
+      .then((items) => {
+        if (items.length > 0) console.log(`  remembered ${items.length} stream(s) that had ended.`);
+        directory.seedEnded(items);
+      })
+      .catch(() => {});
+    void durable.sweep(Date.now() - ENDED_TTL_MS, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
+  }
+
   const session = readSession();
   const owner = new Owner({
     ownerId: options.owner || (session?.token ? await ownerIdOf(session) : ""),
     site: session?.site ?? DEFAULT_DIRECTORY,
   });
+
+  // The party line answers a phone number, and there is only one number. Both
+  // keys or neither: without the public key every webhook would be refused,
+  // which is a worse failure than not offering the endpoint.
+  const partyLine =
+    options.directory && process.env["TELNYX_API_KEY"] && process.env["TELNYX_PUBLIC_KEY"]
+      ? new PartyLine({
+          apiKey: process.env["TELNYX_API_KEY"],
+          publicKey: process.env["TELNYX_PUBLIC_KEY"],
+          streams: directory,
+          callIn: CALL_IN_NUMBER,
+          // Only when a sending number is configured. Without one the line
+          // still answers and still says when the stream ended; it just does
+          // not offer a text it could not send.
+          ...(process.env["PARTYLINE_SMS_FROM"]
+            ? {
+                sms: telnyxSms({
+                  apiKey: process.env["TELNYX_API_KEY"],
+                  from: process.env["PARTYLINE_SMS_FROM"],
+                  onEvent: (message) => console.log(message),
+                }),
+              }
+            : {}),
+          ...(process.env["PARTYLINE_GREETING"] ? { greeting: process.env["PARTYLINE_GREETING"] } : {}),
+          ...(process.env["PARTYLINE_VOICE"] ? { voice: process.env["PARTYLINE_VOICE"] } : {}),
+          onEvent: (message) => console.log(message),
+        })
+      : undefined;
+
+  if (partyLine && durable) {
+    // Put back everybody a previous process promised to text, then keep
+    // echoing. Seeding first means a stream that goes live during startup
+    // still finds them.
+    void durable
+      .loadReminders()
+      .then((waiting) => {
+        const owed = [...waiting.values()].reduce((n, set) => n + set.size, 0);
+        if (owed > 0) console.log(`  ${owed} caller(s) are still owed a text.`);
+        partyLine.persistRemindersTo(
+          {
+            add: (code, phone) => void durable.addReminder(code, phone),
+            take: (code) => durable.takeReminders(code),
+          },
+          waiting,
+        );
+      })
+      .catch(() => {
+        // Still worth echoing new ones even if the old list could not be read.
+        partyLine.persistRemindersTo({
+          add: (code, phone) => void durable.addReminder(code, phone),
+          take: (code) => durable.takeReminders(code),
+        });
+      });
+  }
 
   const server = createServer(engine, {
     web,
@@ -1787,34 +1865,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     load: (next) => loadSource(tools, next),
     ...(directory ? { directory } : {}),
     ...(follows ? { follows, vapidPublicKey } : {}),
-    // The party line answers a phone number, and there is only one number.
-    // Both keys or neither: without the public key every webhook would be
-    // refused, which is a worse failure than not offering the endpoint.
-    ...(options.directory && process.env["TELNYX_API_KEY"] && process.env["TELNYX_PUBLIC_KEY"]
-      ? {
-          partyLine: new PartyLine({
-            apiKey: process.env["TELNYX_API_KEY"],
-            publicKey: process.env["TELNYX_PUBLIC_KEY"],
-            streams: directory,
-            callIn: CALL_IN_NUMBER,
-            // Only when a sending number is configured. Without one the line
-            // still answers and still says when the stream ended; it just does
-            // not offer a text it could not send.
-            ...(process.env["PARTYLINE_SMS_FROM"]
-              ? {
-                  sms: telnyxSms({
-                    apiKey: process.env["TELNYX_API_KEY"],
-                    from: process.env["PARTYLINE_SMS_FROM"],
-                    onEvent: (message) => console.log(message),
-                  }),
-                }
-              : {}),
-            ...(process.env["PARTYLINE_GREETING"] ? { greeting: process.env["PARTYLINE_GREETING"] } : {}),
-            ...(process.env["PARTYLINE_VOICE"] ? { voice: process.env["PARTYLINE_VOICE"] } : {}),
-            onEvent: (message) => console.log(message),
-          }),
-        }
-      : {}),
+    ...(partyLine ? { partyLine } : {}),
     // Accounts live where the directory lives, and only there: a nixamp on a
     // laptop has nobody to be an account of.
     ...(options.directory && process.env["DATABASE_URL"]

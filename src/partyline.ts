@@ -214,6 +214,30 @@ export class PartyLine {
   /** Who to text when a stream returns, by stream code. */
   private readonly reminders = new Map<string, Set<string>>();
   /**
+   * The same list, somewhere that survives a deploy.
+   *
+   * A caller who pressed 1 was told they would be texted. Keeping that promise
+   * only in a Map meant a restart broke it silently, which is the worst way to
+   * break a promise made to somebody on a telephone.
+   */
+  private reminderStore: {
+    add: (code: string, phone: string) => void;
+    take: (code: string) => Promise<string[]>;
+  } | null = null;
+
+  /** Start echoing reminders somewhere durable, and put back what was there. */
+  persistRemindersTo(
+    store: { add: (code: string, phone: string) => void; take: (code: string) => Promise<string[]> },
+    waiting: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  ): void {
+    this.reminderStore = store;
+    for (const [code, phones] of waiting) {
+      const set = this.reminders.get(code) ?? new Set<string>();
+      for (const phone of phones) set.add(phone);
+      this.reminders.set(code, set);
+    }
+  }
+  /**
    * Legs listening to a stream, by its code.
    *
    * Separate from the rooms because a stream listener is not in a conference:
@@ -453,6 +477,7 @@ export class PartyLine {
     const waiting = this.reminders.get(code) ?? new Set<string>();
     waiting.add(from);
     this.reminders.set(code, waiting);
+    this.reminderStore?.add(code, from);
     this.options.onEvent?.(`  a caller asked to be told when ${code} is live again.`);
 
     await this.command(leg, "speak", {
@@ -470,9 +495,13 @@ export class PartyLine {
    * the week is how a useful message becomes the reason they block the number.
    */
   async wentLive(stream: { code: string; name: string; nowPlaying: string }): Promise<number> {
-    const waiting = this.reminders.get(stream.code);
     const sms = this.options.sms;
-    if (waiting === undefined || waiting.size === 0 || sms === undefined) return 0;
+    // Taken from the store first, and that take is what clears it: a number
+    // put there by a process that has since been replaced is still owed a
+    // text, and this one never heard the call that promised it.
+    const stored = this.reminderStore ? await this.reminderStore.take(stream.code) : [];
+    const waiting = new Set([...(this.reminders.get(stream.code) ?? []), ...stored]);
+    if (waiting.size === 0 || sms === undefined) return 0;
     this.reminders.delete(stream.code);
 
     const what = stream.nowPlaying ? ` of ${stream.nowPlaying}` : "";
