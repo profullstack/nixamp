@@ -96,6 +96,9 @@ Options for serve:
                    its own interfaces. Also NIXAMP_PUBLIC_URL
       --no-lookup  do not ask ipinfo.io what this machine's public address is
                    when nothing local looks public
+      --tls-cert FILE --tls-key FILE  serve https rather than http. Needed by
+                   anyone opening this from a page that is itself https, since
+                   a browser refuses every request from https to http
       --ingest     accept a live stream in at POST /api/ingest
       --rtmp-in N  also listen for RTMP publishers (OBS, Larix) from port N
       --rtmp-streams N  how many may publish at once (default 3, a port each)

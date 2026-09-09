@@ -12,6 +12,7 @@ import {
   type LocalTrack,
 } from "./player.ts";
 import {
+  blockedAsMixedContent,
   RemoteClient, fetchSnapshot, normalizeBase, probeServer,
   type Status,
 } from "./remote.ts";
@@ -450,6 +451,17 @@ export function start(): void {
     void (async () => {
       remoteStatus = "connecting";
       draw();
+      // Asked before trying, because the browser will refuse this one without
+      // ever sending it and "no nixamp answered there" would be a lie.
+      const blocked = blockedAsMixedContent(base);
+      if (blocked) {
+        remoteStatus = "error";
+        remoteDetail = blocked;
+        note = blocked;
+        mode = "local";
+        draw();
+        return;
+      }
       const version = await probeServer(base);
       if (version === null) {
         remoteStatus = "error";

@@ -132,11 +132,12 @@ export function reachableAddresses(
   host: string,
   port: number,
   publicUrl = "",
+  scheme: "http" | "https" = "http",
 ): { label: string; url: string }[] {
   const link = (address: string): string => {
     // A bare IPv6 address needs brackets before it is a URL.
     const authority = address.includes(":") ? `[${address}]` : address;
-    return `http://${authority}:${port}`;
+    return `${scheme}://${authority}:${port}`;
   };
 
   // An address somebody told us about, because it is one this machine cannot
@@ -162,7 +163,7 @@ export function reachableAddresses(
   found.sort((x, y) => order[x.kind] - order[y.kind]);
   return [
     ...told,
-    { label: "here", url: `http://localhost:${port}` },
+    { label: "here", url: `${scheme}://localhost:${port}` },
     ...found.map(({ label, url }) => ({ label, url })),
   ];
 }
