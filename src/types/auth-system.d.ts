@@ -73,5 +73,16 @@ declare module "@profullstack/auth-system" {
     jwtSecret?: string;
     accessTokenExpiry?: string | number;
     refreshTokenExpiry?: string | number;
+    /**
+     * Composition rules. Every "require" defaults to true except
+     * requireSpecialChars, so leaving this out is stricter than passing it.
+     */
+    passwordOptions?: {
+      minLength?: number;
+      requireUppercase?: boolean;
+      requireLowercase?: boolean;
+      requireNumbers?: boolean;
+      requireSpecialChars?: boolean;
+    };
   }): AuthSystem;
 }

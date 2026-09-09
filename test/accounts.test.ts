@@ -4,6 +4,7 @@ import {
   Accounts,
   type AuthLike,
   checkCredentials,
+  PASSWORD_RULES,
   clearedCookie,
   readClaims,
   readResult,
@@ -31,10 +32,20 @@ test("an address has to look like one, and a password has to be long enough", ()
   assert.equal(checkCredentials("a@b.com", "a-long-enough-one"), "");
   assert.match(checkCredentials("not-an-address", "a-long-enough-one"), /email address/);
   assert.match(checkCredentials("a@b", "a-long-enough-one"), /email address/);
-  assert.match(checkCredentials("a@b.com", "short"), /10 characters/);
+  assert.match(checkCredentials("a@b.com", "short"), /8 characters/);
   assert.match(checkCredentials("a@b.com", "x".repeat(500)), /too long/);
   assert.match(checkCredentials(42, "a-long-enough-one"), /email address/);
-  assert.match(checkCredentials("a@b.com", undefined), /10 characters/);
+  assert.match(checkCredentials("a@b.com", undefined), /8 characters/);
+
+  // Eight is the floor, and the composition rules the module would otherwise
+  // apply are off: eight digits are a password here. Both halves have to agree
+  // about that, which is what PASSWORD_RULES is for -- a password this accepts
+  // and the module refuses is a sign-up that fails with a different sentence.
+  assert.equal(checkCredentials("a@b.com", "12341234"), "");
+  assert.match(checkCredentials("a@b.com", "1234123"), /8 characters/);
+  assert.equal(PASSWORD_RULES.minLength, 8);
+  assert.equal(PASSWORD_RULES.requireUppercase, false);
+  assert.equal(PASSWORD_RULES.requireLowercase, false);
 });
 
 test("a login result is read out of the module's shape", () => {

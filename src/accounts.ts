@@ -90,16 +90,36 @@ export function readClaims(value: unknown): Account | null {
   return id ? { id, email } : null;
 }
 
+/**
+ * How short a password may be, and what it must contain.
+ *
+ * Eight characters, a number somewhere in it, and no requirement about case.
+ * That is deliberately weaker than it was: the composition rules were the kind
+ * that make people write a password down, and a password is no longer the only
+ * way in -- a provider or a token is a better one, and is what the CLI offers
+ * first. What this floor is really for is keeping a one-character password out
+ * of the database, not pretending eight digits are strong.
+ */
+export const PASSWORD_RULES = {
+  minLength: 8,
+  requireUppercase: false,
+  requireLowercase: false,
+  requireNumbers: true,
+  requireSpecialChars: false,
+} as const;
+
 /** An address that could exist, and a password long enough to be worth having. */
 export function checkCredentials(email: unknown, password: unknown): string {
   if (typeof email !== "string" || !/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(email)) {
     return "that does not look like an email address";
   }
-  if (typeof password !== "string" || password.length < 10) {
+  if (typeof password !== "string" || password.length < PASSWORD_RULES.minLength) {
     // Length is checked here so a hopeless password never reaches the
     // database. The auth module then applies its own composition rules on top,
-    // and its refusals are passed through rather than swallowed.
-    return "a password needs at least 10 characters";
+    // and its refusals are passed through rather than swallowed -- which is why
+    // the two have to agree about the minimum, or a password this accepts is
+    // refused a layer down with a different sentence.
+    return `a password needs at least ${PASSWORD_RULES.minLength} characters`;
   }
   if (password.length > 200) return "that password is too long";
   return "";
@@ -125,6 +145,10 @@ export class Accounts {
       (createAuthSystem({
         adapter,
         jwtSecret: options.secret,
+        // The module defaults to requiring an uppercase and a lowercase
+        // letter. Its rules have to match the ones checked above, or a password
+        // this accepts is refused a layer down in a different sentence.
+        passwordOptions: { ...PASSWORD_RULES },
       }) as AuthLike);
     this.tokens = adapter ? new Tokens(adapter) : null;
     this.identities = adapter ? new Identities(adapter, adapter) : null;
