@@ -20,7 +20,7 @@ import {
 } from "../src/oauth.ts";
 import { BAD_KEY_LIMIT, callerOf, Guard, SIGN_IN_LIMIT } from "../src/guard.ts";
 import { createServer, EmptyEngine } from "../src/server.ts";
-import { anonymousHandle, cleanHandle, isReserved } from "../src/handles.ts";
+import { anonymousHandle, cleanHandle, Handles, isReserved } from "../src/handles.ts";
 import { nameOfDir } from "../src/opendirs.ts";
 import { cleanName, cleanUrl, Servers } from "../src/servers.ts";
 import { hashSecret, mintToken, splitToken, Tokens } from "../src/tokens.ts";
@@ -43,6 +43,8 @@ import {
 function fakeDb() {
   const tokens = new Map<string, Record<string, unknown>>();
   const identities = new Map<string, Record<string, unknown>>();
+  const handles = new Map<string, string>();
+  const servers = new Map<string, Record<string, unknown>>();
   const seen: string[] = [];
 
   const query = async (text: string, values: unknown[] = []) => {
@@ -111,10 +113,58 @@ function fakeDb() {
       identities.set(key, { provider: values[0], subject: values[1], user_id: values[2], email: values[3] });
       return { rows: [] };
     }
+    // --- handles ---
+    if (sql.startsWith("SELECT handle FROM nixamp_handles")) {
+      const row = handles.get(String(values[0]));
+      return { rows: row ? [{ handle: row }] : [] };
+    }
+    if (sql.startsWith("SELECT user_id FROM nixamp_handles")) {
+      for (const [user, handle] of handles) {
+        if (handle.toLowerCase() === String(values[0])) return { rows: [{ user_id: user }] };
+      }
+      return { rows: [] };
+    }
+    if (sql.startsWith("SELECT user_id, handle FROM nixamp_handles")) {
+      const wanted = new Set((values[0] as string[]) ?? []);
+      return {
+        rows: [...handles].filter(([user]) => wanted.has(user)).map(([user, handle]) => ({ user_id: user, handle })),
+      };
+    }
+    if (sql.startsWith("INSERT INTO nixamp_handles")) {
+      handles.set(String(values[0]), String(values[1]));
+      return { rows: [] };
+    }
+
+    // --- servers ---
+    if (sql.startsWith("SELECT id, name, url, share_key")) {
+      return { rows: [...servers.values()].filter((row) => row["user_id"] === values[0]) };
+    }
+    if (sql.startsWith("INSERT INTO nixamp_servers")) {
+      const [id, user_id, name, url, share_key] = values;
+      const existing = [...servers.values()].find((r) => r["user_id"] === user_id && r["url"] === url);
+      const row = existing ?? { id, user_id, url, created_at: "2026-01-01", updated_at: "2026-01-01", last_seen_at: null };
+      row["name"] = name;
+      row["share_key"] = share_key;
+      servers.set(String(row["id"]), row);
+      return { rows: [row] };
+    }
+    if (sql.startsWith("UPDATE nixamp_servers")) {
+      const row = servers.get(String(values[1]));
+      return { rows: row && row["user_id"] === values[0] ? [row] : [] };
+    }
+    if (sql.startsWith("DELETE FROM nixamp_servers")) {
+      const row = servers.get(String(values[1]));
+      if (row && row["user_id"] === values[0]) {
+        servers.delete(String(values[1]));
+        return { rows: [row] };
+      }
+      return { rows: [] };
+    }
+
     throw new Error(`unexpected SQL: ${sql}`);
   };
 
-  return { query, tokens, identities, seen };
+  return { query, tokens, identities, handles, servers, seen };
 }
 
 const account = { id: "u1", email: "a@b.com" };
@@ -483,6 +533,11 @@ async function withSignIn(
     version: "test",
     accounts,
     signIn,
+    // Wired exactly as serve() wires them, because the point of this harness
+    // is the route and a route with nothing behind it answers 404 for the
+    // wrong reason.
+    handles: new Handles(db),
+    servers: new Servers(db),
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const { port } = server.address() as AddressInfo;
@@ -1040,4 +1095,40 @@ test("a folder is named after the folder, not after the URL", () => {
   );
   assert.equal(nameOfDir("http://box.example:19499/"), "box.example:19499");
   assert.equal(nameOfDir("not a url"), "an open directory");
+});
+
+test("the account's own routes are reachable, which they were not", async () => {
+  // They were nested inside the `/api/v1/auth/` block, so every one of them
+  // 404ed from the moment it shipped. The stores had tests; the routes had
+  // none, and a store nobody can reach is not a feature.
+  await withSignIn(async (base, { accounts }) => {
+    const token = await accounts.sessionFor({ id: "u1", email: "a@b.com" });
+    const auth = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+
+    const handle = await fetch(`${base}/api/v1/me/handle`, { headers: auth });
+    assert.equal(handle.status, 200, "GET /api/v1/me/handle");
+
+    const claimed = await fetch(`${base}/api/v1/me/handle`, {
+      method: "PUT",
+      headers: auth,
+      body: JSON.stringify({ handle: "chovy" }),
+    });
+    assert.equal(claimed.status, 200);
+    assert.equal((await claimed.json()).handle, "chovy");
+
+    const list = await fetch(`${base}/api/v1/servers`, { headers: auth });
+    assert.equal(list.status, 200, "GET /api/v1/servers");
+
+    const added = await fetch(`${base}/api/v1/servers`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ url: "http://box.local:4321", name: "Living room" }),
+    });
+    assert.equal(added.status, 201);
+
+    // Signed out they are refused rather than missing, which is a different
+    // thing to tell a caller.
+    assert.equal((await fetch(`${base}/api/v1/servers`)).status, 401);
+    assert.equal((await fetch(`${base}/api/v1/me/handle`)).status, 401);
+  });
 });
