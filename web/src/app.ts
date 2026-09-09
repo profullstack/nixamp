@@ -13,7 +13,7 @@ import {
 } from "./player.ts";
 import {
   blockedAsMixedContent,
-  RemoteClient, fetchSnapshot, normalizeBase, probeServer,
+  RemoteClient, fetchSnapshot, probeServer, splitShareLink,
   rungName, stepDown,
   type Status,
 } from "./remote.ts";
@@ -23,6 +23,17 @@ import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../sr
 export const BAND_COUNT = 24;
 const REMOTE_KEY = "nixamp.remote";
 const VOLUME_KEY = "nixamp.volume";
+/**
+ * Whether a connected server plays here or plays over there.
+ *
+ * On by default, which it was not: connecting a phone to your own server used
+ * to make sound come out of the server's speakers and nothing at all out of
+ * the phone, so picking your server from the directory looked like a player
+ * that was simply broken. Playing here is what a person means by opening a
+ * player; driving the machine in the other room is the specialised thing, and
+ * it is one tick away.
+ */
+const LISTEN_HERE_KEY = "nixamp.listenHere";
 
 type Mode = "local" | "remote";
 
@@ -548,7 +559,14 @@ export function start(): void {
 
   dom.remoteForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    const base = normalizeBase(dom.remoteUrl.value);
+    const typed = dom.remoteUrl.value;
+    // What people paste is a share link: an address with a key on the end of
+    // it. Taken whole it is not an address -- there is no /s/KEY/api/health,
+    // and asking for one gets a 404 that reads as "no nixamp answered there",
+    // which is how connecting to your own server failed while the server was
+    // healthy the entire time. The directory's Listen button hands this the
+    // same shape, so it failed the same way.
+    const { base, key } = splitShareLink(typed);
     if (base === "") {
       note = "That is not an address.";
       draw();
@@ -568,7 +586,9 @@ export function start(): void {
         draw();
         return;
       }
-      const version = await probeServer(base);
+      // With the key, because a keyed server answers 401 to everything without
+      // it -- including the health check that decides whether to go on.
+      const version = await probeServer(base, undefined, key);
       if (version === null) {
         remoteStatus = "error";
         remoteDetail = "no nixamp answered there";
@@ -578,8 +598,10 @@ export function start(): void {
       }
       mode = "remote";
       note = "";
-      try { localStorage.setItem(REMOTE_KEY, base); } catch { /* private mode */ }
-      remote.connect(base);
+      // The link as it was given, key and all: saving the bare address would
+      // mean the next visit reconnects to a server that then refuses it.
+      try { localStorage.setItem(REMOTE_KEY, typed.trim()); } catch { /* private mode */ }
+      remote.connect(typed);
       draw();
     })();
   });
@@ -1354,6 +1376,9 @@ export function start(): void {
   });
 
   dom.listenHere.addEventListener("change", () => {
+    try {
+      localStorage.setItem(LISTEN_HERE_KEY, dom.listenHere.checked ? "1" : "0");
+    } catch { /* private mode */ }
     if (mode !== "remote") return;
     void (async () => {
       if (dom.listenHere.checked) {
@@ -1403,6 +1428,8 @@ export function start(): void {
     }
     const saved = localStorage.getItem(REMOTE_KEY);
     if (saved) dom.remoteUrl.value = saved;
+    // Only an explicit "no" turns it off; an absent setting keeps the default.
+    if (localStorage.getItem(LISTEN_HERE_KEY) === "0") dom.listenHere.checked = false;
   } catch { /* private mode */ }
 
   // Served by a nixamp of its own? Then it has a library to show — but only

@@ -1,11 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { clamp, displayName, formatTime, isVideoFile, titleFromFilename } from "../src/format.ts";
 import { bandEdges, bands, decay, holdPeaks } from "../src/spectrum.ts";
-import { apiUrl, blockedAsMixedContent, mediaUrl, normalizeBase, parseSnapshot, splitShareLink } from "../src/remote.ts";
+import {
+  apiUrl, blockedAsMixedContent, mediaUrl, normalizeBase, parseSnapshot, probeServer, splitShareLink,
+} from "../src/remote.ts";
 import { byName, isPlayable } from "../src/player.ts";
 import { NEVER_CACHE, serviceWorkerSource } from "../scripts/sw.ts";
 import { Bitmap, crc32, drawIcon, encodePng, ICONS } from "../scripts/icons.ts";
@@ -288,4 +292,113 @@ test("a pasted share link is an address and a key, and both are needed", () => {
   // And it joins a query that already exists rather than starting a second one.
   assert.equal(mediaUrl("http://box:4321", 3, 1500, "K"), "http://box:4321/api/media/3?kbps=1500&k=K");
   assert.equal(apiUrl("http://box:4321", "/api/state"), "http://box:4321/api/state");
+});
+
+test("a connected server plays on this device unless you say otherwise", () => {
+  // The default that made picking your own server look like a broken player:
+  // unticked, the server plays through its own speakers and the phone in your
+  // hand draws bars in silence. Whether it is ticked is the whole feature, so
+  // it is asserted on the shipped markup rather than on a variable.
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  const box = /<input id="listen-here" type="checkbox"([^>]*)\/>/.exec(html);
+  assert.ok(box, "#listen-here is missing from index.html");
+  assert.match(box[1] ?? "", /\bchecked\b/);
+
+  // And an explicit "no" is what turns it off, so an empty setting keeps the
+  // default rather than reading as false.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  assert.match(app, /localStorage\.getItem\(LISTEN_HERE_KEY\) === "0"/);
+});
+
+test("nothing in the transport can push the page wider than a phone", () => {
+  // Measured, not guessed: at an iPhone's 390px the transport row was 413px
+  // wide, and a page wider than the screen is one iOS will not scroll straight
+  // down -- which is what "I can't scroll to the bottom" was.
+  //
+  // A stylesheet cannot be laid out here, so this guards the two declarations
+  // that let the row fit rather than re-measuring it. The measurement itself
+  // needs a browser at 390px wide.
+  const css = readFileSync(join(webDir, "src/styles.css"), "utf8");
+
+  // A range input's default width is ~130px and a flex item will not shrink
+  // below its own content without this.
+  const range = /input\[type="range"\] \{([^}]*)\}/.exec(css);
+  assert.ok(range, "the range rule is gone");
+  assert.match(range[1] ?? "", /min-width:\s*0/);
+
+  // Four buttons and a slider do not fit across a phone, so the row wraps.
+  const transport = /\.transport \{([^}]*)\}/.exec(css);
+  assert.ok(transport, "the transport rule is gone");
+  assert.match(transport[1] ?? "", /flex-wrap:\s*wrap/);
+});
+
+test("the installed app is padded away from every edge of the phone", () => {
+  // Installed on an iPhone this runs edge to edge under the status bar and the
+  // home indicator both. Only the bottom inset was honoured, so the header sat
+  // behind the clock.
+  const css = readFileSync(join(webDir, "src/styles.css"), "utf8");
+  const app = /#app \{([^}]*)\}/.exec(css);
+  assert.ok(app, "the #app rule is gone");
+  for (const side of ["top", "right", "bottom", "left"]) {
+    assert.match(app[1] ?? "", new RegExp(`env\\(safe-area-inset-${side}\\)`), `no ${side} inset`);
+  }
+  // And the meta that makes those insets non-zero in the first place.
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  assert.match(html, /viewport-fit=cover/);
+});
+
+test("a share link has to be taken apart before a server is asked anything", async () => {
+  // A nixamp with a key: the key rides in ?k=, and /s/KEY is a page for people
+  // rather than a prefix the API lives under.
+  const KEY = "sekrit";
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://localhost");
+    if (url.pathname !== "/api/health") {
+      response.writeHead(404).end("no such endpoint");
+      return;
+    }
+    if (url.searchParams.get("k") !== KEY) {
+      response.writeHead(401).end("no key");
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ name: "nixamp", version: "test" }));
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const origin = `http://127.0.0.1:${port}`;
+  const shareLink = `${origin}/s/${KEY}`;
+
+  try {
+    // The bug, kept here so it cannot come back: pasted whole, the link is not
+    // an address. Probing it asks for /s/KEY/api/health, gets a 404, and the
+    // page reports "no nixamp answered there" about a server that was healthy
+    // the whole time -- which is what picking your own server did.
+    assert.equal(await probeServer(normalizeBase(shareLink)), null);
+
+    // Split, and with the key, because a keyed server refuses even the health
+    // check without one.
+    const { base, key } = splitShareLink(shareLink);
+    assert.equal(base, origin);
+    assert.equal(key, KEY);
+    assert.equal(await probeServer(base, undefined, key), "test");
+    // The key really is load-bearing: right address, no key, still no.
+    assert.equal(await probeServer(base), null);
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
+  }
+});
+
+test("connecting splits the link and carries the key", () => {
+  // The two calls the handler makes. Asserted on the source because the
+  // handler needs a DOM to run, and the test above is what proves why it
+  // matters.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const handler = app.slice(app.indexOf('dom.remoteForm.addEventListener("submit"'));
+  const body = handler.slice(0, handler.indexOf("\n  });"));
+  assert.match(body, /splitShareLink\(/);
+  assert.match(body, /probeServer\(base, undefined, key\)/);
+  // And what gets saved is the link with its key, not the bare address: a
+  // reload that reconnects without the key is refused by its own server.
+  assert.match(body, /setItem\(REMOTE_KEY, typed\.trim\(\)\)/);
 });
