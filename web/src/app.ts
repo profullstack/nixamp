@@ -642,7 +642,14 @@ export function start(): void {
       const version = await probeServer(base, undefined, key);
       if (version === null) {
         remoteStatus = "error";
-        remoteDetail = "no nixamp answered there";
+        remoteDetail = "not answering";
+        // The two reasons are different problems and deserve different
+        // sentences: a machine that is off needs starting, an address that is
+        // wrong needs correcting, and "no nixamp answered there" covered both
+        // by describing neither.
+        note =
+          `Nothing answered at ${base}. If that is your machine, it is off or ` +
+          "nixamp is not running on it; otherwise check the address.";
         mode = "local";
         draw();
         return;
@@ -988,6 +995,20 @@ export function start(): void {
         open.addEventListener("click", () => {
           dom.remoteUrl.value = entry.key ? `${entry.url}/s/${entry.key}` : entry.url;
           dom.remoteForm.requestSubmit();
+        });
+
+        // Asked rather than assumed. A machine you turned off looks exactly
+        // like a machine that is up until you click Open and nothing happens,
+        // and "nothing happens" is the least useful thing a list can say.
+        void probeServer(entry.url).then((version) => {
+          if (version !== null) {
+            detail.textContent = `${entry.url} · ${version}`;
+            return;
+          }
+          detail.textContent = `${entry.url} · not answering`;
+          item.classList.add("offline");
+          open.disabled = true;
+          open.title = "That machine is not answering. Start nixamp on it.";
         });
 
         const forget = document.createElement("button");
