@@ -362,7 +362,8 @@ export function safeJoin(rootDir: string, urlPath: string): string | null {
 
 /** What the HTTP layer needs from a player. Tests hand it a fake. */
 export interface Engine {
-  snapshot(): Snapshot;
+  /** `withTracks` false leaves the library out, for a frame that is only motion. */
+  snapshot(withTracks?: boolean): Snapshot;
   command(command: Command): void;
   subscribe(listener: (snapshot: Snapshot) => void): () => void;
   /** Absolute path of a track, or undefined when the index is not one. */
@@ -476,10 +477,15 @@ export class PlayerEngine implements Engine {
     this.dirty = true;
   }
 
-  snapshot(): Snapshot {
+  /**
+   * The current state. `withTracks` carries the library, which is worth half a
+   * megabyte on a real one and is only news when it has changed.
+   */
+  snapshot(withTracks = true): Snapshot {
     return {
       revision: this.revision,
-      tracks: toRemoteTracks(this.tracks),
+      ...(withTracks ? { tracks: toRemoteTracks(this.tracks) } : {}),
+      trackCount: this.tracks.length,
       index: this.state.index,
       playing: this.state.playing,
       position: this.state.position,
@@ -569,10 +575,17 @@ export class PlayerEngine implements Engine {
     };
   }
 
-  private push(): void {
+  /**
+   * Send the state to everyone watching.
+   *
+   * The library goes only when `listChanged` says it has, which is what turned
+   * five megabytes a second into a few kilobytes: an analyser tick has nothing
+   * to say about the track list, and it fires twelve times a second.
+   */
+  private push(listChanged = false): void {
     this.revision++;
     if (this.listeners.size === 0) return;
-    const snapshot = this.snapshot();
+    const snapshot = this.snapshot(listChanged);
     for (const listener of this.listeners) listener(snapshot);
   }
 
@@ -592,7 +605,7 @@ export class PlayerEngine implements Engine {
     this.state.index = 0;
     this.state.position = 0;
     this.state.note = "";
-    this.push();
+    this.push(true);
   }
 
   retag(tracks: Track[], root: string): void {
@@ -603,8 +616,9 @@ export class PlayerEngine implements Engine {
     if (tracks.some((track, at) => track.path !== this.tracks[at]?.path)) return;
     this.tracks = tracks;
     // No stop, no index reset: the only thing that changes is what the titles
-    // say, and every remote finds out because a snapshot goes out.
-    this.push();
+    // say, and every remote finds out because a snapshot goes out -- carrying
+    // the list, since the titles are the whole point of this one.
+    this.push(true);
   }
 }
 
@@ -614,6 +628,7 @@ export class EmptyEngine implements Engine {
   snapshot(): Snapshot {
     return { ...emptySnapshot(), note: this.note };
   }
+
   command(): void {}
   subscribe(listener: (snapshot: Snapshot) => void): () => void {
     listener(this.snapshot());
@@ -1811,7 +1826,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 404, { error: "no such track" });
         return;
       }
-      watch(request, response, "media", engine.snapshot().tracks[index]?.title ?? file);
+      watch(request, response, "media", engine.snapshot().tracks?.[index]?.title ?? file);
       // A browser asks for every track here, and a matroska or an avi handed
       // to it raw is bytes it cannot play. Seeking is what this route is for
       // and transcoding gives it up, but an unseekable film beats a silent
@@ -1842,11 +1857,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       const current = engine.snapshot();
-      if (current.tracks.length === 0) {
+      if (current.trackCount === 0) {
         json(response, 404, { error: "nothing is playing" });
         return;
       }
-      watch(request, response, "stream", current.tracks[current.index]?.title ?? "live");
+      watch(request, response, "stream", current.tracks?.[current.index]?.title ?? "live");
       liveAudio(request, response, engine, options.ffmpeg ?? ["ffmpeg"]);
       return;
     }
@@ -1862,7 +1877,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 403, { error: "media streaming is off" });
         return;
       }
-      watch(request, response, "stream", engine.snapshot().tracks[index]?.title ?? source);
+      watch(request, response, "stream", engine.snapshot().tracks?.[index]?.title ?? source);
       transcode(request, response, source, options.ffmpeg ?? ["ffmpeg"]);
       return;
     }
@@ -2681,7 +2696,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         },
         nowPlaying: () => {
           const snapshot = engine.snapshot();
-          return snapshot.tracks[snapshot.index]?.title ?? "";
+          return snapshot.tracks?.[snapshot.index]?.title ?? "";
         },
         onConfig: (remote) => {
           const next = applyRemoteConfig(paywallConfig, (remote as { x402?: unknown })?.x402);

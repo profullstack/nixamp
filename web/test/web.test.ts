@@ -100,21 +100,34 @@ test("a snapshot off the wire is checked, not trusted", () => {
     index: 0, playing: true, position: 12.5,
     bars: [0.1, 0.2], levels: [0.5, 0.6], silent: false, note: "", root: "/m",
   });
-  assert.equal(good?.tracks.length, 1);
+  assert.equal(good?.tracks?.length, 1);
   assert.equal(good?.playing, true);
   assert.equal(good?.position, 12.5);
 
   // Missing and wrong-typed fields become defaults rather than exceptions.
   const partial = parseSnapshot({ tracks: [{}] });
-  assert.equal(partial?.tracks[0]?.title, "Untitled");
+  assert.equal(partial?.tracks?.[0]?.title, "Untitled");
   assert.equal(partial?.revision, 0);
   assert.deepEqual(partial?.levels, [0, 0]);
   assert.equal(parseSnapshot({ tracks: [], position: "soon" })?.position, 0);
   assert.equal(parseSnapshot({ tracks: [], playing: "yes" })?.playing, false);
 
   assert.equal(parseSnapshot(null), null);
-  assert.equal(parseSnapshot({}), null);
   assert.equal(parseSnapshot("nope"), null);
+
+  // A frame carries the library only when it has changed, so one without it is
+  // ordinary. Rejecting those would throw away every frame but the first --
+  // which is to say all the motion.
+  const lean = parseSnapshot({ revision: 7, index: 3, playing: true, trackCount: 5778 });
+  assert.equal(lean?.tracks, undefined, "no news about the list, rather than an empty list");
+  assert.equal(lean?.trackCount, 5778, "and a count, so a client still knows how many");
+  assert.equal(lean?.index, 3);
+
+  // The flag that decides whether a file gets a picture survives the rebuild.
+  const film = parseSnapshot({ tracks: [{ title: "A Film.mkv", video: true }] });
+  assert.equal(film?.tracks?.[0]?.video, true);
+  const song = parseSnapshot({ tracks: [{ title: "A Song.flac" }] });
+  assert.equal(song?.tracks?.[0]?.video, undefined);
 });
 
 test("the manifest has everything an install prompt asks for", () => {

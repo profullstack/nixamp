@@ -16,7 +16,7 @@ import {
   type Status,
 } from "./remote.ts";
 import { bandEdges, bands, decay, drawSpectrum, holdPeaks } from "./spectrum.ts";
-import { emptySnapshot, type Snapshot } from "../../src/protocol.ts";
+import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 
 export const BAND_COUNT = 24;
 const REMOTE_KEY = "nixamp.remote";
@@ -96,7 +96,7 @@ export function start(): void {
   let mode: Mode = "local";
   let local: LocalTrack[] = [];
   let index = 0;
-  let snapshot: Snapshot = emptySnapshot();
+  let snapshot: FullSnapshot = emptySnapshot();
   let remoteStatus: Status = "idle";
   let remoteDetail = "";
   let note = "Pick files, or connect to a nixamp running somewhere else.";
@@ -127,7 +127,10 @@ export function start(): void {
 
   const remote = new RemoteClient({
     onSnapshot: (next) => {
-      snapshot = next;
+      // A frame without a track list has nothing new to say about it, which is
+      // every frame but the first: keep what we had rather than emptying the
+      // playlist twelve times a second.
+      snapshot = merge(snapshot, next);
       if (remoteDrives()) {
         // The server is the one making the sound; mirror its analyser.
         bars = next.bars.length > 0 ? next.bars : bars;
@@ -1208,7 +1211,7 @@ export function start(): void {
     const here = globalThis.location.origin;
     if (await probeServer(here) === null) return;
     const snapshot = await fetchSnapshot(here);
-    if (!snapshot || snapshot.tracks.length === 0) return;
+    if (!snapshot || snapshot.trackCount === 0) return;
     dom.remoteUrl.value = here;
     mode = "remote";
     // The hint about picking files has been answered by the server itself.

@@ -26,7 +26,11 @@ const RECONNECT_MS = 1000;
 
 /** A remote track has no path, because no filesystem path leaves the machine. */
 export function applySnapshot(state: State, snapshot: Snapshot): void {
-  state.tracks = snapshot.tracks.map((track) => ({ path: "", ...track }));
+  // A frame without a list is not an empty library, it is a frame with nothing
+  // new to say about it -- which is every frame but the first.
+  if (snapshot.tracks !== undefined) {
+    state.tracks = snapshot.tracks.map((track) => ({ path: "", ...track }));
+  }
   state.index = snapshot.index;
   state.playing = snapshot.playing;
   state.position = snapshot.position;
