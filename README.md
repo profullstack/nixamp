@@ -366,8 +366,10 @@ carries an `×`.
 ## The noise it makes
 
 nixamp plays a jingle when it starts, once per session, the way Winamp did.
-Drop your own at `~/NixAmp-anything.mp3` and it will be used instead of the one
-that ships. `--no-jingle`, or `NIXAMP_NO_JINGLE=1`, turns it off.
+Any mp3 in your home directory with `nixamp` in its name is used instead of the
+ones that ship, and with more than one it picks at random -- a rotation you can
+predict is one you stop hearing. `--no-jingle`, or `NIXAMP_NO_JINGLE=1`, turns
+it off.
 
 On the web it plays on a fresh page if the browser allows it, and otherwise on
 your first click -- browsers spent a decade learning to refuse pages that make

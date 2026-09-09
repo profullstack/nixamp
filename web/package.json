@@ -1,13 +1,14 @@
 {
   "name": "@nixamp/web",
-  "version": "0.7.27",
+  "version": "0.7.28",
   "private": true,
   "description": "The nixamp PWA: a browser player, and a remote for nixamp serve.",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "jingles": "bun scripts/jingles.ts",
+    "build": "bun scripts/jingles.ts && vite build",
     "preview": "vite preview",
     "icons": "bun scripts/icons.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
