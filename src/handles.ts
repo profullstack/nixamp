@@ -35,7 +35,9 @@ const SCHEMA = `
 export function cleanHandle(value: unknown): string {
   if (typeof value !== "string") return "";
   const wanted = value.trim().toLowerCase();
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?$/.test(wanted)) return "";
+  // Two characters minimum, thirty maximum: the trailing character is required,
+  // which is also what stops a handle ending in a hyphen.
+  if (!/^[a-z0-9][a-z0-9-]{0,28}[a-z0-9]$/.test(wanted)) return "";
   // Doubled hyphens are how punycode marks an encoded label, so a handle with
   // one in it can collide with an internationalised domain.
   return wanted.includes("--") ? "" : wanted;
@@ -83,6 +85,25 @@ export class Handles {
     await this.ensure();
     const { rows } = await this.db.query(`SELECT handle FROM ${TABLE} WHERE user_id = $1`, [userId]);
     return rows[0] ? String(rows[0]["handle"] ?? "") : "";
+  }
+
+  /**
+   * Handles for a page of rows, in one query.
+   *
+   * A public listing names people, and naming them one query at a time is how a
+   * list of fifty becomes fifty round trips. Anyone without a handle is absent
+   * from the map rather than present as an empty string, so a caller decides
+   * what to show for somebody who never picked one.
+   */
+  async many(userIds: string[]): Promise<Map<string, string>> {
+    const wanted = [...new Set(userIds.filter(Boolean))];
+    if (wanted.length === 0) return new Map();
+    await this.ensure();
+    const { rows } = await this.db.query(
+      `SELECT user_id, handle FROM ${TABLE} WHERE user_id = ANY($1)`,
+      [wanted],
+    );
+    return new Map(rows.map((row) => [String(row["user_id"] ?? ""), String(row["handle"] ?? "")]));
   }
 
   /** Who holds this handle, so a listing can name somebody without their address. */

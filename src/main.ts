@@ -76,6 +76,7 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp logout / whoami        forget it, or check it
   nixamp token create|list|revoke  tokens for a machine that cannot sign in
   nixamp server list|add|remove  the machines you run, kept against your account
+  nixamp opendir list|add|remove  folders found on the web, published for everyone
   nixamp update [version]        re-run the installer, keeping your choices
   nixamp uninstall [--yes]       remove everything the installer created
 
@@ -324,6 +325,11 @@ export async function main(): Promise<void> {
   if (first === "login" || first === "signup") {
     const { login } = await import("./session.ts");
     process.exitCode = await login(first === "signup" ? [...rest, "--signup"] : rest);
+    return;
+  }
+  if (first === "opendir" || first === "opendirs") {
+    const { opendirs } = await import("./session.ts");
+    process.exitCode = await opendirs(rest);
     return;
   }
   if (first === "server" || first === "servers") {

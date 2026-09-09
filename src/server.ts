@@ -30,6 +30,7 @@ import { Channels, cleanId } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
 import { anonymousHandle, Handles } from "./handles.ts";
+import { OpenDirs } from "./opendirs.ts";
 import { Servers } from "./servers.ts";
 import { DeviceGrants } from "./device.ts";
 import { BAD_KEY_LIMIT, callerOf, Guard, SIGN_IN_LIMIT } from "./guard.ts";
@@ -82,7 +83,7 @@ import {
   type Tools, type Track,
 } from "./audio.ts";
 import { Analyser, bandEdges, bands, decay } from "./fft.ts";
-import { loadSource, loadTagged } from "./playlist.ts";
+import { loadSource, loadTagged, readRemoteIndex } from "./playlist.ts";
 import {
   emptySnapshot, parseCommand,
   type Command, type RemoteTrack, type Snapshot,
@@ -695,6 +696,9 @@ export function isSignInPath(path: string): boolean {
     path === "/api/v1/servers" ||
     path.startsWith("/api/v1/servers/") ||
     path === "/api/v1/me/handle" ||
+    // Public to read, so it must not be behind a share key either.
+    path === "/api/v1/opendirs" ||
+    path.startsWith("/api/v1/opendirs/") ||
     OAUTH_ROUTE.test(path)
   );
 }
@@ -783,6 +787,8 @@ export interface HandlerOptions {
   servers?: Servers;
   /** The name other people see, which is never the address they signed up with. */
   handles?: Handles;
+  /** Open directories people have found, which anyone may read. */
+  openDirs?: OpenDirs;
   /** True when this instance is reached over https, for the cookie's Secure. */
   secureCookies?: boolean;
   /** A certificate and key in PEM, when this server is to speak https itself. */
@@ -1492,6 +1498,79 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         "set-cookie": sessionCookie(token, secure),
       });
       response.end(JSON.stringify({ account: result.account, token }));
+      return;
+    }
+
+    // --- open directories somebody found -----------------------------------
+    //
+    // Its own list, not the stream directory: that one is what is playing now,
+    // with a heartbeat and a room code and somebody at the other end, and this
+    // one is a folder on the web that is always there and belongs to nobody
+    // here. Reading needs no account. Adding does, because a public list with
+    // nobody accountable for its rows is a list of whatever anyone felt like.
+    if ((path === "/api/v1/opendirs" || path.startsWith("/api/v1/opendirs/")) && options.openDirs) {
+      const dirs = options.openDirs;
+
+      if (path === "/api/v1/opendirs" && request.method === "GET") {
+        const limit = Number(url.searchParams.get("limit") ?? "50");
+        const before = Number(url.searchParams.get("before") ?? "0");
+        const page = await dirs.list(Number.isFinite(limit) ? limit : 50, Number.isFinite(before) ? before : 0);
+        const names = options.handles ? await options.handles.many(page.addedBy) : new Map<string, string>();
+        json(response, 200, {
+          opendirs: page.rows.map((row, at) => ({
+            ...row,
+            // A handle or nothing. The address that signed up is never here.
+            by: names.get(page.addedBy[at] ?? "") ?? "",
+          })),
+          next: page.next,
+        });
+        return;
+      }
+
+      if (path === "/api/v1/opendirs" && request.method === "POST" && options.accounts) {
+        const who = await options.accounts.whoIs(tokenFrom(request.headers));
+        if (who === null) {
+          json(response, 401, { error: "sign in to publish one" });
+          return;
+        }
+        let body: { url?: unknown; name?: unknown };
+        try {
+          body = JSON.parse(await readBody(request)) as typeof body;
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+
+        // Read before publishing. A row nobody can play is worse than no row,
+        // and the count is the one fact a reader wants before clicking.
+        const listed = typeof body.url === "string" ? await readRemoteIndex(body.url) : [];
+        if (listed.length === 0) {
+          json(response, 422, { error: "nothing playable was linked from that page" });
+          return;
+        }
+        const made = await dirs.add(who.id, body.url, body.name, listed.length);
+        if (made === null) {
+          json(response, 422, { error: "that needs an http or https address" });
+          return;
+        }
+        const handle = options.handles ? await options.handles.of(who.id) : "";
+        json(response, 201, { opendir: { ...made, by: handle } });
+        return;
+      }
+
+      const dirId = path.slice("/api/v1/opendirs/".length);
+      if (dirId && request.method === "DELETE" && options.accounts) {
+        const who = await options.accounts.whoIs(tokenFrom(request.headers));
+        if (who === null) {
+          json(response, 401, { error: "not signed in" });
+          return;
+        }
+        const gone = await dirs.remove(who.id, dirId);
+        json(response, gone ? 200 : 404, gone ? { ok: true } : { error: "not yours, or not there" });
+        return;
+      }
+
+      json(response, 405, { error: "GET, POST or DELETE" });
       return;
     }
 
@@ -2678,7 +2757,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
           // all: a browser already signed in can approve a terminal.
           // The same pool the follows and reminders use: three small tables in
           // one database do not want three sets of connections.
-          ...(pool ? { servers: new Servers(pool), handles: new Handles(pool) } : {}),
+          ...(pool
+            ? { servers: new Servers(pool), handles: new Handles(pool), openDirs: new OpenDirs(pool) }
+            : {}),
           signIn: new SignIn(
             providersFrom(process.env),
             new DeviceGrants(),
