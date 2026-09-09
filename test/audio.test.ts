@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { detectTools, formatTime, peaks, probe, RATE, Stream, toMono } from "../src/audio.ts";
+import { videoArgs, detectTools, formatTime, peaks, probe, RATE, Stream, toMono } from "../src/audio.ts";
 import { Analyser, bandEdges, bands } from "../src/fft.ts";
 import { findAudio, isAudio, displayName } from "../src/playlist.ts";
 
@@ -161,4 +161,37 @@ test("skipping a track does not report the killed decoder as a failure", async (
   stream.stop();
 
   assert.deepEqual(ends, [], `a killed decoder reported: ${ends.join(", ")}`);
+});
+
+test("what ffprobe found decides how much work the film is", () => {
+  // Already H.264 with AAC: the container is the only thing wrong, so both
+  // streams are copied and it costs nothing but the rewrap.
+  const remux = videoArgs({ video: "h264", audio: "aac" });
+  assert.deepEqual(remux.slice(0, 4), ["-c:v", "copy", "-c:a", "copy"]);
+
+  // H.264 with DTS, which no browser decodes: keep the picture, redo the sound.
+  const halfway = videoArgs({ video: "h264", audio: "dts" });
+  assert.deepEqual(halfway.slice(0, 2), ["-c:v", "copy"]);
+  assert.ok(halfway.includes("aac"));
+  assert.ok(!halfway.includes("libx264"), "re-encoding a picture nobody asked to change");
+
+  // H.265, the case that actually costs something.
+  const full = videoArgs({ video: "hevc", audio: "ac3" });
+  assert.deepEqual(full.slice(0, 2), ["-c:v", "libx264"]);
+  assert.ok(full.includes("veryfast"), "a film has to arrive at about the speed it plays");
+  assert.ok(full.includes("yuv420p"), "10-bit is a picture most browsers refuse");
+
+  // Every path writes a fragmented MP4, because this is a pipe: an ordinary
+  // MP4 puts its index at the end, which never arrives on a stream.
+  for (const args of [remux, halfway, full]) {
+    assert.deepEqual(args.slice(-4), ["-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof"]);
+  }
+});
+
+test("nothing known about a file means transcode, not a guess", () => {
+  // An empty probe is what a missing ffprobe answers, and copying streams we
+  // have not identified is how a browser gets a file it cannot open.
+  const unknown = videoArgs({ video: "", audio: "" });
+  assert.deepEqual(unknown.slice(0, 2), ["-c:v", "libx264"]);
+  assert.ok(unknown.includes("aac"));
 });

@@ -231,3 +231,81 @@ export function formatTime(seconds: number): string {
   const s = total % 60;
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
+
+/** What is actually inside a container, as opposed to what the name suggests. */
+export interface Codecs {
+  /** e.g. "h264", "hevc", "vp9". Empty when there is no video stream. */
+  video: string;
+  /** e.g. "aac", "ac3", "dts". Empty when there is no audio stream. */
+  audio: string;
+}
+
+/**
+ * Ask ffprobe what the streams are, without holding the event loop.
+ *
+ * Deliberately not the spawnSync `probe` above: this one runs while a server is
+ * answering other requests, and a synchronous probe per media request is how
+ * the whole library came to be tagged with the process wedged solid.
+ */
+export async function codecsOf(tools: Tools, path: string): Promise<Codecs> {
+  const [cmd, ...rest] = tools.ffprobe;
+  const empty: Codecs = { video: "", audio: "" };
+  if (!cmd) return empty;
+
+  return new Promise<Codecs>((done) => {
+    const child = spawn(
+      cmd,
+      [
+        ...rest,
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_entries", "stream=codec_type,codec_name",
+        path,
+      ],
+      { stdio: ["ignore", "pipe", "ignore"] },
+    );
+    let out = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      out += chunk.toString("utf8");
+    });
+    child.on("error", () => done(empty));
+    child.on("close", () => {
+      try {
+        const parsed = JSON.parse(out) as { streams?: { codec_type?: string; codec_name?: string }[] };
+        const streams = parsed.streams ?? [];
+        return done({
+          video: streams.find((s) => s.codec_type === "video")?.codec_name ?? "",
+          audio: streams.find((s) => s.codec_type === "audio")?.codec_name ?? "",
+        });
+      } catch {
+        return done(empty);
+      }
+    });
+  });
+}
+
+/**
+ * How to get this file into a browser, given what is inside it.
+ *
+ * A container a browser will not open says nothing about the streams within:
+ * most Matroska holds H.264, which every browser decodes, and only the wrapper
+ * is wrong. Rewrapping that costs nothing and looks identical; re-encoding it
+ * would cost a core per viewer and look worse. So the streams decide, one part
+ * at a time -- a film can have its video copied and only its DTS re-encoded.
+ */
+export function videoArgs(codecs: Codecs): string[] {
+  // What a browser can play inside MP4 without help.
+  const keepVideo = codecs.video === "h264";
+  const keepAudio = codecs.audio === "aac" || codecs.audio === "mp3";
+  return [
+    "-c:v", keepVideo ? "copy" : "libx264",
+    ...(keepVideo ? [] : ["-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]),
+    "-c:a", keepAudio ? "copy" : "aac",
+    ...(keepAudio ? [] : ["-b:a", "160k", "-ac", "2"]),
+    "-f", "mp4",
+    // Fragmented, because this is a pipe: a normal MP4 writes its index at the
+    // end, which for a stream never arrives and for a browser means nothing
+    // plays at all.
+    "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+  ];
+}
