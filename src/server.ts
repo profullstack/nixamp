@@ -68,6 +68,7 @@ import {
   firewallInUse,
   certifiable,
   keyCookie,
+  keyInPath,
   rememberedKeys,
   keyFrom,
   keysMatch,
@@ -1073,8 +1074,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // cookie, so every later fetch, EventSource and <audio src> carries it
     // without the page knowing anything about keys. Either key works here, and
     // which one was used decides what the browser can then do.
-    if (key !== null && path.startsWith("/s/")) {
-      const offered = decodeURIComponent(path.slice("/s/".length));
+    const offeredInPath = key !== null ? keyInPath(path) : null;
+    if (offeredInPath !== null) {
+      const offered = offeredInPath;
       if (scopeOf(offered, key, listenKey) === null) {
         json(response, 404, { error: "not found" });
         return;
@@ -3078,7 +3080,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         live: publisher !== null,
         code: listing?.code ?? "",
         name: listing?.name ?? (options.name || hostname()),
-        url: listing?.url ?? (publishable_ ? shareLink(publishable_.url, listenKey) : ""),
+        url: listing?.url ?? (publishable_ ? shareLink(publishable_.url, listenKey, false) : ""),
         // Whether going live is even possible here. A laptop behind a router
         // with no address the world can reach cannot be listed, and a button
         // that could only fail is worse than one that is not offered.
@@ -3285,7 +3287,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       console.log("  A listen-only link, for someone you want to hear it but not drive it:");
       for (const { label, url } of addresses) {
         if (label === "here") continue;
-        console.log(`    ${shareLink(url, listenKey)}`);
+        console.log(`    ${shareLink(url, listenKey, false)}`);
       }
     }
   }
@@ -3382,7 +3384,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
    */
   function makePublisher(): Publisher | null {
     if (!publishable_) return null;
-    const listen = shareLink(publishable_.url, listenKey);
+    const listen = shareLink(publishable_.url, listenKey, false);
     // Announced next to the listen link, not instead of it: one is for a person
     // with a browser, the other for the phone line and anything else that is
     // handed one address and expected to play it.
@@ -3420,7 +3422,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   }
 
   if (options.publish !== "no" && publishable_) {
-    const listen = shareLink(publishable_.url, listenKey);
+    const listen = shareLink(publishable_.url, listenKey, false);
     const wanted = options.publish === "yes"
       ? true
       : await confirm(`\n  List this stream at ${DEFAULT_DIRECTORY}/directory so anyone can find it?\n  It publishes ${listen} — listen only, not the controls.`);
@@ -3436,6 +3438,33 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   } else if (options.publish === "yes" && !publishable_) {
     console.log("");
     console.log("  --publish needs an address the world can reach. This machine has none.");
+  }
+
+  // Remember this machine on the account it belongs to, without being asked.
+  //
+  // `nixamp server add --here` existed and did exactly this, which is a manual
+  // step for something the daemon already knows: it has just worked out its
+  // own address and minted its own key, and the session file says whose it is.
+  // Somebody who has signed in on this machine has said which account it is;
+  // being on their list is what they meant by that.
+  //
+  // Idempotent: adding the same URL again updates the row rather than making
+  // a second one, so this is safe on every start. Silent about failure, since
+  // nothing here is worth stopping a player for.
+  if (session?.token && publishable_) {
+    const remembered = shareLink(publishable_.url, key);
+    void fetch(`${DEFAULT_DIRECTORY}/api/v1/servers`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${session.token}` },
+      body: JSON.stringify({ url: publishable_.url, name: options.name || hostname(), key: key ?? "" }),
+    })
+      .then((answer) => {
+        if (answer.ok) console.log(`  Remembered on your account at ${DEFAULT_DIRECTORY}.`);
+      })
+      .catch(() => {
+        // The directory being unreachable is not a reason to stop serving.
+      });
+    void remembered;
   }
 
   // A last resort, not a licence.

@@ -165,7 +165,7 @@ test("a publisher announces the audio address next to the listen link", async ()
     {
       directory: "https://d.example",
       name: "n",
-      url: shareLink("https://a.example", "abc"),
+      url: shareLink("https://a.example", "abc", false),
       audio: audioLink("https://a.example", "abc"),
       tracks: 3,
       nowPlaying: () => "song",
@@ -175,7 +175,8 @@ test("a publisher announces the audio address next to the listen link", async ()
   await publisher.start();
 
   // Both, and different: the phone line cannot play the one a browser opens.
-  assert.equal(bodies[0]?.["url"], "https://a.example/s/abc");
+  // A directory listing is a listen link, and says so in its shape.
+  assert.equal(bodies[0]?.["url"], "https://a.example/v/abc");
   assert.equal(bodies[0]?.["audio"], "https://a.example/api/live?k=abc");
 });
 
