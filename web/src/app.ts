@@ -666,7 +666,11 @@ export function start(): void {
         chips.push(`track ${at() + 1} of ${count()}`);
       }
 
-      if (nowMeta?.catalog) {
+      // Where it came from, only while that is what is playing: a channel
+      // still on, or a film still loaded.
+      const fromCatalog = nowMeta?.catalog !== undefined &&
+        (nowMeta.kind === "channel" ? channelOn !== null : nowMeta.kind === "vod" && player.source !== "");
+      if (fromCatalog && nowMeta?.catalog) {
         chips.push(nowMeta.entry?.group ? `${nowMeta.catalog.name} › ${nowMeta.entry.group}` : nowMeta.catalog.name);
         logo = nowMeta.entry?.logo ?? "";
       }
@@ -3424,7 +3428,10 @@ export function start(): void {
       video: channel.video, objectUrl: false,
     }, true));
     showVideo(channel.video);
-    note = `Watching ${channel.name}, live on this server.`;
+    // Only if we are still on it. A load that failed has already been
+    // answered -- rejoined, or given up on -- and "Watching" written over
+    // "did not come back" was the page saying the wrong thing.
+    if (channelOn === channel) note = `Watching ${channel.name}, live on this server.`;
     draw();
   }
 
@@ -3441,6 +3448,9 @@ export function start(): void {
     if (rejoins >= 5) {
       note = `${channel.name} stopped, and did not come back.`;
       channelOn = null;
+      // Nothing is playing now, so nothing came from anywhere: the catalog
+      // chip under the picture was still naming the dead channel's group.
+      nowMeta = null;
       draw();
       return true;
     }
