@@ -190,6 +190,8 @@ export function start(): void {
   let viewerOnly = false;
   /** What the link that opened this page asked to play, until it has been. */
   let askedToPlay = "";
+  /** And from what second, for a file. */
+  let askedTime = 0;
   let local: LocalTrack[] = [];
   let index = 0;
   let snapshot: FullSnapshot = emptySnapshot();
@@ -282,6 +284,22 @@ export function start(): void {
       // every frame but the first: keep what we had rather than emptying the
       // playlist twelve times a second.
       snapshot = merge(snapshot, next);
+      // A link to a file on this server: played here, once the library has
+      // arrived, from the second the link named.
+      if (askedToPlay.startsWith("track:") && snapshot.tracks.length > 0) {
+        const index = Number(askedToPlay.slice("track:".length));
+        askedToPlay = "";
+        if (Number.isInteger(index) && index >= 0 && index < snapshot.tracks.length) {
+          const from = askedTime;
+          void listenTo(index).then(() => {
+            if (from > 0) {
+              // The element may not know its length yet; ask again when it does.
+              player.seek(from);
+              setTimeout(() => player.seek(from), 600);
+            }
+          });
+        }
+      }
       if (remoteDrives()) {
         // The server is the one making the sound; mirror its analyser.
         bars = next.bars.length > 0 ? next.bars : bars;
@@ -668,12 +686,16 @@ export function start(): void {
           copy.type = "button";
           copy.className = "row-copy";
           drawIcon(copy, "copy");
-          copy.title = "Copy this file's URL";
-          copy.setAttribute("aria-label", `Copy the URL of ${row.name}`);
+          copy.title = "Copy a link that plays this here, from where it is";
+          copy.setAttribute("aria-label", `Copy a link that plays ${row.name}`);
           copy.addEventListener("click", (event) => {
             // Copying is not choosing: the row's own click plays it.
             event.stopPropagation();
-            void copyText(remote.media(row.index), copy, "✓");
+            // A link to this page that plays the file, not the file's bytes:
+            // the bytes are what the player's own copy button is for. From
+            // where it has got to, when it is the one playing, so a link sent
+            // mid-song lands at the same spot.
+            void copyText(pageLinkFor(`track:${row.index}`, watching === row.index ? player.position : 0), copy, "✓");
           });
           item.append(copy);
         }
@@ -2716,6 +2738,7 @@ export function start(): void {
       invited = asked;
       // And which thing on it, when the link said: a channel, or the live stream.
       askedToPlay = params.get("play") ?? "";
+      askedTime = Math.max(0, Number(params.get("t") ?? "0") || 0);
       dom.remoteUrl.value = asked;
       note = "Opening the stream you were sent…";
       // Not something to leave in the address bar: it carries a key.
@@ -3211,9 +3234,10 @@ export function start(): void {
    * thing on it: `live` for the server's own stream, `channel:<id>` for a
    * channel. Honoured by `playWhatWasAsked` once the server has answered.
    */
-  function pageLinkFor(what: string): string {
+  function pageLinkFor(what: string, seconds = 0): string {
     const here = globalThis.location.origin;
-    return `${here}/?url=${encodeURIComponent(remote.shareLink)}&play=${encodeURIComponent(what)}`;
+    const at = seconds > 1 ? `&t=${Math.floor(seconds)}` : "";
+    return `${here}/?url=${encodeURIComponent(remote.shareLink)}&play=${encodeURIComponent(what)}${at}`;
   }
 
   /** Play what the link asked for, once what is live is known. */

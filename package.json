@@ -1,6 +1,6 @@
 {
   "name": "nixamp",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "It really whips the terminal's ass. A Winamp-shaped audio player for your terminal.",
   "license": "MIT",
   "type": "module",
