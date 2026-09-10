@@ -98,6 +98,22 @@ BASE="${NIXAMP_RELEASE_BASE:-https://github.com/$REPO/releases/download/v$VERSIO
 SHARE="$PREFIX/share/nixamp"
 BIN="$PREFIX/bin"
 
+# --- a daemon already running here --------------------------------------------
+#
+# Noticed now, restarted at the end. An update used to leave the old version
+# running until somebody remembered to restart it, and restarting it by hand
+# from the wrong directory started a server of your home folder over plain
+# http. `nixamp daemon restart` replays the flags the daemon was started with,
+# so the installer runs that rather than guessing at any.
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nixamp"
+DAEMON_PID=""
+if [ -r "$STATE_DIR/daemon.json" ]; then
+  DAEMON_PID=$(sed -n 's/^[[:space:]]*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$STATE_DIR/daemon.json" | head -n 1)
+  if [ -n "$DAEMON_PID" ] && ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+    DAEMON_PID=""
+  fi
+fi
+
 say "nixamp $VERSION"
 say "  platform:  $OS-$ARCH"
 say "  desktop:   $WANT_DESKTOP"
@@ -219,7 +235,7 @@ else
   RUNTIME=""
 
   command -v node >/dev/null 2>&1 ||
-    say "  note: no desktop app was installed, so the CLI needs Node 24 or newer. It was not found."
+    say "  note: no desktop app was installed, so the CLI needs Node 22.6 or newer, and none is on PATH."
 fi
 
 # The shim. Written here rather than shipped, because only the installer knows
@@ -236,7 +252,7 @@ else
 #!/bin/sh
 # nixamp. Written by the installer; \`nixamp uninstall\` removes it.
 command -v node >/dev/null 2>&1 || {
-  echo "nixamp: node 24 or newer is required for a CLI-only install." >&2
+  echo "nixamp: node is not on PATH. This install runs on your own Node (22.6 or newer)." >&2
   exit 69
 }
 NIXAMP_HOME="$SHARE" exec node "$CLI_DIR/bin/nixamp.mjs" "\$@"
@@ -360,6 +376,17 @@ elif [ "$FW_RESULT" = manual ]; then
   say "  $FIREWALL is running and $PORT/tcp is closed, so a published stream"
   say "  would be listed at an address nobody outside this machine can open."
   say "  Open it with:  $(firewall_command)"
+fi
+
+if [ -n "$DAEMON_PID" ]; then
+  say ""
+  say "A nixamp daemon was running (pid $DAEMON_PID). Restarting it on $VERSION,"
+  say "with the flags it was started with..."
+  if "$BIN/nixamp" daemon restart; then
+    say "  Restarted. The channels it was carrying come back on their own."
+  else
+    say "  Could not restart it. Run:  nixamp daemon restart"
+  fi
 fi
 
 case ":$PATH:" in

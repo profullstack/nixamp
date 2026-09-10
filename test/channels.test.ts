@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Channels, REDIAL, cleanId, generatedId } from "../src/channels.ts";
+import {
+  Channels, REDIAL, cleanId, generatedId, rememberChannels, rememberedChannels,
+} from "../src/channels.ts";
 import { needsAdmin } from "../src/owner.ts";
 
 /** A listener that keeps what it was sent. */
@@ -352,4 +354,26 @@ test("a source that goes quiet is hung up on and dialled again", async () => {
   assert.equal(set.count, 1, "dialled again rather than given up");
   assert.ok((set.list()[0]?.redials ?? 0) >= 1);
   set.stopAll();
+});
+
+test("the channels a server pulls are remembered, per port, and forgotten on purpose", () => {
+  const dir = mkdtempSync(join(tmpdir(), "nixamp-remember-"));
+  assert.deepEqual(rememberedChannels(dir, 4321), []);
+
+  rememberChannels(dir, 4321, [{ id: "cnn", name: "CNN", source: "http://x.test/301" }]);
+  rememberChannels(dir, 5000, [{ id: "mlb", name: "MLB Network", source: "http://x.test/932" }]);
+  assert.deepEqual(rememberedChannels(dir, 4321), [{ id: "cnn", name: "CNN", source: "http://x.test/301" }]);
+  // Two servers on one machine are two line-ups.
+  assert.deepEqual(rememberedChannels(dir, 5000).map((c) => c.id), ["mlb"]);
+
+  // Taken off the air is taken off the list, and the other port is untouched.
+  rememberChannels(dir, 4321, []);
+  assert.deepEqual(rememberedChannels(dir, 4321), []);
+  assert.equal(rememberedChannels(dir, 5000).length, 1);
+
+  // Somebody's hand-edited file with junk in it is not a crash.
+  writeFileSync(join(dir, "channels.json"), '{"4321": [1, {"id": "x"}, {"id":"ok","name":"Ok","source":"s"}]}');
+  assert.deepEqual(rememberedChannels(dir, 4321).map((c) => c.id), ["ok"]);
+  writeFileSync(join(dir, "channels.json"), "not json");
+  assert.deepEqual(rememberedChannels(dir, 4321), []);
 });
