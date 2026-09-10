@@ -55,6 +55,7 @@ import { CALL_IN_NUMBER, OPT_IN_PATH, optInPage } from "./optin.ts";
 import pg from "pg";
 import { Follows, phoneFrom } from "./follows.ts";
 import { Favorites, favoriteUrl } from "./favorites.ts";
+import { Catalogs, shownCatalog, shownEntry } from "./catalogs.ts";
 import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
@@ -913,6 +914,13 @@ export class PlayerEngine implements Engine {
  * it. An entry names where to start, so clicking it plays.
  */
 /**
+ * How many channels a server will start on demand at once. Each is an ffmpeg,
+ * and a catalog has thousands of entries; this is what keeps a room full of
+ * curious people from becoming a room full of decoders.
+ */
+export const MAX_ON_DEMAND = 4;
+
+/**
  * Probe a source and start carrying it as a channel of its own.
  *
  * Shared by the request that puts one on and the boot that puts remembered
@@ -1095,6 +1103,8 @@ export interface HandlerOptions {
   channels?: Channels;
   /** Write down the channels this server pulls, so a restart puts them back. */
   rememberChannels?: (list: RememberedChannel[]) => void;
+  /** The m3u catalogs this server keeps, browsable by group. */
+  catalogs?: Catalogs;
   /** Live audio going out to RTMP. */
   broadcaster?: Broadcaster;
   /** Where a broadcast should send, and what it should look like. */
@@ -2293,6 +2303,140 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
 
     // --- several streams at once ------------------------------------------
     //
+    // --- catalogs: m3u lists you can browse ---------------------------------
+    //
+    // An IPTV list is thousands of entries with groups and logos. Kept as a
+    // catalog it stays browsable; poured into the playlist it was three
+    // thousand flat rows. Anyone with the link browses and plays; adding,
+    // refreshing and removing is administering (see needsAdmin).
+    if ((path === "/api/catalogs" || path.startsWith("/api/catalogs/")) && options.catalogs) {
+      const catalogs = options.catalogs;
+
+      if (path === "/api/catalogs" && request.method === "GET") {
+        // Where a list is read from is the administrator's business, not a
+        // listener's: it can carry a provider's credentials in the URL.
+        const holdsControl = key === null || scopeOf(keyFrom(request, url), key, null) === "control";
+        const admin = options.owner
+          ? (await options.owner.check(holdsControl, tokenFrom(request.headers))).allowed
+          : holdsControl;
+        json(response, 200, { catalogs: catalogs.list().map((one) => shownCatalog(one, admin)) });
+        return;
+      }
+
+      if (path === "/api/catalogs" && request.method === "POST") {
+        let body: { source?: unknown; name?: unknown } = {};
+        try {
+          body = JSON.parse(await readBody(request)) as typeof body;
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+        try {
+          const added = await catalogs.add(String(body.source ?? ""), String(body.name ?? ""));
+          json(response, added.error ? 422 : 200, {
+            ok: !added.error,
+            catalog: shownCatalog(added, true),
+            ...(added.error ? { error: added.error } : {}),
+          });
+        } catch (error) {
+          json(response, 422, { error: (error as Error).message.replace(/^nixamp: /, "") });
+        }
+        return;
+      }
+
+      const [rawId = "", action = "", entryId = "", sub = ""] = path.slice("/api/catalogs/".length).split("/");
+      const id = decodeURIComponent(rawId);
+      if (!catalogs.get(id)) {
+        json(response, 404, { error: "no such catalog" });
+        return;
+      }
+
+      if (action === "" && request.method === "DELETE") {
+        json(response, 200, { ok: catalogs.remove(id) });
+        return;
+      }
+      if (action === "refresh" && request.method === "POST") {
+        const refreshed = await catalogs.refresh(id);
+        json(response, refreshed && !refreshed.error ? 200 : 422, {
+          ok: refreshed !== null && !refreshed.error,
+          ...(refreshed ? { catalog: shownCatalog(refreshed, true) } : {}),
+          ...(refreshed?.error ? { error: refreshed.error } : {}),
+        });
+        return;
+      }
+      if (action === "groups" && request.method === "GET") {
+        json(response, 200, { groups: catalogs.groups(id) ?? [] });
+        return;
+      }
+      if (action === "entries" && entryId === "" && request.method === "GET") {
+        const page = catalogs.entries_(id, {
+          group: url.searchParams.get("group") ?? "",
+          q: url.searchParams.get("q") ?? "",
+          offset: Number(url.searchParams.get("offset") ?? "0") || 0,
+          limit: Number(url.searchParams.get("limit") ?? "200") || 200,
+        }) ?? { total: 0, entries: [] };
+        json(response, 200, { total: page.total, entries: page.entries.map(shownEntry) });
+        return;
+      }
+
+      const entry = action === "entries" && entryId !== "" ? catalogs.entry(id, decodeURIComponent(entryId)) : null;
+      if (!entry) {
+        json(response, 404, { error: "no such entry" });
+        return;
+      }
+
+      // Play. A live entry becomes a channel, started for whoever asked and
+      // stopped a minute after the last viewer leaves; a film is played on
+      // its own, straight from the source through ffmpeg.
+      if (sub === "play" && request.method === "POST") {
+        if (!entry.live) {
+          json(response, 200, {
+            kind: "vod",
+            url: `/api/catalogs/${encodeURIComponent(id)}/entries/${encodeURIComponent(entry.id)}/stream`,
+            name: entry.title,
+          });
+          return;
+        }
+        if (!options.channels) {
+          json(response, 503, { error: "this server cannot carry channels" });
+          return;
+        }
+        const channelId = cleanId(`cat-${entry.id}`);
+        if (!options.channels.has(channelId)) {
+          if (options.channels.ephemeralCount >= MAX_ON_DEMAND) {
+            json(response, 429, { error: `this server is already carrying ${MAX_ON_DEMAND} channels on demand; try again in a minute` });
+            return;
+          }
+          const started = await pullChannel(options.channels, options.ffprobe ?? ["ffprobe"], channelId, entry.title, entry.source);
+          if (!started) {
+            json(response, 409, { error: "that channel is already starting" });
+            return;
+          }
+          options.channels.ephemeral(channelId);
+        }
+        json(response, 200, { kind: "live", channel: channelId, name: entry.title });
+        return;
+      }
+
+      if (sub === "stream" && request.method === "GET") {
+        if (!options.media) {
+          json(response, 403, { error: "media streaming is off" });
+          return;
+        }
+        watch(request, response, "stream", entry.title);
+        const codecs = await codecsOf({ ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, entry.source);
+        if (codecs.video !== "") {
+          pipeFfmpeg(request, response, entry.source, options.ffmpeg ?? ["ffmpeg"], videoArgs(codecs), "video/mp4");
+        } else {
+          transcode(request, response, entry.source, options.ffmpeg ?? ["ffmpeg"]);
+        }
+        return;
+      }
+
+      json(response, 404, { error: "no such endpoint" });
+      return;
+    }
+
     // A channel is one publisher and everybody listening to them. Two or three
     // devices can publish at once, each to their own channel, and a listener
     // picks which to hear.
@@ -3393,6 +3537,12 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     });
   }
 
+  // The m3u catalogs kept here: read from disk now, and any that were never
+  // read are fetched in the background so browsing does not wait on a provider.
+  const catalogs = new Catalogs(stateDir(), options.port);
+  catalogs.load();
+  void catalogs.warm().catch(() => undefined);
+
   const destinations = parseDestinations(options.rtmp);
   const broadcaster = new Broadcaster(tools.ffmpeg);
   const ingest = options.ingest
@@ -3595,6 +3745,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     owner,
     channels,
     rememberChannels: remembering,
+    catalogs,
     publishUrls: () => publishUrls,
     serverName: options.name || hostname(),
     homeSource: root,

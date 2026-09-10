@@ -444,3 +444,32 @@ test("the backlog is bounded, and never begins with an mdat", async () => {
   assert.ok(total > 0);
   set.stopAll();
 });
+
+test("an on-demand channel stops itself a minute after its last viewer leaves", async () => {
+  const set = new Channels({ ffmpeg: fakeVideoFfmpeg(), idleMs: 300 });
+  const channel = set.pull("cat-abc", "CNN", "http://x.test/301", [], "video");
+  assert.ok(channel);
+  assert.equal(set.ephemeralCount, 0);
+  // Marked on demand with nobody watching yet: the clock starts now.
+  set.ephemeral("cat-abc");
+  assert.equal(set.ephemeralCount, 1);
+
+  // A viewer arriving stops the clock; leaving starts it again.
+  const viewer = collector();
+  const leave = channel?.listen(viewer);
+  await wait(400);
+  assert.equal(set.has("cat-abc"), true, "still on while somebody watches");
+  leave?.();
+  await wait(200);
+  assert.equal(set.has("cat-abc"), true, "not gone the instant they leave");
+  await wait(300);
+  assert.equal(set.has("cat-abc"), false, "gone once nobody came back");
+
+  // An ordinary channel is not touched by any of this.
+  const kept = set.pull("cnn", "CNN", "http://x.test/301", [], "video");
+  const leaveKept = kept?.listen(collector());
+  leaveKept?.();
+  await wait(500);
+  assert.equal(set.has("cnn"), true);
+  set.stopAll();
+});

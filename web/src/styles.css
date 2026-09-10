@@ -352,6 +352,18 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .crumbs button:hover { text-decoration: underline; }
 .crumbs .here { color: var(--fg); }
 
+/* A catalog entry's tag on the right: LIVE in green, a length in grey, so a
+   list of a thousand channels reads at a glance. */
+.catalog-tag {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.catalog-live { color: var(--green); }
+/* The catalog panel's entry list scrolls like the playlist does. */
+#catalogs-entries { max-height: 320px; overflow-y: auto; }
+
 /* A folder in the list. It is not a track, so it has no number and no time --
    what it has is how much is inside it. */
 .folder {

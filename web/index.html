@@ -71,6 +71,27 @@
             <p class="hint" id="onair-note"></p>
             <ul id="onair-list" class="directory-list"></ul>
           </section>
+
+          <!-- The m3u catalogs a server keeps: IPTV lists of live channels and
+               lists of things on demand, browsed by group rather than dumped
+               as three thousand rows. Anyone with the link may browse and
+               play; adding and removing one is administering the server. -->
+          <section class="panel player-only" data-title="Catalogs on this server" id="catalogs-panel" hidden>
+            <p class="hint" id="catalogs-note"></p>
+            <form id="catalogs-form" class="picker" hidden>
+              <input id="catalog-source" type="text" inputmode="url"
+                     placeholder="https://…/list.m3u or a path on the server"
+                     aria-label="An m3u catalog to add" />
+              <input id="catalog-name" type="text" placeholder="call it something"
+                     aria-label="What to call it" />
+              <button type="submit" class="button">Add catalog</button>
+            </form>
+            <nav id="catalogs-crumbs" class="crumbs" hidden></nav>
+            <ul id="catalogs-list" class="directory-list"></ul>
+            <input id="catalogs-filter" type="search" class="filter" placeholder="Filter these entries"
+                   aria-label="Filter the entries" hidden />
+            <ol id="catalogs-entries" class="playlist" hidden></ol>
+          </section>
         </div>
       </div>
 
