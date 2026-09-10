@@ -16,6 +16,8 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { Fragments } from "./fragments.ts";
 
@@ -596,6 +598,59 @@ export class Channels {
 
   stopAll(): void {
     for (const channel of [...this.open.values()]) channel.close();
+  }
+}
+
+/**
+ * The channels a server pulls itself, remembered across a restart.
+ *
+ * A server is restarted to pick up a new version, which is to say often, and
+ * every restart used to take CNN off the air until somebody noticed and put
+ * it back by hand. A publisher's stream cannot be remembered -- it restarts at
+ * the publisher's end -- but a pulled one is a name and a URL, and a name and
+ * a URL can be written down.
+ *
+ * Keyed by port, like the keys, because two servers on one machine are two
+ * different line-ups.
+ */
+export interface RememberedChannel {
+  id: string;
+  name: string;
+  source: string;
+}
+
+const REMEMBERED = "channels.json";
+
+export function rememberedChannels(dir: string, port: number): RememberedChannel[] {
+  try {
+    const all = JSON.parse(readFileSync(join(dir, REMEMBERED), "utf8")) as Record<string, unknown>;
+    const list = all[String(port)];
+    if (!Array.isArray(list)) return [];
+    return list.filter(
+      (one): one is RememberedChannel =>
+        typeof one === "object" && one !== null &&
+        typeof (one as RememberedChannel).id === "string" &&
+        typeof (one as RememberedChannel).name === "string" &&
+        typeof (one as RememberedChannel).source === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function rememberChannels(dir: string, port: number, list: RememberedChannel[]): void {
+  let all: Record<string, unknown> = {};
+  try {
+    all = JSON.parse(readFileSync(join(dir, REMEMBERED), "utf8")) as Record<string, unknown>;
+  } catch {
+    // First time, or unreadable: start again rather than refuse to remember.
+  }
+  all[String(port)] = list;
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, REMEMBERED), JSON.stringify(all, null, 2));
+  } catch {
+    // A state directory that cannot be written costs a memory, not a stream.
   }
 }
 

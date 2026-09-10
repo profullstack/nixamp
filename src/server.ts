@@ -26,7 +26,10 @@ import {
   redact,
 } from "./broadcast.ts";
 import { Ingest, normaliseFormat } from "./ingest.ts";
-import { Channels, cleanId, generatedId } from "./channels.ts";
+import {
+  Channels, cleanId, generatedId, rememberChannels, rememberedChannels,
+  type Channel, type RememberedChannel,
+} from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
 import { anonymousHandle, Handles } from "./handles.ts";
@@ -908,6 +911,30 @@ export class PlayerEngine implements Engine {
  * looking at what is on wants "that album from the web", not every track in
  * it. An entry names where to start, so clicking it plays.
  */
+/**
+ * Probe a source and start carrying it as a channel of its own.
+ *
+ * Shared by the request that puts one on and the boot that puts remembered
+ * ones back, so that both agree on what a source is encoded as. Null when
+ * that channel id is already on.
+ */
+export async function pullChannel(
+  channels: Channels,
+  ffprobe: string[],
+  id: string,
+  name: string,
+  source: string,
+): Promise<Channel | null> {
+  const codecs = await codecsOf({ ffmpeg: [], ffprobe, play: null }, source);
+  const kind = codecs.video === "" ? "audio" : "video";
+  const encode = kind === "video"
+    ? videoArgs(codecs)
+    // No picture in it, so none is invented: MP3 is the thing every browser
+    // plays and the thing a listener can join halfway through.
+    : ["-vn", "-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"];
+  return channels.pull(id, name, source, encode, kind);
+}
+
 export function liveOnes(engine: Engine): { name: string; at: number; tracks: number }[] {
   const tracks = engine.snapshot().tracks ?? [];
   const found = new Map<string, { name: string; at: number; tracks: number }>();
@@ -1065,6 +1092,8 @@ export interface HandlerOptions {
   ingest?: Ingest;
   /** Several live streams at once, each with its own audience. */
   channels?: Channels;
+  /** Write down the channels this server pulls, so a restart puts them back. */
+  rememberChannels?: (list: RememberedChannel[]) => void;
   /** Live audio going out to RTMP. */
   broadcaster?: Broadcaster;
   /** Where a broadcast should send, and what it should look like. */
@@ -2260,6 +2289,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         // Asked once: the second call would answer false, having just stopped
         // the thing it was asking about.
         const stopped = channels.stop(id);
+        // Taken off on purpose is forgotten on purpose: it must not come back
+        // at the next restart.
+        if (stopped && options.rememberChannels) {
+          options.rememberChannels(
+            channels.list()
+              .filter((one) => one.via === "pull" && one.source)
+              .map((one) => ({ id: one.id, name: one.name, source: one.source as string })),
+          );
+        }
         json(response, stopped ? 200 : 404, { ok: stopped });
         return;
       }
@@ -2335,19 +2373,19 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           return;
         }
 
-        const probe = options.ffprobe ?? ["ffprobe"];
-        const codecs = await codecsOf({ ffmpeg: [], ffprobe: probe, play: null }, source);
-        const kind = codecs.video === "" ? "audio" : "video";
-        const encode = kind === "video"
-          ? videoArgs(codecs)
-          // No picture in it, so none is invented: MP3 is the thing every
-          // browser plays and the thing a listener can join halfway through.
-          : ["-vn", "-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"];
-
-        const channel = channels.pull(wanted, called, source, encode, kind);
+        const channel = await pullChannel(channels, options.ffprobe ?? ["ffprobe"], wanted, called, source);
         if (!channel) {
           json(response, 409, { error: "that channel is already on" });
           return;
+        }
+        // Written down, so a restart puts it back on the air.
+        if (options.rememberChannels) {
+          options.rememberChannels([
+            ...channels.list()
+              .filter((one) => one.via === "pull" && one.source && one.id !== wanted)
+              .map((one) => ({ id: one.id, name: one.name, source: one.source as string })),
+            { id: wanted, name: called, source },
+          ]);
         }
         json(response, 200, { ok: true, channel: channel.info });
         return;
@@ -3279,6 +3317,17 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     onEnd: (info) => console.log(`  "${info.id}" stopped.`),
   });
 
+  // The channels this server was carrying when it was last stopped, put back
+  // on. A server is restarted to pick up a new version, which is often, and
+  // every restart used to take CNN off the air until somebody noticed.
+  const remembering = (list: RememberedChannel[]): void => rememberChannels(stateDir(), options.port, list);
+  for (const one of rememberedChannels(stateDir(), options.port)) {
+    console.log(`  Putting "${one.id}" (${one.name}) back on the air.`);
+    void pullChannel(channels, tools.ffprobe, one.id, one.name, one.source).then((channel) => {
+      if (!channel) console.log(`  "${one.id}" is already on.`);
+    });
+  }
+
   const destinations = parseDestinations(options.rtmp);
   const broadcaster = new Broadcaster(tools.ffmpeg);
   const ingest = options.ingest
@@ -3479,6 +3528,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     media: options.media,
     owner,
     channels,
+    rememberChannels: remembering,
     publishUrls: () => publishUrls,
     serverName: options.name || hostname(),
     homeSource: root,
