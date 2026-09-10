@@ -2815,8 +2815,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       response.writeHead(200, {
         ...CORS,
         "content-type": "application/json; charset=utf-8",
-        // A miss is worth asking again in a few hours; a hit lasts the day.
-        "cache-control": match ? "public, max-age=3600" : "public, max-age=600",
+        // Briefly: the server remembers for days, so the browser need not,
+        // and an hour of browser cache hid a better answer for an hour.
+        "cache-control": match ? "public, max-age=300" : "public, max-age=120",
       });
       response.end(JSON.stringify({ match }));
       return;

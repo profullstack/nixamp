@@ -35,6 +35,12 @@ export const MIN_SCORE = 0.5;
 export const PREFIX_SCORE = 0.42;
 /** How many answers the cache keeps before the oldest go. */
 export const MAX_ENTRIES = 5000;
+/**
+ * Which rules wrote the cache. Answers chosen by older rules are dropped on
+ * load: 0.11.0 remembered "Oppenheimer" as the row without the poster for
+ * seven days, and an update that chose better could not be seen through it.
+ */
+export const CACHE_VERSION = 2;
 
 export type EnrichKind = "auto" | "title" | "channel" | "fixture";
 
@@ -263,8 +269,13 @@ export class Enricher {
   private load(): void {
     if (!this.options.cacheFile) return;
     try {
-      const parsed = JSON.parse(readFileSync(this.options.cacheFile, "utf8")) as Record<string, Cached>;
-      for (const [k, v] of Object.entries(parsed)) {
+      const parsed = JSON.parse(readFileSync(this.options.cacheFile, "utf8")) as {
+        v?: number;
+        entries?: Record<string, Cached>;
+      };
+      // A file from older rules is a file of answers those rules chose.
+      if (parsed.v !== CACHE_VERSION) return;
+      for (const [k, v] of Object.entries(parsed.entries ?? {})) {
         if (v && typeof v.at === "number") this.cache.set(k, v);
       }
     } catch {
@@ -287,7 +298,7 @@ export class Enricher {
     try {
       mkdirSync(dirname(this.options.cacheFile), { recursive: true });
       const tmp = `${this.options.cacheFile}.tmp`;
-      writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.cache)));
+      writeFileSync(tmp, JSON.stringify({ v: CACHE_VERSION, entries: Object.fromEntries(this.cache) }));
       renameSync(tmp, this.options.cacheFile);
       this.dirty = false;
     } catch (error) {

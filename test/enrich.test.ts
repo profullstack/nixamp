@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cacheKey, Enricher, fresh, FIXTURE_TTL_MS, HIT_TTL_MS, MISS_TTL_MS, pickBest, whereToAsk } from "../src/enrich.ts";
@@ -152,4 +152,11 @@ test("answers survive a restart", async () => {
   const second = new Enricher({ site: "https://ndb.test", fetch: dead, cacheFile: file });
   assert.equal((await second.lookup("BBC One", "channel"))?.title, "BBC One");
   assert.equal(asked.length, 0, "answered from disk, nothing asked");
+
+  // A cache written by older rules is not believed: those rules chose the
+  // answers, and an update that chooses better must be seen through it.
+  const stale = join(dir, "old.json");
+  writeFileSync(stale, JSON.stringify({ [cacheKey("BBC One", "channel", null)]: { at: Date.now(), hit: null } }));
+  const third = new Enricher({ site: "https://ndb.test", fetch: dead, cacheFile: stale });
+  assert.equal(third.size, 0);
 });
