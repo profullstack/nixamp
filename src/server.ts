@@ -2721,6 +2721,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
             return;
           }
           options.channels.ephemeral(channelId);
+          // Told to the directory now, so the room code arrives with the
+          // channel rather than at the next heartbeat, ninety seconds on.
+          void options.live?.announce?.();
         }
         json(response, 200, { kind: "live", channel: channelId, name: entry.title });
         return;
@@ -2826,6 +2829,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           return;
         }
         options.channels.ephemeral(channelId);
+        // Told to the directory now, so the room code arrives with the
+        // channel rather than at the next heartbeat, ninety seconds on.
+        void options.live?.announce?.();
       }
       json(response, 200, shownLink(channelId, resolved));
       return;

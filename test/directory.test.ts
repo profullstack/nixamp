@@ -318,6 +318,15 @@ test("each live on a server is its own room, with a code of its own", () => {
   assert.notEqual(again.channelCodes["MLB"], cnn);
   assert.equal(dir.liveByCode(fiba ?? ""), undefined);
 
+  // One that comes back -- a server restarting announces before its channels
+  // are back up -- gets the code people were already given, and nobody else
+  // was handed it meanwhile.
+  const back = dir.announce({ ...stream("https://a.example/listen"), channels: ["FIBA: China vs. France", "CNN"] });
+  assert.equal(back.channelCodes["FIBA: China vs. France"], fiba);
+  assert.equal(back.channelCodes["CNN"], cnn);
+  const other = dir.announce({ ...stream("https://c.example/listen", "Else"), channels: ["Something"] });
+  assert.notEqual(other.channelCodes["Something"], again.channelCodes["MLB"], "a gone channel's code is still its own");
+
   // No channels is the honest empty map, and an older listing reads the same.
   assert.deepEqual(dir.announce(stream("https://b.example/listen", "Someone")).channelCodes, {});
 });
