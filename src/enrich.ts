@@ -254,7 +254,20 @@ export class Enricher {
     }
     const answer = await this.get(`/api/v1/match?${first}`);
     if (where) return pickBest(answer, answer.parsed?.name ?? name);
-    const guessed = whereToAsk("auto", answer.parsed?.kind);
+    // nichedb reads "Alien vs Predator" as a game too. Once the sports
+    // collection has said it has none, the name is a title after all.
+    let parsedKind = answer.parsed?.kind;
+    if (parsedKind === "fixture") {
+      if (!isMatchupName(name)) {
+        const fixture = new URLSearchParams(first);
+        fixture.set("collection", "sports");
+        fixture.set("kind", "fixture");
+        const hit = pickBest(await this.get(`/api/v1/match?${fixture}`), name);
+        if (hit && hit.kind === "fixture" && hit.score >= MIN_SCORE) return hit;
+      }
+      parsedKind = "title";
+    }
+    const guessed = whereToAsk("auto", parsedKind);
     if (!guessed) return null;
     const second = new URLSearchParams(first);
     second.set("collection", guessed.collection);

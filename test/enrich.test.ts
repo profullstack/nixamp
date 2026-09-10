@@ -142,6 +142,15 @@ test("a name that reads as a game is asked about where fixtures live first, and 
   const other = new Enricher({ site: "https://ndb.test", fetch: film.fetch });
   assert.equal((await other.lookup("Kramer vs. Kramer", "auto"))?.kind, "title");
   assert.equal(film.asked.length, 3);
+  // nichedb itself reads "Alien vs Predator" as a game now. The sports
+  // collection said no already, so the title question follows, not a second no.
+  const alien = site((url) => (url.includes("collection=sports")
+    ? { items: [] }
+    : url.includes("collection=screen") ? { items: [{ kind: "title", title: "Alien vs Predator", score: 0.9, data: { year: 2004 } }] } : { parsed: { kind: "fixture", teams: ["Alien", "Predator"] }, items: [] }));
+  const avp = new Enricher({ site: "https://ndb.test", fetch: alien.fetch });
+  assert.equal((await avp.lookup("Alien vs Predator", "auto"))?.kind, "title");
+  assert.equal(alien.asked.length, 3);
+  assert.match(alien.asked[2] ?? "", /collection=screen&kind=title/);
   // Asked as a fixture outright, the sports collection is the only place asked.
   const direct = site(CHIEFS_BILLS);
   assert.equal((await new Enricher({ site: "https://ndb.test", fetch: direct.fetch }).lookup("Chiefs vs Bills", "fixture"))?.kind, "fixture");
