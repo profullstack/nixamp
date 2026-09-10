@@ -78,6 +78,7 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp logout / whoami        forget it, or check it
   nixamp token create|list|revoke  tokens for a machine that cannot sign in
   nixamp dns [set|rm]           names under your handle, for your servers
+  nixamp library [folder]       where the media is; the daemon serves this and nothing outside it
   nixamp server list|add|remove  the machines you run, kept against your account
   nixamp opendir list|add|remove  folders found on the web, published for everyone
   nixamp update [version]        re-run the installer, keeping your choices
@@ -263,9 +264,44 @@ async function runDaemon(argv: string[]): Promise<number> {
   const [action = "status", ...rest] = argv;
   const entry = fileURLToPath(new URL("./main.js", import.meta.url));
 
-  if (action === "start") {
+  // The daemon has to know where the media is. Told a folder, that folder is
+  // kept as the library so the next start needs no telling; told nothing, the
+  // saved library is used, or asked for when there is somebody to ask.
+  const withLibrary = async (args: string[]): Promise<string[] | null> => {
+    const { forbiddenLibrary, chooseLibrary, writeLibrary } = await import("./library.ts");
+    const { parseServeArgs } = await import("./server.ts");
+    const { isRemote } = await import("./sources.ts");
+    let given = "";
     try {
-      const state = await d.start(rest, entry);
+      given = parseServeArgs(args).root;
+    } catch {
+      // A bad flag is the daemon's to report, in its own words.
+      return args;
+    }
+    if (given) {
+      if (!isRemote(given)) {
+        const why = forbiddenLibrary(given);
+        if (why) {
+          console.error(`nixamp: will not serve ${why}. Pick a folder with your media in it.`);
+          return null;
+        }
+        writeLibrary(given);
+      }
+      return args;
+    }
+    const library = await chooseLibrary(process.stdin.isTTY === true);
+    if (!library) {
+      console.error("nixamp: which folder? `nixamp library ~/Music` once, then `nixamp daemon start`.");
+      return null;
+    }
+    return [library, ...args];
+  };
+
+  if (action === "start") {
+    const args = await withLibrary(rest);
+    if (args === null) return 64;
+    try {
+      const state = await d.start(args, entry);
       for (const line of d.daemonLines(state)) console.log(line);
       return 0;
     } catch (error) {
@@ -281,8 +317,12 @@ async function runDaemon(argv: string[]): Promise<number> {
   }
 
   if (action === "restart") {
+    // With no arguments the flags it was started with are replayed, library
+    // included; with arguments, the library rule applies as for start.
+    const args = rest.length === 0 ? rest : await withLibrary(rest);
+    if (args === null) return 64;
     try {
-      const state = await d.restart(rest, entry);
+      const state = await d.restart(args, entry);
       for (const line of d.daemonLines(state)) console.log(line);
       return 0;
     } catch (error) {
@@ -359,6 +399,13 @@ export async function main(): Promise<void> {
   if (first === "login" || first === "signup") {
     const { login } = await import("./session.ts");
     process.exitCode = await login(first === "signup" ? [...rest, "--signup"] : rest);
+    // Signed in is the moment a machine is about to be a server, so it is
+    // the moment to ask where the media is -- once, kept beside the keys.
+    if (process.exitCode === 0 && process.stdin.isTTY) {
+      const { chooseLibrary } = await import("./library.ts");
+      const library = await chooseLibrary(true);
+      if (library) console.log("  Start serving it with `nixamp daemon start`.");
+    }
     return;
   }
   if (first === "opendir" || first === "opendirs") {
@@ -381,6 +428,11 @@ export async function main(): Promise<void> {
     process.exitCode = await dns(rest);
     return;
   }
+  if (first === "library") {
+    const { libraryCommand } = await import("./library.ts");
+    process.exitCode = await libraryCommand(rest);
+    return;
+  }
   if (first === "logout" || first === "whoami") {
     const session = await import("./session.ts");
     process.exitCode = first === "logout" ? session.logout() : await session.whoami();
@@ -395,8 +447,16 @@ export async function main(): Promise<void> {
 
   // resolve() would turn https://host/x into /cwd/https:/host/x, so a URL is
   // left exactly as it was typed.
-  const asked = first ?? ".";
+  // The saved library before the current directory, and never a folder the
+  // server would refuse: `d` hands this same folder to a daemon.
+  const { forbiddenLibrary, readLibrary } = await import("./library.ts");
+  const asked = first ?? (readLibrary() || ".");
   const target = isRemote(asked) ? asked : resolve(asked);
+  const why = isRemote(target) ? "" : forbiddenLibrary(target);
+  if (why) {
+    console.error(`nixamp: will not play ${why}. Pick a folder with your media in it, or set one: nixamp library ~/Music`);
+    process.exit(64);
+  }
   const tools = detectTools();
   // The noise it makes when it wakes up. Started before the library is walked
   // so it plays over the wait rather than after it, and never awaited: a

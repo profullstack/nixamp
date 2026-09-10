@@ -392,7 +392,9 @@ fi
 case ":$PATH:" in
   *":$BIN:"*)
     say ""
-    say "Try:  nixamp ~/Music"
+    say "Tell it where your media is, then start it:"
+    say "  nixamp library ~/Music"
+    say "  nixamp daemon start"
     ;;
   *)
     say ""

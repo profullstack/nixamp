@@ -60,6 +60,7 @@ import { Porkbun, isIPv4, isIPv6, type DnsZone } from "./dns.ts";
 import { NameError, Names } from "./names.ts";
 import { AcmeIssuer, Certs } from "./certs.ts";
 import { claimName, fetchCert, labelFor, readCertFiles, writeCertFiles } from "./naming.ts";
+import { forbiddenLibrary, readLibrary } from "./library.ts";
 import { createThrottle, presentedCredential, type Throttle } from "@profullstack/throttle";
 import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
@@ -210,7 +211,9 @@ export function parseServeArgs(argv: string[]): ServeOptions {
   // A platform that hands out the port does it through PORT; a flag still wins.
   const fromEnv = Number(process.env.PORT);
   const options: ServeOptions = {
-    root: ".",
+    // Empty, not ".": nothing about a server should depend on where it was
+    // started from. The saved library fills it in, or the start refuses.
+    root: "",
     port: Number.isInteger(fromEnv) && fromEnv > 0 && fromEnv <= 65535 ? fromEnv : DEFAULT_PORT,
     // Every interface, because a player nobody else can reach is not much of a
     // remote. The key in the link is what makes that safe; --no-key gives up
@@ -3629,7 +3632,20 @@ export function createServer(engine: Engine, options: HandlerOptions): Server {
 
 export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const options = parseServeArgs(argv);
-  const root = isRemote(options.root) ? options.root : resolve(options.root);
+  // Told which folder, or the one that was saved. Never the directory this
+  // happens to be running in: a daemon restarted from a home directory served
+  // the home directory, keys and all, under a public listing.
+  const chosen = options.root || readLibrary();
+  if (!chosen) {
+    throw new Error(
+      "nixamp serve: which folder? Say `nixamp library ~/Music` once, or `nixamp daemon start ~/Music`.",
+    );
+  }
+  const root = isRemote(chosen) ? chosen : resolve(chosen);
+  const why = isRemote(root) ? "" : forbiddenLibrary(root);
+  if (why) {
+    throw new Error(`nixamp will not serve ${why}. Pick a folder with your media in it: nixamp library ~/Music`);
+  }
   const tools = detectTools();
   // Names now, tags later.
   //
