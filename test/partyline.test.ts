@@ -5,9 +5,11 @@ import {
   CODE_LENGTH,
   pacificTime,
   PartyLine,
+  peopleHere,
   roomCodeFrom,
   sameSecret,
   spokenCode,
+  spokenTitle,
   telnyxSms,
 } from "../src/partyline.ts";
 import { optInPage } from "../src/optin.ts";
@@ -247,14 +249,124 @@ test("a code that is not six digits is re-asked, never guessed at", async () => 
   const { calls, fetch } = recorder();
   const party = line(fetch);
 
+  await party.handle({ event_type: "call.answered", payload: { call_control_id: "leg-1" } });
   await party.handle(keyed("leg-1", "4829"));
 
-  const reask = calls.find((c) => c.path === "/calls/leg-1/actions/gather_using_speak");
+  const reask = calls.filter((c) => c.path === "/calls/leg-1/actions/gather_using_speak")[1];
   assert.ok(reask, "it asks again");
-  assert.match(String(reask?.body["payload"]), /not a six digit code/i);
+  // It says how many it got: a caller whose sixth digit was lost in the tone
+  // over the prompt is told so, rather than left to wonder if the line works.
+  assert.match(String(reask?.body["payload"]), /I only got 4 digits/);
+  // The re-ask does not repeat the welcome; that is the "repeats itself".
+  assert.doesNotMatch(String(reask?.body["payload"]), /Welcome/);
+  // And it stops waiting for a digit that is not coming.
+  assert.equal(reask?.body["inter_digit_timeout_millis"], 4000);
   // Nothing was opened on a code we could not read.
   assert.equal(calls.filter((c) => c.path === "/conferences").length, 0);
   assert.deepEqual(party.list(), []);
+});
+
+test("a gather that ended with nothing is asked again without a scolding", async () => {
+  const { calls, fetch } = recorder();
+  const party = line(fetch);
+
+  await party.handle(keyed("leg-1", ""));
+
+  const reask = calls.find((c) => c.path === "/calls/leg-1/actions/gather_using_speak");
+  assert.match(String(reask?.body["payload"]), /did not get a code/i);
+  assert.doesNotMatch(String(reask?.body["payload"]), /only got/);
+});
+
+test("a gather that ended because the caller hung up is not answered", async () => {
+  // Anything sent to that leg now is a 422, which is what the log showed.
+  const { calls, fetch } = recorder();
+  const party = line(fetch);
+
+  await party.handle({
+    event_type: "call.gather.ended",
+    payload: { call_control_id: "leg-1", digits: "", status: "call_hangup" },
+  });
+
+  assert.deepEqual(calls, []);
+});
+
+test("three empty gathers is goodbye, not a fourth prompt", async () => {
+  // A voice that fails, or a keypad that sends nothing, made a line that
+  // asked for a code every ninety seconds until the caller gave up.
+  const { calls, fetch } = recorder();
+  const party = line(fetch);
+
+  await party.handle({ event_type: "call.answered", payload: { call_control_id: "leg-1" } });
+  await party.handle(keyed("leg-1", ""));
+  await party.handle(keyed("leg-1", ""));
+  assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/gather_using_speak").length, 3);
+  assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/hangup").length, 0);
+
+  await party.handle(keyed("leg-1", ""));
+  assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/gather_using_speak").length, 3);
+  const bye = calls.find((c) => c.path === "/calls/leg-1/actions/speak");
+  assert.match(String(bye?.body["payload"]), /Goodbye/);
+  assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/hangup").length, 1);
+});
+
+test("when the voice fails, the leg hears the plain one from then on", async () => {
+  // Telnyx's Kokoro voice answered a prompt with a 500; the gather it belonged
+  // to ended at once with no digits. Asking again in the same voice is asking
+  // for the same silence.
+  const { calls, fetch } = recorder();
+  const party = line(fetch);
+
+  await party.handle({ event_type: "call.answered", payload: { call_control_id: "leg-1" } });
+  assert.equal(calls[0]?.body["voice"], "Telnyx.KokoroTTS.af");
+
+  await party.handle({ event_type: "call.speak.failed", payload: { call_control_id: "leg-1" } });
+  await party.handle(keyed("leg-1", ""));
+  const reask = calls[1];
+  assert.equal(reask?.path, "/calls/leg-1/actions/gather_using_speak");
+  assert.equal(reask?.body["voice"], "female");
+
+  // Another caller's voice is not touched by this one's failure.
+  await party.handle({ event_type: "call.answered", payload: { call_control_id: "leg-2" } });
+  assert.equal(calls[2]?.body["voice"], "Telnyx.KokoroTTS.af");
+});
+
+test("a caller is welcomed once they are in the room, and told how many are there", async () => {
+  const { calls, fetch } = recorder(conferenceReplies("conf-482917"));
+  const party = line(fetch);
+
+  await party.handle(keyed("leg-1", "482917"));
+  // Spoken into the conference, to that participant, after the conference
+  // exists: a speak on the leg before the join was cut off by the join.
+  const paths = calls.map((c) => c.path);
+  assert.ok(paths.indexOf("/conferences") < paths.indexOf("/conferences/conf-482917/actions/speak"));
+  const first = calls.find((c) => c.path === "/conferences/conf-482917/actions/speak");
+  assert.deepEqual(first?.body["call_control_ids"], ["leg-1"]);
+  assert.match(String(first?.body["payload"]), /Welcome to room 4, 8, 2, 9, 1, 7/);
+  assert.match(String(first?.body["payload"]), /You are the first one here/);
+  assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/speak").length, 0);
+
+  await party.handle(keyed("leg-2", "482917"));
+  const second = calls.filter((c) => c.path === "/conferences/conf-482917/actions/speak")[1];
+  assert.deepEqual(second?.body["call_control_ids"], ["leg-2"]);
+  assert.match(String(second?.body["payload"]), /There is one other person in here/);
+
+  await party.handle(keyed("leg-3", "482917"));
+  const third = calls.filter((c) => c.path === "/conferences/conf-482917/actions/speak")[2];
+  assert.match(String(third?.body["payload"]), /There are 3 people in here/);
+});
+
+test("who is in a room is said in words a caller can act on", () => {
+  assert.match(peopleHere(0), /first one here/);
+  assert.match(peopleHere(1), /first one here/);
+  assert.match(peopleHere(2), /one other person/);
+  assert.match(peopleHere(5), /5 people in here/);
+});
+
+test("a filename is read as a title", () => {
+  assert.equal(spokenTitle("02 - ...And Justice For All.mp3"), "And Justice For All");
+  assert.equal(spokenTitle("Top Gun: Maverick"), "Top Gun: Maverick");
+  assert.equal(spokenTitle("CNN"), "CNN");
+  assert.equal(spokenTitle(""), "");
 });
 
 test("hanging up empties the room, and an empty room stops existing", async () => {
@@ -392,9 +504,12 @@ test("a code that is a live stream puts you in the room, and plays nothing", asy
 
   await party.handle(keyed("leg-1", "482917"));
 
-  const spoke = calls.find((c) => c.path === "/calls/leg-1/actions/speak");
-  assert.match(String(spoke?.body["payload"]), /on the line for Chovy of Top Gun: Maverick/);
-  assert.match(String(spoke?.body["payload"]), /watching it too/);
+  // Welcomed in the room, not on the way in: the join cut the old one off.
+  const spoke = calls.find((c) => c.path === "/conferences/conf-1/actions/speak");
+  assert.match(String(spoke?.body["payload"]), /Welcome to the live room for Chovy, playing Top Gun: Maverick/);
+  assert.match(String(spoke?.body["payload"]), /You are the first one here/);
+  assert.deepEqual(spoke?.body["call_control_ids"], ["leg-1"]);
+  assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/speak").length, 0);
 
   // The show is on your screen; the phone is where you talk about it. Playing
   // the stream down the line was the wrong idea and the half that kept
@@ -424,8 +539,8 @@ test("a stream with no audio address is still somewhere to call", async () => {
   await party.handle(keyed("leg-1", "482917"));
 
   assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/playback_start").length, 0);
-  const spoke = calls.find((c) => c.path === "/calls/leg-1/actions/speak");
-  assert.match(String(spoke?.body["payload"]), /on the line for Chovy/);
+  const spoke = calls.find((c) => c.path === "/conferences/conf-1/actions/speak");
+  assert.match(String(spoke?.body["payload"]), /Welcome to the live room for Chovy/);
   // Nobody is hung up on for want of an MP3 any more.
   assert.equal(calls.filter((c) => c.path === "/calls/leg-1/actions/hangup").length, 0);
   assert.equal(party.listenersOn("482917"), 1);

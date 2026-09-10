@@ -43,6 +43,36 @@ const TELNYX_API = "https://api.telnyx.com/v2";
  */
 const DEFAULT_VOICE = "Telnyx.KokoroTTS.af";
 
+/**
+ * The voice a leg falls back to when the good one fails.
+ *
+ * Telnyx's Kokoro voice answered a prompt with a 500 once (2026-09-09), and
+ * what the caller got was a gather with no speech in it, ended at once with
+ * no digits, and asked again -- a line that "just repeats itself", silently,
+ * every ninety seconds. The plain Telnyx voice is older and worse and has not
+ * been seen to fail, which is the quality that matters on the second try.
+ */
+const FALLBACK_VOICE = "female";
+
+/**
+ * How long a caller has between digits before the code is treated as done.
+ *
+ * Telnyx's default is five seconds and did not fire: a caller who keyed five
+ * digits (one was lost in the keypad tone over the prompt) waited ten seconds
+ * in silence and hung up. Set explicitly so the partial code comes back to us
+ * quickly and we can say how many digits we got.
+ */
+const INTER_DIGIT_MS = 4000;
+
+/**
+ * How many times a caller is asked for a code before being let go.
+ *
+ * A gather that ends with nothing three times is a caller who cannot or will
+ * not key a code -- or a voice that is not being heard at all. Asking a
+ * fourth time is the loop that was reported; saying goodbye is not.
+ */
+const MAX_ASKS = 3;
+
 /** How long a signed webhook stays acceptable. Telnyx's own SDKs use five minutes. */
 const SIGNATURE_TOLERANCE_MS = 5 * 60 * 1000;
 
@@ -168,6 +198,35 @@ export function spokenCode(code: string): string {
 }
 
 /**
+ * A track's name as it should be read out.
+ *
+ * What is playing is a filename more often than a title: "02 - ...And Justice
+ * For All.mp3" read aloud is "zero two dash dot dot dot", and the extension is
+ * a noise the caller does not need. The track number and extension go; what
+ * is left is close enough to a title to say.
+ */
+export function spokenTitle(nowPlaying: string): string {
+  return nowPlaying
+    .replace(/\.[a-z0-9]{2,4}$/i, "")
+    .replace(/^\s*\d{1,3}\s*[-._]\s*/, "")
+    .replace(/^[\s.]+/, "")
+    .trim();
+}
+
+/**
+ * How many people are in a room, said to the one who just walked in.
+ *
+ * The count includes them: "there are 3 people in here" is what you say to the
+ * third person, and "you are the first one here" is what you say to the first,
+ * who would otherwise be told there is one person in an empty room.
+ */
+export function peopleHere(callers: number): string {
+  if (callers <= 1) return "You are the first one here. Say hello when somebody joins.";
+  if (callers === 2) return "There is one other person in here. Say hello.";
+  return `There are ${callers} people in here. Say hello.`;
+}
+
+/**
  * Telnyx signs `${timestamp}|${body}` with ed25519 and sends both back in
  * headers. Node will not take a bare 32-byte key, so it is wrapped in the
  * fixed SPKI prefix that says "this is ed25519" and handed over as DER.
@@ -213,6 +272,10 @@ export class PartyLine {
   private readonly legFrom = new Map<string, string>();
   /** Legs that heard "press 1", and which stream they would be reminded about. */
   private readonly pendingReminder = new Map<string, string>();
+  /** How many times each leg has been asked for a code, so it is not forever. */
+  private readonly asks = new Map<string, number>();
+  /** Legs whose voice failed once, which hear the plain one from then on. */
+  private readonly plainVoice = new Set<string>();
   /** Who to text when a stream returns, by stream code. */
   private readonly reminders = new Map<string, Set<string>>();
   /**
@@ -334,8 +397,21 @@ export class PartyLine {
       return;
     }
 
+    if (type === "call.speak.failed") {
+      // The voice, not the caller, failed. Everything this leg hears from now
+      // on is in the plain voice; the gather this speech belonged to ends on
+      // its own and is asked again, audibly this time.
+      this.plainVoice.add(leg);
+      this.options.onEvent?.("  a prompt could not be spoken; using the plain voice.");
+      return;
+    }
+
     if (type === "call.gather.ended") {
       const digits = typeof payload["digits"] === "string" ? payload["digits"] : "";
+
+      // A gather that ended because the caller hung up is not an answer, and
+      // anything sent to that leg now is a 422 for the log.
+      if (payload["status"] === "call_hangup") return;
 
       // A leg that was just offered a reminder is answering that, not keying a
       // room code -- the same event carries both, so the question we asked is
@@ -351,9 +427,14 @@ export class PartyLine {
       if (!code) {
         // Re-ask rather than guess. Anything that is not six digits is not a
         // room, and picking the nearest one would be picking a stranger's.
-        await this.ask(leg, "That is not a six digit code. ");
+        // Say what we got: five digits and silence is a caller who thinks
+        // the line is broken, and a caller who keyed nothing does not need
+        // telling their nothing was not six digits.
+        const got = digits.replace(/\D/g, "").length;
+        await this.ask(leg, got > 0 ? `I only got ${got} digits. ` : "I did not get a code. ");
         return;
       }
+      this.asks.delete(leg);
       // A code that belongs to a stream is answered as a stream. Anything else
       // is an ordinary room, which is what this line was before.
       if (await this.stream(leg, code)) return;
@@ -365,6 +446,8 @@ export class PartyLine {
       this.release(leg);
       this.legFrom.delete(leg);
       this.pendingReminder.delete(leg);
+      this.asks.delete(leg);
+      this.plainVoice.delete(leg);
       return;
     }
   }
@@ -383,18 +466,35 @@ export class PartyLine {
    * to press anything after; # is there for the ones who do it anyway.
    */
   private async ask(leg: string, prefix = ""): Promise<void> {
-    const greeting =
-      this.options.greeting ??
-      "Welcome to the party line. Enter a six digit room code. Anyone who enters the same code will be on the line with you.";
+    const asked = (this.asks.get(leg) ?? 0) + 1;
+    this.asks.set(leg, asked);
+    if (asked > MAX_ASKS) {
+      // Three gathers with no code in them is not a caller who needs a fourth
+      // prompt. Whatever is wrong -- their keypad, our voice -- repeating
+      // ourselves is the failure that was reported, so this ends instead.
+      await this.command(leg, "speak", {
+        payload: "I did not get a room code. Goodbye.",
+        voice: this.voiceFor(leg),
+      });
+      await this.command(leg, "hangup", {});
+      return;
+    }
+
+    // Short, because callers key the code over the prompt and a long one
+    // costs digits: a tone pressed as the speech starts was not heard. The
+    // first time gets the welcome; a re-ask has already been welcomed.
+    const greeting = this.options.greeting ?? "Welcome to the nixamp party line. Enter the six digit room code.";
+    const payload = asked === 1 ? `${prefix}${greeting}` : `${prefix}Enter the six digit room code.`;
 
     await this.command(leg, "gather_using_speak", {
-      payload: `${prefix}${greeting}`,
-      voice: this.voice,
+      payload,
+      voice: this.voiceFor(leg),
       valid_digits: "0123456789",
       minimum_digits: CODE_LENGTH,
       maximum_digits: CODE_LENGTH,
       terminating_digit: "#",
       timeout_millis: 20000,
+      inter_digit_timeout_millis: INTER_DIGIT_MS,
     });
   }
 
@@ -420,14 +520,13 @@ export class PartyLine {
 
     const live = streams.liveByCode(code);
     if (live !== undefined) {
-      const what = live.nowPlaying ? ` of ${live.nowPlaying}` : "";
-      await this.command(leg, "speak", {
-        payload:
-          `You're on the line for ${live.name}${what}. ` +
-          "Everyone here is watching it too. Say hello.",
-        voice: this.voice,
-      });
-      await this.join(leg, code);
+      // The welcome is said once they are in the room, not before: a speak
+      // on the leg followed by the conference join was cut off by the join --
+      // Telnyx reported it started and ended in the same millisecond -- and
+      // the caller heard twenty seconds of nothing and hung up.
+      const title = spokenTitle(live.nowPlaying);
+      const what = title ? `, playing ${title}` : "";
+      await this.join(leg, code, `Welcome to the live room for ${live.name}${what}. `);
       return true;
     }
 
@@ -444,7 +543,7 @@ export class PartyLine {
         `The live stream ended at ${pacificTime(ended.endedAt)}. ` +
         "Call back later when they stream again. " +
         "Press 1 to get a text message when they do.",
-      voice: this.voice,
+      voice: this.voiceFor(leg),
       valid_digits: "1",
       minimum_digits: 1,
       maximum_digits: 1,
@@ -472,7 +571,7 @@ export class PartyLine {
 
     await this.command(leg, "speak", {
       payload: "Got it. We will text you when they are live again. Goodbye.",
-      voice: this.voice,
+      voice: this.voiceFor(leg),
     });
     await this.command(leg, "hangup", {});
   }
@@ -513,14 +612,20 @@ export class PartyLine {
     return this.reminders.get(code)?.size ?? 0;
   }
 
-  /** Put a leg into a room, making the conference if it is the first one there. */
-  private async join(leg: string, code: string): Promise<void> {
+  /**
+   * Put a leg into a room, making the conference if it is the first one there.
+   *
+   * `welcome` is what the caller hears once they are in, before the count of
+   * who else is; a stream's room names the stream, an ordinary room reads its
+   * code back.
+   */
+  private async join(leg: string, code: string, welcome = `Welcome to room ${spokenCode(code)}. `): Promise<void> {
     const room = this.room(code);
 
     if (room.callers >= this.maxParticipants) {
       await this.command(leg, "speak", {
         payload: "That room is full. Goodbye.",
-        voice: this.voice,
+        voice: this.voiceFor(leg),
       });
       await this.command(leg, "hangup", {});
       return;
@@ -538,6 +643,7 @@ export class PartyLine {
       );
       if (joined !== null) {
         this.enter(room, leg);
+        await this.greet(room, leg, welcome);
         return;
       }
       // The id was stale in a way the clock did not predict -- an operator
@@ -559,7 +665,7 @@ export class PartyLine {
     if (typeof id !== "string") {
       await this.command(leg, "speak", {
         payload: "Sorry, that room could not be opened. Goodbye.",
-        voice: this.voice,
+        voice: this.voiceFor(leg),
       });
       await this.command(leg, "hangup", {});
       this.legRoom.delete(leg);
@@ -569,6 +675,7 @@ export class PartyLine {
     room.conferenceId = id;
     room.startedAt = this.now();
     this.enter(room, leg);
+    await this.greet(room, leg, welcome);
   }
 
   private enter(room: Room, leg: string): void {
@@ -576,6 +683,23 @@ export class PartyLine {
     room.legs.add(leg);
     room.callers = room.legs.size;
     this.options.onEvent?.(`  a caller joined a room (${room.callers} on the line).`);
+  }
+
+  /**
+   * Say hello to somebody who just joined, and only to them.
+   *
+   * Spoken into the conference rather than at the leg, because the leg is in
+   * the conference now and a speak on it is what the join interrupts. Telnyx
+   * addresses conference speech to particular participants, so the others in
+   * the room do not hear every arrival welcomed.
+   */
+  private async greet(room: Room, leg: string, welcome: string): Promise<void> {
+    if (room.conferenceId === null) return;
+    await this.request(`/conferences/${encodeURIComponent(room.conferenceId)}/actions/speak`, {
+      payload: `${welcome}${peopleHere(room.callers)}`,
+      voice: this.voiceFor(leg),
+      call_control_ids: [leg],
+    });
   }
 
   /**
@@ -630,6 +754,11 @@ export class PartyLine {
 
   private get voice(): string {
     return this.options.voice ?? DEFAULT_VOICE;
+  }
+
+  /** The voice for this leg: the good one, unless it has already failed them. */
+  private voiceFor(leg: string): string {
+    return this.plainVoice.has(leg) ? FALLBACK_VOICE : this.voice;
   }
 
   private get maxParticipants(): number {
