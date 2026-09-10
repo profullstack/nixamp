@@ -670,6 +670,23 @@ test("go live sits beside play, for whoever may, and puts it on the air for ever
   assert.match(body, /copyText\(page, button/);
 });
 
+test("on a live stream the page says whose it is, what is on, and how to call in", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // Between the album line and the chips: where the eye goes after the title.
+  const line = html.indexOf('id="live-line"');
+  assert.ok(line > html.indexOf('id="album-line"') && line < html.indexOf('id="meta-line"'));
+  const body = app.slice(app.indexOf("function drawLiveLine"), app.indexOf("function drawMeta"));
+  // The server's own live stream and a channel both count; a file does not.
+  assert.match(body, /channelOn !== null \|\| nowMeta\?\.kind === "live"/);
+  // What is on comes from the server's current answer, so it follows the track.
+  assert.match(body, /lastAir\?\.server\.nowPlaying/);
+  // The number and the code, in the same words as the Share panel, as text.
+  assert.match(body, /To talk about it, call /);
+  assert.match(body, /boldly\(phoneCode\)/);
+  assert.equal(body.includes("innerHTML"), false);
+});
+
 test("a listed server's channels are rows in the directory that play them", () => {
   const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
   // A name in a list you cannot press is a name. Each channel is a row with

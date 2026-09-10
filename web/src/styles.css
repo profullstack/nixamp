@@ -260,6 +260,15 @@ body {
   white-space: nowrap;
 }
 
+/* On a live stream: whose it is, what is on, and the number to call. */
+.track-live {
+  margin-top: 6px;
+  color: var(--muted);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.track-live b { color: var(--green); font-weight: 700; }
+
 /* What is known about what is playing, as chips under the title. */
 .track-meta {
   display: flex;
