@@ -192,6 +192,13 @@ export function start(): void {
   let askedToPlay = "";
   /** And from what second, for a file. */
   let askedTime = 0;
+  /**
+   * The server's view-only link, once it has said what it is. Every link
+   * this page hands out is built on this and never on the link the page
+   * connected with: an admin who copies a link is sharing the stream, not
+   * the controls, and one copied admin link is the whole server given away.
+   */
+  let viewLink = "";
   let local: LocalTrack[] = [];
   let index = 0;
   let snapshot: FullSnapshot = emptySnapshot();
@@ -1736,7 +1743,9 @@ export function start(): void {
   });
 
   dom.favHere.addEventListener("click", () => {
-    const link = remote.shareLink;
+    // Kept as the view link, so opening a favourite later is watching it;
+    // administering is what the directory's Admin button is for.
+    const link = shareableLink() || remote.shareLink;
     if (!link) return;
     const stored = [...favoriteUrls].find((one) => originOf(one) === originOf(link)) ?? link;
     void setFavorite(isFavorite(link) ? stored : link, serverName || remote.address, !isFavorite(link))
@@ -2771,6 +2780,7 @@ export function start(): void {
     dom.catalogsPanel.hidden = true;
     dom.catalogsPanel.dataset.title = "Catalogs on this server";
     serverName = "";
+    viewLink = "";
     updateFavHere();
     watchOnAir(false);
     mode = "local";
@@ -2804,11 +2814,13 @@ export function start(): void {
     // Filled in below with the server's own view-only link when it offers one.
     // Handing over the link you are holding would hand over the controls with
     // it if you are an admin, which is not what "share this" means.
-    let stream = remote.shareLink;
+    let stream = shareableLink();
     const here = globalThis.location.origin;
-    dom.shareLink.value = stream.startsWith("https://")
-      ? `${here}/?url=${encodeURIComponent(stream)}`
-      : stream;
+    dom.shareLink.value = stream === ""
+      ? ""
+      : stream.startsWith("https://")
+        ? `${here}/?url=${encodeURIComponent(stream)}`
+        : stream;
 
     dom.shareNote.textContent = "Anyone with this link can watch. They sign in once, then it opens.";
 
@@ -2834,6 +2846,8 @@ export function start(): void {
       if (answer.ok) live = (await answer.json()) as LiveState;
       if (live?.url) {
         stream = live.url;
+        // What every copied link is built on from now on.
+        viewLink = live.url;
         dom.shareLink.value = stream.startsWith("https://")
           ? `${here}/?url=${encodeURIComponent(stream)}`
           : stream;
@@ -3235,9 +3249,25 @@ export function start(): void {
    * channel. Honoured by `playWhatWasAsked` once the server has answered.
    */
   function pageLinkFor(what: string, seconds = 0): string {
+    const base = shareableLink();
+    if (base === "") return "";
     const here = globalThis.location.origin;
     const at = seconds > 1 ? `&t=${Math.floor(seconds)}` : "";
-    return `${here}/?url=${encodeURIComponent(remote.shareLink)}&play=${encodeURIComponent(what)}${at}`;
+    return `${here}/?url=${encodeURIComponent(base)}&play=${encodeURIComponent(what)}${at}`;
+  }
+
+  /**
+   * The link to share, or "" when there is nothing safe to share yet.
+   *
+   * The view link the server offered, else the link we connected with only
+   * when that is itself a view link. An admin link is never handed out,
+   * whatever was asked; a copy that yields nothing beats one that yields the
+   * controls.
+   */
+  function shareableLink(): string {
+    if (viewLink !== "") return viewLink;
+    const link = mode === "remote" ? remote.shareLink : "";
+    return /\/admin\//.test(link) ? "" : link;
   }
 
   /** Play what the link asked for, once what is live is known. */
@@ -3442,7 +3472,7 @@ export function start(): void {
         const answer = await fetch("/api/v1/invite", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ to, stream: remote.shareLink }),
+          body: JSON.stringify({ to, stream: shareableLink() }),
         });
         const body = (await answer.json()) as { error?: string; sent?: string };
         dom.shareNote.textContent = answer.ok

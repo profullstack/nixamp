@@ -64,6 +64,7 @@ import { forbiddenLibrary, readLibrary } from "./library.ts";
 import { createThrottle, presentedCredential, type Throttle } from "@profullstack/throttle";
 import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
+import { inviteSubject, inviteText, isEmail, isPhone, watchLink } from "./invite.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
   applyRemoteConfig,
@@ -1225,6 +1226,15 @@ export interface HandlerOptions {
   follows?: Follows;
   /** The servers an account hearted. nixamp.com only, like follows. */
   favorites?: Favorites;
+  /**
+   * How an invite is sent: by email, by text, and the site the watch link is
+   * built on. nixamp.com only; a personal nixamp has no mail to send from.
+   */
+  invites?: {
+    email?: (to: string, note: Notification) => Promise<boolean>;
+    sms?: { send(to: string, text: string): Promise<boolean> };
+    site: string;
+  };
   /** Names under `<handle>.<zone>` for an account's servers. nixamp.com only. */
   names?: Names;
   /** One wildcard certificate per handle, issued and renewed here. nixamp.com only. */
@@ -1428,6 +1438,78 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       json(response, 202, { status: "issuing", host });
+      return;
+    }
+
+    // --- an invite: "so-and-so is streaming", by text or by email ------------
+    //
+    // The page had a Send button and nothing answered it: the message was
+    // written (invite.ts) and never given a route. Sending needs an account,
+    // because a text costs money and lands on somebody's phone, and the link
+    // sent is always the listen link -- an admin link handed out by mistake
+    // would hand out the server.
+    if (path === "/api/v1/invite" && options.invites && options.accounts) {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "POST only" });
+        return;
+      }
+      const me = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (me === null) {
+        json(response, 401, { error: "sign in to send an invite" });
+        return;
+      }
+      let body: { to?: unknown; stream?: unknown } = {};
+      try {
+        body = JSON.parse(await readBody(request)) as typeof body;
+      } catch {
+        json(response, 400, { error: "bad JSON" });
+        return;
+      }
+      const to = String(body.to ?? "").trim();
+      const stream = String(body.stream ?? "").trim();
+      const byEmail = isEmail(to);
+      const bySms = !byEmail && isPhone(to);
+      if (!byEmail && !bySms) {
+        json(response, 400, { error: "give a phone number or an email address" });
+        return;
+      }
+      let origin = "";
+      try {
+        origin = new URL(stream).origin;
+      } catch {
+        json(response, 400, { error: "that is not a stream link" });
+        return;
+      }
+      // What the directory knows about this server names it and gives the
+      // listen link and the phone code. An unlisted server is still sendable,
+      // as long as the link given is not the one that drives it.
+      const listed = options.directory?.list().find((one) => {
+        try {
+          return new URL(one.url).origin === origin;
+        } catch {
+          return false;
+        }
+      });
+      const link = listed?.url ?? stream;
+      if (/\/admin\//.test(link) || /[?&]k=/.test(link) && !listed) {
+        json(response, 400, { error: "send the view link, not the admin link" });
+        return;
+      }
+      const invite = {
+        name: listed?.name ?? new URL(link).hostname,
+        link: watchLink(link, options.invites.site),
+        phone: listed ? CALL_IN_NUMBER : "",
+        code: listed?.code ?? "",
+      };
+      const sender = byEmail ? options.invites.email : options.invites.sms;
+      if (!sender) {
+        json(response, 503, { error: byEmail ? "this site cannot send email yet" : "this site cannot send texts yet" });
+        return;
+      }
+      const ok = byEmail
+        ? await options.invites.email!(to, { title: inviteSubject(invite), body: inviteText(invite), url: invite.link })
+        : await options.invites.sms!.send(to, inviteText(invite));
+      json(response, ok ? 200 : 502, ok ? { sent: to } : { error: "the message did not go" });
       return;
     }
 
@@ -3780,6 +3862,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
           // a guess with an Authorization header buys itself the bigger budget.
           { path: "/api/v1/auth/", limit: 20, credential: false },
           { path: "/api/v1/dns/", limit: 30 },
+          // A text costs money and lands on a phone: ten a minute is plenty.
+          { path: "/api/v1/invite", limit: 10 },
           { path: "/api/v1/dns", limit: 30 },
           { path: "/api/v1/certs", limit: 30 },
           { path: "/api/health", open: true },
@@ -4068,6 +4152,33 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(directory ? { directory } : {}),
     ...(follows ? { follows, vapidPublicKey } : {}),
     ...(favorites ? { favorites } : {}),
+    // Invites go out the same way follow notifications do, and only from a
+    // site that has somebody to send them for.
+    ...(pool
+      ? {
+          invites: {
+            site: (process.env["NIXAMP_SITE"] ?? DEFAULT_DIRECTORY).replace(/\/+$/, ""),
+            ...(process.env["RESEND_API_KEY"]
+              ? {
+                  email: resendEmail({
+                    apiKey: process.env["RESEND_API_KEY"],
+                    from: process.env["NIXAMP_MAIL_FROM"] ?? "nixamp <notifications@nixamp.com>",
+                    onEvent: (message) => console.log(message),
+                  }),
+                }
+              : {}),
+            ...(process.env["TELNYX_API_KEY"] && process.env["PARTYLINE_SMS_FROM"]
+              ? {
+                  sms: telnyxSms({
+                    apiKey: process.env["TELNYX_API_KEY"],
+                    from: process.env["PARTYLINE_SMS_FROM"],
+                    onEvent: (message) => console.log(message),
+                  }),
+                }
+              : {}),
+          },
+        }
+      : {}),
     ...(names ? { names } : {}),
     ...(certs ? { certs } : {}),
     dnsZone: zoneName,
