@@ -52,6 +52,7 @@ import { readSession } from "./session.ts";
 import { Directory, ENDED_TTL_MS, parseAnnouncement, type Listing } from "./directory.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
 import { HlsPackagers, withKey } from "./hls.ts";
+import { DEFAULT_SITE as NICHEDB, Enricher, type EnrichKind } from "./enrich.ts";
 import {
   contentTypeFor, downloadArgs, fileNameFor, inputArgsFor, linkChannelId, playableLink, resolveLink, saveFormat,
   type ResolvedLink,
@@ -1166,6 +1167,8 @@ export interface HandlerOptions {
   ytdlp?: string[] | null;
   /** Channels as HLS, for Safari on a phone, which plays a live stream no other way. */
   hls?: HlsPackagers;
+  /** What a name is -- a film, a channel, a fixture -- asked of nichedb.dev and remembered. */
+  enricher?: Enricher;
   /** A Netscape cookies file for sites that want a signed-in browser, when there is one. */
   cookies?: string;
   /** Who is listening, for the admin view. */
@@ -2789,6 +2792,36 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // own, the way a catalog entry is played: started for whoever asked,
     // stopped a minute after the last viewer leaves. Open to anyone holding
     // the link, like picking something from a catalog.
+    // --- what is this? ------------------------------------------------------
+    //
+    // A file name, a playlist entry, a channel: the poster, the logo, the
+    // year, the rating, from nichedb.dev, remembered here so a library is
+    // asked about once. Open to whoever holds the link, like the playlist.
+    if (path === "/api/enrich" && request.method === "GET") {
+      const name = (url.searchParams.get("name") ?? "").trim().slice(0, 300);
+      if (name === "") {
+        json(response, 400, { error: "name is required" });
+        return;
+      }
+      if (!options.enricher) {
+        json(response, 200, { match: null });
+        return;
+      }
+      const kinds: EnrichKind[] = ["auto", "title", "channel", "fixture"];
+      const asked = url.searchParams.get("kind") ?? "auto";
+      const kind = kinds.includes(asked as EnrichKind) ? (asked as EnrichKind) : "auto";
+      const year = Number(url.searchParams.get("year")) || null;
+      const match = await options.enricher.lookup(name, kind, year);
+      response.writeHead(200, {
+        ...CORS,
+        "content-type": "application/json; charset=utf-8",
+        // A miss is worth asking again in a few hours; a hit lasts the day.
+        "cache-control": match ? "public, max-age=3600" : "public, max-age=600",
+      });
+      response.end(JSON.stringify({ match }));
+      return;
+    }
+
     if (path === "/api/links/play" && request.method === "POST") {
       let body: { url?: unknown } = {};
       try {
@@ -4069,6 +4102,13 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   });
   // Channels as HLS, on demand, for Safari on a phone: one ffmpeg copying a
   // channel's fragments into short files while somebody is asking for them.
+  // What things are, from nichedb.dev, remembered beside the keys so a
+  // library is asked about once across restarts.
+  const enricher = new Enricher({
+    site: process.env["NIXAMP_NICHEDB"] || NICHEDB,
+    cacheFile: join(stateDir(), "enrich.json"),
+    onEvent: (message) => console.log(message),
+  });
   const hls = new HlsPackagers({
     ffmpeg: tools.ffmpeg,
     listen: (id, listener) => channels.listen(id, listener),
@@ -4445,6 +4485,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ytdlp: tools.ytdlp ?? null,
     cookies: cookiesFile(),
     hls,
+    enricher,
     ...(tls ? { tls } : {}),
     // Untagged, so a directory of five thousand files answers at once; the
     // tags follow through `tag` below.
@@ -4889,6 +4930,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 
   const shutdown = (): void => {
     rtmp?.stop();
+    enricher.save();
     hls.stopAll();
     channels.stopAll();
     ingest?.stopRtmp();

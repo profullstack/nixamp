@@ -130,6 +130,8 @@ test("the paths that need an administrator, and the ones that do not", () => {
   // Pasting a link to play, or keeping what it points at, is what the link
   // is for: the server does the fetching, the person gets the file.
   assert.equal(needsAdmin("/api/links/play", "POST"), false);
+  // Asking what a name is reveals nothing about this server.
+  assert.equal(needsAdmin("/api/enrich", "GET"), false);
   assert.equal(needsAdmin("/api/links/download", "GET"), false);
 
   // Listening is not administering.

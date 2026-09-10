@@ -730,6 +730,22 @@ test("a phone's Safari is handed a live channel as HLS, and a dead channel does 
   assert.match(ended, /if \(mode === "remote" && watching < 0 && !remoteDrives\(\)\) return;/);
 });
 
+test("what is playing is asked about, and the answer is drawn only while it still plays", () => {
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  // Asked of the server we are on, which asks nichedb once per name.
+  assert.match(app, /fetch\(remote\.url\(`\/api\/enrich\?\$\{params\}`\)\)/);
+  // Every way something starts playing asks: a file, a channel, a catalog film, the live stream.
+  assert.equal((app.match(/\benrich\((track\.title|channel\.name|name|title), /g) ?? []).length >= 4, true);
+  // An answer for the last thing is not drawn over the next.
+  assert.match(app, /if \(enrichAsked !== key\) return;/);
+  assert.match(app, /enrichment\?\.key === enrichAsked \? enrichment\.match : null/);
+  // A poster stands beside the chips; a synopsis under them; nothing is markup.
+  assert.match(app, /"meta-logo meta-poster"/);
+  assert.match(app, /dom\.metaBlurb\.textContent = blurb/);
+  assert.ok(html.includes('id="meta-blurb"'));
+});
+
 test("a listed server's channels are rows in the directory that play them", () => {
   const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
   // A name in a list you cannot press is a name. Each channel is a row with

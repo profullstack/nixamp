@@ -64,6 +64,7 @@ export function start(): void {
     title: need<HTMLElement>("title-line"),
     album: need<HTMLElement>("album-line"),
     meta: need<HTMLElement>("meta-line"),
+    metaBlurb: need<HTMLParagraphElement>("meta-blurb"),
     liveLine: need<HTMLElement>("live-line"),
     downloadNow: need<HTMLButtonElement>("download-now"),
     linkForm: need<HTMLFormElement>("link-form"),
@@ -278,6 +279,45 @@ export function start(): void {
   } | null = null;
   /** The last answer to "what is on", so the meta line can say who is watching. */
   let lastAir: OnAir | null = null;
+  /**
+   * What nichedb says the thing playing is: a poster and a year for a film, a
+   * logo and a country for a channel, a rating, a synopsis. Asked of the
+   * server we are on, which asks nichedb.dev once per name and remembers.
+   * Keyed by what was asked, so an answer that arrives after the next track
+   * started is not drawn over it.
+   */
+  interface Enrichment {
+    kind: "title" | "channel" | "fixture";
+    title: string;
+    year: number | null;
+    image: string | null;
+    summary: string | null;
+    page: string;
+    score: number;
+    data: Record<string, unknown>;
+    tags: string[];
+  }
+  let enrichment: { key: string; match: Enrichment | null } | null = null;
+  let enrichAsked = "";
+
+  /** Ask what the thing that just started is. The answer is drawn when it comes, if it is still playing. */
+  function enrich(name: string, kind: "auto" | "title" | "channel" | "fixture", year: number | null = null): void {
+    const key = `${kind}|${name}`;
+    enrichAsked = key;
+    if (enrichment?.key === key) return;
+    enrichment = null;
+    if (mode !== "remote" || name.trim() === "") return;
+    const params = new URLSearchParams({ name, kind });
+    if (year) params.set("year", String(year));
+    void fetch(remote.url(`/api/enrich?${params}`))
+      .then((answer) => (answer.ok ? answer.json() : { match: null }))
+      .then((body: { match?: Enrichment | null }) => {
+        if (enrichAsked !== key) return;
+        enrichment = { key, match: body.match ?? null };
+        draw();
+      })
+      .catch(() => undefined);
+  }
   /** Whether this server is listed, and the phone code and number if so. */
   let listed = false;
   let phoneCode = "";
@@ -619,6 +659,8 @@ export function start(): void {
     watching = next;
     channelOn = null;
     nowMeta = { kind: "file" };
+    // What it is, from its name: a film gets a poster and a year.
+    enrich(track.title, "auto");
     await whileLoading(() => player.load({
       title: track.title, artist: track.artist, album: track.album,
       duration: track.duration, url: remote.media(next, rung),
@@ -734,6 +776,32 @@ export function start(): void {
         chips.push(nowMeta.entry?.group ? `${nowMeta.catalog.name} › ${nowMeta.entry.group}` : nowMeta.catalog.name);
         logo = nowMeta.entry?.logo ?? "";
       }
+      // What nichedb knows: the year, the rating, the genres of a film; the
+      // country and category of a channel. The poster or logo goes in front.
+      const rich = enrichment?.key === enrichAsked ? enrichment.match : null;
+      if (rich) {
+        if (rich.image) logo = rich.image;
+        const d = rich.data;
+        if (rich.kind === "title") {
+          if (rich.year) chips.push(String(rich.year));
+          const rating = typeof d["rating"] === "number" ? (d["rating"] as number) : null;
+          if (rating) chips.push(`★ ${rating.toFixed(1)}`);
+          const genres = Array.isArray(d["genres"]) ? (d["genres"] as unknown[]).slice(0, 2).map(String) : [];
+          if (genres.length) chips.push(genres.join(" · "));
+          const minutes = typeof d["runtimeMin"] === "number" ? (d["runtimeMin"] as number) : 0;
+          if (minutes) chips.push(`${minutes} min`);
+        } else if (rich.kind === "channel") {
+          const country = typeof d["country"] === "string" ? (d["country"] as string) : "";
+          const categories = Array.isArray(d["categories"]) ? (d["categories"] as unknown[]).slice(0, 2).map(String) : [];
+          const network = typeof d["network"] === "string" ? (d["network"] as string) : "";
+          if (country) chips.push(country);
+          if (categories.length) chips.push(categories.join(" · "));
+          if (network) chips.push(network);
+        } else if (rich.kind === "fixture") {
+          const state = typeof d["statusDetail"] === "string" ? (d["statusDetail"] as string) : "";
+          if (state) chips.push(state);
+        }
+      }
       // A pasted link: which site, by yt-dlp's name for it, and its host.
       if (channelOn && nowMeta?.link) {
         let host = "";
@@ -750,14 +818,19 @@ export function start(): void {
       }
     }
 
-    const key = `${logo}|${chips.join("|")}`;
+    const known = enrichment?.key === enrichAsked ? enrichment.match : null;
+    const blurb = !nothing && known?.summary ? known.summary : "";
+    const key = `${logo}|${chips.join("|")}|${blurb}`;
     if (key === drawnMeta) return;
     drawnMeta = key;
     dom.meta.hidden = chips.length === 0;
+    dom.metaBlurb.textContent = blurb;
+    dom.metaBlurb.hidden = blurb === "";
     const children: HTMLElement[] = [];
     if (logo !== "" && /^https?:\/\//.test(logo)) {
       const img = document.createElement("img");
-      img.className = "meta-logo";
+      // A film's poster is tall and stands beside the chips; a logo sits among them.
+      img.className = known?.kind === "title" && logo === known.image ? "meta-logo meta-poster" : "meta-logo";
       img.alt = "";
       img.src = logo;
       img.addEventListener("error", () => { img.hidden = true; });
@@ -2513,6 +2586,7 @@ export function start(): void {
           channelOn = null;
           watching = -1;
           nowMeta = { kind: "vod", ...from };
+          enrich(name, "title");
           await player.load({
             title: name, artist: "", album: "", duration: 0,
             url: remote.url(body.url), video: true, objectUrl: false,
@@ -3542,6 +3616,7 @@ export function start(): void {
     watching = -1;
     channelOn = null;
     nowMeta = { kind: "live" };
+    enrich(title, "auto");
     await whileLoading(() => player.load({
       title: title || "Live", artist: "", album: "", duration: 0,
       url: remote.url("/api/live"),
@@ -3573,6 +3648,9 @@ export function start(): void {
     // Where it came from, when a catalog entry started it; a channel picked
     // from the Live list is its own. A rejoin keeps what it had.
     if (fresh) nowMeta = from ?? { kind: "channel" };
+    // A pasted link is whatever its page said it was; everything else on the
+    // air here is a channel, and is asked about as one.
+    if (fresh) enrich(channel.name, nowMeta?.link ? "auto" : "channel");
     // Safari on a phone will not play the endless MP4 a channel is sent as;
     // it plays HLS, so it is handed the same channel as a playlist. A
     // browser with MediaSource plays the MP4 as it is, which is lower latency.
