@@ -119,5 +119,8 @@ export function needsAdmin(path: string, method = "GET"): boolean {
   // Publishing to a channel, or ending one, is administering the server.
   // Listening to a channel is not: that is what the share link is for.
   if (path.startsWith("/api/channels/") && method !== "GET") return true;
+  // Adding, refreshing or removing a catalog is administering; browsing one,
+  // and picking something in it to play, is what the link is for.
+  if (path.startsWith("/api/catalogs") && method !== "GET" && !path.endsWith("/play")) return true;
   return false;
 }

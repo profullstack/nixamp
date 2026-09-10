@@ -64,6 +64,8 @@ export const GIVE_UP = 5;
  * channel that is quiet for half a minute is not being quiet, it is dead.
  */
 export const STALL = 30_000;
+/** How long an on-demand channel stays up with nobody watching. */
+export const IDLE = 60_000;
 /** How much of what ffmpeg said to keep, for the last line when it dies. */
 const TAIL = 2000;
 /**
@@ -116,6 +118,8 @@ export interface ChannelOptions {
   ffmpeg: string[];
   onStart?: (info: ChannelInfo) => void;
   onEnd?: (info: ChannelInfo) => void;
+  /** How long an on-demand channel outlives its last viewer. Tests shorten it. */
+  idleMs?: number;
 }
 
 /**
@@ -151,6 +155,13 @@ export class Channel {
    */
   private recent: Buffer[] = [];
   private recentBytes = 0;
+  /**
+   * Started for whoever asked and stopped when nobody is left. A catalog
+   * channel is one of thousands; keeping every one that was ever clicked
+   * running would be a decoder per click, for ever.
+   */
+  ephemeral = false;
+  private idle: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     readonly info: ChannelInfo,
@@ -466,10 +477,23 @@ export class Channel {
     }
     this.listeners.add(listener);
     this.info.listeners = this.listeners.size;
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = null;
     return () => {
       this.listeners.delete(listener);
       this.info.listeners = this.listeners.size;
+      if (this.ephemeral && this.listeners.size === 0) this.idleOut();
     };
+  }
+
+  /** Nobody is watching an on-demand channel: give it a minute, then stop. */
+  private idleOut(): void {
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = setTimeout(() => {
+      this.idle = null;
+      if (this.ephemeral && this.listeners.size === 0) this.close();
+    }, this.options.idleMs ?? IDLE);
+    this.idle.unref?.();
   }
 
   close(): void {
@@ -480,6 +504,8 @@ export class Channel {
     this.timer = null;
     if (this.watchdog) clearTimeout(this.watchdog);
     this.watchdog = null;
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = null;
     const said = lastLine(this.stderr);
     if (said && !this.info.error) this.info.error = said;
     const child = this.child;
@@ -613,6 +639,21 @@ export class Channels {
   /** Whether a channel is one we fetch ourselves, and so can start over. */
   pulled(id: string): boolean {
     return this.open.get(id)?.info.via === "pull";
+  }
+
+  /** Mark a channel as on demand: it stops itself a minute after its last viewer leaves. */
+  ephemeral(id: string): void {
+    const channel = this.open.get(id);
+    if (!channel) return;
+    channel.ephemeral = true;
+    if (channel.listeners.size === 0) channel.listen({ write: () => true, end: () => undefined })();
+  }
+
+  /** How many on-demand channels are up, for a ceiling on decoders. */
+  get ephemeralCount(): number {
+    let total = 0;
+    for (const channel of this.open.values()) if (channel.ephemeral) total += 1;
+    return total;
   }
 
   /** What a listener should be told this channel is. */

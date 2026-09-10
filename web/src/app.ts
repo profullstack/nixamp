@@ -118,6 +118,15 @@ export function start(): void {
     favoritesNote: need<HTMLParagraphElement>("favorites-note"),
     favoritesList: need<HTMLUListElement>("favorites-list"),
     favHere: need<HTMLButtonElement>("fav-here"),
+    catalogsPanel: need<HTMLElement>("catalogs-panel"),
+    catalogsNote: need<HTMLParagraphElement>("catalogs-note"),
+    catalogsForm: need<HTMLFormElement>("catalogs-form"),
+    catalogSource: need<HTMLInputElement>("catalog-source"),
+    catalogName: need<HTMLInputElement>("catalog-name"),
+    catalogsList: need<HTMLUListElement>("catalogs-list"),
+    catalogsCrumbs: need<HTMLElement>("catalogs-crumbs"),
+    catalogsFilter: need<HTMLInputElement>("catalogs-filter"),
+    catalogsEntries: need<HTMLOListElement>("catalogs-entries"),
     notifyPanel: need<HTMLElement>("notify-panel"),
     notifyNote: need<HTMLParagraphElement>("notify-note"),
     notifyWeb: need<HTMLInputElement>("notify-web"),
@@ -931,6 +940,7 @@ export function start(): void {
       try { localStorage.setItem(REMOTE_KEY, typed.trim()); } catch { /* private mode */ }
       remote.connect(typed);
       void loadOnAir();
+      void loadCatalogs();
       watchOnAir(true);
       // Asked of the server we just connected to. Whether you may administer
       // it is a question about that machine, and it was being answered by
@@ -1321,6 +1331,8 @@ export function start(): void {
     // who may, and it was usually drawn before this answer arrived -- so it
     // is drawn again now, with the answer.
     void loadOnAir();
+    // The same for the catalogs: Add, Refresh and Remove are the admin's.
+    void loadCatalogs();
     // Whether you may administer this server decides whether Go live is
     // offered, and this is the answer to that question -- so the share panel
     // is drawn again now rather than from whatever was known before it.
@@ -1648,6 +1660,438 @@ export function start(): void {
     const stored = [...favoriteUrls].find((one) => originOf(one) === originOf(link)) ?? link;
     void setFavorite(isFavorite(link) ? stored : link, serverName || remote.address, !isFavorite(link))
       .then(updateFavHere);
+  });
+
+  // ---- catalogs: the m3u lists a server keeps ------------------------------
+  //
+  // An IPTV list is thousands of channels in groups, and a VOD list is
+  // hundreds of films. Dumped into the playlist they were unusable; here they
+  // are walked -- catalog, then group, then entries -- the way the library is
+  // walked by folder. Anyone with the link may browse and play. Adding a
+  // catalog, refreshing it or removing it is administering the server.
+  interface CatalogSummary {
+    id: string; name: string; entries: number; live: number; vod: number;
+    groups: number; refreshedAt: number; error?: string;
+  }
+  interface CatalogEntry {
+    id: string; title: string; group: string; logo?: string; live: boolean; duration: number;
+  }
+  const CATALOG_PAGE = 200;
+  let catalogs: CatalogSummary[] = [];
+  /** Where in the walk we are: nothing, a catalog, or a group inside one. */
+  let openCatalog: CatalogSummary | null = null;
+  let openGroup: string | null = null;
+  let entryQuery = "";
+  let entriesShown: CatalogEntry[] = [];
+  let entriesTotal = 0;
+  let filterTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Answers that arrive after a newer request are not news. */
+  let entriesRequest = 0;
+
+  /** "3 minutes ago", for a refresh time. Never, for a catalog never read. */
+  function agoOf(at: number): string {
+    if (!at) return "never";
+    const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
+    if (seconds < 90) return "just now";
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 90) return `${minutes} min ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 36) return `${hours} h ago`;
+    return `${Math.round(hours / 24)} d ago`;
+  }
+
+  async function loadCatalogs(): Promise<void> {
+    if (mode !== "remote") {
+      dom.catalogsPanel.hidden = true;
+      return;
+    }
+    let answer: Response;
+    try {
+      answer = await fetch(remote.url("/api/catalogs"));
+    } catch {
+      dom.catalogsPanel.hidden = true;
+      return;
+    }
+    // An older server has no catalogs to speak of, and a panel about a thing
+    // the server has never heard of is worse than no panel.
+    if (!answer.ok) {
+      dom.catalogsPanel.hidden = true;
+      return;
+    }
+    const body = (await answer.json().catch(() => ({}))) as { catalogs?: CatalogSummary[] };
+    catalogs = body.catalogs ?? [];
+    // The one we are inside may have been refreshed or removed meanwhile.
+    if (openCatalog) openCatalog = catalogs.find((one) => one.id === openCatalog?.id) ?? null;
+    if (!openCatalog) openGroup = null;
+    dom.catalogsPanel.hidden = false;
+    drawCatalogs();
+  }
+
+  /** The three levels, drawn from what is open. */
+  function drawCatalogs(): void {
+    const canDrive = !dom.adminPanel.hidden;
+    dom.catalogsForm.hidden = !canDrive;
+
+    const live = catalogs.reduce((sum, one) => sum + one.live, 0);
+    const vod = catalogs.reduce((sum, one) => sum + one.vod, 0);
+    dom.catalogsNote.textContent = catalogs.length === 0
+      ? (canDrive ? "No catalogs yet. Add an m3u list of channels or films." : "No catalogs yet.")
+      : `${catalogs.length} ${catalogs.length === 1 ? "catalog" : "catalogs"} · ${live} live ${live === 1 ? "channel" : "channels"} · ${vod} on demand`;
+
+    drawCatalogCrumbs();
+    const inEntries = openCatalog !== null && openGroup !== null;
+    dom.catalogsList.hidden = inEntries;
+    dom.catalogsFilter.hidden = !inEntries;
+    dom.catalogsEntries.hidden = !inEntries;
+
+    if (inEntries) {
+      drawEntries();
+      return;
+    }
+    if (openCatalog) {
+      void drawGroups(openCatalog);
+      return;
+    }
+    dom.catalogsList.replaceChildren(...catalogs.map((catalog) => catalogRow(catalog, canDrive)));
+  }
+
+  /** The way back out: all catalogs, the catalog, the group. */
+  function drawCatalogCrumbs(): void {
+    const needed = openCatalog !== null;
+    dom.catalogsCrumbs.hidden = !needed;
+    if (!needed) return;
+    const step = (label: string, to: () => void, last: boolean): HTMLElement => {
+      if (last) {
+        const here = document.createElement("span");
+        here.className = "here";
+        here.textContent = label;
+        return here;
+      }
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", to);
+      return button;
+    };
+    const sep = (): HTMLElement => {
+      const span = document.createElement("span");
+      span.textContent = "/";
+      return span;
+    };
+    const children: HTMLElement[] = [
+      step("All catalogs", () => { openCatalog = null; openGroup = null; drawCatalogs(); }, false),
+      sep(),
+      step(openCatalog?.name ?? "", () => { openGroup = null; drawCatalogs(); }, openGroup === null),
+    ];
+    if (openGroup !== null) {
+      children.push(sep(), step(openGroup === "" ? "All groups" : openGroup, () => undefined, true));
+    }
+    dom.catalogsCrumbs.replaceChildren(...children);
+  }
+
+  function catalogRow(catalog: CatalogSummary, canDrive: boolean): HTMLElement {
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    label.className = "server-label";
+    // textContent, never innerHTML: a catalog is named by whoever added it,
+    // and its groups by whoever wrote the list.
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = catalog.name;
+    const detail = document.createElement("span");
+    detail.className = "detail";
+    detail.textContent = [
+      `${catalog.entries.toLocaleString()} ${catalog.entries === 1 ? "entry" : "entries"}`,
+      `${catalog.live.toLocaleString()} live`,
+      `${catalog.vod.toLocaleString()} on demand`,
+      `refreshed ${agoOf(catalog.refreshedAt)}`,
+    ].join(" · ");
+    label.append(name, detail);
+    // What went wrong the last time it was read, for whoever can act on it.
+    if (canDrive && catalog.error) {
+      const trouble = document.createElement("span");
+      trouble.className = "detail";
+      trouble.textContent = catalog.error;
+      label.append(trouble);
+    }
+
+    const browse = document.createElement("button");
+    browse.type = "button";
+    browse.className = "button";
+    browse.textContent = "Browse";
+    browse.addEventListener("click", () => {
+      openCatalog = catalog;
+      openGroup = null;
+      drawCatalogs();
+    });
+    item.append(label, browse);
+
+    if (canDrive) {
+      const refresh = document.createElement("button");
+      refresh.type = "button";
+      refresh.className = "ghost";
+      refresh.textContent = "Refresh";
+      refresh.title = "Read the list again";
+      refresh.addEventListener("click", () => { void refreshCatalog(catalog); });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "ghost";
+      remove.textContent = "Remove";
+      remove.title = "Take this catalog off the server";
+      remove.addEventListener("click", () => {
+        // Asked, because a catalog is somebody's list and a slip here is a
+        // thousand channels gone.
+        if (!confirm(`Remove ${catalog.name} from this server?`)) return;
+        void removeCatalog(catalog);
+      });
+      item.append(refresh, remove);
+    }
+    return item;
+  }
+
+  async function drawGroups(catalog: CatalogSummary): Promise<void> {
+    dom.catalogsList.replaceChildren();
+    let groups: { name: string; count: number; live: number; vod: number }[] = [];
+    try {
+      const answer = await fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/groups`));
+      if (!answer.ok) throw new Error(String(answer.status));
+      groups = ((await answer.json()) as { groups?: typeof groups }).groups ?? [];
+    } catch {
+      note = `Could not read the groups in ${catalog.name}.`;
+      draw();
+      return;
+    }
+    // Still where we were? A click elsewhere while this was in flight wins.
+    if (openCatalog?.id !== catalog.id || openGroup !== null) return;
+
+    const rows: HTMLElement[] = [
+      groupRow("All groups", "", catalog.entries, catalog.live, catalog.vod),
+      ...groups.map((group) => groupRow(group.name || "(no group)", group.name, group.count, group.live, group.vod)),
+    ];
+    dom.catalogsList.replaceChildren(...rows);
+  }
+
+  function groupRow(label: string, group: string, count: number, live: number, vod: number): HTMLElement {
+    const item = document.createElement("li");
+    const text = document.createElement("span");
+    text.className = "server-label";
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = label;
+    const detail = document.createElement("span");
+    detail.className = "detail";
+    detail.textContent = `${count.toLocaleString()} · ${live.toLocaleString()} live · ${vod.toLocaleString()} on demand`;
+    text.append(name, detail);
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "button";
+    open.textContent = "Open";
+    open.addEventListener("click", () => {
+      openGroup = group;
+      entryQuery = "";
+      dom.catalogsFilter.value = "";
+      entriesShown = [];
+      entriesTotal = 0;
+      drawCatalogs();
+      void loadEntries(0);
+    });
+    item.append(text, open);
+    return item;
+  }
+
+  /** One page of entries, appended to what is shown or replacing it. */
+  async function loadEntries(offset: number): Promise<void> {
+    const catalog = openCatalog;
+    const group = openGroup;
+    if (!catalog || group === null) return;
+    const request = ++entriesRequest;
+    const params = new URLSearchParams({
+      group, q: entryQuery, offset: String(offset), limit: String(CATALOG_PAGE),
+    });
+    let got: { total: number; entries: CatalogEntry[] };
+    try {
+      const answer = await fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/entries?${params}`));
+      if (!answer.ok) throw new Error(String(answer.status));
+      got = (await answer.json()) as typeof got;
+    } catch {
+      note = `Could not read ${catalog.name}.`;
+      draw();
+      return;
+    }
+    if (request !== entriesRequest) return;
+    entriesTotal = got.total ?? 0;
+    entriesShown = offset === 0 ? (got.entries ?? []) : [...entriesShown, ...(got.entries ?? [])];
+    drawEntries();
+  }
+
+  function drawEntries(): void {
+    const catalog = openCatalog;
+    if (!catalog) return;
+    const children: HTMLElement[] = entriesShown.map((entry) => {
+      const item = document.createElement("li");
+      item.className = "row";
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = entry.title;
+      const tag = document.createElement("span");
+      tag.className = entry.live ? "catalog-tag catalog-live" : "catalog-tag";
+      tag.textContent = entry.live ? "LIVE" : (entry.duration > 0 ? formatTime(entry.duration) : "VOD");
+      item.append(name, tag);
+      if (!entry.live) {
+        // The film's own address, for VLC or another page. A live entry has
+        // none until it is playing, and then it is a channel with its own.
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "row-copy";
+        copy.textContent = "⧉";
+        copy.title = "Copy this entry's URL";
+        copy.setAttribute("aria-label", `Copy the URL of ${entry.title}`);
+        copy.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const path = `/api/catalogs/${encodeURIComponent(catalog.id)}/entries/${encodeURIComponent(entry.id)}/stream`;
+          void copyText(remote.url(path), copy, "✓");
+        });
+        item.append(copy);
+      }
+      item.addEventListener("click", () => { void playEntry(catalog, entry); });
+      return item;
+    });
+
+    if (entriesShown.length === 0) {
+      const empty = document.createElement("li");
+      empty.className = "group";
+      const label = document.createElement("span");
+      label.className = "group-name";
+      label.textContent = entryQuery ? `Nothing called "${entryQuery}" here.` : "Nothing in this group.";
+      empty.append(label);
+      children.push(empty);
+    } else if (entriesShown.length < entriesTotal) {
+      const more = document.createElement("li");
+      more.className = "group";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ghost";
+      button.textContent = `Show more (${entriesShown.length.toLocaleString()} of ${entriesTotal.toLocaleString()})`;
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void loadEntries(entriesShown.length);
+      });
+      more.append(button);
+      children.push(more);
+    }
+    dom.catalogsEntries.replaceChildren(...children);
+  }
+
+  /** Ask the server to put it on, then play whatever it answers with. */
+  async function playEntry(catalog: CatalogSummary, entry: CatalogEntry): Promise<void> {
+    let answer: Response;
+    let body: { kind?: string; channel?: string; url?: string; name?: string; error?: string } = {};
+    try {
+      answer = await fetch(
+        remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/entries/${encodeURIComponent(entry.id)}/play`),
+        { method: "POST" },
+      );
+      body = (await answer.json().catch(() => ({}))) as typeof body;
+    } catch {
+      note = "could not reach the server";
+      draw();
+      return;
+    }
+    if (!answer.ok) {
+      note = body.error ?? `${entry.title} would not play.`;
+      draw();
+      return;
+    }
+    const name = body.name || entry.title;
+    if (body.kind === "live" && body.channel) {
+      // A live entry is a channel now, with everything a channel has: a
+      // backlog for the newcomer, a rejoin when it starts over.
+      await watchChannel({ id: body.channel, name, video: true });
+      return;
+    }
+    if (body.kind === "vod" && body.url) {
+      channelOn = null;
+      watching = -1;
+      await player.load({
+        title: name, artist: "", album: "", duration: 0,
+        url: remote.url(body.url), video: true, objectUrl: false,
+      }, true);
+      showVideo(true);
+      note = `Playing ${name}.`;
+      draw();
+      return;
+    }
+    note = `${entry.title} would not play.`;
+    draw();
+  }
+
+  async function refreshCatalog(catalog: CatalogSummary): Promise<void> {
+    said(`Reading ${catalog.name} again…`);
+    try {
+      const answer = await fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/refresh`), {
+        method: "POST",
+      });
+      const body = (await answer.json().catch(() => ({}))) as { error?: string; catalog?: CatalogSummary };
+      said(answer.ok
+        ? `${body.catalog?.name ?? catalog.name}: ${(body.catalog?.entries ?? 0).toLocaleString()} entries.`
+        : (body.error ?? "that did not work"));
+    } catch {
+      said("could not reach the server");
+    }
+    void loadCatalogs();
+  }
+
+  async function removeCatalog(catalog: CatalogSummary): Promise<void> {
+    try {
+      const answer = await fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}`), { method: "DELETE" });
+      said(answer.ok ? `${catalog.name} is off the server.` : "that did not work");
+    } catch {
+      said("could not reach the server");
+    }
+    if (openCatalog?.id === catalog.id) {
+      openCatalog = null;
+      openGroup = null;
+    }
+    void loadCatalogs();
+  }
+
+  dom.catalogsForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const source = dom.catalogSource.value.trim();
+    const name = dom.catalogName.value.trim();
+    if (!source) return;
+    void (async () => {
+      said(`Reading ${name || source}…`);
+      try {
+        const answer = await fetch(remote.url("/api/catalogs"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ source, name }),
+        });
+        const body = (await answer.json().catch(() => ({}))) as { error?: string; catalog?: CatalogSummary };
+        if (!answer.ok) {
+          said(body.error ?? "that did not work");
+          return;
+        }
+        said(`${body.catalog?.name ?? name ?? source}: ${(body.catalog?.entries ?? 0).toLocaleString()} entries.`);
+        dom.catalogSource.value = "";
+        dom.catalogName.value = "";
+      } catch {
+        said("could not reach the server");
+      }
+      void loadCatalogs();
+    })();
+  });
+
+  // Typing narrows the entries after a pause, not on every keystroke: a
+  // request per key against a thousand-line list is a request per key.
+  dom.catalogsFilter.addEventListener("input", () => {
+    if (filterTimer) clearTimeout(filterTimer);
+    filterTimer = setTimeout(() => {
+      filterTimer = null;
+      entryQuery = dom.catalogsFilter.value.trim();
+      void loadEntries(0);
+    }, 250);
   });
 
   const loadServers = async (): Promise<void> => {
@@ -2189,6 +2633,7 @@ export function start(): void {
       dom.publishPanel.hidden = true;
       dom.adminPanel.hidden = true;
       dom.onairPanel.hidden = true;
+      dom.catalogsPanel.hidden = true;
       dom.listenOnly.hidden = true;
       watchOnAir(false);
       try {
@@ -2238,6 +2683,8 @@ export function start(): void {
     dom.adminPanel.hidden = true;
     dom.onairPanel.hidden = true;
     dom.onairPanel.dataset.title = "Live on this server";
+    dom.catalogsPanel.hidden = true;
+    dom.catalogsPanel.dataset.title = "Catalogs on this server";
     serverName = "";
     updateFavHere();
     watchOnAir(false);
@@ -2395,6 +2842,7 @@ export function start(): void {
       if (air.server.name && air.server.name !== serverName) {
         serverName = air.server.name;
         dom.onairPanel.dataset.title = `Live on ${serverName}`;
+        dom.catalogsPanel.dataset.title = `Catalogs on ${serverName}`;
         updateFavHere();
         draw();
       }
