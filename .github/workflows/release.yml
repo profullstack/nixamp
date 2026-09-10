@@ -100,6 +100,11 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun run web:build
+      # The desktop app carries the CLI's version, whatever desktop/package.json
+      # says: 0.9.8 and 0.9.9 shipped installers still named 0.9.7, which the
+      # installer then could not find at the version it had just asked for.
+      - name: Desktop version follows the CLI's
+        run: node -e "const fs=require('fs');const v=require('./package.json').version;const p='desktop/package.json';const d=JSON.parse(fs.readFileSync(p,'utf8'));d.version=v;fs.writeFileSync(p,JSON.stringify(d,null,2)+'\n')"
       - run: bun run --filter '@nixamp/desktop' stage
       # Unsigned on purpose: there is no signing identity or certificate.
       # electron-builder is configured with a null mac identity so it does not
