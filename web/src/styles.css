@@ -299,6 +299,20 @@ body {
   border-radius: 3px;
   background: #000;
 }
+/* A poster is tall; it stands beside the chips rather than among them. */
+.meta-logo.meta-poster { height: 72px; max-width: 52px; }
+
+/* What nichedb knows about it, in a sentence or two. */
+.track-blurb {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 #video {
   width: 100%;
