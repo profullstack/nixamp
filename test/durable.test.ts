@@ -83,6 +83,33 @@ test("a big number comes back as a number, not the string pg hands over", async 
   assert.equal(typeof item?.endedAt, "number");
   assert.equal(item?.endedAt, NOW);
   assert.ok((item?.endedAt ?? 0) > (item?.startedAt ?? 0));
+  // A row from before channels had codes reads as no codes, not a crash.
+  assert.deepEqual(item?.channelCodes, {});
+});
+
+test("each channel's phone code is kept with the ended stream, and comes back as codes", async () => {
+  // A server that stops withdraws its listing; when it comes back its channels
+  // must land on the codes people were given, even across a directory restart.
+  const { asked, queryable } = db({
+    "SELECT * FROM ended_streams": [{
+      id: "s1", code: "482917", name: "Chovy", owner_id: "o1", url: "u", now_playing: "x",
+      started_at: String(NOW - 1000), ended_at: String(NOW),
+      channel_codes: { CNN: "111111", "not a code": "abc" },
+    }],
+  });
+  const durable = new Durable(queryable);
+  await durable.saveEnded(stored({ channelCodes: { CNN: "111111" } }));
+  const insert = asked.find((a) => a.text.includes("INSERT INTO ended_streams"));
+  assert.match(insert?.text ?? "", /channel_codes/);
+  assert.equal(insert?.values?.[8], '{"CNN":"111111"}');
+
+  const [item] = await durable.loadEnded(0);
+  assert.deepEqual(item?.channelCodes, { CNN: "111111" }, "six digits or it is not a code");
+  // And as a string, from a driver that does not parse JSONB.
+  const { queryable: stringy } = db({
+    "SELECT * FROM ended_streams": [{ id: "s2", code: "1", started_at: "1", ended_at: "2", channel_codes: '{"MLB":"222222"}' }],
+  });
+  assert.deepEqual((await new Durable(stringy).loadEnded(0))[0]?.channelCodes, { MLB: "222222" });
 });
 
 test("reminders come back grouped by the code they were left on", async () => {

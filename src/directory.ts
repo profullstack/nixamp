@@ -105,6 +105,12 @@ export interface Ended {
   startedAt: number;
   /** The last heartbeat we saw, which is as close to "ended" as we can know. */
   endedAt: number;
+  /**
+   * The codes its channels had, so a server that stops and comes back -- an
+   * update restarts the daemon, and the daemon withdraws its listing on the
+   * way down -- puts each channel back under the code people were given.
+   */
+  channelCodes?: Record<string, string>;
 }
 
 /** How long an ended stream is still worth telling a caller about. */
@@ -237,7 +243,14 @@ export class Directory {
    */
   seedEnded(items: readonly Ended[]): void {
     for (const item of items) {
-      if (!this.ended.has(item.id) && !this.items.has(item.id)) this.ended.set(item.id, item);
+      if (!this.ended.has(item.id) && !this.items.has(item.id)) {
+        this.ended.set(item.id, item);
+        // Its channels' codes are reserved too, so a server coming back after
+        // the directory restarted still finds them its own.
+        if (item.channelCodes && Object.keys(item.channelCodes).length > 0) {
+          this.channelHistory.set(item.id, { ...(this.channelHistory.get(item.id) ?? {}), ...item.channelCodes });
+        }
+      }
     }
   }
 
@@ -297,7 +310,11 @@ export class Directory {
         // channel that was gone for a heartbeat -- a server restarting puts
         // its channels back a moment after it announces -- comes back to the
         // code people were given, not a new one.
-        { ...(this.channelHistory.get(id) ?? {}), ...(existing?.channelCodes ?? {}) },
+        {
+          ...(previously && "channelCodes" in previously ? previously.channelCodes ?? {} : {}),
+          ...(this.channelHistory.get(id) ?? {}),
+          ...(existing?.channelCodes ?? {}),
+        },
         id,
       ),
       updatedAt: this.now(),
@@ -316,7 +333,7 @@ export class Directory {
     const item = this.items.get(id);
     if (item !== undefined) this.remember(item);
     this.items.delete(id);
-    this.channelHistory.delete(id);
+    // The channel history stays with the ended record, and goes when it goes.
   }
 
   list(): Listing[] {
@@ -435,6 +452,9 @@ export class Directory {
       nowPlaying: item.nowPlaying,
       startedAt: item.startedAt,
       endedAt: item.updatedAt,
+      // Every code its channels have had, not only the ones on at the end:
+      // a restart announces before its channels are back.
+      channelCodes: { ...(this.channelHistory.get(item.id) ?? {}), ...item.channelCodes },
     };
     this.ended.set(item.id, record);
     this.mirror?.save(record);
@@ -457,13 +477,13 @@ export class Directory {
       if (item.updatedAt < cutoff) {
         this.remember(item);
         this.items.delete(id);
-        this.channelHistory.delete(id);
       }
     }
     const forget = this.now() - ENDED_TTL_MS;
     for (const [id, item] of this.ended) {
       if (item.endedAt < forget) {
         this.ended.delete(id);
+        this.channelHistory.delete(id);
         this.mirror?.drop(id);
       }
     }

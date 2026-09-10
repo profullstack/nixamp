@@ -35,6 +35,8 @@ export interface StoredEnded {
   nowPlaying: string;
   startedAt: number;
   endedAt: number;
+  /** Each channel's phone code, by name, so a server coming back keeps them. */
+  channelCodes?: Record<string, string>;
 }
 
 const SCHEMA = `
@@ -48,6 +50,7 @@ const SCHEMA = `
     started_at   BIGINT NOT NULL,
     ended_at     BIGINT NOT NULL
   );
+  ALTER TABLE ended_streams ADD COLUMN IF NOT EXISTS channel_codes JSONB NOT NULL DEFAULT '{}'::jsonb;
   CREATE INDEX IF NOT EXISTS ended_streams_code ON ended_streams (code);
 
   CREATE TABLE IF NOT EXISTS stream_reminders (
@@ -57,6 +60,24 @@ const SCHEMA = `
     PRIMARY KEY (code, phone)
   );
 `;
+
+/** A JSONB column, as pg hands it back: an object already, or a string on an odd driver. */
+function codesFrom(value: unknown): Record<string, string> {
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const codes: Record<string, string> = {};
+  for (const [name, code] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof code === "string" && /^\d{6}$/.test(code)) codes[name] = code;
+  }
+  return codes;
+}
 
 export class Durable {
   private ready: Promise<void> | null = null;
@@ -91,8 +112,8 @@ export class Durable {
     await this.quietly("an ended stream", () =>
       this.db.query(
         `INSERT INTO ended_streams
-           (id, code, name, owner_id, url, now_playing, started_at, ended_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           (id, code, name, owner_id, url, now_playing, started_at, ended_at, channel_codes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
          ON CONFLICT (id) DO UPDATE
            SET code = EXCLUDED.code,
                name = EXCLUDED.name,
@@ -100,7 +121,8 @@ export class Durable {
                url = EXCLUDED.url,
                now_playing = EXCLUDED.now_playing,
                started_at = EXCLUDED.started_at,
-               ended_at = EXCLUDED.ended_at`,
+               ended_at = EXCLUDED.ended_at,
+               channel_codes = EXCLUDED.channel_codes`,
         [
           stream.id,
           stream.code,
@@ -110,6 +132,7 @@ export class Durable {
           stream.nowPlaying,
           stream.startedAt,
           stream.endedAt,
+          JSON.stringify(stream.channelCodes ?? {}),
         ],
       ),
     );
@@ -141,6 +164,7 @@ export class Durable {
         // nothing like a number.
         startedAt: Number(r["started_at"] ?? 0),
         endedAt: Number(r["ended_at"] ?? 0),
+        channelCodes: codesFrom(r["channel_codes"]),
       }));
     } catch (error) {
       this.onEvent(`  could not read ended streams: ${(error as Error).message}`);
