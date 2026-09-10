@@ -468,7 +468,11 @@ export function videoArgs(codecs: Codecs, capKbps = 0): string[] {
   const keepAudio = !transportStream && (codecs.audio === "aac" || codecs.audio === "mp3");
   return [
     "-c:v", keepVideo ? "copy" : "libx264",
-    ...(keepVideo ? [] : ["-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]),
+    // A keyframe every two seconds when encoding. A fragment starts on a
+    // keyframe, so this is how soon a joiner sees a picture -- and an HLS
+    // segment, which is cut on keyframes too, was ten seconds long on
+    // x264's default and made a phone wait thirty before it played.
+    ...(keepVideo ? [] : ["-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0"]),
     "-c:a", keepAudio ? "copy" : "aac",
     ...(keepAudio ? [] : ["-b:a", "160k", "-ac", "2"]),
     "-f", "mp4",

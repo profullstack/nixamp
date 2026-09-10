@@ -51,6 +51,7 @@ import { stateDir } from "./daemon.ts";
 import { readSession } from "./session.ts";
 import { Directory, ENDED_TTL_MS, parseAnnouncement, type Listing } from "./directory.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
+import { HlsPackagers, withKey } from "./hls.ts";
 import {
   contentTypeFor, downloadArgs, fileNameFor, inputArgsFor, linkChannelId, playableLink, resolveLink, saveFormat,
   type ResolvedLink,
@@ -1163,6 +1164,8 @@ export interface HandlerOptions {
   ffprobe?: string[];
   /** yt-dlp, which turns a pasted page into a media address. Null when there is none. */
   ytdlp?: string[] | null;
+  /** Channels as HLS, for Safari on a phone, which plays a live stream no other way. */
+  hls?: HlsPackagers;
   /** A Netscape cookies file for sites that want a signed-in browser, when there is one. */
   cookies?: string;
   /** Who is listening, for the admin view. */
@@ -2913,8 +2916,53 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     if (path.startsWith("/api/channels/") && options.channels) {
       const channels = options.channels;
       const rest = path.slice("/api/channels/".length);
-      const [rawId, action] = rest.split("/");
+      const [rawId, action, file] = rest.split("/");
       const id = cleanId(rawId);
+
+      // The same channel as HLS: a playlist of short files, which is what
+      // Safari on an iPhone plays live -- it will not take the endless MP4
+      // below, and spun on it a few times before giving up. Packaged on
+      // demand, copying the fragments the browser would have got.
+      if (action === "hls" && request.method === "GET") {
+        if (!options.hls) {
+          json(response, 503, { error: "this server cannot package HLS" });
+          return;
+        }
+        if (!channels.has(id)) {
+          json(response, 404, { error: "nothing is playing on that channel" });
+          return;
+        }
+        if (file === "index.m3u8") {
+          const playlist = await options.hls.playlist(id);
+          if (playlist === null) {
+            json(response, 503, { error: "that channel could not be packaged as HLS yet; try again in a moment" });
+            return;
+          }
+          response.writeHead(200, {
+            ...CORS,
+            "content-type": "application/vnd.apple.mpegurl",
+            "cache-control": "no-store",
+          });
+          // The key rides on every segment line: a browser drops the query
+          // when it resolves a segment against the playlist.
+          response.end(withKey(playlist, url.searchParams.get("k") ?? ""));
+          return;
+        }
+        const segment = options.hls.segment(id, file ?? "");
+        if (segment === "") {
+          json(response, 404, { error: "no such segment" });
+          return;
+        }
+        watch(request, response, "stream", id);
+        response.writeHead(200, {
+          ...CORS,
+          "content-type": "video/mp2t",
+          "cache-control": "no-store",
+          "content-length": statSync(segment).size,
+        });
+        createReadStream(segment).pipe(response);
+        return;
+      }
 
       if (action === undefined && request.method === "GET") {
         // Listening. The response is the fan-out target: whatever ffmpeg
@@ -4019,6 +4067,13 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       console.log(`  ${info.name} is publishing to "${info.id}" (${info.format} over ${info.via}).`),
     onEnd: (info) => console.log(`  "${info.id}" stopped.`),
   });
+  // Channels as HLS, on demand, for Safari on a phone: one ffmpeg copying a
+  // channel's fragments into short files while somebody is asking for them.
+  const hls = new HlsPackagers({
+    ffmpeg: tools.ffmpeg,
+    listen: (id, listener) => channels.listen(id, listener),
+    onEvent: (message) => console.log(message),
+  });
 
   // The channels this server was carrying when it was last stopped, put back
   // on. A server is restarted to pick up a new version, which is often, and
@@ -4389,6 +4444,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     // for the sites that will not talk to a datacenter without one.
     ytdlp: tools.ytdlp ?? null,
     cookies: cookiesFile(),
+    hls,
     ...(tls ? { tls } : {}),
     // Untagged, so a directory of five thousand files answers at once; the
     // tags follow through `tag` below.
@@ -4833,6 +4889,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 
   const shutdown = (): void => {
     rtmp?.stop();
+    hls.stopAll();
     channels.stopAll();
     ingest?.stopRtmp();
     ingest?.close();

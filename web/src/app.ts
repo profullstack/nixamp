@@ -309,6 +309,22 @@ export function start(): void {
   const isAdmin = (): boolean => mode === "remote" && !dom.adminPanel.hidden;
 
   /**
+   * Whether a live channel should be asked for as HLS.
+   *
+   * A browser without MediaSource -- Safari on an iPhone -- cannot play a
+   * live MP4 stream at all and plays HLS natively; one with it plays the MP4
+   * as it comes, a few seconds closer to live. `nixamp.hls` in localStorage
+   * forces it, so the HLS path can be tried in any browser.
+   */
+  function wantsHls(): boolean {
+    try {
+      if (localStorage.getItem("nixamp.hls") === "1") return true;
+    } catch { /* private mode with storage refused */ }
+    if (typeof MediaSource !== "undefined") return false;
+    return dom.video.canPlayType("application/vnd.apple.mpegurl") !== "";
+  }
+
+  /**
    * What "Go live" would put on the air: the thing that is playing here.
    *
    * A channel is kept; a catalog entry, film or channel, becomes a channel
@@ -411,6 +427,10 @@ export function start(): void {
     },
     onEnded: () => {
       if (rejoinChannel()) return;
+      // A channel that gave up is not a place in the playlist: stepping on
+      // from it played the first file in somebody's library, which read as
+      // the page picking something else to fail on.
+      if (mode === "remote" && watching < 0 && !remoteDrives()) return;
       void step(1);
     },
     onState: () => draw(),
@@ -3553,9 +3573,15 @@ export function start(): void {
     // Where it came from, when a catalog entry started it; a channel picked
     // from the Live list is its own. A rejoin keeps what it had.
     if (fresh) nowMeta = from ?? { kind: "channel" };
+    // Safari on a phone will not play the endless MP4 a channel is sent as;
+    // it plays HLS, so it is handed the same channel as a playlist. A
+    // browser with MediaSource plays the MP4 as it is, which is lower latency.
+    const asHls = channel.video && wantsHls();
     await whileLoading(() => player.load({
       title: channel.name, artist: "", album: "", duration: 0,
-      url: remote.url(`/api/channels/${encodeURIComponent(channel.id)}`),
+      url: remote.url(asHls
+        ? `/api/channels/${encodeURIComponent(channel.id)}/hls/index.m3u8`
+        : `/api/channels/${encodeURIComponent(channel.id)}`),
       video: channel.video, objectUrl: false,
     }, true));
     showVideo(channel.video);

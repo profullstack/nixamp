@@ -716,6 +716,20 @@ test("every live has its own room code, shown wherever the live is", () => {
   assert.match(app, /stream\.channelCodes\?\.\[channelName\]/);
 });
 
+test("a phone's Safari is handed a live channel as HLS, and a dead channel does not step on", () => {
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // Without MediaSource a browser cannot play a live MP4 at all; with native
+  // HLS it plays the playlist. Everything else keeps the lower-latency MP4.
+  const wants = app.slice(app.indexOf("function wantsHls"), app.indexOf("type GoLiveWith"));
+  assert.match(wants, /typeof MediaSource !== "undefined"\) return false/);
+  assert.match(wants, /canPlayType\("application\/vnd\.apple\.mpegurl"\)/);
+  assert.match(app, /const asHls = channel\.video && wantsHls\(\)/);
+  assert.match(app, /\/hls\/index\.m3u8`/);
+  // A channel that gave up is not a place in the playlist to step on from.
+  const ended = app.slice(app.indexOf("onEnded: () => {"), app.indexOf("onState: () => draw()"));
+  assert.match(ended, /if \(mode === "remote" && watching < 0 && !remoteDrives\(\)\) return;/);
+});
+
 test("a listed server's channels are rows in the directory that play them", () => {
   const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
   // A name in a list you cannot press is a name. Each channel is a row with
