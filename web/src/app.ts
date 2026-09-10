@@ -64,6 +64,7 @@ export function start(): void {
     title: need<HTMLElement>("title-line"),
     album: need<HTMLElement>("album-line"),
     meta: need<HTMLElement>("meta-line"),
+    liveLine: need<HTMLElement>("live-line"),
     goLiveNow: need<HTMLButtonElement>("go-live-now"),
     elapsed: need<HTMLElement>("elapsed"),
     total: need<HTMLElement>("total"),
@@ -486,9 +487,38 @@ export function start(): void {
 
   const currentAlbum = (): string => {
     if (channelOn) return "live on this server";
+    if (nowMeta?.kind === "live" && mode === "remote") return `live on ${serverName || "this server"}`;
     const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
     return track?.album || "—";
   };
+
+  /**
+   * The line for somebody on a live stream: whose it is, what is on, and how
+   * to call in. Joining used to land you on a track name and a dash, with the
+   * number and the code a long way down in the Share panel.
+   */
+  function drawLiveLine(): void {
+    const onLive = mode === "remote" && (channelOn !== null || nowMeta?.kind === "live");
+    if (!onLive) {
+      dom.liveLine.hidden = true;
+      dom.liveLine.replaceChildren();
+      return;
+    }
+    const where = serverName || "this server";
+    const what = channelOn ? channelOn.name : (lastAir?.server.nowPlaying || currentName());
+    const parts: (string | HTMLElement)[] = [
+      channelOn ? `Live on ${where}: ` : `Live from ${where}, now playing: `,
+      boldly(what),
+    ];
+    if (listed && phoneCode) {
+      parts.push(". To talk about it, call ", boldly(phoneNumber || "the line"), " and key ", boldly(phoneCode), ".");
+    }
+    const key = parts.map((p) => (typeof p === "string" ? p : p.textContent)).join("");
+    if (dom.liveLine.dataset.drawn === key) return;
+    dom.liveLine.dataset.drawn = key;
+    dom.liveLine.hidden = false;
+    dom.liveLine.replaceChildren(...parts.map((p) => (typeof p === "string" ? document.createTextNode(p) : p)));
+  }
 
   const duration = (): number => {
     if (remoteDrives()) return snapshot.tracks[at()]?.duration ?? 0;
@@ -674,7 +704,10 @@ export function start(): void {
         chips.push(nowMeta.entry?.group ? `${nowMeta.catalog.name} › ${nowMeta.entry.group}` : nowMeta.catalog.name);
         logo = nowMeta.entry?.logo ?? "";
       }
-      if (listed && phoneCode && (channelOn || remoteDrives())) {
+      // The phone number and code are on the live line above, in words,
+      // when the page is on a live stream; the chip covers the admin driving
+      // the server's own player, which is listed but not "joined".
+      if (listed && phoneCode && remoteDrives() && !channelOn && nowMeta?.kind !== "live") {
         chips.push(phoneNumber ? `☎ ${phoneNumber} · key ${phoneCode}` : `☎ code ${phoneCode}`);
       }
     }
@@ -710,6 +743,7 @@ export function start(): void {
     dom.status.textContent = wait ? "LOADING" : live ? "▶ PLAYING" : "■ STOPPED";
     dom.status.dataset.playing = wait ? "loading" : String(live);
     dom.title.textContent = currentName();
+    drawLiveLine();
     drawMeta();
     // Going live is for whoever administers this server, with something to
     // go live with. Play is everybody's; this is the one beside it.
