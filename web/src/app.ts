@@ -146,6 +146,8 @@ export function start(): void {
     next: need<HTMLButtonElement>("next"),
   };
 
+  /** What the tab is called with nothing playing: whatever the shell said. */
+  const baseTitle = document.title || "nixamp";
   let mode: Mode = "local";
   let local: LocalTrack[] = [];
   let index = 0;
@@ -410,6 +412,10 @@ export function start(): void {
     dom.status.textContent = live ? "▶ PLAYING" : "■ STOPPED";
     dom.status.dataset.playing = String(live);
     dom.title.textContent = currentName();
+    // The tab says what is on, the way a radio does, so a row of tabs reads
+    // as "CNN" rather than as five copies of the site's name.
+    const tab = live ? `${currentName()} · ${baseTitle}` : baseTitle;
+    if (document.title !== tab) document.title = tab;
     dom.album.textContent = currentAlbum();
 
     const at2 = position();
