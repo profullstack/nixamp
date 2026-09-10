@@ -55,6 +55,14 @@ export interface Listing {
    * an older nixamp that only knows about `url`.
    */
   audio: string;
+  /**
+   * The link that administers the server, as the publisher announced it.
+   *
+   * Kept so the owner can open their own machine as its administrator from
+   * the directory, and handed out to nobody else: the listing route strips it
+   * for anyone but the account that owns the listing.
+   */
+  admin: string;
   tracks: number;
   nowPlaying: string;
   /**
@@ -103,6 +111,8 @@ export interface Announcement {
   url: string;
   /** Where the audio actually is. See `Listing.audio`. */
   audio?: string;
+  /** The admin share link, same origin as `url`. Kept for the owner alone. */
+  admin?: string;
   tracks: number;
   nowPlaying: string;
   /** Absent from an older publisher, which is read as "unknown, say playing". */
@@ -160,6 +170,10 @@ export function parseAnnouncement(input: unknown): Announcement | null {
   const offered = typeof record["audio"] === "string" ? record["audio"] : "";
   const parsed = offered ? publishable(offered) : null;
   const audio = parsed !== null && parsed.origin === listen.origin ? offered : "";
+  // The admin link is held to the same rule: it names this server or nothing.
+  const adminOffered = typeof record["admin"] === "string" ? record["admin"] : "";
+  const adminParsed = adminOffered ? publishable(adminOffered) : null;
+  const admin = adminParsed !== null && adminParsed.origin === listen.origin ? adminOffered : "";
 
   const name = clean(record["name"], MAX_NAME);
   const tracks = Number(record["tracks"]);
@@ -168,6 +182,7 @@ export function parseAnnouncement(input: unknown): Announcement | null {
     name: name || "a nixamp",
     url,
     ...(audio ? { audio } : {}),
+    ...(admin ? { admin } : {}),
     tracks: Number.isFinite(tracks) && tracks >= 0 ? Math.min(1_000_000, Math.floor(tracks)) : 0,
     nowPlaying: clean(record["nowPlaying"], MAX_TRACK),
     ...(typeof record["playing"] === "boolean" ? { playing: record["playing"] } : {}),
@@ -261,6 +276,7 @@ export class Directory {
       // older publisher renewing an entry should not blank the address the
       // phone line is playing from.
       audio: announcement.audio ?? existing?.audio ?? "",
+      admin: announcement.admin ?? existing?.admin ?? "",
       tracks: announcement.tracks,
       nowPlaying: announcement.nowPlaying,
       // An older publisher says nothing about either; "playing" keeps what a

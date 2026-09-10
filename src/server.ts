@@ -2265,9 +2265,14 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         // phone for it. The code is published on purpose: it is a public
         // call-in line, and a listing you cannot dial is a listing of nothing.
         const onThePhone = options.partyLine;
-        const streams = options.directory.list().map((stream) => ({
+        // The admin link goes only to the account that owns the listing. A
+        // directory that handed out control links would be a directory of
+        // machines anyone could take over.
+        const me = options.accounts ? await options.accounts.whoIs(tokenFrom(request.headers)) : null;
+        const streams = options.directory.list().map(({ admin, ...stream }) => ({
           ...stream,
           callers: onThePhone ? onThePhone.listenersOn(stream.code) : 0,
+          ...(admin && me !== null && stream.ownerId === me.id ? { admin } : {}),
         }));
         // Recently ended too, because following exists to hear about
         // broadcasts you would otherwise miss -- and a list of only what is on
@@ -4338,6 +4343,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         name: options.name || hostname(),
         url: listen,
         audio,
+        // The control link, for the owner to open this machine as its
+        // administrator from the directory. The directory shows it to the
+        // owning account and strips it for everyone else.
+        ...(key ? { admin: shareLink(publishable_.url, key) } : {}),
         // Asked at every heartbeat rather than once, because the library is
         // read after the port opens and is still arriving when this is made.
         tracks: () => engine.snapshot(false).trackCount,

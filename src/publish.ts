@@ -30,6 +30,8 @@ export interface PublishTarget {
    */
   tracks: () => number;
   nowPlaying: () => string;
+  /** The admin share link, kept by the directory for the owner alone. */
+  admin?: string;
   /** Whether the player is actually running, so a stopped server is not listed as live. */
   playing?: () => boolean;
   /** The live channels on this server, by name, for the listing to show. */
@@ -103,6 +105,9 @@ export class Publisher {
           name: this.target.name,
           url: this.target.url,
           ...(this.target.audio ? { audio: this.target.audio } : {}),
+          // The link that drives this server. The directory keeps it for the
+          // account that owns the listing and shows it to nobody else.
+          ...(this.target.admin ? { admin: this.target.admin } : {}),
           tracks: this.target.tracks(),
           nowPlaying: this.target.nowPlaying(),
           ...(this.target.playing ? { playing: this.target.playing() } : {}),

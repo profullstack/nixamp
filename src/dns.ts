@@ -181,12 +181,17 @@ export class Porkbun implements DnsZone {
     }
     // Edit rather than delete-and-create: the name never has a moment with no
     // record at all, which for an A record is a moment nobody can connect.
-    await this.call(`/dns/edit/${this.zone}/${first.id}`, {
-      name: this.sub(host),
-      type,
-      content,
-      ttl: String(ttlOf(ttl)),
-    });
+    // Unless nothing would change: Porkbun refuses an edit that edits nothing
+    // ("We were unable to edit the DNS record"), and a server announcing the
+    // address it already has is the ordinary case, not an error.
+    if (first.content !== content || first.ttl !== ttlOf(ttl)) {
+      await this.call(`/dns/edit/${this.zone}/${first.id}`, {
+        name: this.sub(host),
+        type,
+        content,
+        ttl: String(ttlOf(ttl)),
+      });
+    }
     for (const extra of extras) {
       await this.call(`/dns/delete/${this.zone}/${extra.id}`);
     }
