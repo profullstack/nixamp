@@ -111,7 +111,7 @@ export const ADMIN_PATHS = [
  * `/api/live` itself is the public listen address -- the one the phone line is
  * handed. Gating it by prefix would shut the front door to lock the office.
  */
-const LIVE_CONTROL = ["/api/live/state", "/api/live/start", "/api/live/stop"];
+const LIVE_CONTROL = ["/api/live/start", "/api/live/stop"];
 
 export function needsAdmin(path: string, method = "GET"): boolean {
   if (LIVE_CONTROL.includes(path)) return true;

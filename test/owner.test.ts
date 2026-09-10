@@ -141,7 +141,7 @@ test("the paths that need an administrator, and the ones that do not", () => {
   // Listing this machine in a public directory is administering it.
   assert.equal(needsAdmin("/api/live/start"), true);
   assert.equal(needsAdmin("/api/live/stop"), true);
-  assert.equal(needsAdmin("/api/live/state"), true);
+  assert.equal(needsAdmin("/api/live/state"), false);
   // But /api/live is the public listen address -- the one the phone line is
   // handed -- so gating it by prefix would shut the front door to lock the
   // office.
