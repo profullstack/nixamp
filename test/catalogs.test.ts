@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  Catalogs, MAX_LIST_BYTES, entryId, isLiveEntry, parseCatalog, readCatalog, shownCatalog, shownEntry,
+  Catalogs, MAX_LIST_BYTES, entryId, isLiveEntry, parseCatalog, preferPlus, readCatalog, shownCatalog, shownEntry,
 } from "../src/catalogs.ts";
 
 const LIST = `#EXTM3U
@@ -141,8 +141,58 @@ test("a provider that is down leaves the old entries and says so", async () => {
 });
 
 test("a list that is not a playlist is refused", async () => {
-  const { send } = provider("x".repeat(MAX_LIST_BYTES + 1));
-  await assert.rejects(readCatalog("http://iptv.test/huge.m3u", send), /too big/);
+  // The cap is hundreds of megabytes; the test passes a small one rather than
+  // allocating it.
+  assert.ok(MAX_LIST_BYTES >= 256 * 1024 * 1024, "a real provider's full list is tens of MB");
+  const { send } = provider("x".repeat(2049));
+  await assert.rejects(readCatalog("http://iptv.test/huge.m3u", send, 2048), /bigger than/);
   const { send: missing } = provider("", 404);
   await assert.rejects(readCatalog("http://iptv.test/gone.m3u", missing), /404/);
+});
+
+test("a plain Xtream list is asked for in its richer form first, and grouped by what its addresses say", async () => {
+  assert.equal(preferPlus("http://p.test/playlist/u/p/m3u"), "http://p.test/playlist/u/p/m3u_plus");
+  assert.equal(preferPlus("http://p.test/playlist/u/p/m3u_plus"), "http://p.test/playlist/u/p/m3u_plus");
+  assert.equal(preferPlus("http://p.test/get.php?username=u&password=p&type=m3u&output=ts"),
+    "http://p.test/get.php?username=u&password=p&type=m3u_plus&output=ts");
+  assert.equal(preferPlus("https://iptv-org.github.io/iptv/countries/us.m3u"), "https://iptv-org.github.io/iptv/countries/us.m3u");
+
+  // A plain list: no attributes at all, four hundred thousand times over.
+  const plain = `#EXTM3U
+#EXTINF:-1,ATN Bangla
+http://p.test/live/u/p/1.ts
+#EXTINF:-1,Sneakers (1992)
+http://p.test/movie/u/p/2.mkv
+#EXTINF:-1,Pluribus S01E01
+http://p.test/series/u/p/3.mkv
+`;
+  const entries = parseCatalog(plain, "http://p.test/playlist/u/p/m3u");
+  assert.deepEqual(entries.map((e) => [e.group, e.live]), [["Live TV", true], ["Movies", false], ["Series", false]]);
+
+  // The panel serves the richer form: it is used, and the given address kept.
+  const asked: string[] = [];
+  const send = (async (url: string | URL) => {
+    asked.push(String(url));
+    if (String(url).endsWith("m3u_plus")) {
+      return new Response('#EXTM3U\n#EXTINF:-1 group-title="News",CNN\nhttp://p.test/live/u/p/1.ts\n', { status: 200 });
+    }
+    return new Response(plain, { status: 200 });
+  }) as unknown as typeof fetch;
+  const dir = mkdtempSync(join(tmpdir(), "nixamp-catalogs-"));
+  const catalogs = new Catalogs(dir, 4321, send);
+  const added = await catalogs.add("http://p.test/playlist/u/p/m3u", "Plus");
+  assert.deepEqual(asked, ["http://p.test/playlist/u/p/m3u_plus"]);
+  assert.equal(added.entries, 1);
+  assert.equal(catalogs.groups(added.id)?.[0]?.name, "News");
+  assert.equal(shownCatalog(added, true).source, "http://p.test/playlist/u/p/m3u");
+
+  // The panel does not serve it: the given address is what is read.
+  const refusing = (async (url: string | URL) => {
+    asked.push(String(url));
+    return new Response(String(url).endsWith("m3u_plus") ? "" : plain, { status: String(url).endsWith("m3u_plus") ? 404 : 200 });
+  }) as unknown as typeof fetch;
+  const fallback = new Catalogs(mkdtempSync(join(tmpdir(), "nixamp-catalogs-")), 4321, refusing);
+  const plainOne = await fallback.add("http://p.test/playlist/u/p/m3u", "Plain");
+  assert.equal(plainOne.entries, 3);
+  assert.equal(plainOne.error, "");
 });
