@@ -55,6 +55,14 @@ test("the best answer is the exact title, else the highest score above the floor
   assert.equal(pickBest({ items: [{ kind: "title", title: "Something Else", score: 0.2 }] }, "Top Gun"), null);
   assert.equal(pickBest({ items: [{ kind: "channel", title: "Sever", score: 0.45 }] }, "Severance"), null);
   assert.equal(pickBest({ items: [{ kind: "fixture", title: "Rangers at Celtic", score: 0.44 }] }, "Lakers at Celtics"), null);
+  // Two exact rows -- IMDb's and TMDB's Oppenheimer -- and only one has the poster.
+  const twins = pickBest({
+    items: [
+      { kind: "title", title: "Oppenheimer", score: 1, page: "imdb", data: { year: 2023, rating: 8.2 } },
+      { kind: "title", title: "Oppenheimer", score: 1, page: "tmdb", image_url: "https://i/poster.jpg", data: { year: 2023, rating: 8.0 } },
+    ],
+  }, "Oppenheimer");
+  assert.equal(twins?.page, "tmdb");
   // But a weaker score is taken when one name plainly begins with the other.
   assert.equal(pickBest({ items: [{ kind: "title", title: "Top Gun: Maverick", score: 0.45 }] }, "Top Gun Maverick Extended")?.title, "Top Gun: Maverick");
   assert.equal(pickBest({ items: [] }, "x"), null);
