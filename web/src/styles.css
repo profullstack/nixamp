@@ -596,17 +596,29 @@ button.golive:hover { color: #fff; background: #7a2b2b; border-color: #ff5c5c; }
 button.golive:disabled { opacity: 0.5; cursor: progress; }
 .row-live:hover { color: #ff5c5c; border-color: #ff5c5c; }
 
-/* What is on the air on a listed server, one row each, under its name. */
-.server-lives {
+/* What is on the air on a listed server: full-width rows under the server,
+   each with Play at the end. The server row wraps so this lands beneath the
+   name and the buttons rather than beside them. */
+.directory-list li:has(> .server-lives) { flex-wrap: wrap; }
+.directory-list li > .server-lives {
+  flex: 1 1 100%;
   list-style: none;
   margin: 2px 0 0;
-  padding: 0;
+  padding: 0 0 0 12px;
+  border-left: 2px solid var(--green-dim);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
-.server-lives li { display: flex; align-items: center; gap: 8px; }
-.server-lives .ghost { padding: 1px 8px; font-size: 12px; }
+.server-lives li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.server-lives li > .detail { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-lives li > .button { flex: none; padding: 2px 10px; font-size: 12px; }
 
 .volume {
   display: flex;

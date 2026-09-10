@@ -52,6 +52,16 @@ export interface PublishTarget {
   onConfig?: (config: unknown) => void;
   /** Called when the directory refused us for want of an account. */
   onRefused?: () => void;
+  /**
+   * Called with the listing every heartbeat, not only the first.
+   *
+   * The directory forgets everything when it restarts, and the next heartbeat
+   * lists this server again under a new phone code. A server that only kept
+   * the first answer went on showing the old code -- to the Share panel, the
+   * player, and anybody sent the link -- while the phone line knew only the
+   * new one.
+   */
+  onListed?: (listing: Listing) => void;
 }
 
 /**
@@ -128,6 +138,7 @@ export class Publisher {
       const listing = (await response.json()) as Listing & { config?: unknown };
       this.id = listing.id;
       if (listing.config !== undefined) this.target.onConfig?.(listing.config);
+      this.target.onListed?.(listing);
       return listing;
     } catch {
       // The directory being down is not a reason for a player to stop playing.

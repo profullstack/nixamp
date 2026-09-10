@@ -4557,6 +4557,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
           console.log("  nixamp.com would not list this stream: it needs an account.");
           console.log("  Run `nixamp login` (or `nixamp signup`) and start again.");
         },
+        // Every heartbeat, so the code this server shows is the code the
+        // phone line knows, whatever the directory has forgotten meanwhile.
+        onListed: (fresh) => {
+          if (listing && listing.code !== fresh.code) {
+            console.log(`  nixamp.com listed this stream again; the phone code is now ${fresh.code}.`);
+          }
+          listing = fresh;
+        },
         nowPlaying: () => {
           const snapshot = engine.snapshot();
           return snapshot.tracks?.[snapshot.index]?.title ?? "";

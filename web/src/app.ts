@@ -1369,27 +1369,26 @@ export function start(): void {
         dom.remoteForm.requestSubmit();
       };
 
-      // What is on the air on it, each as a row of its own that plays it:
-      // a channel somebody went live with is the thing a visitor came for,
-      // and a name in a list you cannot press is a name.
-      if (stream.channels && stream.channels.length > 0) {
-        const lives = document.createElement("ul");
-        lives.className = "server-lives";
-        for (const channelName of stream.channels) {
-          const row = document.createElement("li");
-          const dot = document.createElement("span");
-          dot.className = "detail live";
-          dot.textContent = `● ${channelName}`;
-          const play = document.createElement("button");
-          play.type = "button";
-          play.className = "ghost";
-          play.textContent = "Play";
-          play.title = `Watch ${channelName}, live on ${stream.name}`;
-          play.addEventListener("click", () => open(true, `channel:${channelName}`));
-          row.append(dot, play);
-          lives.append(row);
-        }
-        label.append(lives);
+      // What is on the air on it, each as a full-width row of its own under
+      // the server, with Play at the end: a channel somebody went live with
+      // is the thing a visitor came for, and a name in a list you cannot
+      // press is a name. Under the server, not inside its label -- squeezed
+      // into the label column it wrapped into a mess beside the buttons.
+      const lives = document.createElement("ul");
+      lives.className = "server-lives";
+      for (const channelName of stream.channels ?? []) {
+        const row = document.createElement("li");
+        const dot = document.createElement("span");
+        dot.className = "detail live";
+        dot.textContent = `● ${channelName}`;
+        const play = document.createElement("button");
+        play.type = "button";
+        play.className = "button";
+        play.textContent = "Play";
+        play.title = `Watch ${channelName}, live on ${stream.name}`;
+        play.addEventListener("click", () => open(true, `channel:${channelName}`));
+        row.append(dot, play);
+        lives.append(row);
       }
       const connect = document.createElement("button");
       connect.type = "button";
@@ -1417,6 +1416,7 @@ export function start(): void {
       if (stream.ownerId && meId && stream.ownerId !== meId) {
         item.append(followButton(stream.ownerId, stream.name));
       }
+      if (lives.childElementCount > 0) item.append(lives);
       // Your own, on the other hand, you can take down. A listing outlives the
       // server that made it by up to a couple of minutes, and a machine that
       // was stopped without saying goodbye leaves one sitting there for
