@@ -218,7 +218,9 @@ export class Stream {
     }
 
     let stderr = "";
-    this.decoder.stderr?.on("data", (c: Buffer) => { stderr += c.toString(); });
+    // The tail only: what went wrong is on the last line, and a film with a
+    // damaged audio track can say so once a frame for two hours.
+    this.decoder.stderr?.on("data", (c: Buffer) => { stderr = (stderr + c.toString()).slice(-2000); });
 
     this.decoder.stdout?.on("data", (chunk: Buffer) => {
       if (this.stopped || generation !== this.generation) return;

@@ -177,6 +177,17 @@ export function start(): void {
    */
   let watching = -1;
   /**
+   * The channel this device is on, if it is on one.
+   *
+   * Remembered because a channel's stream ends whenever the server dials its
+   * source again -- the opening boxes and the clock start over, and a browser
+   * cannot follow that mid-picture -- so "ended" on a live channel means
+   * "rejoin", never "play the next track in the library".
+   */
+  let channelOn: { id: string; name: string; video: boolean } | null = null;
+  let rejoins = 0;
+  let rejoinTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
    * A stream somebody was sent, waiting on them to sign in.
    *
    * The whole point of an invite is that the person opening it is not
@@ -205,9 +216,14 @@ export function start(): void {
       if (mode === "local" && track && of > 0 && track.duration !== of) track.duration = of;
       draw();
     },
-    onEnded: () => step(1),
+    onEnded: () => {
+      if (rejoinChannel()) return;
+      void step(1);
+    },
     onState: () => draw(),
     onError: (message) => {
+      // A live channel that broke is a live channel to come back to.
+      if (rejoinChannel()) return;
       note = message;
       draw();
       // A stream that refused to play may be a stream asking to be paid for,
@@ -253,11 +269,15 @@ export function start(): void {
   };
 
   const currentName = (): string => {
+    // On a channel, the channel: it is not in the playlist, and naming the
+    // server's own track over CNN said the wrong thing was playing.
+    if (channelOn) return channelOn.name;
     const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
     return track ? displayName(track) : "Nothing loaded.";
   };
 
   const currentAlbum = (): string => {
+    if (channelOn) return "live on this server";
     const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
     return track?.album || "—";
   };
@@ -295,6 +315,7 @@ export function start(): void {
     const track = local[next];
     if (!track) return;
     index = next;
+    channelOn = null;
     await player.load(track, true);
     showVideo(track.video);
     updateMediaSession();
@@ -327,6 +348,7 @@ export function start(): void {
     // Ours, not the server's: this is the one place that decides what this
     // device is playing, so it is the one place that records it.
     watching = next;
+    channelOn = null;
     await player.load({
       title: track.title, artist: track.artist, album: track.album,
       duration: track.duration, url: remote.media(next, rung),
@@ -369,6 +391,7 @@ export function start(): void {
       await remote.send({ type: "stop" });
       return;
     }
+    channelOn = null;
     player.stop();
     bars = new Array<number>(BAND_COUNT).fill(0);
     peaks = [...bars];
@@ -575,6 +598,22 @@ export function start(): void {
         time.className = "time";
         time.textContent = row.seconds > 0 ? formatTime(row.seconds) : "--:--";
         item.append(n, label, time);
+        // The file's own address, for whoever wants it somewhere other than
+        // here. A picked file is a blob in this tab and has no address.
+        if (mode === "remote") {
+          const copy = document.createElement("button");
+          copy.type = "button";
+          copy.className = "row-copy";
+          copy.textContent = "⧉";
+          copy.title = "Copy this file's URL";
+          copy.setAttribute("aria-label", `Copy the URL of ${row.name}`);
+          copy.addEventListener("click", (event) => {
+            // Copying is not choosing: the row's own click plays it.
+            event.stopPropagation();
+            void copyText(remote.media(row.index), copy, "✓");
+          });
+          item.append(copy);
+        }
         children.push(item);
       }
       dom.playlist.replaceChildren(...children);
@@ -1230,6 +1269,10 @@ export function start(): void {
     dom.adminPanel.hidden = !allowed;
     if (adminTimer) clearInterval(adminTimer);
     adminTimer = null;
+    // The list of what is live carries Restart and Remove only for somebody
+    // who may, and it was usually drawn before this answer arrived -- so it
+    // is drawn again now, with the answer.
+    void loadOnAir();
     // Whether you may administer this server decides whether Go live is
     // offered, and this is the answer to that question -- so the share panel
     // is drawn again now rather than from whatever was known before it.
@@ -2111,7 +2154,7 @@ export function start(): void {
     };
     channels: {
       id: string; name: string; via: string; listeners: number; startedAt: number;
-      kind?: "audio" | "video"; source?: string;
+      kind?: "audio" | "video"; redials?: number; error?: string;
     }[];
     restreams?: { name: string; at: number; tracks: number }[];
   }
@@ -2160,7 +2203,10 @@ export function start(): void {
     }
 
     dom.onairPanel.hidden = false;
-    const key = JSON.stringify(air);
+    // Part of the key, because the admin's buttons are part of the drawing:
+    // learning you may drive this server is news even when nothing on the
+    // air has changed.
+    const key = `${dom.adminPanel.hidden ? "view" : "drive"}:${JSON.stringify(air)}`;
     if (key === drawnOnAir) return;
     drawnOnAir = key;
 
@@ -2205,6 +2251,8 @@ export function start(): void {
         if (canDrive) void startTheStream();
       },
       link: air.server.live ? air.server.url : "",
+      // The stream itself, for VLC or mpv or a <video> on some other page.
+      direct: running ? remote.url("/api/live") : "",
     }));
 
     // Anything re-streamed into this server. These used to sit in the middle
@@ -2219,40 +2267,42 @@ export function start(): void {
           : `re-streamed from the web · ${restream.tracks} tracks`,
         onPlay: () => { void playAt(restream.at); },
         link: "",
+        direct: remote.media(restream.at),
       }));
     }
 
     for (const channel of air.channels) {
-      const watching = channel.kind !== "audio";
-      rows.push(onAirRow({
-        title: channel.name,
-        detail: channel.via === "pull"
+      const withPicture = channel.kind !== "audio";
+      // A channel is its own address, so playing it is pointing the player
+      // at that rather than at a track number -- and that address is the
+      // whole reason two of these can play in two tabs at once.
+      const address = remote.url(`/api/channels/${encodeURIComponent(channel.id)}`);
+      const detail = [
+        channel.via === "pull"
           ? `on the air · ${channel.listeners} watching`
           : `live over ${channel.via} · ${channel.listeners} listening`,
-        // A channel is its own address, so playing it is pointing the player
-        // at that rather than at a track number -- and that address is the
-        // whole reason two of these can play in two tabs at once.
+      ];
+      // How it has been going. A source that keeps dropping is worth knowing
+      // about, and the last thing ffmpeg said is for whoever can act on it.
+      if (channel.redials) detail.push(`redialled ${channel.redials}×`);
+      if (canDrive && channel.error) detail.push(channel.error);
+      rows.push(onAirRow({
+        title: channel.name,
+        detail: detail.join(" · "),
         onPlay: () => {
-          void player.load({
-            title: channel.name, artist: "", album: "", duration: 0,
-            url: remote.url(`/api/channels/${encodeURIComponent(channel.id)}`),
-            video: watching, objectUrl: false,
-          }, true);
-          showVideo(watching);
+          void watchChannel({ id: channel.id, name: channel.name, video: withPicture });
         },
-        // The address on its own, for a second tab or a panel of a multiview.
-        link: remote.url(`/api/channels/${encodeURIComponent(channel.id)}`),
-        // Taking something off the air is administering the server, so the
-        // button is only there for somebody who may.
-        onStop: !dom.adminPanel.hidden
-          ? () => {
-              void (async () => {
-                await fetch(remote.url(`/api/channels/${encodeURIComponent(channel.id)}`), {
-                  method: "DELETE",
-                }).catch(() => undefined);
-                void loadOnAir();
-              })();
-            }
+        link: address,
+        direct: address,
+        // Taking something off the air, or dialling its source again, is
+        // administering the server, so those are only there for somebody
+        // who may. Restarting is for what this server fetches itself: a
+        // publisher's stream restarts at the publisher's end.
+        onRestart: canDrive && channel.via === "pull"
+          ? () => { void restartChannel(channel.id, channel.name); }
+          : undefined,
+        onStop: canDrive
+          ? () => { void removeChannel(channel.id, channel.name); }
           : undefined,
       }));
     }
@@ -2316,6 +2366,7 @@ export function start(): void {
     // Ours to follow, not the server's cursor: joining is a thing this device
     // is doing, and it should not look like the server moved.
     watching = -1;
+    channelOn = null;
     await player.load({
       title: title || "Live", artist: "", album: "", duration: 0,
       url: remote.url("/api/live"),
@@ -2329,9 +2380,110 @@ export function start(): void {
     draw();
   }
 
-  /** One row of what is live: what it is, and the two things you can do. */
+  /**
+   * Watch a channel: a live thing with its own address on this server.
+   *
+   * Fresh means a person chose it, which clears the count of rejoins; a
+   * rejoin after the server dialled its source again is not fresh, and five
+   * of those in a row without the picture ever settling means it is gone.
+   */
+  async function watchChannel(
+    channel: { id: string; name: string; video: boolean },
+    fresh = true,
+  ): Promise<void> {
+    watching = -1;
+    channelOn = channel;
+    if (fresh) rejoins = 0;
+    await player.load({
+      title: channel.name, artist: "", album: "", duration: 0,
+      url: remote.url(`/api/channels/${encodeURIComponent(channel.id)}`),
+      video: channel.video, objectUrl: false,
+    }, true);
+    showVideo(channel.video);
+    note = `Watching ${channel.name}, live on this server.`;
+    draw();
+  }
+
+  /**
+   * The channel ended under us. Come back to it: a live channel's stream
+   * ends when the server dials its source again, and the only sensible thing
+   * to do with a new beginning is to join it. True when this was a channel
+   * and something has been done about it, so the caller leaves it alone.
+   */
+  function rejoinChannel(): boolean {
+    const channel = channelOn;
+    if (!channel) return false;
+    if (rejoinTimer) return true;
+    if (rejoins >= 5) {
+      note = `${channel.name} stopped, and did not come back.`;
+      channelOn = null;
+      draw();
+      return true;
+    }
+    rejoins += 1;
+    note = `${channel.name} started over; rejoining…`;
+    draw();
+    rejoinTimer = setTimeout(() => {
+      rejoinTimer = null;
+      if (channelOn === channel) void watchChannel(channel, false);
+    }, 2000);
+    return true;
+  }
+
+  async function restartChannel(id: string, name: string): Promise<void> {
+    said(`Restarting ${name}…`);
+    try {
+      const answer = await fetch(remote.url(`/api/channels/${encodeURIComponent(id)}/restart`), {
+        method: "POST",
+      });
+      const body = (await answer.json().catch(() => ({}))) as { error?: string };
+      said(answer.ok ? `${name} is dialling its source again.` : (body.error ?? "that did not work"));
+    } catch {
+      said("could not reach the server");
+    }
+    drawnOnAir = "";
+    void loadOnAir();
+  }
+
+  async function removeChannel(id: string, name: string): Promise<void> {
+    try {
+      const answer = await fetch(remote.url(`/api/channels/${encodeURIComponent(id)}`), { method: "DELETE" });
+      said(answer.ok ? `${name} is off the air.` : "that did not work");
+    } catch {
+      said("could not reach the server");
+    }
+    // Nothing to rejoin: it was taken off on purpose.
+    if (channelOn?.id === id) {
+      channelOn = null;
+      player.stop();
+    }
+    drawnOnAir = "";
+    void loadOnAir();
+  }
+
+  /** Onto the clipboard, and the button says so for a moment. */
+  async function copyText(text: string, button: HTMLButtonElement, done = "Copied"): Promise<void> {
+    if (!text) return;
+    const was = button.textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // No clipboard here -- an http origin, or a browser that asks first --
+      // so show it instead, where it can be selected and copied by hand.
+      note = text;
+      draw();
+      return;
+    }
+    button.textContent = done;
+    setTimeout(() => { button.textContent = was; }, 1200);
+  }
+
+  /** One row of what is live: what it is, and the things you can do to it. */
   function onAirRow(row: {
     title: string; detail: string; onPlay: () => void; link: string; playLabel?: string;
+    /** The stream's own address, for VLC, mpv, or a <video> somewhere else. */
+    direct?: string;
+    onRestart?: () => void;
     onStop?: () => void;
   }): HTMLElement {
     const item = document.createElement("li");
@@ -2359,21 +2511,45 @@ export function start(): void {
       copy.type = "button";
       copy.className = "ghost";
       copy.textContent = "Copy link";
+      copy.title = "A link that opens this in the player";
       copy.addEventListener("click", () => {
         const here = globalThis.location.origin;
         const full = row.link.startsWith("https://")
           ? `${here}/?url=${encodeURIComponent(row.link)}`
           : row.link;
-        void navigator.clipboard?.writeText(full).catch(() => {});
+        void copyText(full, copy);
       });
       item.append(copy);
+    }
+
+    // The stream itself, as distinct from a page that plays it: what you
+    // paste into VLC, or into a <video> on a page of your own.
+    if (row.direct) {
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "ghost";
+      copy.textContent = "Copy URL";
+      copy.title = "The stream's own address, for VLC or mpv";
+      copy.addEventListener("click", () => { void copyText(row.direct ?? "", copy); });
+      item.append(copy);
+    }
+
+    if (row.onRestart) {
+      const restart = document.createElement("button");
+      restart.type = "button";
+      restart.className = "ghost";
+      restart.textContent = "Restart";
+      restart.title = "Dial the source again";
+      restart.addEventListener("click", row.onRestart);
+      item.append(restart);
     }
 
     if (row.onStop) {
       const stop = document.createElement("button");
       stop.type = "button";
       stop.className = "ghost";
-      stop.textContent = "Stop";
+      stop.textContent = "Remove";
+      stop.title = "Take it off the air";
       stop.addEventListener("click", row.onStop);
       item.append(stop);
     }

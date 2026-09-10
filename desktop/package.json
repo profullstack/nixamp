@@ -1,7 +1,7 @@
 {
   "name": "@nixamp/desktop",
   "productName": "nixamp",
-  "version": "0.7.35",
+  "version": "0.7.36",
   "private": true,
   "description": "nixamp as a desktop app: the PWA in a window, with the CLI bundled in.",
   "author": "Profullstack, Inc. <anthony@profullstack.com>",

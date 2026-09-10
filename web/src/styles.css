@@ -374,6 +374,22 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .row .time { color: var(--muted); flex: none; }
 
+/* The file's address, one glyph wide, quiet until the row is under the
+   pointer. On a touch screen there is no pointer, so it simply stays. */
+.row-copy {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1.4;
+  opacity: 0.55;
+}
+.row:hover .row-copy, .row.selected .row-copy { opacity: 1; }
+.row-copy:hover { color: var(--accent); border-color: var(--accent); }
+
 /* ---- transport --------------------------------------------------------- */
 
 .transport {
