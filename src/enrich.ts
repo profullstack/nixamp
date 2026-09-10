@@ -126,9 +126,12 @@ export function pickBest(answer: MatchAnswer, asked: string): Enriched | null {
       askedPlain.length >= 4 &&
       (askedPlain.startsWith(`${titlePlain} `) || titlePlain.startsWith(`${askedPlain} `));
     if (!exact && score < (prefix ? PREFIX_SCORE : MIN_SCORE)) continue;
-    // An exact title beats any score; among the rest, the score decides.
+    // An exact title beats any score; among exact titles the one with a
+    // picture wins, since nichedb keeps both the IMDb row and the TMDB row of
+    // a film and only one has the poster; among the rest, the score decides.
     if (!best) best = item;
     else if (exact && !isExact(best)) best = item;
+    else if (exact && isExact(best) && !best.image_url && item.image_url) best = item;
     else if (!isExact(best) && score > Number(best.score ?? 0)) best = item;
   }
   if (!best) return null;
