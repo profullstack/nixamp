@@ -67,6 +67,7 @@ export function start(): void {
     total: need<HTMLElement>("total"),
     seek: need<HTMLInputElement>("seek"),
     fullscreen: need<HTMLButtonElement>("fullscreen"),
+    copyNow: need<HTMLButtonElement>("copy-now"),
     canvas: need<HTMLCanvasElement>("spectrum"),
     glyphs: need<HTMLElement>("glyphs"),
     levels: need<HTMLElement>("levels"),
@@ -159,6 +160,23 @@ export function start(): void {
     next: need<HTMLButtonElement>("next"),
   };
 
+  /**
+   * The icons, as inline SVG rather than glyphs. A link or copy character
+   * is an empty box in most monospace faces, which is what the icons were
+   * on a machine without an emoji font. These are drawn, not typed.
+   */
+  const ICONS: Record<"link" | "copy" | "restart" | "remove" | "check", string> = {
+    link: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+    restart: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>',
+    remove: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+    check: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5L20 7"/></svg>',
+  };
+  /** Draw one of ours into a button. Static markup, never anybody's text. */
+  const drawIcon = (button: HTMLElement, name: keyof typeof ICONS): void => {
+    button.innerHTML = ICONS[name];
+  };
+
   /** What the tab is called with nothing playing: whatever the shell said. */
   const baseTitle = document.title || "nixamp";
   let mode: Mode = "local";
@@ -170,6 +188,8 @@ export function start(): void {
    * where a server you own offers both ways in.
    */
   let viewerOnly = false;
+  /** What the link that opened this page asked to play, until it has been. */
+  let askedToPlay = "";
   let local: LocalTrack[] = [];
   let index = 0;
   let snapshot: FullSnapshot = emptySnapshot();
@@ -446,6 +466,9 @@ export function start(): void {
     // as "CNN" rather than as five copies of the site's name.
     const tab = live ? `${currentName()} · ${baseTitle}` : baseTitle;
     if (document.title !== tab) document.title = tab;
+    // The address of what is playing, for another player. A picked file has
+    // none, and nothing loaded has nothing to copy.
+    dom.copyNow.hidden = player.source === "";
     dom.album.textContent = currentAlbum();
 
     const at2 = position();
@@ -644,7 +667,7 @@ export function start(): void {
           const copy = document.createElement("button");
           copy.type = "button";
           copy.className = "row-copy";
-          copy.textContent = "⧉";
+          drawIcon(copy, "copy");
           copy.title = "Copy this file's URL";
           copy.setAttribute("aria-label", `Copy the URL of ${row.name}`);
           copy.addEventListener("click", (event) => {
@@ -1685,6 +1708,11 @@ export function start(): void {
     dom.favHere.setAttribute("aria-label", dom.favHere.title);
   }
 
+  drawIcon(dom.copyNow, "copy");
+  dom.copyNow.addEventListener("click", () => {
+    void copyText(player.source, dom.copyNow, "✓");
+  });
+
   dom.favHere.addEventListener("click", () => {
     const link = remote.shareLink;
     if (!link) return;
@@ -1974,7 +2002,7 @@ export function start(): void {
         const copy = document.createElement("button");
         copy.type = "button";
         copy.className = "row-copy";
-        copy.textContent = "⧉";
+        drawIcon(copy, "copy");
         copy.title = "Copy this entry's URL";
         copy.setAttribute("aria-label", `Copy the URL of ${entry.title}`);
         copy.addEventListener("click", (event) => {
@@ -2682,9 +2710,12 @@ export function start(): void {
   // question is what opens it: set afterwards, the invite arrived too late and
   // the page just sat there.
   try {
-    const asked = new URL(globalThis.location.href).searchParams.get("url") ?? "";
+    const params = new URL(globalThis.location.href).searchParams;
+    const asked = params.get("url") ?? "";
     if (asked !== "") {
       invited = asked;
+      // And which thing on it, when the link said: a channel, or the live stream.
+      askedToPlay = params.get("play") ?? "";
       dom.remoteUrl.value = asked;
       note = "Opening the stream you were sent…";
       // Not something to leave in the address bar: it carries a key.
@@ -2883,6 +2914,7 @@ export function start(): void {
     }
 
     dom.onairPanel.hidden = false;
+    playWhatWasAsked(air);
     // Part of the key, because the admin's buttons are part of the drawing:
     // learning you may drive this server is news even when nothing on the
     // air has changed.
@@ -2931,6 +2963,7 @@ export function start(): void {
         if (canDrive) void startTheStream();
       },
       link: air.server.live ? air.server.url : "",
+      ...(running ? { page: pageLinkFor("live") } : {}),
       // The stream itself, for VLC or mpv or a <video> on some other page.
       direct: running ? remote.url("/api/live") : "",
     }));
@@ -2973,6 +3006,7 @@ export function start(): void {
           void watchChannel({ id: channel.id, name: channel.name, video: withPicture });
         },
         link: address,
+        page: pageLinkFor(`channel:${channel.id}`),
         direct: address,
         // Taking something off the air, or dialling its source again, is
         // administering the server, so those are only there for somebody
@@ -3156,7 +3190,7 @@ export function start(): void {
   /** Onto the clipboard, and the button says so for a moment. */
   async function copyText(text: string, button: HTMLButtonElement, done = "Copied"): Promise<void> {
     if (!text) return;
-    const was = button.textContent;
+    const was = button.innerHTML;
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -3166,19 +3200,63 @@ export function start(): void {
       draw();
       return;
     }
-    button.textContent = done;
-    setTimeout(() => { button.textContent = was; }, 1200);
+    if (done === "\u2713" || done === "✓") drawIcon(button, "check");
+    else button.textContent = done;
+    setTimeout(() => { button.innerHTML = was; }, 1200);
   }
 
   /** One row of what is live: what it is, and the things you can do to it. */
+  /**
+   * A link to this page that connects to the current server AND plays one
+   * thing on it: `live` for the server's own stream, `channel:<id>` for a
+   * channel. Honoured by `playWhatWasAsked` once the server has answered.
+   */
+  function pageLinkFor(what: string): string {
+    const here = globalThis.location.origin;
+    return `${here}/?url=${encodeURIComponent(remote.shareLink)}&play=${encodeURIComponent(what)}`;
+  }
+
+  /** Play what the link asked for, once what is live is known. */
+  function playWhatWasAsked(air: OnAir): void {
+    if (askedToPlay === "") return;
+    const asked = askedToPlay;
+    if (asked === "live") {
+      askedToPlay = "";
+      if (air.server.playing) void joinLive(air.server.nowPlaying);
+      else {
+        note = "Nothing is playing on this server right now.";
+        draw();
+      }
+      return;
+    }
+    const wanted = asked.startsWith("channel:") ? asked.slice("channel:".length) : "";
+    const channel = air.channels.find((one) => one.id === wanted);
+    // Maybe on the next answer: a channel can be a moment behind the page.
+    if (!channel) return;
+    askedToPlay = "";
+    void watchChannel({ id: channel.id, name: channel.name, video: channel.kind !== "audio" });
+  }
+
+  /**
+   * One thing that is live, on two lines: what it is, then what you can do
+   * to it. One line held a name and five buttons and read as a squash. The
+   * copies and the administering are icons with a tooltip each; Play keeps
+   * its word, because it is the one everybody presses.
+   */
   function onAirRow(row: {
     title: string; detail: string; onPlay: () => void; link: string; playLabel?: string;
+    /**
+     * A ready-made page link that plays this very thing, when the plain
+     * server link would only connect and show the library.
+     */
+    page?: string;
     /** The stream's own address, for VLC, mpv, or a <video> somewhere else. */
     direct?: string;
     onRestart?: () => void;
     onStop?: () => void;
   }): HTMLElement {
     const item = document.createElement("li");
+    item.className = "onair";
     const label = document.createElement("span");
     label.className = "recent-label";
     const name = document.createElement("span");
@@ -3189,62 +3267,56 @@ export function start(): void {
     detail.textContent = row.detail;
     label.append(name, detail);
 
+    const actions = document.createElement("span");
+    actions.className = "onair-actions";
+
     const play = document.createElement("button");
     play.type = "button";
     play.className = "button";
     play.textContent = row.playLabel ?? "Play";
     play.addEventListener("click", row.onPlay);
-    item.append(label, play);
+    actions.append(play);
+
+    /** An icon that says what it does when you hover, or to a screen reader. */
+    const icon = (name: keyof typeof ICONS, tip: string, onClick: (button: HTMLButtonElement) => void): HTMLButtonElement => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "icon";
+      drawIcon(button, name);
+      button.title = tip;
+      button.setAttribute("aria-label", tip);
+      button.addEventListener("click", () => onClick(button));
+      return button;
+    };
 
     // Only when there is a link worth copying: an unlisted server has no
     // address to hand anybody, and a button that copies nothing is a lie.
-    if (row.link) {
-      const copy = document.createElement("button");
-      copy.type = "button";
-      copy.className = "ghost";
-      copy.textContent = "Copy link";
-      copy.title = "A link that opens this in the player";
-      copy.addEventListener("click", () => {
+    if (row.link || row.page) {
+      actions.append(icon("link", "Copy a link that opens this in the player", (button) => {
         const here = globalThis.location.origin;
-        const full = row.link.startsWith("https://")
-          ? `${here}/?url=${encodeURIComponent(row.link)}`
-          : row.link;
-        void copyText(full, copy);
-      });
-      item.append(copy);
+        // A link to a channel used to be its bytes' address wrapped in a
+        // page link, which connected to the server and showed the library:
+        // the page had no idea which channel was meant. The page link says.
+        const full = row.page
+          ?? (row.link.startsWith("https://") ? `${here}/?url=${encodeURIComponent(row.link)}` : row.link);
+        void copyText(full, button, "\u2713");
+      }));
     }
-
     // The stream itself, as distinct from a page that plays it: what you
     // paste into VLC, or into a <video> on a page of your own.
     if (row.direct) {
-      const copy = document.createElement("button");
-      copy.type = "button";
-      copy.className = "ghost";
-      copy.textContent = "Copy URL";
-      copy.title = "The stream's own address, for VLC or mpv";
-      copy.addEventListener("click", () => { void copyText(row.direct ?? "", copy); });
-      item.append(copy);
+      actions.append(icon("copy", "Copy the stream's own URL, for VLC or mpv", (button) => {
+        void copyText(row.direct ?? "", button, "\u2713");
+      }));
     }
-
     if (row.onRestart) {
-      const restart = document.createElement("button");
-      restart.type = "button";
-      restart.className = "ghost";
-      restart.textContent = "Restart";
-      restart.title = "Dial the source again";
-      restart.addEventListener("click", row.onRestart);
-      item.append(restart);
+      actions.append(icon("restart", "Restart: dial the source again", () => row.onRestart?.()));
+    }
+    if (row.onStop) {
+      actions.append(icon("remove", "Remove: take it off the air", () => row.onStop?.()));
     }
 
-    if (row.onStop) {
-      const stop = document.createElement("button");
-      stop.type = "button";
-      stop.className = "ghost";
-      stop.textContent = "Remove";
-      stop.title = "Take it off the air";
-      stop.addEventListener("click", row.onStop);
-      item.append(stop);
-    }
+    item.append(label, actions);
     return item;
   }
 

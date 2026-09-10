@@ -147,6 +147,39 @@ body {
   min-width: 0;
 }
 
+/* One live thing, on two lines: what it is, then what you can do to it. */
+.directory-list li.onair {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--edge);
+}
+.directory-list li.onair:last-child { border-bottom: 0; }
+.directory-list li.onair > .recent-label { flex: none; }
+.onair-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* An icon that does one thing, and says which on hover. Square, so a row of
+   them lines up, and the same height as the labelled button beside them. */
+.icon {
+  flex: none;
+  min-width: 2.2em;
+  height: 2.2em;
+  padding: 0 6px;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1em;
+  line-height: 1;
+  cursor: pointer;
+}
+.icon:hover { color: var(--accent); border-color: var(--accent); }
+
 /* A way in that is not yours: there, so you know it exists, and greyed. */
 .directory-list li > .button:disabled {
   opacity: 0.4;
@@ -459,6 +492,9 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
   opacity: 0.55;
 }
 .row:hover .row-copy, .row.selected .row-copy { opacity: 1; }
+/* The drawn icons sit on the text baseline, sized to the type around them. */
+.row-copy svg, .icon svg { width: 14px; height: 14px; vertical-align: -2px; display: inline-block; }
+.icon { display: inline-flex; align-items: center; justify-content: center; }
 .row-copy:hover { color: var(--accent); border-color: var(--accent); }
 
 /* ---- transport --------------------------------------------------------- */
