@@ -28,12 +28,14 @@ export interface Tools {
   ffprobe: string[];
   /** Argv prefix for the player, or null when nothing can make sound here. */
   play: string[] | null;
+  /** yt-dlp, which turns a pasted page into a media address; null when there is none. */
+  ytdlp?: string[] | null;
 }
 
-function works(argv: string[]): boolean {
+function works(argv: string[], flag = "-version"): boolean {
   const [cmd, ...rest] = argv;
   if (!cmd) return false;
-  const r = spawnSync(cmd, [...rest, "-version"], { encoding: "utf8", timeout: 10_000 });
+  const r = spawnSync(cmd, [...rest, flag], { encoding: "utf8", timeout: 10_000 });
   return !r.error && r.status === 0;
 }
 
@@ -92,10 +94,16 @@ export function detectTools(): Tools {
   const ffmpeg = pick("ffmpeg");
   const ffprobe = pick("ffprobe");
   const play = pick("ffplay");
+  // yt-dlp is not an ffmpeg, so mise's ffmpeg tree is not where it lives;
+  // the installer puts it beside nixamp, and pip puts it in ~/.local/bin too.
+  // Asked with its own spelling: ffmpeg answers -version, yt-dlp only --version.
+  const ytdlp = [["yt-dlp"], [join(homedir(), ".local", "bin", "yt-dlp")], ["/usr/local/bin/yt-dlp"], ["/usr/bin/yt-dlp"], ["/opt/homebrew/bin/yt-dlp"]]
+    .find((argv) => works(argv, "--version")) ?? null;
   return {
     ffmpeg: ffmpeg ?? ["ffmpeg"],
     ffprobe: ffprobe ?? ["ffprobe"],
     play,
+    ytdlp,
   };
 }
 
@@ -392,7 +400,7 @@ export interface Codecs {
  * answering other requests, and a synchronous probe per media request is how
  * the whole library came to be tagged with the process wedged solid.
  */
-export async function codecsOf(tools: Tools, path: string): Promise<Codecs> {
+export async function codecsOf(tools: Tools, path: string, input: string[] = []): Promise<Codecs> {
   const [cmd, ...rest] = tools.ffprobe;
   const empty: Codecs = { video: "", audio: "", container: "" };
   if (!cmd) return empty;
@@ -405,6 +413,8 @@ export async function codecsOf(tools: Tools, path: string): Promise<Codecs> {
         "-v", "quiet",
         "-print_format", "json",
         "-show_entries", "format=format_name:stream=codec_type,codec_name",
+        // Headers the source's site expects, for a link resolved by yt-dlp.
+        ...input,
         path,
       ],
       { stdio: ["ignore", "pipe", "ignore"] },

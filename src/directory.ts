@@ -73,6 +73,12 @@ export interface Listing {
   playing: boolean;
   /** The live channels on it, by name: what a visitor could actually watch. */
   channels: string[];
+  /**
+   * A phone code for each of those channels, by name: its own room, so the
+   * people calling about one live are not put in with the people calling
+   * about another on the same server.
+   */
+  channelCodes: Record<string, string>;
   /** Set by the directory from the request, never by the publisher. */
   updatedAt: number;
   /** When this stream first announced itself: the "started at" a caller hears. */
@@ -283,6 +289,11 @@ export class Directory {
       // listing always meant, and no channels is the honest empty list.
       playing: announcement.playing ?? true,
       channels: announcement.channels ?? [],
+      channelCodes: this.codesFor(
+        announcement.channels ?? [],
+        existing?.channelCodes ?? (previously && "channelCodes" in previously ? previously.channelCodes : undefined),
+        id,
+      ),
       updatedAt: this.now(),
       // A stream that never stopped keeps its original start. One that did
       // starts again now, because that is what a caller is being told about.
@@ -305,10 +316,55 @@ export class Directory {
     return [...this.items.values()].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
   }
 
-  /** The live stream on this code, if there is one. */
+  /**
+   * The live stream on this code, if there is one.
+   *
+   * A channel's code answers as the channel: the same listing, named for the
+   * channel and playing nothing else, so the phone line says "the live room
+   * for FIBA World Cup" rather than the server's name and whatever its own
+   * player has on.
+   */
   liveByCode(code: string): Listing | undefined {
     this.sweep();
-    return [...this.items.values()].find((item) => item.code === code);
+    const own = [...this.items.values()].find((item) => item.code === code);
+    if (own !== undefined) return own;
+    for (const item of this.items.values()) {
+      const channel = Object.entries(item.channelCodes).find(([, one]) => one === code)?.[0];
+      if (channel !== undefined) return { ...item, code, name: channel, nowPlaying: "" };
+    }
+    return undefined;
+  }
+
+  /**
+   * A code for each channel, kept while the channel stays on.
+   *
+   * One code per server meant every live on it shared a room: somebody
+   * calling about the basketball landed with the people talking about the
+   * film. Each live is its own room now, and a channel that is still there at
+   * the next heartbeat keeps the code it was given.
+   */
+  private codesFor(channels: string[], had: Record<string, string> | undefined, own = ""): Record<string, string> {
+    const codes: Record<string, string> = {};
+    for (const name of channels) {
+      if (codes[name] !== undefined) continue;
+      const kept = had?.[name];
+      codes[name] = kept !== undefined && !this.taken(kept, codes, own) ? kept : this.freeCode(codes, own);
+    }
+    return codes;
+  }
+
+  /**
+   * Whether a code is somebody's already: a stream's own, a channel's on any
+   * stream, or a recently-ended stream's. A listing renewing itself is not
+   * "somebody else", or its channels would be re-coded every heartbeat.
+   */
+  private taken(code: string, besides: Record<string, string> = {}, own = ""): boolean {
+    if (Object.values(besides).includes(code)) return true;
+    for (const item of this.items.values()) {
+      if (item.code === code) return true;
+      if (item.id !== own && Object.values(item.channelCodes).includes(code)) return true;
+    }
+    return [...this.ended.values()].some((i) => i.code === code);
   }
 
   /**
@@ -372,15 +428,12 @@ export class Directory {
     this.mirror?.save(record);
   }
 
-  /** A code no live and no recently-ended stream is using. */
-  private freeCode(): string {
+  /** A code no live stream, no channel on one, and no recently-ended stream is using. */
+  private freeCode(besides: Record<string, string> = {}, own = ""): string {
     for (let tries = 0; tries < 40; tries += 1) {
       const code = this.randomCode();
       if (code.length !== 6) continue;
-      const taken =
-        [...this.items.values()].some((i) => i.code === code) ||
-        [...this.ended.values()].some((i) => i.code === code);
-      if (!taken) return code;
+      if (!this.taken(code, besides, own)) return code;
     }
     return "";
   }

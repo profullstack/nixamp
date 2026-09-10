@@ -219,7 +219,7 @@ export class Channel {
    * because you looked away, and a room where the picture depends on who is
    * in it is not a room anybody can be invited to.
    */
-  pull(source: string, encode: string[], paced = true, stall = STALL): void {
+  pull(source: string, encode: string[], paced = true, stall = STALL, input: string[] = []): void {
     this.stall = stall;
     if (this.info.kind === "video") this.fragments = new Fragments();
     const [command, ...prefix] = this.options.ffmpeg as [string, ...string[]];
@@ -247,6 +247,10 @@ export class Channel {
           // hour of film in ninety seconds and a room that cannot be in it
           // together; a live source is already paced and loses nothing.
           ...(paced ? ["-re"] : []),
+          // What the source's site expects on the request: a user agent, a
+          // referer, a cookie. A link resolved by yt-dlp comes with these,
+          // and a CDN that got them from yt-dlp and not from us answers 403.
+          ...input,
           "-i", source,
           ...encode,
           "pipe:1",
@@ -612,6 +616,7 @@ export class Channels {
     kind: "audio" | "video",
     paced = true,
     stall = STALL,
+    input: string[] = [],
   ): Channel | null {
     if (this.open.has(id)) return null;
     const channel = new Channel(
@@ -630,7 +635,7 @@ export class Channels {
       (gone) => this.open.delete(gone),
     );
     this.open.set(id, channel);
-    channel.pull(source, encode, paced, stall);
+    channel.pull(source, encode, paced, stall, input);
     return channel;
   }
 

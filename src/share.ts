@@ -354,8 +354,10 @@ export function allowedForListening(path: string): boolean {
   if (path === "/api/source" || path.startsWith("/api/source/")) return false;
   // Listing this machine in a public directory is not listening to it. The
   // listen address itself, /api/live, stays open: that is the thing a listen
-  // key is for.
-  if (path === "/api/live/state" || path === "/api/live/start" || path === "/api/live/stop") return false;
+  // key is for -- and so is knowing the phone code, which /api/live/state
+  // answers: a joiner is told the number to call and the code to key, and
+  // the code is in the public directory anyway.
+  if (path === "/api/live/start" || path === "/api/live/stop") return false;
   return true;
 }
 

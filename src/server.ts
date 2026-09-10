@@ -51,6 +51,10 @@ import { stateDir } from "./daemon.ts";
 import { readSession } from "./session.ts";
 import { Directory, ENDED_TTL_MS, parseAnnouncement, type Listing } from "./directory.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
+import {
+  contentTypeFor, downloadArgs, fileNameFor, inputArgsFor, linkChannelId, playableLink, resolveLink, saveFormat,
+  type ResolvedLink,
+} from "./links.ts";
 import { CALL_IN_NUMBER, OPT_IN_PATH, optInPage } from "./optin.ts";
 import pg from "pg";
 import { Follows, phoneFrom } from "./follows.ts";
@@ -978,15 +982,50 @@ export async function pullChannel(
   id: string,
   name: string,
   source: string,
+  input: string[] = [],
 ): Promise<Channel | null> {
-  const codecs = await codecsOf({ ffmpeg: [], ffprobe, play: null }, source);
+  const codecs = await codecsOf({ ffmpeg: [], ffprobe, play: null }, source, input);
   const kind = codecs.video === "" ? "audio" : "video";
   const encode = kind === "video"
     ? videoArgs(codecs)
     // No picture in it, so none is invented: MP3 is the thing every browser
     // plays and the thing a listener can join halfway through.
     : ["-vn", "-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"];
-  return channels.pull(id, name, source, encode, kind);
+  return channels.pull(id, name, source, encode, kind, true, undefined, input);
+}
+
+/** What a link resolves to, kept so a download can be named without asking twice. */
+const links = new Map<string, ResolvedLink>();
+
+/**
+ * A Netscape cookies file beside the state, if the operator has put one there.
+ *
+ * YouTube and Vimeo refuse a datacenter without a signed-in cookie; the
+ * person who runs the server can export one from their browser and drop it
+ * at ~/.local/state/nixamp/cookies.txt, and every link is asked for with it.
+ */
+export function cookiesFile(): string {
+  const path = join(stateDir(), "cookies.txt");
+  try {
+    return statSync(path).isFile() ? path : "";
+  } catch {
+    return "";
+  }
+}
+
+/** What the page is told about a link it asked to play. */
+function shownLink(channelId: string, link: ResolvedLink) {
+  return {
+    kind: "live",
+    channel: channelId,
+    name: link.title,
+    live: link.live,
+    video: link.video,
+    duration: link.duration,
+    extractor: link.extractor,
+    // A live has no whole to keep; a bare file can be fetched by the browser itself.
+    download: !link.live && link.extractor !== "direct",
+  };
 }
 
 export function liveOnes(engine: Engine): { name: string; at: number; tracks: number }[] {
@@ -1122,6 +1161,10 @@ export interface HandlerOptions {
   ffmpeg?: string[];
   /** Where ffprobe is, for asking what is inside a file before re-encoding it. */
   ffprobe?: string[];
+  /** yt-dlp, which turns a pasted page into a media address. Null when there is none. */
+  ytdlp?: string[] | null;
+  /** A Netscape cookies file for sites that want a signed-in browser, when there is one. */
+  cookies?: string;
   /** Who is listening, for the admin view. */
   connections?: Connections;
   /**
@@ -1177,7 +1220,11 @@ export interface HandlerOptions {
    * and starting it. It is an action now, because that is what it is.
    */
   live?: {
-    status: () => { live: boolean; code: string; name: string; url: string; possible: boolean };
+    status: () => {
+      live: boolean; code: string; name: string; url: string; possible: boolean;
+      /** A phone code per live channel, by name, as the directory assigned them. */
+      channelCodes?: Record<string, string>;
+    };
     start: () => Promise<{ live: boolean; code: string; name: string; url: string; error?: string }>;
     stop: () => Promise<void>;
     /**
@@ -2363,6 +2410,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         const streams = options.directory.list().map(({ admin, ...stream }) => ({
           ...stream,
           callers: onThePhone ? onThePhone.listenersOn(stream.code) : 0,
+          // And on the phone for each live on it, by name: every live is its
+          // own room, so each has its own count.
+          channelCallers: Object.fromEntries(
+            Object.entries(stream.channelCodes).map(([name, code]) => [name, onThePhone ? onThePhone.listenersOn(code) : 0]),
+          ),
           ...(admin && me !== null && stream.ownerId === me.id ? { admin } : {}),
         }));
         // Recently ended too, because following exists to hear about
@@ -2533,6 +2585,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // Whether it has a picture, so the page puts it in the element
           // that can show one. Never the source: that is the owner's.
           kind: one.kind ?? "audio",
+          // Its own room on the phone line, as the directory assigned it;
+          // empty until the next heartbeat has told the directory it is on.
+          code: state?.channelCodes?.[one.name] ?? "",
           // How it has been going, for whoever may do something about it.
           redials: one.redials ?? 0,
           error: one.error ?? "",
@@ -2718,6 +2773,118 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
 
       json(response, 404, { error: "no such endpoint" });
+      return;
+    }
+
+    // --- any link, played -------------------------------------------------
+    //
+    // Paste a page -- YouTube, a podcast, SoundCloud, a TikTok live -- and the
+    // server works out where the media is and plays it as a channel of its
+    // own, the way a catalog entry is played: started for whoever asked,
+    // stopped a minute after the last viewer leaves. Open to anyone holding
+    // the link, like picking something from a catalog.
+    if (path === "/api/links/play" && request.method === "POST") {
+      let body: { url?: unknown } = {};
+      try {
+        body = JSON.parse(await readBody(request)) as typeof body;
+      } catch {
+        json(response, 400, { error: "bad JSON" });
+        return;
+      }
+      const link = playableLink(body.url);
+      if (link === "") {
+        json(response, 400, { error: "that is not a link this can play" });
+        return;
+      }
+      if (!options.channels) {
+        json(response, 503, { error: "this server cannot carry channels" });
+        return;
+      }
+      const channelId = linkChannelId(link);
+      const known = links.get(link);
+      if (options.channels.has(channelId) && known) {
+        json(response, 200, shownLink(channelId, known));
+        return;
+      }
+      if (!options.channels.has(channelId) && options.channels.ephemeralCount >= MAX_ON_DEMAND) {
+        json(response, 429, { error: `this server is already carrying ${MAX_ON_DEMAND} channels on demand; try again in a minute` });
+        return;
+      }
+      const resolved = known ?? await resolveLink(options.ytdlp ?? null, link, { cookies: options.cookies ?? "" });
+      if ("error" in resolved) {
+        json(response, 422, { error: resolved.error });
+        return;
+      }
+      links.set(link, resolved);
+      if (!options.channels.has(channelId)) {
+        const started = await pullChannel(
+          options.channels, options.ffprobe ?? ["ffprobe"], channelId, resolved.title, resolved.media,
+          inputArgsFor(resolved.headers),
+        );
+        if (!started) {
+          json(response, 409, { error: "that link is already starting" });
+          return;
+        }
+        options.channels.ephemeral(channelId);
+      }
+      json(response, 200, shownLink(channelId, resolved));
+      return;
+    }
+
+    // The whole thing, to keep. The server fetches it through yt-dlp and
+    // hands the bytes straight on as a download, so the person's own machine
+    // ends up with the file and the server keeps nothing. A live stream has
+    // no whole to hand over.
+    if (path === "/api/links/download") {
+      const link = playableLink(url.searchParams.get("url"));
+      if (link === "") {
+        json(response, 400, { error: "that is not a link this can fetch" });
+        return;
+      }
+      if (!options.ytdlp || options.ytdlp.length === 0) {
+        json(response, 503, { error: "this server has no yt-dlp to fetch with" });
+        return;
+      }
+      const resolved = links.get(link) ?? await resolveLink(options.ytdlp, link, { cookies: options.cookies ?? "" });
+      if ("error" in resolved) {
+        json(response, 422, { error: resolved.error });
+        return;
+      }
+      links.set(link, resolved);
+      if (resolved.live) {
+        json(response, 409, { error: "that is live; there is no whole file to download yet" });
+        return;
+      }
+      const audioOnly = url.searchParams.get("audio") === "1" || !resolved.video;
+      // Named for the format the download will actually take, which is not
+      // always the one played: a track played from an HLS playlist is saved
+      // as the plain MP3 the site also offers, and ".m4a" on an MP3 is a
+      // file nothing will open.
+      const saved = await resolveLink(options.ytdlp, link, { cookies: options.cookies ?? "", format: saveFormat(audioOnly) });
+      const fileName = fileNameFor("error" in saved ? resolved : { ...resolved, ext: saved.ext || resolved.ext }, audioOnly);
+      const [command, ...prefix] = options.ytdlp as [string, ...string[]];
+      const child = spawn(command, [...prefix, ...downloadArgs(link, audioOnly, options.cookies ?? "")], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      response.writeHead(200, {
+        "content-type": contentTypeFor(fileName),
+        "content-disposition": `attachment; filename="${fileName.replace(/["\\]/g, "")}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+        "cache-control": "no-store",
+      });
+      child.stdout?.pipe(response);
+      let complaint = "";
+      child.stderr?.on("data", (chunk: Buffer) => {
+        if (complaint.length < 20_000) complaint += chunk.toString("utf8");
+      });
+      child.on("error", () => response.end());
+      child.on("close", (code) => {
+        if (code !== 0) console.log(`  a download of ${link} failed: ${complaint.split("\n").filter((one) => one.startsWith("ERROR")).pop() ?? code}`);
+        response.end();
+      });
+      // The person closed the tab: stop fetching what nobody will keep.
+      response.on("close", () => {
+        if (child.exitCode === null) child.kill("SIGKILL");
+      });
       return;
     }
 
@@ -4163,6 +4330,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       status: () => ({
         live: publisher !== null,
         code: listing?.code ?? "",
+        channelCodes: listing?.channelCodes ?? {},
         name: listing?.name ?? (options.name || hostname()),
         url: listing?.url ?? (publishable_ ? shareLink(publishable_.url, listenKey, false) : ""),
         // Whether going live is even possible here. A laptop behind a router
@@ -4210,6 +4378,11 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     paywall,
     ffmpeg: tools.ffmpeg,
     ffprobe: tools.ffprobe,
+    // For a pasted link: where its media is, and the whole of it to keep.
+    // A cookie jar beside the state, when the operator has put one there,
+    // for the sites that will not talk to a datacenter without one.
+    ytdlp: tools.ytdlp ?? null,
+    cookies: cookiesFile(),
     ...(tls ? { tls } : {}),
     // Untagged, so a directory of five thousand files answers at once; the
     // tags follow through `tag` below.

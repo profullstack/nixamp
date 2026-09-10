@@ -635,6 +635,10 @@ button.golive:disabled { opacity: 0.5; cursor: progress; }
 
 .picker { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
+/* The paste-a-link box under the player: the field takes the width. */
+.link-form { margin-top: 8px; }
+.link-form input { flex: 1 1 240px; min-width: 0; }
+
 .button {
   display: inline-block;
   background: #121a15;

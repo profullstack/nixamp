@@ -683,8 +683,37 @@ test("on a live stream the page says whose it is, what is on, and how to call in
   assert.match(body, /lastAir\?\.server\.nowPlaying/);
   // The number and the code, in the same words as the Share panel, as text.
   assert.match(body, /To talk about it, call /);
-  assert.match(body, /boldly\(phoneCode\)/);
+  assert.match(body, /boldly\(code\)/);
   assert.equal(body.includes("innerHTML"), false);
+});
+
+test("a pasted link is played by the server you are on, and a whole one can be kept", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  assert.ok(html.includes('id="link-form"') && html.includes('id="link-url"'));
+  assert.ok(html.includes('id="download-now"'));
+  const body = app.slice(app.indexOf("async function playLink"), app.indexOf("dom.linkForm.addEventListener"));
+  // Not connected is said, not silently nothing.
+  assert.match(body, /Connect to a server first/);
+  assert.match(body, /\/api\/links\/play/);
+  // The answer is watched as a channel, remembering where it came from.
+  assert.match(body, /watchChannel\(/);
+  assert.match(body, /download: body\.download === true/);
+  // Keeping it opens the server's download route in the browser, which saves it.
+  assert.match(app, /\/api\/links\/download\?url=/);
+  assert.match(app, /dom\.downloadNow\.hidden = !\(channelOn && nowMeta\?\.link\?\.download\)/);
+  // A shared link can name a link to paste.
+  assert.match(app, /asked\.startsWith\("link:"\)/);
+  // And the footer points at the subreddit, beside GitHub.
+  assert.ok(html.indexOf('href="https://www.reddit.com/r/nixamp"') > html.indexOf('href="https://github.com/profullstack/nixamp"'));
+});
+
+test("every live has its own room code, shown wherever the live is", () => {
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // The Live rows, the line under the title, and the directory's channel rows.
+  assert.match(app, /if \(channel\.code\) detail\.push\(`☎ \$\{channel\.code\}`\)/);
+  assert.match(app, /lastAir\?\.channels\.find\(\(one\) => one\.id === channelOn\?\.id\)\?\.code/);
+  assert.match(app, /stream\.channelCodes\?\.\[channelName\]/);
 });
 
 test("a listed server's channels are rows in the directory that play them", () => {
