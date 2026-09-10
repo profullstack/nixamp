@@ -473,3 +473,27 @@ test("an on-demand channel stops itself a minute after its last viewer leaves", 
   assert.equal(set.has("cnn"), true);
   set.stopAll();
 });
+
+test("going live with an on-demand channel keeps it up with nobody watching", async () => {
+  // Watching something from a catalog starts a channel that stops a minute
+  // after you leave. Going live with it is asking it to stay: listed,
+  // shareable, and still there when the tab that started it is closed.
+  const set = new Channels({ ffmpeg: fakeVideoFfmpeg(), idleMs: 200 });
+  const channel = set.pull("cat-abc", "CNN", "http://x.test/301", [], "video");
+  set.ephemeral("cat-abc");
+  assert.equal(set.isEphemeral("cat-abc"), true);
+
+  const viewer = collector();
+  const leave = channel?.listen(viewer);
+  leave?.();
+  // The clock is running; keeping it stops the clock.
+  assert.equal(set.keep("cat-abc"), true);
+  assert.equal(set.isEphemeral("cat-abc"), false);
+  assert.equal(set.ephemeralCount, 0);
+  await wait(500);
+  assert.equal(set.has("cat-abc"), true, "kept, so still on with nobody watching");
+
+  // A channel that is not there is not kept.
+  assert.equal(set.keep("nothing"), false);
+  set.stopAll();
+});

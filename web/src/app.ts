@@ -63,6 +63,8 @@ export function start(): void {
     audio: need<HTMLAudioElement>("audio"),
     title: need<HTMLElement>("title-line"),
     album: need<HTMLElement>("album-line"),
+    meta: need<HTMLElement>("meta-line"),
+    goLiveNow: need<HTMLButtonElement>("go-live-now"),
     elapsed: need<HTMLElement>("elapsed"),
     total: need<HTMLElement>("total"),
     seek: need<HTMLInputElement>("seek"),
@@ -165,7 +167,8 @@ export function start(): void {
    * is an empty box in most monospace faces, which is what the icons were
    * on a machine without an emoji font. These are drawn, not typed.
    */
-  const ICONS: Record<"link" | "copy" | "restart" | "remove" | "check", string> = {
+  const ICONS: Record<"link" | "copy" | "restart" | "remove" | "check" | "live", string> = {
+    live: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><path d="M8.5 15.5a5 5 0 0 1 0-7"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M5.6 18.4a9 9 0 0 1 0-12.8"/><path d="M18.4 5.6a9 9 0 0 1 0 12.8"/></svg>',
     link: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
     copy: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
     restart: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>',
@@ -238,6 +241,41 @@ export function start(): void {
    */
   let channelOn: { id: string; name: string; video: boolean } | null = null;
   let rejoins = 0;
+  /**
+   * Requests in flight that will end in something playing, and whether the
+   * element is waiting on bytes. Either one is LOADING at the top of the
+   * page: a catalog entry can take half a minute to start, and for all of it
+   * the page used to say STOPPED.
+   */
+  let pending = 0;
+  let mediaBusy = false;
+  const loading = (): boolean => pending > 0 || mediaBusy;
+  async function whileLoading<T>(work: () => Promise<T>): Promise<T> {
+    pending += 1;
+    draw();
+    try {
+      return await work();
+    } finally {
+      pending -= 1;
+      draw();
+    }
+  }
+  /**
+   * Where what is playing came from, for the line under the picture and for
+   * going live with it. A file from the library, a film or a channel from a
+   * catalog, the server's own live stream.
+   */
+  let nowMeta: {
+    kind: "file" | "vod" | "channel" | "live";
+    catalog?: { id: string; name: string };
+    entry?: { id: string; title: string; group: string; logo?: string; live: boolean };
+  } | null = null;
+  /** The last answer to "what is on", so the meta line can say who is watching. */
+  let lastAir: OnAir | null = null;
+  /** Whether this server is listed, and the phone code and number if so. */
+  let listed = false;
+  let phoneCode = "";
+  let phoneNumber = "";
   let rejoinTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * A stream somebody was sent, waiting on them to sign in.
@@ -261,6 +299,103 @@ export function start(): void {
    */
   const remoteDrives = (): boolean => mode === "remote" && !dom.listenHere.checked;
 
+  /** Whether this page may drive the server it is connected to. */
+  const isAdmin = (): boolean => mode === "remote" && !dom.adminPanel.hidden;
+
+  /**
+   * What "Go live" would put on the air: the thing that is playing here.
+   *
+   * A channel is kept; a catalog entry, film or channel, becomes a channel
+   * that is kept; a file from the library is played on the server, for
+   * everyone on the link. Nothing loaded is nothing to go live with.
+   */
+  type GoLiveWith =
+    | { kind: "channel"; id: string; name: string }
+    | { kind: "entry"; catalog: { id: string; name: string }; entry: { id: string; title: string } }
+    | { kind: "track"; index: number; name: string };
+  function whatToGoLiveWith(): GoLiveWith | null {
+    if (mode !== "remote") return null;
+    if (nowMeta?.catalog && nowMeta.entry) {
+      return { kind: "entry", catalog: nowMeta.catalog, entry: nowMeta.entry };
+    }
+    if (channelOn) return { kind: "channel", id: channelOn.id, name: channelOn.name };
+    const track = snapshot.tracks[at()];
+    if (track && (player.source !== "" || remoteDrives())) {
+      return { kind: "track", index: at(), name: displayName(track) };
+    }
+    return null;
+  }
+
+  /**
+   * Go live with something. Play plays it for you; this plays it for
+   * everybody: on the air on the server, listed in the directory with a
+   * phone code, and the link to it copied so it can be sent.
+   */
+  async function goLiveWith(what: GoLiveWith, button: HTMLButtonElement): Promise<void> {
+    button.disabled = true;
+    const name = what.kind === "entry" ? what.entry.title : what.name;
+    note = `Putting ${name} on the air…`;
+    draw();
+    try {
+      let link = "";
+      if (what.kind === "track") {
+        // The server plays it, whatever this device is doing: going live with
+        // a file is the server's player, not this tab's.
+        await remote.send({ type: "play", index: what.index });
+        link = "live";
+      } else {
+        const path = what.kind === "entry"
+          ? `/api/catalogs/${encodeURIComponent(what.catalog.id)}/entries/${encodeURIComponent(what.entry.id)}/live`
+          : `/api/channels/${encodeURIComponent(what.id)}/keep`;
+        const answer = await fetch(remote.url(path), { method: "POST" });
+        const body = (await answer.json().catch(() => ({}))) as { error?: string; channel?: string };
+        if (!answer.ok) {
+          note = body.error ?? `${name} would not go on the air.`;
+          draw();
+          return;
+        }
+        link = `channel:${what.kind === "entry" ? (body.channel ?? "") : what.id}`;
+      }
+
+      // Listed, so it is in the directory and has a phone code. Already
+      // listed is fine; the directory is told again so the channel shows.
+      if (!listed) await setLive(true);
+      else await fetch(remote.url("/api/live/start"), { method: "POST" }).catch(() => undefined);
+      await loadShare();
+      void loadOnAir();
+
+      const page = pageLinkFor(link);
+      const phone = phoneCode ? ` Call ${phoneNumber || "the line"} and key ${phoneCode} to talk about it.` : "";
+      if (page !== "") {
+        await copyText(page, button, "✓");
+        note = `${name} is on the air. Link copied.${phone}`;
+      } else {
+        note = `${name} is on the air.${phone}`;
+      }
+      draw();
+    } catch {
+      note = "could not reach the server";
+      draw();
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  /** A row's go-live icon, for whoever may. */
+  function goLiveButton(what: () => GoLiveWith, name: string): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "row-copy row-live";
+    drawIcon(button, "live");
+    button.title = `Go live with ${name}: on the air for everyone, listed, link copied`;
+    button.setAttribute("aria-label", `Go live with ${name}`);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void goLiveWith(what(), button);
+    });
+    return button;
+  }
+
   const player = new BrowserPlayer({ audio: dom.audio, video: dom.video }, {
     onTime: (_at, of) => {
       // A picked file has no duration until the browser has looked at it.
@@ -273,6 +408,11 @@ export function start(): void {
       void step(1);
     },
     onState: () => draw(),
+    onBusy: (busy) => {
+      if (mediaBusy === busy) return;
+      mediaBusy = busy;
+      draw();
+    },
     onError: (message) => {
       // A live channel that broke is a live channel to come back to.
       if (rejoinChannel()) return;
@@ -384,7 +524,8 @@ export function start(): void {
     if (!track) return;
     index = next;
     channelOn = null;
-    await player.load(track, true);
+    nowMeta = { kind: "file" };
+    await whileLoading(() => player.load(track, true));
     showVideo(track.video);
     updateMediaSession();
     draw();
@@ -417,14 +558,15 @@ export function start(): void {
     // device is playing, so it is the one place that records it.
     watching = next;
     channelOn = null;
-    await player.load({
+    nowMeta = { kind: "file" };
+    await whileLoading(() => player.load({
       title: track.title, artist: track.artist, album: track.album,
       duration: track.duration, url: remote.media(next, rung),
       // It was false for everything, so a film played its soundtrack over a
       // blank panel. The server says which tracks have a picture.
       video: track.video === true,
       objectUrl: false,
-    }, true);
+    }, true));
     showVideo(track.video === true);
     updateMediaSession();
   }
@@ -460,6 +602,7 @@ export function start(): void {
       return;
     }
     channelOn = null;
+    nowMeta = null;
     player.stop();
     bars = new Array<number>(BAND_COUNT).fill(0);
     peaks = [...bars];
@@ -481,12 +624,92 @@ export function start(): void {
   const glyph = (value: number): string =>
     RAMP[Math.max(0, Math.min(RAMP.length - 1, Math.round(value * (RAMP.length - 1))))] as string;
 
+  /**
+   * The line under the picture: what is known about what is playing.
+   *
+   * Live or on demand; the picture's size once the browser knows it; for a
+   * channel, who else is watching and how long it has been on; for something
+   * from a catalog, which catalog and which group. Chips of text, never
+   * markup: every word here was written by a stranger or a provider.
+   */
+  let drawnMeta = "";
+  function drawMeta(): void {
+    const chips: string[] = [];
+    let logo = "";
+    const channel = channelOn ? lastAir?.channels.find((one) => one.id === channelOn?.id) : undefined;
+    const nothing = player.source === "" && !channelOn && !(remoteDrives() && snapshot.tracks[at()]);
+    if (!nothing) {
+      if (channelOn) chips.push(nowMeta?.entry?.live === false ? "ON DEMAND · LIVE CHANNEL" : "LIVE");
+      else if (nowMeta?.kind === "vod") chips.push("ON DEMAND");
+      else if (nowMeta?.kind === "live") chips.push("LIVE");
+      else if (mode === "remote" && remoteDrives()) chips.push("ON THE SERVER");
+      else chips.push("FILE");
+
+      if (!dom.video.hidden && dom.video.videoWidth > 0) {
+        chips.push(`${dom.video.videoWidth}×${dom.video.videoHeight}`);
+      } else if (!dom.video.hidden) {
+        chips.push("video");
+      } else {
+        chips.push("audio");
+      }
+
+      if (channel) {
+        chips.push(channel.via === "pull" ? `${channel.listeners} watching` : `${channel.listeners} listening · over ${channel.via}`);
+        if (channel.startedAt > 0) chips.push(`on air ${formatTime(Math.max(0, (Date.now() - channel.startedAt) / 1000))}`);
+        if (channel.redials) chips.push(`redialled ${channel.redials}×`);
+        if (isAdmin() && channel.error) chips.push(channel.error);
+      } else if (mode === "remote" && !channelOn) {
+        const track = snapshot.tracks[at()];
+        if (track && count() > 0) chips.push(`track ${at() + 1} of ${count()}`);
+        if (remoteDrives() && lastAir) chips.push(`${lastAir.server.playing ? "playing" : "stopped"} on ${serverName || "the server"}`);
+      } else if (mode === "local" && count() > 0) {
+        chips.push(`track ${at() + 1} of ${count()}`);
+      }
+
+      if (nowMeta?.catalog) {
+        chips.push(nowMeta.entry?.group ? `${nowMeta.catalog.name} › ${nowMeta.entry.group}` : nowMeta.catalog.name);
+        logo = nowMeta.entry?.logo ?? "";
+      }
+      if (listed && phoneCode && (channelOn || remoteDrives())) {
+        chips.push(phoneNumber ? `☎ ${phoneNumber} · key ${phoneCode}` : `☎ code ${phoneCode}`);
+      }
+    }
+
+    const key = `${logo}|${chips.join("|")}`;
+    if (key === drawnMeta) return;
+    drawnMeta = key;
+    dom.meta.hidden = chips.length === 0;
+    const children: HTMLElement[] = [];
+    if (logo !== "" && /^https?:\/\//.test(logo)) {
+      const img = document.createElement("img");
+      img.className = "meta-logo";
+      img.alt = "";
+      img.src = logo;
+      img.addEventListener("error", () => { img.hidden = true; });
+      children.push(img);
+    }
+    for (const chip of chips) {
+      const span = document.createElement("span");
+      span.className = "meta-chip";
+      span.textContent = chip;
+      children.push(span);
+    }
+    dom.meta.replaceChildren(...children);
+  }
+
   function draw(): void {
     const total = count();
     const live = playing();
-    dom.status.textContent = live ? "▶ PLAYING" : "■ STOPPED";
-    dom.status.dataset.playing = String(live);
+    // Loading outranks both: a stream that is on its way is neither playing
+    // nor stopped, and STOPPED over a thirty-second wait reads as broken.
+    const wait = loading();
+    dom.status.textContent = wait ? "LOADING" : live ? "▶ PLAYING" : "■ STOPPED";
+    dom.status.dataset.playing = wait ? "loading" : String(live);
     dom.title.textContent = currentName();
+    drawMeta();
+    // Going live is for whoever administers this server, with something to
+    // go live with. Play is everybody's; this is the one beside it.
+    dom.goLiveNow.hidden = !isAdmin() || whatToGoLiveWith() === null;
     // The tab says what is on, the way a radio does, so a row of tabs reads
     // as "CNN" rather than as five copies of the site's name.
     const tab = live ? `${currentName()} · ${baseTitle}` : baseTitle;
@@ -705,6 +928,7 @@ export function start(): void {
             void copyText(pageLinkFor(`track:${row.index}`, watching === row.index ? player.position : 0), copy, "✓");
           });
           item.append(copy);
+          if (isAdmin()) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: row.name }), row.name));
         }
         children.push(item);
       }
@@ -894,6 +1118,10 @@ export function start(): void {
   dom.next.addEventListener("click", () => void step(1));
   dom.stop.addEventListener("click", () => void halt());
   dom.playPause.addEventListener("click", () => void toggle());
+  dom.goLiveNow.addEventListener("click", () => {
+    const what = whatToGoLiveWith();
+    if (what) void goLiveWith(what, dom.goLiveNow);
+  });
 
   dom.seek.addEventListener("input", () => { scrubbing = true; });
   dom.seek.addEventListener("change", () => {
@@ -1088,12 +1316,6 @@ export function start(): void {
       }
       detail.textContent = parts.join(" · ");
       label.append(name, detail);
-      if (stream.channels && stream.channels.length > 0) {
-        const live = document.createElement("span");
-        live.className = "detail live";
-        live.textContent = `● live: ${stream.channels.join(", ")}`;
-        label.append(live);
-      }
 
       // Two ways in. Viewer is for everybody; Admin is for the account the
       // server belongs to, and is shown greyed to everyone else so that what
@@ -1101,12 +1323,36 @@ export function start(): void {
       // The directory hands the control link to the owning account only, so
       // holding one is the whole test of whether Admin is yours to press.
       const mine = Boolean(stream.admin);
-      const open = (asViewer: boolean): void => {
+      const open = (asViewer: boolean, play = ""): void => {
         viewerOnly = asViewer;
+        askedToPlay = play;
         dom.remoteUrl.value = asViewer ? stream.url : (stream.admin ?? stream.url);
         dom.directory.hidden = true;
         dom.remoteForm.requestSubmit();
       };
+
+      // What is on the air on it, each as a row of its own that plays it:
+      // a channel somebody went live with is the thing a visitor came for,
+      // and a name in a list you cannot press is a name.
+      if (stream.channels && stream.channels.length > 0) {
+        const lives = document.createElement("ul");
+        lives.className = "server-lives";
+        for (const channelName of stream.channels) {
+          const row = document.createElement("li");
+          const dot = document.createElement("span");
+          dot.className = "detail live";
+          dot.textContent = `● ${channelName}`;
+          const play = document.createElement("button");
+          play.type = "button";
+          play.className = "ghost";
+          play.textContent = "Play";
+          play.title = `Watch ${channelName}, live on ${stream.name}`;
+          play.addEventListener("click", () => open(true, `channel:${channelName}`));
+          row.append(dot, play);
+          lives.append(row);
+        }
+        label.append(lives);
+      }
       const connect = document.createElement("button");
       connect.type = "button";
       connect.className = "button";
@@ -1943,7 +2189,7 @@ export function start(): void {
     dom.catalogsList.replaceChildren();
     let groups: { name: string; count: number; live: number; vod: number }[] = [];
     try {
-      const answer = await fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/groups`));
+      const answer = await whileLoading(() => fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/groups`)));
       if (!answer.ok) throw new Error(String(answer.status));
       groups = ((await answer.json()) as { groups?: typeof groups }).groups ?? [];
     } catch {
@@ -2000,7 +2246,7 @@ export function start(): void {
     });
     let got: { total: number; entries: CatalogEntry[] };
     try {
-      const answer = await fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/entries?${params}`));
+      const answer = await whileLoading(() => fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/entries?${params}`)));
       if (!answer.ok) throw new Error(String(answer.status));
       got = (await answer.json()) as typeof got;
     } catch {
@@ -2043,7 +2289,15 @@ export function start(): void {
         });
         item.append(copy);
       }
-      item.addEventListener("click", () => { void playEntry(catalog, entry); });
+      // Going live with it is for whoever may: on the air for everyone,
+      // listed, with a link to send. Play is for you.
+      if (isAdmin()) {
+        item.append(goLiveButton(
+          () => ({ kind: "entry", catalog: { id: catalog.id, name: catalog.name }, entry }),
+          entry.title,
+        ));
+      }
+      item.addEventListener("click", () => { void playEntry(catalog, entry, item); });
       return item;
     });
 
@@ -2073,46 +2327,56 @@ export function start(): void {
   }
 
   /** Ask the server to put it on, then play whatever it answers with. */
-  async function playEntry(catalog: CatalogSummary, entry: CatalogEntry): Promise<void> {
-    let answer: Response;
-    let body: { kind?: string; channel?: string; url?: string; name?: string; error?: string } = {};
+  async function playEntry(catalog: CatalogSummary, entry: CatalogEntry, row?: HTMLElement): Promise<void> {
+    // The row spins and the top says LOADING for as long as this takes,
+    // which for a live entry is the server probing the source and starting a
+    // decoder: long enough that silence read as "nothing happened".
+    row?.classList.add("loading");
+    note = `Starting ${entry.title}…`;
+    const from = { catalog: { id: catalog.id, name: catalog.name }, entry };
     try {
-      answer = await fetch(
-        remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/entries/${encodeURIComponent(entry.id)}/play`),
-        { method: "POST" },
-      );
-      body = (await answer.json().catch(() => ({}))) as typeof body;
-    } catch {
-      note = "could not reach the server";
+      await whileLoading(async () => {
+        let answer: Response;
+        let body: { kind?: string; channel?: string; url?: string; name?: string; error?: string } = {};
+        try {
+          answer = await fetch(
+            remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/entries/${encodeURIComponent(entry.id)}/play`),
+            { method: "POST" },
+          );
+          body = (await answer.json().catch(() => ({}))) as typeof body;
+        } catch {
+          note = "could not reach the server";
+          return;
+        }
+        if (!answer.ok) {
+          note = body.error ?? `${entry.title} would not play.`;
+          return;
+        }
+        const name = body.name || entry.title;
+        if (body.kind === "live" && body.channel) {
+          // A live entry is a channel now, with everything a channel has: a
+          // backlog for the newcomer, a rejoin when it starts over.
+          await watchChannel({ id: body.channel, name, video: true }, true, { kind: "channel", ...from });
+          return;
+        }
+        if (body.kind === "vod" && body.url) {
+          channelOn = null;
+          watching = -1;
+          nowMeta = { kind: "vod", ...from };
+          await player.load({
+            title: name, artist: "", album: "", duration: 0,
+            url: remote.url(body.url), video: true, objectUrl: false,
+          }, true);
+          showVideo(true);
+          note = `Playing ${name}.`;
+          return;
+        }
+        note = `${entry.title} would not play.`;
+      });
+    } finally {
+      row?.classList.remove("loading");
       draw();
-      return;
     }
-    if (!answer.ok) {
-      note = body.error ?? `${entry.title} would not play.`;
-      draw();
-      return;
-    }
-    const name = body.name || entry.title;
-    if (body.kind === "live" && body.channel) {
-      // A live entry is a channel now, with everything a channel has: a
-      // backlog for the newcomer, a rejoin when it starts over.
-      await watchChannel({ id: body.channel, name, video: true });
-      return;
-    }
-    if (body.kind === "vod" && body.url) {
-      channelOn = null;
-      watching = -1;
-      await player.load({
-        title: name, artist: "", album: "", duration: 0,
-        url: remote.url(body.url), video: true, objectUrl: false,
-      }, true);
-      showVideo(true);
-      note = `Playing ${name}.`;
-      draw();
-      return;
-    }
-    note = `${entry.title} would not play.`;
-    draw();
   }
 
   async function refreshCatalog(catalog: CatalogSummary): Promise<void> {
@@ -2856,6 +3120,9 @@ export function start(): void {
       // An older server, or one we may not administer.
     }
     if (!live) return;
+    listed = live.live;
+    phoneCode = live.live ? live.code : "";
+    phoneNumber = callIn;
 
     // Only somebody who can administer this server may list it, and only a
     // machine the world can reach can be listed at all.
@@ -2951,6 +3218,7 @@ export function start(): void {
     }
 
     dom.onairPanel.hidden = false;
+    lastAir = air;
     playWhatWasAsked(air);
     // Part of the key, because the admin's buttons are part of the drawing:
     // learning you may drive this server is news even when nothing on the
@@ -3118,14 +3386,15 @@ export function start(): void {
     // is doing, and it should not look like the server moved.
     watching = -1;
     channelOn = null;
-    await player.load({
+    nowMeta = { kind: "live" };
+    await whileLoading(() => player.load({
       title: title || "Live", artist: "", album: "", duration: 0,
       url: remote.url("/api/live"),
       // The server decides what it sends; a film comes with its picture, and
       // the element that can show one can also play a song.
       video: true,
       objectUrl: false,
-    }, true);
+    }, true));
     showVideo(true);
     note = "Watching what this server is playing. Everyone here sees the same thing.";
     draw();
@@ -3141,15 +3410,19 @@ export function start(): void {
   async function watchChannel(
     channel: { id: string; name: string; video: boolean },
     fresh = true,
+    from?: typeof nowMeta,
   ): Promise<void> {
     watching = -1;
     channelOn = channel;
     if (fresh) rejoins = 0;
-    await player.load({
+    // Where it came from, when a catalog entry started it; a channel picked
+    // from the Live list is its own. A rejoin keeps what it had.
+    if (fresh) nowMeta = from ?? { kind: "channel" };
+    await whileLoading(() => player.load({
       title: channel.name, artist: "", album: "", duration: 0,
       url: remote.url(`/api/channels/${encodeURIComponent(channel.id)}`),
       video: channel.video, objectUrl: false,
-    }, true);
+    }, true));
     showVideo(channel.video);
     note = `Watching ${channel.name}, live on this server.`;
     draw();
@@ -3284,7 +3557,9 @@ export function start(): void {
       return;
     }
     const wanted = asked.startsWith("channel:") ? asked.slice("channel:".length) : "";
-    const channel = air.channels.find((one) => one.id === wanted);
+    // By id, or by name: the directory knows channels by name only, and a
+    // row in it that plays one names it.
+    const channel = air.channels.find((one) => one.id === wanted) ?? air.channels.find((one) => one.name === wanted);
     // Maybe on the next answer: a channel can be a moment behind the page.
     if (!channel) return;
     askedToPlay = "";
@@ -3570,6 +3845,11 @@ export function start(): void {
   // first click or keypress instead, once, and then never again this session.
   void (() => {
     if (jingled) return;
+    // Only into silence. A page opened from a link is opening a stream, and
+    // the jingle over the first seconds of it was the wrong first thing to
+    // hear; the same goes for a click that is the click that plays something.
+    if (invited !== "") return;
+    const busy = (): boolean => player.source !== "" || player.playing || loading() || channelOn !== null;
 
     // One of however many ship, at random. The list is written by the build
     // from whatever is in the folder, so another one is a file to drop in
@@ -3597,11 +3877,16 @@ export function start(): void {
       document.removeEventListener("pointerdown", armed);
       document.removeEventListener("keydown", armed);
       spend();
-      void jingle.play().catch(() => {});
+      // The first click was the click that plays something: let that play.
+      // Deferred a tick so the click has done its work before it is judged.
+      setTimeout(() => {
+        if (busy()) return;
+        void jingle.play().catch(() => {});
+      }, 150);
     };
 
     void chosen().then((src) => {
-      if (src === "") return;
+      if (src === "" || busy()) return;
       jingle.src = src;
       return jingle.play().then(
         spend,

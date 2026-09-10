@@ -121,6 +121,12 @@ test("the paths that need an administrator, and the ones that do not", () => {
   assert.equal(needsAdmin("/api/ingest"), true);
   assert.equal(needsAdmin("/api/ingest/chunk"), true);
   assert.equal(needsAdmin("/api/admin"), true);
+  // Going live with something from a catalog, or keeping a channel that was
+  // started on demand, is administering; picking something to play is not.
+  assert.equal(needsAdmin("/api/catalogs/k/entries/e/live", "POST"), true);
+  assert.equal(needsAdmin("/api/catalogs/k/entries/e/play", "POST"), false);
+  assert.equal(needsAdmin("/api/channels/cat-e/keep", "POST"), true);
+  assert.equal(needsAdmin("/api/channels/cat-e", "GET"), false);
 
   // Listening is not administering.
   assert.equal(needsAdmin("/api/state"), false);
