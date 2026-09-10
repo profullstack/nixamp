@@ -137,6 +137,44 @@ body {
 .split > .col-a { grid-column: 1; }
 .split > .col-b { grid-column: 2; }
 
+/* One column's worth of panels, stacked: the files and, under them, what is
+   live. A grid rather than a flex column so the panels' floating titles have
+   room between them. */
+.stack {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  min-width: 0;
+}
+
+/* The heart. Outlined until it is yours, filled once it is. */
+.heart {
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1.1em;
+  line-height: 1;
+  padding: 2px 6px;
+}
+.heart:hover { color: var(--accent); border-color: var(--accent); }
+.heart[data-on="yes"] { color: var(--accent); }
+
+/* A directory row: the server, what is on it, and Connect. The name and the
+   detail take the room; the buttons are as wide as their words. */
+.directory-list li > .server-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 2px;
+}
+.directory-list li > .server-label .name { font-weight: 600; }
+.directory-list li > .server-label .detail { color: var(--muted); white-space: normal; }
+.directory-list li > .server-label .live { color: var(--green); }
+
 @media (max-width: 720px) {
   .split { grid-template-columns: 1fr; }
   /* One column, so document order is the only order and a panel assigned to
@@ -252,12 +290,27 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .glyphs {
   color: var(--green);
   letter-spacing: 1px;
-  white-space: nowrap;
+  white-space: pre;
   overflow: hidden;
   min-height: 1.4em;
+  /* Every bar the same width whatever its height, so the row stays put. */
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.levelmeter { margin-left: auto; color: var(--accent); white-space: nowrap; }
+/* Fixed cells, so the row never shifts as the level moves: a monospace face,
+   a width reserved for the whole "L▮▮▮▯▯▯ R▮▮▮▯▯▯", and no flexing. */
+.levelmeter {
+  margin-left: auto;
+  color: var(--accent);
+  white-space: pre;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-variant-ligatures: none;
+  flex: none;
+  min-width: 15ch;
+  text-align: right;
+}
 
 /* ---- playlist ---------------------------------------------------------- */
 

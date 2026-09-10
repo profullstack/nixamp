@@ -57,6 +57,14 @@ export interface Listing {
   audio: string;
   tracks: number;
   nowPlaying: string;
+  /**
+   * Whether the server's own player is running. A listing used to say only
+   * what was loaded, so a stopped server read as a live stream of a film
+   * nobody was watching.
+   */
+  playing: boolean;
+  /** The live channels on it, by name: what a visitor could actually watch. */
+  channels: string[];
   /** Set by the directory from the request, never by the publisher. */
   updatedAt: number;
   /** When this stream first announced itself: the "started at" a caller hears. */
@@ -97,10 +105,16 @@ export interface Announcement {
   audio?: string;
   tracks: number;
   nowPlaying: string;
+  /** Absent from an older publisher, which is read as "unknown, say playing". */
+  playing?: boolean;
+  /** Names of the live channels on it. Absent from an older publisher. */
+  channels?: string[];
 }
 
 const MAX_NAME = 60;
 const MAX_TRACK = 120;
+/** How many channel names a listing carries. A multiview is four; eight is plenty. */
+const MAX_CHANNELS = 8;
 
 /** Trim and flatten, so one publisher cannot draw a box in someone's terminal. */
 export function clean(value: unknown, max: number): string {
@@ -156,6 +170,15 @@ export function parseAnnouncement(input: unknown): Announcement | null {
     ...(audio ? { audio } : {}),
     tracks: Number.isFinite(tracks) && tracks >= 0 ? Math.min(1_000_000, Math.floor(tracks)) : 0,
     nowPlaying: clean(record["nowPlaying"], MAX_TRACK),
+    ...(typeof record["playing"] === "boolean" ? { playing: record["playing"] } : {}),
+    ...(Array.isArray(record["channels"])
+      ? {
+          channels: (record["channels"] as unknown[])
+            .map((one) => clean(one, MAX_NAME))
+            .filter((one) => one !== "")
+            .slice(0, MAX_CHANNELS),
+        }
+      : {}),
   };
 }
 
@@ -240,6 +263,10 @@ export class Directory {
       audio: announcement.audio ?? existing?.audio ?? "",
       tracks: announcement.tracks,
       nowPlaying: announcement.nowPlaying,
+      // An older publisher says nothing about either; "playing" keeps what a
+      // listing always meant, and no channels is the honest empty list.
+      playing: announcement.playing ?? true,
+      channels: announcement.channels ?? [],
       updatedAt: this.now(),
       // A stream that never stopped keeps its original start. One that did
       // starts again now, because that is what a caller is being told about.
