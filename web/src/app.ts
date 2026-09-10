@@ -3079,27 +3079,39 @@ export function start(): void {
     return true;
   }
 
+  /**
+   * Said where the button was pressed. The admin panel's line is a long way
+   * from the Live rows, so a restart that answered there looked like a button
+   * that did nothing.
+   */
+  function tellOnAir(message: string): void {
+    dom.onairNote.textContent = message;
+    said(message);
+  }
+
   async function restartChannel(id: string, name: string): Promise<void> {
-    said(`Restarting ${name}…`);
+    tellOnAir(`Restarting ${name}…`);
     try {
       const answer = await fetch(remote.url(`/api/channels/${encodeURIComponent(id)}/restart`), {
         method: "POST",
       });
       const body = (await answer.json().catch(() => ({}))) as { error?: string };
-      said(answer.ok ? `${name} is dialling its source again.` : (body.error ?? "that did not work"));
+      tellOnAir(answer.ok ? `${name} is dialling its source again.` : (body.error ?? "that did not work"));
     } catch {
-      said("could not reach the server");
+      tellOnAir("could not reach the server");
     }
     drawnOnAir = "";
     void loadOnAir();
   }
 
   async function removeChannel(id: string, name: string): Promise<void> {
+    tellOnAir(`Taking ${name} off the air…`);
     try {
       const answer = await fetch(remote.url(`/api/channels/${encodeURIComponent(id)}`), { method: "DELETE" });
-      said(answer.ok ? `${name} is off the air.` : "that did not work");
+      const body = (await answer.json().catch(() => ({}))) as { error?: string };
+      tellOnAir(answer.ok ? `${name} is off the air.` : (body.error ?? "that did not work"));
     } catch {
-      said("could not reach the server");
+      tellOnAir("could not reach the server");
     }
     // Nothing to rejoin: it was taken off on purpose.
     if (channelOn?.id === id) {

@@ -519,6 +519,123 @@ export async function tokens(argv: string[], fetcher: typeof fetch = fetch): Pro
   }
 }
 
+/**
+ * `nixamp dns list|set|rm`: names under your handle, for your servers.
+ *
+ * The DNS keys stay on nixamp.com; this only says which label should point
+ * where. "auto" is the address the request arrives from, which is what a
+ * server naming itself wants and what nobody behind a router can type.
+ */
+export async function dns(argv: string[], fetcher: typeof fetch = fetch): Promise<number> {
+  const session = readSession();
+  if (session === null) {
+    console.error("nixamp: not signed in. Try `nixamp login`.");
+    return 1;
+  }
+  const [command = "list", ...rest] = argv;
+  const where = `${session.site}/api/v1/dns`;
+  const headers = { authorization: `Bearer ${session.token}`, "content-type": "application/json" };
+  const flag = (name: string): string | undefined => {
+    const at = rest.indexOf(name);
+    return at === -1 ? undefined : rest[at + 1];
+  };
+  // "off" is a word a person types; null is what the API takes it to mean.
+  const family = (value: string | undefined): string | null | undefined =>
+    value === undefined ? undefined : value === "off" || value === "none" ? null : value;
+
+  try {
+    if (command === "set" || command === "add" || command === "claim") {
+      const label = rest.find((a) => !a.startsWith("-")) ?? "";
+      if (!label) {
+        console.error("nixamp: which name? `nixamp dns set server2` names this machine server2.");
+        return 64;
+      }
+      let a = family(flag("--a"));
+      let aaaa = family(flag("--aaaa"));
+      // Neither named: a server naming itself, both families from where it is.
+      if (a === undefined && aaaa === undefined) {
+        a = "auto";
+        aaaa = "auto";
+      }
+      const ttlText = flag("--ttl");
+      const ttl = ttlText === undefined ? undefined : Number(ttlText);
+      if (ttl !== undefined && (!Number.isInteger(ttl) || ttl < 60)) {
+        console.error("nixamp: --ttl is seconds, 60 or more.");
+        return 64;
+      }
+      const answer = await fetcher(`${where}/${encodeURIComponent(label)}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          ...(a !== undefined ? { a } : {}),
+          ...(aaaa !== undefined ? { aaaa } : {}),
+          ...(ttl !== undefined ? { ttl } : {}),
+        }),
+      });
+      const body = (await answer.json().catch(() => ({}))) as {
+        name?: { host: string; a: string | null; aaaa: string | null; ttl: number };
+        error?: string;
+      };
+      if (!answer.ok || !body.name) {
+        console.error(`nixamp: ${body.error ?? `could not set it (${answer.status})`}`);
+        return 1;
+      }
+      console.log(`${body.name.host}`);
+      console.log(`  A     ${body.name.a || "—"}`);
+      console.log(`  AAAA  ${body.name.aaaa || "—"}`);
+      console.log(`  ttl   ${body.name.ttl}`);
+      return 0;
+    }
+
+    if (command === "rm" || command === "remove" || command === "delete") {
+      const label = rest.find((a) => !a.startsWith("-")) ?? "";
+      if (!label) {
+        console.error("nixamp: which name? `nixamp dns list` shows them.");
+        return 64;
+      }
+      const answer = await fetcher(`${where}/${encodeURIComponent(label)}`, { method: "DELETE", headers });
+      if (!answer.ok) {
+        const body = (await answer.json().catch(() => ({}))) as { error?: string };
+        console.error(`nixamp: ${answer.status === 404 ? "no name like that under your handle" : (body.error ?? "could not remove it")}`);
+        return 1;
+      }
+      console.log(`Removed ${label}.`);
+      return 0;
+    }
+
+    if (command === "list" || command === "ls") {
+      const answer = await fetcher(where, { headers });
+      const body = (await answer.json().catch(() => ({}))) as {
+        zone?: string;
+        names?: { label: string; host: string; a: string | null; aaaa: string | null; ttl: number; updatedAt: number }[];
+        error?: string;
+      };
+      if (!answer.ok) {
+        console.error(`nixamp: ${body.error ?? `could not list them (${answer.status})`}`);
+        return 1;
+      }
+      const names = body.names ?? [];
+      if (names.length === 0) {
+        console.log("No names yet. `nixamp dns set <name>` gives this machine one.");
+        return 0;
+      }
+      const width = Math.max(...names.map((n) => n.host.length));
+      for (const name of names) {
+        console.log(
+          `${name.host.padEnd(width)}  A ${(name.a || "—").padEnd(15)}  AAAA ${(name.aaaa || "—").padEnd(39)}  ttl ${String(name.ttl).padStart(5)}  ${day(name.updatedAt)}`,
+        );
+      }
+      return 0;
+    }
+
+    console.error(`nixamp: no such dns command: ${command}`);
+    return 64;
+  } catch (error) {
+    console.error(`nixamp: could not reach ${session.site}: ${(error as Error).message}`);
+    return 69;
+  }
+}
+
 export function logout(): number {
   const session = readSession();
   clearSession();
