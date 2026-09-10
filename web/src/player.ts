@@ -107,6 +107,8 @@ export function needsVideoElement(video: boolean, kind: string): boolean {
 export class BrowserPlayer {
   /** The engine currently feeding the element, if any. */
   private attached: AttachedSource | null = null;
+  /** The address of what is loaded, for handing to another player. */
+  source = "";
 
   private context: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -222,6 +224,8 @@ export class BrowserPlayer {
    * play in the same commit fails permanently rather than loudly.
    */
   async load(track: LocalTrack, autoplay: boolean): Promise<void> {
+    // A picked file is a blob in this tab, which is no address at all.
+    this.source = track.objectUrl ? "" : track.url;
     // A picked file is a blob URL with nothing to read a kind from, so the
     // flag the file itself carried decides; a remote track has a real URL and
     // the package can tell.
@@ -271,6 +275,7 @@ export class BrowserPlayer {
   stop(): void {
     this.active.pause();
     this.active.currentTime = 0;
+    this.source = "";
     // The engine goes with it: an HLS or transport stream left attached keeps
     // pulling segments long after somebody has stopped listening.
     this.attached?.destroy();
