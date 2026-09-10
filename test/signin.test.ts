@@ -775,9 +775,11 @@ test("what is chosen when nobody is there to choose", async () => {
   assert.equal(await chooseWay(ways, { ...bare, with: "github" }), "github");
   // Naming an address is asking for the password flow.
   assert.equal(await chooseWay(ways, { ...bare, email: "a@b.com" }), "password");
-  // A site with the device grant but no providers has nothing to offer, so a
-  // bare `nixamp login` asks for a password rather than a menu of one thing.
-  assert.equal(await chooseWay({ ...ways, providers: [] }, bare), "password");
+  // A site with the device grant but no providers still has a browser to
+  // approve in, and that is the way in from a terminal. This used to fall
+  // through to a password prompt, which is what nixamp.com's empty provider
+  // list produced, so nobody ever saw the browser flow built for it.
+  assert.equal(await chooseWay({ ...ways, providers: [] }, bare), "device");
   // Asking for the browser anyway is allowed: it is how somebody whose browser
   // is already signed in approves without naming a provider.
   assert.equal(await chooseWay({ ...ways, providers: [] }, { ...bare, device: true }), "device");

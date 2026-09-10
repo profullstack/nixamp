@@ -417,19 +417,28 @@ export async function chooseWay(ways: SiteWays, options: LoginOptions): Promise<
   // them, and a browser that is already signed in can approve on the spot.
   if (options.device) return ways.device ? "device" : null;
   // Naming an address is asking for the password flow by implication.
-  if (!ways.device || options.email || !process.stdin.isTTY) return "password";
-  if (ways.providers.length === 0) return "password";
+  if (!ways.device || options.email) return "password";
+  // A site with no providers configured still has a browser to approve in,
+  // and that is the way in from a terminal: a code, a page, a click. This
+  // used to fall through to a password prompt the moment the provider list
+  // was empty, which is what nixamp.com answers, so nobody ever saw the
+  // browser flow that was built for exactly this. With no terminal to draw
+  // a menu on, the browser page offers the providers instead.
+  if (ways.providers.length === 0 || !process.stdin.isTTY) return "device";
 
   console.log("How would you like to sign in?");
   ways.providers.forEach((provider, index) => console.log(`  ${index + 1}) ${provider.name}`));
-  console.log(`  ${ways.providers.length + 1}) Email and password`);
+  console.log(`  ${ways.providers.length + 1}) In a browser you are already signed in to`);
+  console.log(`  ${ways.providers.length + 2}) Email and password`);
   const typed = await ask(`Choose [1]: `);
   const picked = typed === "" ? 1 : Number(typed);
-  if (!Number.isInteger(picked) || picked < 1 || picked > ways.providers.length + 1) {
-    console.log("Not one of those, so: email and password.");
-    return "password";
+  if (!Number.isInteger(picked) || picked < 1 || picked > ways.providers.length + 2) {
+    console.log("Not one of those, so: in a browser.");
+    return "device";
   }
-  return picked === ways.providers.length + 1 ? "password" : (ways.providers[picked - 1]?.id ?? "password");
+  if (picked === ways.providers.length + 1) return "device";
+  if (picked === ways.providers.length + 2) return "password";
+  return ways.providers[picked - 1]?.id ?? "device";
 }
 
 const day = (at: number | null): string => (at ? new Date(at).toISOString().slice(0, 10) : "never");
