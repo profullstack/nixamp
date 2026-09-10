@@ -327,6 +327,15 @@ test("each live on a server is its own room, with a code of its own", () => {
   const other = dir.announce({ ...stream("https://c.example/listen", "Else"), channels: ["Something"] });
   assert.notEqual(other.channelCodes["Something"], again.channelCodes["MLB"], "a gone channel's code is still its own");
 
+  // A server that stops and comes back -- an update restarts the daemon, which
+  // withdraws its listing on the way down -- keeps its channels' codes too,
+  // the way it keeps its own.
+  dir.withdraw(back.id);
+  assert.equal(dir.endedByCode(first.code)?.channelCodes?.["FIBA: China vs. France"], fiba, "kept on the ended record");
+  const restarted = dir.announce({ ...stream("https://a.example/listen"), channels: ["FIBA: China vs. France"] });
+  assert.equal(restarted.code, first.code);
+  assert.equal(restarted.channelCodes["FIBA: China vs. France"], fiba);
+
   // No channels is the honest empty map, and an older listing reads the same.
   assert.deepEqual(dir.announce(stream("https://b.example/listen", "Someone")).channelCodes, {});
 });
