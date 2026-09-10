@@ -2173,6 +2173,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           via: one.via,
           listeners: one.listeners,
           startedAt: one.startedAt,
+          // Whether it has a picture, so the page puts it in the element
+          // that can show one. Never the source: that is the owner's.
+          kind: one.kind ?? "audio",
+          // How it has been going, for whoever may do something about it.
+          redials: one.redials ?? 0,
+          error: one.error ?? "",
         })),
         // Anything re-streamed into this server is a live stream too, and was
         // sitting in the middle of the playlist among the files -- which is
@@ -2197,7 +2203,13 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // devices can publish at once, each to their own channel, and a listener
     // picks which to hear.
     if (path === "/api/channels" && options.channels) {
-      json(response, 200, { channels: options.channels.list(), listeners: options.channels.listeners });
+      // Without the source. Anyone holding the listen link may ask what is
+      // on, and the address a channel is pulled from is the one thing about
+      // it that is not theirs to have.
+      json(response, 200, {
+        channels: options.channels.list().map(({ source: _source, ...shown }) => shown),
+        listeners: options.channels.listeners,
+      });
       return;
     }
 
@@ -2254,6 +2266,28 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
 
       if (request.method !== "POST") {
         json(response, 405, { error: "GET, POST or DELETE" });
+        return;
+      }
+
+      /**
+       * Dial the source again, now.
+       *
+       * The thing an administrator reaches for when a channel says it is on
+       * the air and shows nobody anything. It is what fixed CNN by hand --
+       * take it off, put it back -- without having to know the source, which
+       * a browser is never told.
+       */
+      if (action === "restart") {
+        if (!channels.has(id)) {
+          json(response, 404, { error: "nothing is playing on that channel" });
+          return;
+        }
+        if (!channels.pulled(id)) {
+          json(response, 409, { error: "that channel is published into this server; restart it at the publisher" });
+          return;
+        }
+        const restarted = channels.restart(id);
+        json(response, restarted ? 200 : 409, { ok: restarted });
         return;
       }
 

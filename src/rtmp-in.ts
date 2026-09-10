@@ -71,6 +71,10 @@ export class RtmpListeners {
       channel?.feed(chunk);
     });
     child.stdout?.on("error", () => child.kill("SIGKILL"));
+    // Read and dropped. A pipe nobody reads fills at 64 KiB, and ffmpeg then
+    // blocks on its next complaint and stops producing anything -- a
+    // publisher whose stream hiccups enough would take the slot down with it.
+    child.stderr?.resume();
     child.on("error", () => this.done(slot, child, channel));
     child.on("close", () => this.done(slot, child, channel));
   }

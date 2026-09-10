@@ -44,12 +44,52 @@ export interface ChannelInfo {
   kind?: "audio" | "video";
   /** For a channel we pull ourselves: where from. Never shown to a listener. */
   source?: string;
+  /** The last thing ffmpeg complained about, for whoever administers this. */
+  error?: string;
+  /** How many times the source has been dialled again since it started. */
+  redials?: number;
 }
 
 /** How long to wait before dialling a dropped source again. */
 export const REDIAL = 2000;
 /** How many times in a row a source may fail without ever sending anything. */
 export const GIVE_UP = 5;
+/**
+ * How long a pulled source may say nothing before it is treated as gone.
+ *
+ * ffmpeg's own reconnect covers a connection that errors. It does not cover
+ * one that simply stops sending, and neither does anything else: a television
+ * channel that is quiet for half a minute is not being quiet, it is dead.
+ */
+export const STALL = 30_000;
+/** How much of what ffmpeg said to keep, for the last line when it dies. */
+const TAIL = 2000;
+
+/**
+ * Read everything a child says on stderr, keeping only the end of it.
+ *
+ * This is not optional. A pipe nobody reads fills, at 64 KiB on Linux, and
+ * the child then blocks on its next write to it -- every thread it has waits
+ * on the one that is stuck, and it produces nothing more, for ever, without
+ * exiting. A channel carrying an IPTV transport stream logs a line for every
+ * corrupt packet, and over twelve hours that is more than 64 KiB. Measured on
+ * the real server: CNN "on the air" with a full stderr socket, its decoder
+ * thread asleep in the kernel on that write, its byte count frozen, and a
+ * listener handed the opening boxes and then nothing at all.
+ */
+function drain(stream: Readable | null | undefined, keep: (tail: string) => void): void {
+  let tail = "";
+  stream?.on("data", (chunk: Buffer) => {
+    tail = (tail + chunk.toString("utf8")).slice(-TAIL);
+    keep(tail);
+  });
+  stream?.on("error", () => undefined);
+}
+
+/** The last thing ffmpeg said, which is where it says what went wrong. */
+function lastLine(tail: string): string {
+  return tail.trim().split("\n").pop() ?? "";
+}
 
 /** A name that can sit in a URL and be read back in a list. */
 export function cleanId(value: unknown, fallback = "main"): string {
@@ -80,6 +120,10 @@ export class Channel {
   private redial: (() => void) | null = null;
   private failures = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** Fires when a pulled source has said nothing for STALL. */
+  private watchdog: ReturnType<typeof setTimeout> | null = null;
+  private stall = STALL;
+  private stderr = "";
 
   constructor(
     readonly info: ChannelInfo,
@@ -112,6 +156,7 @@ export class Channel {
       this.info.bytes += chunk.byteLength;
       this.send(chunk);
     });
+    drain(child.stderr, (tail) => { this.stderr = tail; });
     // A publisher that hangs up mid-write breaks the pipe, and an unhandled
     // EPIPE takes the whole server with it.
     child.stdin?.on("error", () => this.close());
@@ -136,13 +181,15 @@ export class Channel {
    * because you looked away, and a room where the picture depends on who is
    * in it is not a room anybody can be invited to.
    */
-  pull(source: string, encode: string[], paced = true): void {
+  pull(source: string, encode: string[], paced = true, stall = STALL): void {
+    this.stall = stall;
     if (this.info.kind === "video") this.fragments = new Fragments();
     const [command, ...prefix] = this.options.ffmpeg as [string, ...string[]];
     const remote = /^https?:\/\//i.test(source);
 
     const dial = (): void => {
       if (this.closing) return;
+      this.stderr = "";
       const child = spawn(
         command,
         [
@@ -153,6 +200,11 @@ export class Channel {
           // the first time a CDN hiccups is not a channel anybody can rely
           // on. ffmpeg redials on its own before we have to.
           ...(remote ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] : []),
+          // A connection that stops answering is an error after this long,
+          // and an error is a thing the reconnect above knows what to do
+          // with. Without it a silent socket is waited on for ever. In
+          // microseconds, as ffmpeg wants it.
+          ...(remote ? ["-rw_timeout", String(stall * 1000)] : []),
           // Real time, always. A file read as fast as the disk allows is an
           // hour of film in ninety seconds and a room that cannot be in it
           // together; a live source is already paced and loses nothing.
@@ -165,20 +217,96 @@ export class Channel {
       );
 
       let sent = false;
+      this.child = child;
+      this.rearm(child);
       child.stdout?.on("data", (chunk: Buffer) => {
+        // An ffmpeg that was replaced can still have a chunk in the pipe.
+        if (this.child !== child) return;
         sent = true;
         this.info.bytes += chunk.byteLength;
+        this.rearm(child);
         this.emit(chunk);
       });
       child.stdout?.on("error", () => undefined);
-      child.on("error", () => this.dropped(sent));
-      child.on("close", () => this.dropped(sent));
-      this.child = child;
+      drain(child.stderr, (tail) => { this.stderr = tail; });
+      // Only the ffmpeg we are currently running gets to say the source
+      // dropped. One that was killed to make way for a restart is not news.
+      child.on("error", () => { if (this.child === child) this.dropped(sent); });
+      child.on("close", () => { if (this.child === child) this.dropped(sent); });
     };
 
     this.redial = dial;
     dial();
     this.options.onStart?.(this.info);
+  }
+
+  /**
+   * Start the source over, now.
+   *
+   * For a pulled channel only: a publisher's stream cannot be dialled again
+   * from this end. The current ffmpeg is killed and a new one started at
+   * once, with the count of failures cleared -- somebody asking for this has
+   * decided the thing is worth another go, and should not inherit the four
+   * strikes a dead CDN ran up an hour ago.
+   */
+  restart(): boolean {
+    const dial = this.redial;
+    if (!dial || this.closing) return false;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    if (this.watchdog) clearTimeout(this.watchdog);
+    this.watchdog = null;
+    this.failures = 0;
+    this.info.redials = (this.info.redials ?? 0) + 1;
+    this.info.error = undefined;
+    const old = this.child;
+    this.child = null;
+    old?.kill("SIGKILL");
+    this.startOver();
+    dial();
+    return true;
+  }
+
+  /**
+   * The stream that was is over; the next ffmpeg is a new one.
+   *
+   * New opening boxes, timestamps from zero again. Whoever was listening
+   * cannot follow that mid-picture, and a newcomer must not be handed the old
+   * opening boxes in front of the new fragments -- so the header is dropped
+   * and the audience is ended, to come back to the stream as it now is. The
+   * player rejoins on its own. Done the moment the source is known to be
+   * gone, not when the redial happens: somebody joining in between gets the
+   * new beginning as it is written, rather than a stale one first.
+   */
+  private startOver(): void {
+    if (this.info.kind === "video") this.fragments = new Fragments();
+    this.hangUp();
+  }
+
+  /** Expect output within STALL, or treat the source as gone and dial again. */
+  private rearm(child: ChildProcess): void {
+    if (this.watchdog) clearTimeout(this.watchdog);
+    this.watchdog = setTimeout(() => {
+      this.watchdog = null;
+      if (this.child !== child || this.closing) return;
+      this.info.error = `no data from the source for ${Math.round(this.stall / 1000)}s`;
+      // Its close handler is what dials again.
+      child.kill("SIGKILL");
+    }, this.stall);
+    this.watchdog.unref?.();
+  }
+
+  /** End everybody listening; the stream they were on is over. */
+  private hangUp(): void {
+    for (const listener of this.listeners) {
+      try {
+        listener.end();
+      } catch {
+        // Gone already.
+      }
+    }
+    this.listeners.clear();
+    this.info.listeners = 0;
   }
 
   /**
@@ -191,11 +319,17 @@ export class Channel {
   private dropped(sent: boolean): void {
     if (this.closing || !this.redial) return;
     this.child = null;
+    if (this.watchdog) clearTimeout(this.watchdog);
+    this.watchdog = null;
+    const said = lastLine(this.stderr);
+    if (said) this.info.error = said;
     this.failures = sent ? 0 : this.failures + 1;
     if (this.failures >= GIVE_UP) {
       this.close();
       return;
     }
+    this.info.redials = (this.info.redials ?? 0) + 1;
+    this.startOver();
     const dial = this.redial;
     this.timer = setTimeout(() => {
       this.timer = null;
@@ -282,6 +416,10 @@ export class Channel {
     this.redial = null;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    if (this.watchdog) clearTimeout(this.watchdog);
+    this.watchdog = null;
+    const said = lastLine(this.stderr);
+    if (said && !this.info.error) this.info.error = said;
     const child = this.child;
     this.child = null;
     try {
@@ -378,6 +516,7 @@ export class Channels {
     encode: string[],
     kind: "audio" | "video",
     paced = true,
+    stall = STALL,
   ): Channel | null {
     if (this.open.has(id)) return null;
     const channel = new Channel(
@@ -396,8 +535,22 @@ export class Channels {
       (gone) => this.open.delete(gone),
     );
     this.open.set(id, channel);
-    channel.pull(source, encode, paced);
+    channel.pull(source, encode, paced, stall);
     return channel;
+  }
+
+  /**
+   * Dial a pulled channel's source again, now. False for a channel that is
+   * not there or is not ours to dial: a publisher's stream restarts at the
+   * publisher's end.
+   */
+  restart(id: string): boolean {
+    return this.open.get(id)?.restart() ?? false;
+  }
+
+  /** Whether a channel is one we fetch ourselves, and so can start over. */
+  pulled(id: string): boolean {
+    return this.open.get(id)?.info.via === "pull";
   }
 
   /** What a listener should be told this channel is. */

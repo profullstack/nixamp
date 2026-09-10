@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Channels, cleanId, generatedId } from "../src/channels.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Channels, REDIAL, cleanId, generatedId } from "../src/channels.ts";
 import { needsAdmin } from "../src/owner.ts";
 
 /** A listener that keeps what it was sent. */
@@ -240,5 +243,113 @@ test("a channel carrying only sound says so", () => {
   assert.equal(set.contentType("radio"), "audio/mpeg");
   // And a channel nobody has heard of is not called video on a guess.
   assert.equal(set.contentType("nothing"), "audio/mpeg");
+  set.stopAll();
+});
+
+/** The opening and one fragment, as one base64 blob a shell can print. */
+function fakeStream(): string {
+  return Buffer.concat([
+    box("ftyp", "isom"), box("moov", "tracks"), box("moof", "one"), box("mdat", "picture"),
+  ]).toString("base64");
+}
+
+const wait = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+test("a source that floods stderr does not stall the channel", async () => {
+  // What took CNN off the air after twelve hours. ffmpeg logs a line for
+  // every corrupt packet an IPTV stream sends, and a stderr pipe nobody reads
+  // fills at 64 KiB -- after which the next complaint blocks, every thread
+  // waits on it, and the channel produces nothing more without ever exiting.
+  // 300 KiB of complaints before the first byte of picture: read, or stuck.
+  const noisy = [
+    "sh", "-c",
+    `head -c 300000 /dev/zero | tr '\\0' x >&2; printf %s ${fakeStream()} | base64 -d; sleep 30`,
+    "--",
+  ];
+  const set = new Channels({ ffmpeg: noisy });
+  const channel = set.pull("cnn", "CNN", "http://x.test/301", [], "video");
+  const viewer = collector();
+  channel?.listen(viewer);
+  await wait(800);
+
+  const got = Buffer.concat(viewer.chunks);
+  assert.equal(got.toString("latin1", 4, 8), "ftyp", "the picture never came: ffmpeg is blocked on stderr");
+  assert.ok(got.includes("mdat"));
+  set.stopAll();
+});
+
+test("restarting a pulled channel starts the stream over, once", async () => {
+  const set = new Channels({ ffmpeg: fakeVideoFfmpeg() });
+  const channel = set.pull("cnn", "CNN", "http://x.test/301", [], "video");
+  const before = collector();
+  channel?.listen(before);
+  await wait(300);
+  assert.ok(before.chunks.length > 0);
+
+  assert.equal(set.restart("cnn"), true);
+  // Still on the air, and still the same channel.
+  assert.equal(set.count, 1);
+  assert.equal(set.list()[0]?.redials, 1);
+  // The old audience was on a stream that no longer exists: ended, so their
+  // player rejoins, rather than sent a second beginning mid-picture.
+  assert.equal(before.ended(), true);
+
+  await wait(300);
+  const after = collector();
+  channel?.listen(after);
+  const header = Buffer.concat(after.chunks).toString("latin1");
+  // One beginning, not two: the header was reset with the stream.
+  assert.equal(header.split("ftyp").length - 1, 1);
+  assert.equal(header.split("moov").length - 1, 1);
+
+  // A publisher's stream is not ours to dial.
+  set.attach("phone", "A phone", "flv", "rtmp");
+  assert.equal(set.pulled("phone"), false);
+  assert.equal(set.restart("phone"), false);
+  assert.equal(set.restart("nothing"), false);
+  set.stopAll();
+});
+
+test("a source that drops is dialled again, with one header, not two", async () => {
+  // Prints its opening and a fragment and exits at once: a source that
+  // worked and then went away. It is dialled again after REDIAL, and the
+  // second time it stays up, as a CDN that came back does.
+  const marker = join(mkdtempSync(join(tmpdir(), "nixamp-redial-")), "dialled-once");
+  const brief = [
+    "sh", "-c",
+    `printf %s ${fakeStream()} | base64 -d; if [ -e "${marker}" ]; then exec sleep 30; fi; touch "${marker}"`,
+    "--",
+  ];
+  const set = new Channels({ ffmpeg: brief });
+  const channel = set.pull("cnn", "CNN", "http://x.test/301", [], "video");
+  await wait(REDIAL + 500);
+
+  assert.equal(set.count, 1, "still on the air");
+  assert.ok((set.list()[0]?.redials ?? 0) >= 1);
+  const late = collector();
+  channel?.listen(late);
+  const header = Buffer.concat(late.chunks).toString("latin1");
+  // The second ffmpeg's opening replaced the first's rather than joining it.
+  assert.equal(header.split("ftyp").length - 1, 1);
+  set.stopAll();
+});
+
+test("a source that goes quiet is hung up on and dialled again", async () => {
+  // Says its piece and then nothing, for ever. ffmpeg's reconnect never
+  // fires for a socket that simply stops; the watchdog is what notices.
+  // `exec`, so that killing the fake kills the thing holding its pipe open,
+  // as killing ffmpeg does.
+  const quiet = ["sh", "-c", `printf %s ${fakeStream()} | base64 -d; exec sleep 30`, "--"];
+  const set = new Channels({ ffmpeg: quiet });
+  const channel = set.pull("cnn", "CNN", "http://x.test/301", [], "video", true, 300);
+  const viewer = collector();
+  channel?.listen(viewer);
+  await wait(700);
+
+  assert.match(set.list()[0]?.error ?? "", /no data from the source/);
+  assert.equal(viewer.ended(), true, "hung up on, to rejoin the fresh stream");
+  await wait(REDIAL + 300);
+  assert.equal(set.count, 1, "dialled again rather than given up");
+  assert.ok((set.list()[0]?.redials ?? 0) >= 1);
   set.stopAll();
 });
