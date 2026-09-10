@@ -18,7 +18,9 @@ import {
   type Status,
 } from "./remote.ts";
 import { bandEdges, bands, decay, drawSpectrum, holdPeaks } from "./spectrum.ts";
+import { fixtureState, scoreLine } from "./score.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
+import { isMatchupName } from "../../src/matchup.ts";
 
 export const BAND_COUNT = 24;
 const REMOTE_KEY = "nixamp.remote";
@@ -299,22 +301,49 @@ export function start(): void {
   }
   let enrichment: { key: string; match: Enrichment | null } | null = null;
   let enrichAsked = "";
+  /**
+   * A game's score is stale in a minute. While a fixture is on, or about to
+   * be, the same question is asked again every minute; the server remembers
+   * a fixture for a minute too, so that is one request upstream at most.
+   */
+  const FIXTURE_REFRESH_MS = 60_000;
+  let fixtureTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /** Ask what the thing that just started is. The answer is drawn when it comes, if it is still playing. */
-  function enrich(name: string, kind: "auto" | "title" | "channel" | "fixture", year: number | null = null): void {
+  /**
+   * Ask what the thing that just started is. The answer is drawn when it
+   * comes, if it is still playing. `again` asks the same question over the
+   * answer already held, so the score line moves without first going blank.
+   */
+  function enrich(name: string, kind: "auto" | "title" | "channel" | "fixture", year: number | null = null, again = false): void {
     const key = `${kind}|${name}`;
     enrichAsked = key;
-    if (enrichment?.key === key) return;
-    enrichment = null;
+    if (fixtureTimer) clearTimeout(fixtureTimer);
+    fixtureTimer = null;
+    if (!again) {
+      if (enrichment?.key === key) return;
+      enrichment = null;
+    }
     if (mode !== "remote" || name.trim() === "") return;
     const params = new URLSearchParams({ name, kind });
     if (year) params.set("year", String(year));
+    // The server caps a fixture's browser cache at half a minute, so the
+    // minute's question reaches it.
     void fetch(remote.url(`/api/enrich?${params}`))
       .then((answer) => (answer.ok ? answer.json() : { match: null }))
       .then((body: { match?: Enrichment | null }) => {
         if (enrichAsked !== key) return;
         enrichment = { key, match: body.match ?? null };
         draw();
+        const match = enrichment.match;
+        if (match?.kind === "fixture" && fixtureState(match) !== "post") {
+          fixtureTimer = setTimeout(() => {
+            fixtureTimer = null;
+            // Only while it is still what is playing: the track changed, or
+            // was stopped, and the question with it.
+            if (enrichAsked !== key || (player.source === "" && !channelOn)) return;
+            enrich(name, kind, year, true);
+          }, FIXTURE_REFRESH_MS);
+        }
       })
       .catch(() => undefined);
   }
@@ -738,6 +767,8 @@ export function start(): void {
   function drawMeta(): void {
     const chips: string[] = [];
     let logo = "";
+    /** A game: two teams and a score, on a row above the chips. */
+    let score: ReturnType<typeof scoreLine> | null = null;
     const channel = channelOn ? lastAir?.channels.find((one) => one.id === channelOn?.id) : undefined;
     const nothing = player.source === "" && !channelOn && !(remoteDrives() && snapshot.tracks[at()]);
     if (!nothing) {
@@ -777,9 +808,13 @@ export function start(): void {
         logo = nowMeta.entry?.logo ?? "";
       }
       // What nichedb knows: the year, the rating, the genres of a film; the
-      // country and category of a channel. The poster or logo goes in front.
+      // country and category of a channel; the score of a game. The poster
+      // or logo goes in front; a game gets its two teams on a row of its own.
       const rich = enrichment?.key === enrichAsked ? enrichment.match : null;
-      if (rich) {
+      if (rich?.kind === "fixture") {
+        score = scoreLine(rich);
+        chips.unshift(score.status, ...score.chips);
+      } else if (rich) {
         if (rich.image) logo = rich.image;
         const d = rich.data;
         if (rich.kind === "title") {
@@ -797,9 +832,6 @@ export function start(): void {
           if (country) chips.push(country);
           if (categories.length) chips.push(categories.join(" · "));
           if (network) chips.push(network);
-        } else if (rich.kind === "fixture") {
-          const state = typeof d["statusDetail"] === "string" ? (d["statusDetail"] as string) : "";
-          if (state) chips.push(state);
         }
       }
       // A pasted link: which site, by yt-dlp's name for it, and its host.
@@ -819,14 +851,49 @@ export function start(): void {
     }
 
     const known = enrichment?.key === enrichAsked ? enrichment.match : null;
-    const blurb = !nothing && known?.summary ? known.summary : "";
-    const key = `${logo}|${chips.join("|")}|${blurb}`;
+    // A game has no synopsis worth the room under its score.
+    const blurb = !nothing && !score && known?.summary ? known.summary : "";
+    const key = `${logo}|${score ? `${score.away.logo}|${score.home.logo}|${score.text}` : ""}|${chips.join("|")}|${blurb}`;
     if (key === drawnMeta) return;
     drawnMeta = key;
     dom.meta.hidden = chips.length === 0;
     dom.metaBlurb.textContent = blurb;
     dom.metaBlurb.hidden = blurb === "";
     const children: HTMLElement[] = [];
+    if (score) {
+      // [away logo] Away 17 – Home 21 [home logo]: text, never markup, as
+      // every word here is; the logos are pictures nichedb was given.
+      const row = document.createElement("div");
+      row.className = "meta-score";
+      const team = (one: typeof score.away, logoFirst: boolean): HTMLElement[] => {
+        const parts: HTMLElement[] = [];
+        const name = document.createElement("span");
+        name.className = "meta-team";
+        name.textContent = one.name;
+        parts.push(name);
+        if (score?.state !== "pre" && one.score !== null) {
+          const points = document.createElement("b");
+          points.className = "meta-points";
+          points.textContent = String(one.score);
+          parts.push(points);
+        }
+        if (one.logo !== "") {
+          const img = document.createElement("img");
+          img.className = "meta-team-logo";
+          img.alt = "";
+          img.src = one.logo;
+          img.addEventListener("error", () => { img.hidden = true; });
+          if (logoFirst) parts.unshift(img);
+          else parts.push(img);
+        }
+        return parts;
+      };
+      const dash = document.createElement("span");
+      dash.className = "meta-dash";
+      dash.textContent = "–";
+      row.replaceChildren(...team(score.away, true), dash, ...team(score.home, false));
+      children.push(row);
+    }
     if (logo !== "" && /^https?:\/\//.test(logo)) {
       const img = document.createElement("img");
       // A film's poster is tall and stands beside the chips; a logo sits among them.
@@ -838,7 +905,8 @@ export function start(): void {
     }
     for (const chip of chips) {
       const span = document.createElement("span");
-      span.className = "meta-chip";
+      // The chip that says a game is on gets the red dot.
+      span.className = score?.state === "in" && chip === score.status ? "meta-chip chip-live" : "meta-chip";
       span.textContent = chip;
       children.push(span);
     }
@@ -3648,9 +3716,10 @@ export function start(): void {
     // Where it came from, when a catalog entry started it; a channel picked
     // from the Live list is its own. A rejoin keeps what it had.
     if (fresh) nowMeta = from ?? { kind: "channel" };
-    // A pasted link is whatever its page said it was; everything else on the
-    // air here is a channel, and is asked about as one.
-    if (fresh) enrich(channel.name, nowMeta?.link ? "auto" : "channel");
+    // A pasted link is whatever its page said it was; a channel named for
+    // two teams is the game between them; everything else on the air here is
+    // a channel, and is asked about as one.
+    if (fresh) enrich(channel.name, nowMeta?.link || isMatchupName(channel.name) ? "auto" : "channel");
     // Safari on a phone will not play the endless MP4 a channel is sent as;
     // it plays HLS, so it is handed the same channel as a playlist. A
     // browser with MediaSource plays the MP4 as it is, which is lower latency.

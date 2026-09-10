@@ -16,6 +16,9 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { isMatchupName } from "./matchup.ts";
+
+export { isMatchupName };
 
 /** Where the answers come from, unless a deployment says otherwise. */
 export const DEFAULT_SITE = "https://nichedb.dev";
@@ -121,6 +124,13 @@ export function pickBest(answer: MatchAnswer, asked: string): Enriched | null {
     item !== undefined && String(item.title ?? "").toLowerCase() === wanted;
   const plain = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const askedPlain = plain(wanted);
+  // nichedb keeps every meeting of two teams under the same title: the one
+  // being played now outranks the one next month, which outranks last year's.
+  const stateRank = (item: Item | undefined): number => {
+    if (item?.kind !== "fixture") return 1;
+    const state = String(item.data?.["state"] ?? item.tags?.find((t) => t.startsWith("state:"))?.slice(6) ?? "");
+    return state === "in" ? 0 : state === "pre" ? 1 : state === "post" ? 2 : 1;
+  };
   for (const item of items) {
     const exact = isExact(item);
     const score = Number(item.score ?? 0);
@@ -137,8 +147,10 @@ export function pickBest(answer: MatchAnswer, asked: string): Enriched | null {
     // a film and only one has the poster; among the rest, the score decides.
     if (!best) best = item;
     else if (exact && !isExact(best)) best = item;
-    else if (exact && isExact(best) && !best.image_url && item.image_url) best = item;
+    else if (exact && isExact(best) && stateRank(item) < stateRank(best)) best = item;
+    else if (exact && isExact(best) && stateRank(item) === stateRank(best) && !best.image_url && item.image_url) best = item;
     else if (!isExact(best) && score > Number(best.score ?? 0)) best = item;
+    else if (!isExact(best) && score === Number(best.score ?? 0) && stateRank(item) < stateRank(best)) best = item;
   }
   if (!best) return null;
   const kind = best.kind === "channel" || best.kind === "fixture" ? best.kind : "title";
@@ -230,9 +242,32 @@ export class Enricher {
       first.set("collection", where.collection);
       first.set("kind", where.kind);
     }
+    // Two sides with "vs" or "@" between them are a fixture until nichedb's
+    // sports collection says it has none: nichedb's parser reads a name, and
+    // "Chiefs vs Bills" reads as a title to a parser that expects films.
+    if (kind === "auto" && isMatchupName(name)) {
+      const fixture = new URLSearchParams(first);
+      fixture.set("collection", "sports");
+      fixture.set("kind", "fixture");
+      const hit = pickBest(await this.get(`/api/v1/match?${fixture}`), name);
+      if (hit && hit.kind === "fixture" && hit.score >= MIN_SCORE) return hit;
+    }
     const answer = await this.get(`/api/v1/match?${first}`);
     if (where) return pickBest(answer, answer.parsed?.name ?? name);
-    const guessed = whereToAsk("auto", answer.parsed?.kind);
+    // nichedb reads "Alien vs Predator" as a game too. Once the sports
+    // collection has said it has none, the name is a title after all.
+    let parsedKind = answer.parsed?.kind;
+    if (parsedKind === "fixture") {
+      if (!isMatchupName(name)) {
+        const fixture = new URLSearchParams(first);
+        fixture.set("collection", "sports");
+        fixture.set("kind", "fixture");
+        const hit = pickBest(await this.get(`/api/v1/match?${fixture}`), name);
+        if (hit && hit.kind === "fixture" && hit.score >= MIN_SCORE) return hit;
+      }
+      parsedKind = "title";
+    }
+    const guessed = whereToAsk("auto", parsedKind);
     if (!guessed) return null;
     const second = new URLSearchParams(first);
     second.set("collection", guessed.collection);

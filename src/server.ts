@@ -52,7 +52,7 @@ import { readSession } from "./session.ts";
 import { Directory, ENDED_TTL_MS, parseAnnouncement, type Listing } from "./directory.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
 import { HlsPackagers, withKey } from "./hls.ts";
-import { DEFAULT_SITE as NICHEDB, Enricher, type EnrichKind } from "./enrich.ts";
+import { DEFAULT_SITE as NICHEDB, Enricher, type EnrichKind, FIXTURE_TTL_MS } from "./enrich.ts";
 import {
   contentTypeFor, downloadArgs, fileNameFor, inputArgsFor, linkChannelId, playableLink, resolveLink, saveFormat,
   type ResolvedLink,
@@ -2816,8 +2816,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         ...CORS,
         "content-type": "application/json; charset=utf-8",
         // Briefly: the server remembers for days, so the browser need not,
-        // and an hour of browser cache hid a better answer for an hour.
-        "cache-control": match ? "public, max-age=300" : "public, max-age=120",
+        // and an hour of browser cache hid a better answer for an hour. A
+        // fixture's score moves by the minute and the page asks again every
+        // minute; a browser cache that long would answer instead of the server.
+        "cache-control": match?.kind === "fixture"
+          ? `public, max-age=${Math.floor(FIXTURE_TTL_MS / 2000)}`
+          : match ? "public, max-age=300" : "public, max-age=120",
       });
       response.end(JSON.stringify({ match }));
       return;

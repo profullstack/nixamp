@@ -3,7 +3,28 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cacheKey, Enricher, fresh, FIXTURE_TTL_MS, HIT_TTL_MS, MISS_TTL_MS, pickBest, whereToAsk } from "../src/enrich.ts";
+import {
+  cacheKey, Enricher, fresh, FIXTURE_TTL_MS, HIT_TTL_MS, isMatchupName, MISS_TTL_MS, pickBest, whereToAsk,
+} from "../src/enrich.ts";
+
+/** nichedb's answer for a game, as /api/v1/match returns it from the sports collection. */
+const CHIEFS_BILLS = {
+  parsed: { name: "Chiefs vs Bills", kind: "title" },
+  items: [
+    {
+      kind: "fixture", title: "Buffalo Bills at Kansas City Chiefs", summary: "BUF @ KC",
+      image_url: "https://a.espncdn.com/i/teamlogos/nfl/500/kc.png", published_at: "2026-09-14T00:20:00.000Z",
+      page: "https://nichedb.dev/i/3599999", score: 0.81, tags: ["fixture", "football", "league:nfl", "state:in"],
+      data: {
+        state: "in", statusDetail: "Q3 4:12", broadcast: "NBC", sport: "football",
+        league: { name: "NFL", abbreviation: "NFL", slug: "nfl" },
+        away: { name: "Bills", displayName: "Buffalo Bills", abbreviation: "BUF", score: 17, record: "1-0", logoUrl: "https://a.espncdn.com/i/teamlogos/nfl/500/buf.png" },
+        home: { name: "Chiefs", displayName: "Kansas City Chiefs", abbreviation: "KC", score: 21, record: "1-0", logoUrl: "https://a.espncdn.com/i/teamlogos/nfl/500/kc.png" },
+        homeScore: 21, awayScore: 17,
+      },
+    },
+  ],
+};
 
 /** nichedb's answer for a film, as /api/v1/match returns it. */
 const TOP_GUN = {
@@ -82,6 +103,74 @@ test("a file is asked about twice: once to be read, once where it lives", async 
   assert.match(asked[1] ?? "", /collection=screen&kind=title/);
   // The year the name carried narrows the question.
   assert.match(asked[1] ?? "", /year=2022/);
+});
+
+test("two sides with vs, v, at or @ between them read as a game; a concert at Wembley does not", () => {
+  for (const name of ["NFL: Chiefs vs Bills", "Lakers @ Celtics", "Arsenal v Chelsea", "Rangers at Celtic 19:45",
+    "Chiefs vs. Bills - 7:30 PM EDT", "EPL - Man City vs Liverpool", "Boise State Broncos at Fresno State Bulldogs"]) {
+    assert.equal(isMatchupName(name), true, name);
+  }
+  for (const name of ["Live at Wembley", "Oppenheimer (2023)", "CNN", "US: ESPN2 HD", "Dinner at Eight",
+    "Meet Me at the Fountain", "Chiefs vs", "", "vs Bills"]) {
+    assert.equal(isMatchupName(name), false, name);
+  }
+});
+
+test("a name that reads as a game is asked about where fixtures live first, and that answer is kept for a minute", async () => {
+  const { asked, fetch } = site((url) => (url.includes("collection=sports") ? CHIEFS_BILLS : { parsed: { kind: "title" }, items: [] }));
+  let now = 1_700_000_000_000;
+  const enricher = new Enricher({ site: "https://ndb.test", fetch, now: () => now });
+  const hit = await enricher.lookup("NFL: Chiefs vs Bills", "auto");
+  assert.equal(hit?.kind, "fixture");
+  assert.equal(hit?.title, "Buffalo Bills at Kansas City Chiefs");
+  assert.equal((hit?.data["home"] as { score: number }).score, 21);
+  // One question, to the sports collection, before nichedb's parser is asked to read the name.
+  assert.equal(asked.length, 1);
+  assert.match(asked[0] ?? "", /collection=sports&kind=fixture/);
+  assert.match(asked[0] ?? "", /q=NFL%3A\+Chiefs\+vs\+Bills/);
+  // Half a minute on: the score is still believed. A minute on: asked again.
+  now += FIXTURE_TTL_MS / 2;
+  await enricher.lookup("NFL: Chiefs vs Bills", "auto");
+  assert.equal(asked.length, 1);
+  now += FIXTURE_TTL_MS;
+  await enricher.lookup("NFL: Chiefs vs Bills", "auto");
+  assert.equal(asked.length, 2);
+  // Not a game after all -- "Kramer vs. Kramer" -- and the usual questions follow.
+  const film = site((url) => (url.includes("collection=sports")
+    ? { items: [] }
+    : url.includes("collection=screen") ? { items: [{ kind: "title", title: "Kramer vs. Kramer", score: 0.9, data: { year: 1979 } }] } : { parsed: { kind: "movie" }, items: [] }));
+  const other = new Enricher({ site: "https://ndb.test", fetch: film.fetch });
+  assert.equal((await other.lookup("Kramer vs. Kramer", "auto"))?.kind, "title");
+  assert.equal(film.asked.length, 3);
+  // nichedb itself reads "Alien vs Predator" as a game now. The sports
+  // collection said no already, so the title question follows, not a second no.
+  const alien = site((url) => (url.includes("collection=sports")
+    ? { items: [] }
+    : url.includes("collection=screen") ? { items: [{ kind: "title", title: "Alien vs Predator", score: 0.9, data: { year: 2004 } }] } : { parsed: { kind: "fixture", teams: ["Alien", "Predator"] }, items: [] }));
+  const avp = new Enricher({ site: "https://ndb.test", fetch: alien.fetch });
+  assert.equal((await avp.lookup("Alien vs Predator", "auto"))?.kind, "title");
+  assert.equal(alien.asked.length, 3);
+  assert.match(alien.asked[2] ?? "", /collection=screen&kind=title/);
+  // Asked as a fixture outright, the sports collection is the only place asked.
+  const direct = site(CHIEFS_BILLS);
+  assert.equal((await new Enricher({ site: "https://ndb.test", fetch: direct.fetch }).lookup("Chiefs vs Bills", "fixture"))?.kind, "fixture");
+  assert.equal(direct.asked.length, 1);
+});
+
+test("among the same two teams, the game being played beats the one to come, which beats the one gone", () => {
+  const meeting = (state: string, page: string, score = 0.8) => ({
+    kind: "fixture", title: "Bills at Chiefs", page, score, tags: ["fixture", `state:${state}`], data: { state },
+  });
+  // Same score: the state decides.
+  assert.equal(pickBest({ items: [meeting("post", "last-year"), meeting("pre", "next-week"), meeting("in", "now")] }, "Chiefs vs Bills")?.page, "now");
+  assert.equal(pickBest({ items: [meeting("post", "last-year"), meeting("pre", "next-week")] }, "Chiefs vs Bills")?.page, "next-week");
+  // Exact titles too, where the score is not consulted at all.
+  assert.equal(pickBest({ items: [meeting("post", "last-year", 1), meeting("in", "now", 0.7)] }, "Bills at Chiefs")?.page, "now");
+  // But a plainly better score still wins over a better state.
+  assert.equal(pickBest({ items: [meeting("post", "last-year", 0.9), meeting("in", "now", 0.6)] }, "Chiefs vs Bills")?.page, "last-year");
+  // The state is read from the tags when the data has none.
+  const tagged = { kind: "fixture", title: "Bills at Chiefs", page: "tagged", score: 0.8, tags: ["state:in"], data: {} };
+  assert.equal(pickBest({ items: [meeting("pre", "next-week"), tagged] }, "Chiefs vs Bills")?.page, "tagged");
 });
 
 test("a channel is asked about once, where channels live, and remembered", async () => {
