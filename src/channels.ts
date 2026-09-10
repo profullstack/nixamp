@@ -486,6 +486,13 @@ export class Channel {
     };
   }
 
+  /** Stay up with nobody watching: no longer on demand. */
+  keep(): void {
+    this.ephemeral = false;
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = null;
+  }
+
   /** Nobody is watching an on-demand channel: give it a minute, then stop. */
   private idleOut(): void {
     if (this.idle) clearTimeout(this.idle);
@@ -647,6 +654,25 @@ export class Channels {
     if (!channel) return;
     channel.ephemeral = true;
     if (channel.listeners.size === 0) channel.listen({ write: () => true, end: () => undefined })();
+  }
+
+  /**
+   * The opposite: a channel that stays up with nobody watching.
+   *
+   * Going live with something from a catalog turns the on-demand channel it
+   * was being watched on into a broadcast -- listed, shareable, and still
+   * there when the person who started it closes their tab.
+   */
+  keep(id: string): boolean {
+    const channel = this.open.get(id);
+    if (!channel) return false;
+    channel.keep();
+    return true;
+  }
+
+  /** Whether a channel stops itself when its last viewer leaves. */
+  isEphemeral(id: string): boolean {
+    return this.open.get(id)?.ephemeral === true;
   }
 
   /** How many on-demand channels are up, for a ceiling on decoders. */

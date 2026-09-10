@@ -33,6 +33,11 @@
         <audio id="audio"></audio>
         <div id="title-line" class="track-title">Nothing loaded.</div>
         <div id="album-line" class="track-sub">—</div>
+        <!-- What is known about what is playing: live or on demand, the
+             picture's size, who else is watching, where in a catalog it came
+             from. Under the picture and above the controls, where the eye
+             goes after the title. -->
+        <div id="meta-line" class="track-meta" hidden></div>
         <div class="scrub">
           <span id="elapsed" class="time">00:00</span>
           <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" disabled />
@@ -101,6 +106,10 @@
       <section class="transport">
         <button id="prev" type="button" aria-label="Previous">|◀◀</button>
         <button id="play-pause" type="button" class="primary" aria-label="Play">▶</button>
+        <!-- For whoever administers the server: Play plays it for you; this
+             puts it on the air for everybody, lists it, and copies the link. -->
+        <button id="go-live-now" type="button" class="golive" hidden
+                title="Go live: put this on the air for everyone, list it in the directory with a phone code, and copy the link to share">● GO LIVE</button>
         <button id="stop" type="button" aria-label="Stop">■</button>
         <button id="next" type="button" aria-label="Next">▶▶|</button>
         <label class="volume">

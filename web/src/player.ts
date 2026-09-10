@@ -79,6 +79,16 @@ export interface PlayerHandlers {
   onEnded: () => void;
   onState: (playing: boolean) => void;
   onError: (message: string) => void;
+  /**
+   * Whether the element is waiting on bytes it does not have yet.
+   *
+   * True from the moment a source starts loading, and again whenever playback
+   * stalls for want of data; false once it is playing, or has stopped trying.
+   * A catalog entry can take half a minute to start -- the server probes the
+   * source and spins up a decoder first -- and for all of that the page said
+   * STOPPED, which reads as broken. This is what lets it say LOADING instead.
+   */
+  onBusy?: (busy: boolean) => void;
 }
 
 /** How many analyser bins we ask for. 2048 samples, as in the terminal app. */
@@ -146,6 +156,13 @@ export class BrowserPlayer {
       element.addEventListener("error", () => {
         if (element === this.active) this.handlers.onError(mediaError(element));
       });
+      const busy = (is: boolean) => () => {
+        if (element === this.active) this.handlers.onBusy?.(is);
+      };
+      for (const name of ["loadstart", "waiting", "stalled", "seeking"]) element.addEventListener(name, busy(true));
+      for (const name of ["playing", "canplay", "pause", "ended", "error", "emptied", "seeked", "abort"]) {
+        element.addEventListener(name, busy(false));
+      }
     }
   }
 

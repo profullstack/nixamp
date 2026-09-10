@@ -1180,6 +1180,12 @@ export interface HandlerOptions {
     status: () => { live: boolean; code: string; name: string; url: string; possible: boolean };
     start: () => Promise<{ live: boolean; code: string; name: string; url: string; error?: string }>;
     stop: () => Promise<void>;
+    /**
+     * Tell the directory now rather than at the next heartbeat. A channel
+     * that just went on the air should be in the list before the person who
+     * put it there has looked, and a heartbeat is ninety seconds.
+     */
+    announce?: () => Promise<void>;
   };
   /**
    * Where OBS should point, one entry per stream this server will accept.
@@ -2665,6 +2671,37 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
 
+      // Go live with it. The same channel a viewer would get on demand, but
+      // kept: it stays up with nobody watching, it is written down so a
+      // restart puts it back, and the directory hears about it now. A film
+      // goes on the air the same way -- read at its own pace from the start,
+      // so everybody who opens the link sees the same minute of it.
+      if (sub === "live" && request.method === "POST") {
+        if (!options.channels) {
+          json(response, 503, { error: "this server cannot carry channels" });
+          return;
+        }
+        const channelId = cleanId(`cat-${entry.id}`);
+        if (!options.channels.has(channelId)) {
+          const started = await pullChannel(options.channels, options.ffprobe ?? ["ffprobe"], channelId, entry.title, entry.source);
+          if (!started) {
+            json(response, 409, { error: "that channel is already starting" });
+            return;
+          }
+        }
+        options.channels.keep(channelId);
+        if (options.rememberChannels) {
+          options.rememberChannels(
+            options.channels.list()
+              .filter((one) => one.via === "pull" && one.source && !options.channels?.isEphemeral(one.id))
+              .map((one) => ({ id: one.id, name: one.name, source: one.source as string })),
+          );
+        }
+        void options.live?.announce?.();
+        json(response, 200, { channel: channelId, name: entry.title, kind: entry.live ? "live" : "vod" });
+        return;
+      }
+
       if (sub === "stream" && request.method === "GET") {
         if (!options.media) {
           json(response, 403, { error: "media streaming is off" });
@@ -2782,6 +2819,30 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         }
         const restarted = channels.restart(id);
         json(response, restarted ? 200 : 409, { ok: restarted });
+        return;
+      }
+
+      /*
+       * Keep a channel that was started on demand. Something being watched
+       * from a catalog stops a minute after its last viewer leaves; going
+       * live with it is asking it not to, and asking the directory to list
+       * it now.
+       */
+      if (action === "keep") {
+        if (!channels.has(id)) {
+          json(response, 404, { error: "nothing is playing on that channel" });
+          return;
+        }
+        channels.keep(id);
+        if (options.rememberChannels) {
+          options.rememberChannels(
+            channels.list()
+              .filter((one) => one.via === "pull" && one.source && !channels.isEphemeral(one.id))
+              .map((one) => ({ id: one.id, name: one.name, source: one.source as string })),
+          );
+        }
+        void options.live?.announce?.();
+        json(response, 200, { ok: true });
         return;
       }
 
@@ -4132,6 +4193,11 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         await publisher?.stop();
         publisher = null;
         listing = null;
+      },
+      announce: async () => {
+        if (publisher === null) return;
+        const renewed = await publisher.announce();
+        if (renewed) listing = renewed;
       },
     },
     ...(ingest ? { ingest } : {}),

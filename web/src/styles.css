@@ -77,6 +77,27 @@ body {
 
 .status { color: var(--muted); }
 .status[data-playing="true"] { color: var(--green); }
+/* Loading: a ring that turns, in front of the word. A stream on its way is
+   neither playing nor stopped, and STOPPED over a long wait read as broken. */
+.status[data-playing="loading"] { color: var(--accent); }
+.status[data-playing="loading"]::before,
+.row.loading > .name::after {
+  content: "";
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.1em;
+  animation: turn 0.8s linear infinite;
+}
+.status[data-playing="loading"]::before { margin-right: 6px; }
+.row.loading > .name::after { margin-left: 8px; color: var(--accent); }
+@keyframes turn { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .status[data-playing="loading"]::before, .row.loading > .name::after { animation-duration: 2.4s; }
+}
 
 .chip {
   margin-left: auto;
@@ -237,6 +258,37 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* What is known about what is playing, as chips under the title. */
+.track-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  margin-bottom: 4px;
+}
+.meta-chip {
+  color: var(--muted);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  line-height: 1.7;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta-chip:first-of-type { color: var(--green); border-color: var(--green-dim); }
+.meta-logo {
+  height: 22px;
+  max-width: 64px;
+  object-fit: contain;
+  border-radius: 3px;
+  background: #000;
 }
 
 #video {
@@ -529,6 +581,23 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 
 button.primary { color: var(--green); border-color: var(--green-dim); min-width: 64px; }
 button.ghost { background: transparent; color: var(--muted); }
+/* Go live: red, because that is what "on the air" has looked like since radio. */
+button.golive { color: #ff5c5c; border-color: #7a2b2b; letter-spacing: 0.06em; }
+button.golive:hover { color: #fff; background: #7a2b2b; border-color: #ff5c5c; }
+button.golive:disabled { opacity: 0.5; cursor: progress; }
+.row-live:hover { color: #ff5c5c; border-color: #ff5c5c; }
+
+/* What is on the air on a listed server, one row each, under its name. */
+.server-lives {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.server-lives li { display: flex; align-items: center; gap: 8px; }
+.server-lives .ghost { padding: 1px 8px; font-size: 12px; }
 
 .volume {
   display: flex;

@@ -609,3 +609,84 @@ test("signing out lets go of the server as well as the account", () => {
   assert.match(body, /adminPanel\.hidden = true/);
   assert.match(body, /sharePanel\.hidden = true/);
 });
+
+test("the top of the page says LOADING while something is on its way", () => {
+  // A catalog entry can take half a minute to start, and for all of it the
+  // page said STOPPED, which reads as broken. Loading outranks both states.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const player = readFileSync(join(webDir, "src/player.ts"), "utf8");
+  const css = readFileSync(join(webDir, "src/styles.css"), "utf8");
+  assert.match(app, /wait \? "LOADING" : live \? "▶ PLAYING" : "■ STOPPED"/);
+  assert.match(app, /dataset\.playing = wait \? "loading"/);
+  // The element says when it is waiting on bytes, and a request in flight
+  // counts the same.
+  assert.match(player, /onBusy\?: \(busy: boolean\) => void/);
+  for (const name of ["loadstart", "waiting", "stalled"]) assert.ok(player.includes(`"${name}"`), name);
+  assert.match(app, /async function whileLoading/);
+  // Playing a catalog entry, a channel, a file and the live stream all wait
+  // through it, and the row that was clicked spins.
+  assert.equal((app.match(/whileLoading\(/g) ?? []).length >= 6, true);
+  assert.match(app, /classList\.add\("loading"\)/);
+  assert.match(css, /\.status\[data-playing="loading"\]::before/);
+  assert.match(css, /@keyframes turn/);
+});
+
+test("what is playing has a line of its own under the picture", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // Under the title and above the controls: the meta line comes after the
+  // album line and before the scrub bar.
+  const meta = html.indexOf('id="meta-line"');
+  assert.ok(meta > html.indexOf('id="album-line"'));
+  assert.ok(meta < html.indexOf('class="scrub"'));
+  // Text, never markup: the words are a provider's or a stranger's.
+  const drawMeta = app.slice(app.indexOf("function drawMeta"), app.indexOf("function draw(): void"));
+  assert.match(drawMeta, /span\.textContent = chip/);
+  assert.equal(drawMeta.includes("innerHTML"), false);
+  // Who is watching, how big the picture is, where in a catalog it came from.
+  assert.match(drawMeta, /watching/);
+  assert.match(drawMeta, /videoWidth/);
+  assert.match(drawMeta, /nowMeta\.catalog\.name/);
+});
+
+test("go live sits beside play, for whoever may, and puts it on the air for everyone", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // Next to Play, hidden until somebody who administers the server has
+  // something loaded.
+  const play = html.indexOf('id="play-pause"');
+  const goLive = html.indexOf('id="go-live-now"');
+  assert.ok(goLive > play && goLive < html.indexOf('id="stop"'));
+  assert.match(app, /dom\.goLiveNow\.hidden = !isAdmin\(\) \|\| whatToGoLiveWith\(\) === null/);
+  // Every row that plays offers it too, to an admin.
+  assert.equal((app.match(/goLiveButton\(/g) ?? []).length >= 3, true);
+  // A catalog entry becomes a kept channel; a channel is kept; a file is
+  // played on the server. Then it is listed, and the link is copied.
+  const body = app.slice(app.indexOf("async function goLiveWith"), app.indexOf("function goLiveButton"));
+  assert.match(body, /\/live`/);
+  assert.match(body, /\/keep`/);
+  assert.match(body, /type: "play", index: what\.index/);
+  assert.match(body, /if \(!listed\) await setLive\(true\)/);
+  assert.match(body, /copyText\(page, button/);
+});
+
+test("a listed server's channels are rows in the directory that play them", () => {
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // A name in a list you cannot press is a name. Each channel is a row with
+  // Play, which connects as a viewer and asks for that channel by name --
+  // the directory knows channels by name only.
+  assert.match(app, /className = "server-lives"/);
+  assert.match(app, /open\(true, `channel:\$\{channelName\}`\)/);
+  assert.match(app, /air\.channels\.find\(\(one\) => one\.name === wanted\)/);
+});
+
+test("the jingle plays into silence, never over a stream that was asked for", () => {
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const jingle = app.slice(app.indexOf("The noise it makes when it wakes up"));
+  // A page opened from a link is opening a stream; the first click may be
+  // the click that plays something. Neither gets the jingle over it.
+  assert.match(jingle, /if \(invited !== ""\) return;/);
+  assert.match(jingle, /const busy = \(\): boolean => player\.source !== ""/);
+  assert.match(jingle, /if \(src === "" \|\| busy\(\)\) return;/);
+  assert.match(jingle, /if \(busy\(\)\) return;/);
+});
