@@ -210,6 +210,8 @@ export function parseAnnouncement(input: unknown): Announcement | null {
  */
 export class Directory {
   private readonly items = new Map<string, Listing>();
+  /** Every code a channel has had on each listing, so a returning channel keeps its own. */
+  private readonly channelHistory = new Map<string, Record<string, string>>();
   /** Streams that stopped, so the phone line can say when. */
   private readonly ended = new Map<string, Ended>();
   private sequence = 0;
@@ -291,7 +293,11 @@ export class Directory {
       channels: announcement.channels ?? [],
       channelCodes: this.codesFor(
         announcement.channels ?? [],
-        existing?.channelCodes ?? (previously && "channelCodes" in previously ? previously.channelCodes : undefined),
+        // What each channel has been called before, on this listing: a
+        // channel that was gone for a heartbeat -- a server restarting puts
+        // its channels back a moment after it announces -- comes back to the
+        // code people were given, not a new one.
+        { ...(this.channelHistory.get(id) ?? {}), ...(existing?.channelCodes ?? {}) },
         id,
       ),
       updatedAt: this.now(),
@@ -300,6 +306,7 @@ export class Directory {
       startedAt: existing?.startedAt ?? this.now(),
     };
     this.items.set(id, listing);
+    this.channelHistory.set(id, { ...(this.channelHistory.get(id) ?? {}), ...listing.channelCodes });
     // The transition, not the heartbeat: existing means it was already live.
     if (existing === undefined) this.onLive(listing);
     return listing;
@@ -309,6 +316,7 @@ export class Directory {
     const item = this.items.get(id);
     if (item !== undefined) this.remember(item);
     this.items.delete(id);
+    this.channelHistory.delete(id);
   }
 
   list(): Listing[] {
@@ -362,7 +370,11 @@ export class Directory {
     if (Object.values(besides).includes(code)) return true;
     for (const item of this.items.values()) {
       if (item.code === code) return true;
-      if (item.id !== own && Object.values(item.channelCodes).includes(code)) return true;
+    }
+    // Every code a channel has ever had on a listing that is still up is
+    // that channel's to come back to, on every listing but the one asking.
+    for (const [id, codes] of this.channelHistory) {
+      if (id !== own && Object.values(codes).includes(code)) return true;
     }
     return [...this.ended.values()].some((i) => i.code === code);
   }
@@ -445,6 +457,7 @@ export class Directory {
       if (item.updatedAt < cutoff) {
         this.remember(item);
         this.items.delete(id);
+        this.channelHistory.delete(id);
       }
     }
     const forget = this.now() - ENDED_TTL_MS;
