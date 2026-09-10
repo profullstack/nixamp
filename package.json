@@ -1,6 +1,6 @@
 {
   "name": "nixamp",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "It really whips the terminal's ass. A Winamp-shaped audio player for your terminal.",
   "license": "MIT",
   "type": "module",
@@ -42,7 +42,7 @@
     "@profullstack/auth-system": "^0.6.0",
     "@profullstack/hqtui": "^0.3.0",
     "@profullstack/throttle": "0.2.2",
-    "@profullstack/x402-gateway": "^0.4.0",
+    "@profullstack/x402-gateway": "0.6.0",
     "acme-client": "5.4.0",
     "pg": "^8.23.0",
     "web-push": "^3.6.7"
@@ -69,5 +69,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/profullstack/nixamp.git"
+  },
+  "overrides": {
+    "https-proxy-agent": "7.0.6",
+    "tslib": "2.8.1"
   }
 }

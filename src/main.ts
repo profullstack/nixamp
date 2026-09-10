@@ -384,7 +384,13 @@ export async function main(): Promise<void> {
 
   if (first === "serve") {
     const { serve } = await import("./server.ts");
-    await serve(rest, version());
+    try {
+      await serve(rest, version());
+    } catch (error) {
+      // A refusal is a sentence, not a stack trace.
+      console.error((error as Error).message);
+      process.exitCode = 64;
+    }
     return;
   }
   if (first === "daemon") {
