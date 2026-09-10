@@ -302,6 +302,44 @@ body {
 /* A poster is tall; it stands beside the chips rather than among them. */
 .meta-logo.meta-poster { height: 72px; max-width: 52px; }
 
+/* A game: [away logo] Away 17 – Home 21 [home logo], on a row of its own
+   above the chips. Names may shrink and wrap; the score never does, so at
+   a phone's width the numbers still stand next to their teams. */
+.meta-score {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.meta-team { color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 38vw; }
+.meta-points { font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; }
+.meta-dash { color: var(--muted); padding: 0 2px; }
+.meta-team-logo {
+  height: 20px;
+  width: 20px;
+  object-fit: contain;
+  flex: none;
+}
+/* The chip that says a game is on right now, with the red dot a live badge has. */
+.meta-chip.chip-live { color: var(--fg); border-color: #b3261e; }
+.meta-chip.chip-live::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: #e53935;
+  vertical-align: 1px;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .meta-chip.chip-live::before { animation: none; } }
+
 /* What nichedb knows about it, in a sentence or two. */
 .track-blurb {
   margin: 4px 0 0;

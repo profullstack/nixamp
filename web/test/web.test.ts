@@ -12,6 +12,8 @@ import {
   refusesUs, splitShareLink,
 } from "../src/remote.ts";
 import { byName, isPlayable, needsVideoElement } from "../src/player.ts";
+import { fixtureState, kickoff, scoreLine } from "../src/score.ts";
+import { isMatchupName } from "../../src/matchup.ts";
 import { NEVER_CACHE, serviceWorkerSource } from "../scripts/sw.ts";
 import { Bitmap, crc32, drawIcon, encodePng, ICONS } from "../scripts/icons.ts";
 
@@ -744,6 +746,80 @@ test("what is playing is asked about, and the answer is drawn only while it stil
   assert.match(app, /"meta-logo meta-poster"/);
   assert.match(app, /dom\.metaBlurb\.textContent = blurb/);
   assert.ok(html.includes('id="meta-blurb"'));
+});
+
+test("a game is a score line: two teams, the score, and where the game has got to", () => {
+  const game = (state: string, statusDetail: string) => ({
+    published_at: "2026-09-14T00:20:00.000Z",
+    tags: ["fixture", "football", "league:nfl", `state:${state}`],
+    data: {
+      state, statusDetail, broadcast: "NBC",
+      league: { name: "NFL", abbreviation: "NFL", slug: "nfl" },
+      away: { name: "Bills", displayName: "Buffalo Bills", abbreviation: "BUF", score: 17, logoUrl: "https://logos/buf.png" },
+      home: { name: "Chiefs", displayName: "Kansas City Chiefs", abbreviation: "KC", score: 21, logoUrl: "https://logos/kc.png" },
+      homeScore: 21, awayScore: 17,
+    },
+  });
+  const clock = { now: new Date("2026-09-13T20:00:00.000Z"), locale: "en-US", timeZone: "America/New_York" };
+  // On: the score, and the chip says LIVE with the clock.
+  const on = scoreLine(game("in", "Q3 4:12"), clock);
+  assert.equal(on.state, "in");
+  assert.equal(on.text, "Bills 17 – Chiefs 21");
+  assert.equal(on.status, "LIVE · Q3 4:12");
+  assert.deepEqual(on.chips, ["NFL", "NBC"]);
+  assert.equal(on.away.logo, "https://logos/buf.png");
+  assert.equal(on.home.score, 21);
+  // Before: no score yet, and when it starts, in the viewer's own clock.
+  const before = scoreLine(game("pre", "9/13 - 8:20 PM EDT"), clock);
+  assert.equal(before.text, "Bills – Chiefs");
+  assert.equal(before.status, "Kicks off 8:20 PM");
+  // Another day's game names the day, since "Kicks off 8:20 PM" read as tonight.
+  const later = scoreLine(game("pre", ""), { ...clock, now: new Date("2026-09-10T20:00:00.000Z") });
+  assert.match(later.status, /^Kicks off Sun,? 8:20 PM$/);
+  // Over: FINAL, with the score.
+  const over = scoreLine(game("post", "Final"), clock);
+  assert.equal(over.status, "FINAL");
+  assert.equal(over.text, "Bills 17 – Chiefs 21");
+  // The state falls back to the tags, then to "pre"; scores fall back to the flat fields.
+  assert.equal(fixtureState({ data: {}, tags: ["state:post"] }), "post");
+  assert.equal(fixtureState({ data: {}, tags: [] }), "pre");
+  const flat = scoreLine({ data: { state: "in", away: { name: "A" }, home: { name: "B" }, awayScore: 3, homeScore: 1 } });
+  assert.equal(flat.text, "A 3 – B 1");
+  assert.equal(flat.status, "LIVE");
+  assert.deepEqual(flat.chips, []);
+  assert.equal(kickoff("not a date"), "");
+  assert.equal(kickoff(null), "");
+});
+
+test("a channel named for two teams is asked about as a game, and its score is asked again every minute", () => {
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const css = readFileSync(join(webDir, "src/styles.css"), "utf8");
+  // The browser tells a matchup the same way the server does.
+  assert.equal(isMatchupName("NFL: Chiefs vs Bills"), true);
+  assert.equal(isMatchupName("CNN"), false);
+  assert.match(app, /isMatchupName\(channel\.name\) \? "auto" : "channel"/);
+  // A fixture is drawn as a score row instead of film chips: no poster, no blurb.
+  const drawMeta = app.slice(app.indexOf("function drawMeta"), app.indexOf("function draw(): void"));
+  assert.match(drawMeta, /if \(rich\?\.kind === "fixture"\) \{\s*score = scoreLine\(rich\);/);
+  assert.match(drawMeta, /row\.className = "meta-score"/);
+  assert.match(drawMeta, /img\.className = "meta-team-logo"/);
+  assert.match(drawMeta, /points\.textContent = String\(one\.score\)/);
+  assert.match(drawMeta, /!score && known\?\.summary/);
+  assert.match(drawMeta, /"meta-chip chip-live"/);
+  assert.equal(drawMeta.includes("innerHTML"), false);
+  // Asked again every minute while the game is on or about to be, never after
+  // it is over, and not once the track changed or stopped.
+  const enrich = app.slice(app.indexOf("const FIXTURE_REFRESH_MS"), app.indexOf("let listed = false"));
+  assert.match(enrich, /FIXTURE_REFRESH_MS = 60_000/);
+  assert.match(enrich, /fixtureState\(match\) !== "post"/);
+  assert.match(enrich, /if \(fixtureTimer\) clearTimeout\(fixtureTimer\);/);
+  assert.match(enrich, /if \(enrichAsked !== key \|\| \(player\.source === "" && !channelOn\)\) return;/);
+  assert.match(enrich, /enrich\(name, kind, year, true\)/);
+  // Team logos are small, the score is bold, and the live chip has its dot.
+  assert.match(css, /\.meta-team-logo \{[^}]*height: 20px/);
+  assert.match(css, /\.meta-points \{[^}]*font-weight: 700/);
+  assert.match(css, /\.meta-chip\.chip-live::before \{[^}]*border-radius: 50%/);
+  assert.match(css, /\.meta-score \{[^}]*flex-wrap: wrap/);
 });
 
 test("a listed server's channels are rows in the directory that play them", () => {
