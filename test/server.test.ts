@@ -20,7 +20,8 @@ test("serve flags parse, and a bad one is a message rather than a NaN", () => {
   // means halfway through this test.
   delete process.env.PORT;
   const bare = parseServeArgs([]);
-  assert.equal(bare.root, ".");
+  // Empty, not ".": a server never depends on where it was started from.
+  assert.equal(bare.root, "");
   assert.equal(bare.port, DEFAULT_PORT);
   // Every interface, so the phone on the sofa can reach it. What makes that
   // safe is the key in the share link, which is on by default with it.
