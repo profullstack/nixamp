@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  Channels, REDIAL, cleanId, generatedId, rememberChannels, rememberedChannels,
+  BACKLOG_VIDEO, Channels, REDIAL, cleanId, generatedId, rememberChannels, rememberedChannels,
 } from "../src/channels.ts";
 import { needsAdmin } from "../src/owner.ts";
 
@@ -376,4 +376,71 @@ test("the channels a server pulls are remembered, per port, and forgotten on pur
   assert.deepEqual(rememberedChannels(dir, 4321).map((c) => c.id), ["ok"]);
   writeFileSync(join(dir, "channels.json"), "not json");
   assert.deepEqual(rememberedChannels(dir, 4321), []);
+});
+
+test("somebody who joins a picture late gets the last few seconds, from a fragment boundary", async () => {
+  // Handed only what comes next, a viewer starts on the live edge with nothing
+  // buffered, and every hiccup is a stall: CNN in a browser was play, wait,
+  // play, wait. So the recent fragments go out first, beginning at a moof.
+  const stream = Buffer.concat([
+    box("ftyp", "isom"), box("moov", "tracks"),
+    box("moof", "one"), box("mdat", "first picture"),
+    box("moof", "two"), box("mdat", "second picture"),
+    box("moof", "three"), box("mdat", "third picture"),
+  ]).toString("base64");
+  const fake = ["sh", "-c", `printf %s ${stream} | base64 -d; exec sleep 30`, "--"];
+  const set = new Channels({ ffmpeg: fake });
+  const channel = set.pull("cnn", "CNN", "http://x.test/301", [], "video");
+  await wait(400);
+
+  const late = collector();
+  channel?.listen(late);
+  const got = boxNames(Buffer.concat(late.chunks));
+  // The description of the stream, then everything recent, in order.
+  assert.deepEqual(got, ["ftyp", "moov", "moof", "mdat", "moof", "mdat", "moof", "mdat"]);
+  assert.ok(Buffer.concat(late.chunks).includes("third picture"));
+  set.stopAll();
+});
+
+/** The names of the boxes in a buffer, in order. */
+function boxNames(bytes: Buffer): string[] {
+  const names: string[] = [];
+  let at = 0;
+  while (at + 8 <= bytes.length) {
+    const size = bytes.readUInt32BE(at);
+    names.push(bytes.toString("latin1", at + 4, at + 8));
+    if (size < 8) break;
+    at += size;
+  }
+  return names;
+}
+
+test("the backlog is bounded, and never begins with an mdat", async () => {
+  // Fragments much bigger than the cap, so only whole recent ones survive.
+  const big = "x".repeat(BACKLOG_VIDEO / 2);
+  const stream = Buffer.concat([
+    box("ftyp", "isom"), box("moov", "tracks"),
+    box("moof", "one"), box("mdat", `a${big}`),
+    box("moof", "two"), box("mdat", `b${big}`),
+    box("moof", "three"), box("mdat", `c${big}`),
+  ]);
+  // Too big for a command line, so it goes through a file.
+  const file = join(mkdtempSync(join(tmpdir(), "nixamp-backlog-")), "stream.mp4");
+  writeFileSync(file, stream);
+  const fake = ["sh", "-c", `cat "${file}"; exec sleep 30`, "--"];
+  const set = new Channels({ ffmpeg: fake });
+  const channel = set.pull("cnn", "CNN", "http://x.test/301", [], "video");
+  await wait(1200);
+
+  const late = collector();
+  channel?.listen(late);
+  const all = Buffer.concat(late.chunks);
+  const got = boxNames(all);
+  assert.deepEqual(got.slice(0, 3), ["ftyp", "moov", "moof"], "after the header comes a moof, never an mdat");
+  // Everything after the header is the backlog, and it fits under the cap.
+  const header = 8 + "isom".length + 8 + "tracks".length;
+  const total = all.byteLength - header;
+  assert.ok(total <= BACKLOG_VIDEO, `backlog of ${total} is over the cap`);
+  assert.ok(total > 0);
+  set.stopAll();
 });

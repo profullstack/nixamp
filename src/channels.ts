@@ -19,7 +19,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
-import { Fragments } from "./fragments.ts";
+import { Fragments, isOpening } from "./fragments.ts";
 
 /** Somewhere for a channel's audio to go. A response, in practice. */
 export interface Listener {
@@ -66,6 +66,18 @@ export const GIVE_UP = 5;
 export const STALL = 30_000;
 /** How much of what ffmpeg said to keep, for the last line when it dies. */
 const TAIL = 2000;
+/**
+ * How much of the recent stream a newcomer is handed. About six seconds of
+ * 720p television, and a couple of seconds of 192k MP3: enough to play
+ * through a hiccup, not enough to put a viewer noticeably behind the room.
+ */
+export const BACKLOG_VIDEO = 4 * 1024 * 1024;
+export const BACKLOG_AUDIO = 64 * 1024;
+
+/** The four-letter name in a box header, or "" for something too short. */
+function boxType(box: Buffer): string {
+  return box.length >= 8 ? box.toString("latin1", 4, 8) : "";
+}
 
 /**
  * Read everything a child says on stderr, keeping only the end of it.
@@ -126,6 +138,19 @@ export class Channel {
   private watchdog: ReturnType<typeof setTimeout> | null = null;
   private stall = STALL;
   private stderr = "";
+  /**
+   * The last few seconds, for whoever joins next.
+   *
+   * A listener handed only what comes after they arrive starts exactly on the
+   * live edge, with nothing buffered ahead: every hiccup in the source or the
+   * network is a stall, and CNN in a browser was play, wait, play, wait, for
+   * ever. A few seconds of recent fragments, written before the live bytes,
+   * is the cushion every other live player has. For a picture the backlog
+   * starts at a fragment boundary, because a fragment is the unit a decoder
+   * can begin at; for MP3 any point will do, a frame announces itself.
+   */
+  private recent: Buffer[] = [];
+  private recentBytes = 0;
 
   constructor(
     readonly info: ChannelInfo,
@@ -282,6 +307,8 @@ export class Channel {
    */
   private startOver(): void {
     if (this.info.kind === "video") this.fragments = new Fragments();
+    this.recent = [];
+    this.recentBytes = 0;
     this.hangUp();
   }
 
@@ -350,10 +377,32 @@ export class Channel {
    */
   private emit(chunk: Buffer): void {
     if (!this.fragments) {
+      this.remember(chunk, BACKLOG_AUDIO, false);
       this.send(chunk);
       return;
     }
-    for (const box of this.fragments.push(chunk)) this.send(box);
+    for (const box of this.fragments.push(chunk)) {
+      if (!isOpening(boxType(box))) this.remember(box, BACKLOG_VIDEO, true);
+      this.send(box);
+    }
+  }
+
+  /** Keep this for the next arrival, and let the oldest go once it is too much. */
+  private remember(piece: Buffer, cap: number, aligned: boolean): void {
+    this.recent.push(piece);
+    this.recentBytes += piece.byteLength;
+    while (this.recent.length > 0 && this.recentBytes > cap) {
+      const gone = this.recent.shift() as Buffer;
+      this.recentBytes -= gone.byteLength;
+    }
+    // A picture's backlog must begin at a `moof`: an `mdat` on its own is
+    // samples nobody has been told the layout of.
+    if (aligned) {
+      while (this.recent.length > 0 && boxType(this.recent[0] as Buffer) !== "moof") {
+        const gone = this.recent.shift() as Buffer;
+        this.recentBytes -= gone.byteLength;
+      }
+    }
   }
 
   /** Feed the source. */
@@ -402,6 +451,17 @@ export class Channel {
         listener.write(this.fragments.header);
       } catch {
         // Gone before it began; the detach below still tidies up.
+      }
+    }
+    // Then the last few seconds, so there is something to play while the
+    // live bytes catch up, rather than a picture that stalls on every hiccup.
+    if (!this.fragments || this.fragments.ready) {
+      for (const piece of this.recent) {
+        try {
+          listener.write(piece);
+        } catch {
+          break;
+        }
       }
     }
     this.listeners.add(listener);
