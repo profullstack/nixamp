@@ -114,6 +114,10 @@ export function start(): void {
     serversPanel: need<HTMLElement>("servers-panel"),
     serversNote: need<HTMLParagraphElement>("servers-note"),
     serversList: need<HTMLUListElement>("servers-list"),
+    favoritesPanel: need<HTMLElement>("favorites-panel"),
+    favoritesNote: need<HTMLParagraphElement>("favorites-note"),
+    favoritesList: need<HTMLUListElement>("favorites-list"),
+    favHere: need<HTMLButtonElement>("fav-here"),
     notifyPanel: need<HTMLElement>("notify-panel"),
     notifyNote: need<HTMLParagraphElement>("notify-note"),
     notifyWeb: need<HTMLInputElement>("notify-web"),
@@ -149,6 +153,8 @@ export function start(): void {
   /** What the tab is called with nothing playing: whatever the shell said. */
   const baseTitle = document.title || "nixamp";
   let mode: Mode = "local";
+  /** What the server we are connected to calls itself, once it has said. */
+  let serverName = "";
   let local: LocalTrack[] = [];
   let index = 0;
   let snapshot: FullSnapshot = emptySnapshot();
@@ -402,6 +408,15 @@ export function start(): void {
 
   // ---- drawing ------------------------------------------------------------
 
+  /**
+   * The level meter: six cells a side, a block for a lit one and a dot for a
+   * dark one. The element is set in a monospace face with a reserved width,
+   * because in a proportional face a dot is narrower than a block and the
+   * whole row shifted sideways as the level moved -- a meter that shakes.
+   */
+  const meter = (l: number, r: number): string =>
+    `L${"▮".repeat(Math.round(l * 6)).padEnd(6, "·")} R${"▮".repeat(Math.round(r * 6)).padEnd(6, "·")}`;
+
   const RAMP = "▁▂▃▄▅▆▇█";
   const glyph = (value: number): string =>
     RAMP[Math.max(0, Math.min(RAMP.length - 1, Math.round(value * (RAMP.length - 1))))] as string;
@@ -429,9 +444,13 @@ export function start(): void {
 
     dom.playPause.textContent = live ? "❚❚" : "▶";
     dom.playPause.setAttribute("aria-label", live ? "Pause" : "Play");
-    dom.playlistTitle.dataset.title = `Playlist (${total})`;
+    // Connected, the list is that server's files, and says so; on its own it
+    // is a playlist of what was picked.
+    dom.playlistTitle.dataset.title = mode === "remote"
+      ? `Files on ${serverName || "this server"} (${total.toLocaleString()})`
+      : `Playlist (${total})`;
     dom.source.textContent = mode === "remote"
-      ? `remote · ${remote.address.replace(/^https?:\/\//, "") || "—"}`
+      ? `connected · ${serverName || remote.address.replace(/^https?:\/\//, "") || "—"}`
       : local.length > 0 ? `local · ${local.length} files` : "no source";
 
     dom.remoteState.textContent = mode === "remote"
@@ -448,7 +467,7 @@ export function start(): void {
     dom.glyphs.textContent = bars.map(glyph).join("");
     const [l, r] = remoteDrives() ? snapshot.levels : player.levels();
     dom.levels.textContent =
-      `L${"▮".repeat(Math.round(l * 6)).padEnd(6, "·")} R${"▮".repeat(Math.round(r * 6)).padEnd(6, "·")}`;
+      meter(l, r);
   }
 
   let renderedFor = "";
@@ -731,7 +750,7 @@ export function start(): void {
       dom.glyphs.textContent = bars.map(glyph).join("");
       const [l, r] = remoteDrives() ? snapshot.levels : player.levels();
       dom.levels.textContent =
-        `L${"▮".repeat(Math.round(l * 6)).padEnd(6, "·")} R${"▮".repeat(Math.round(r * 6)).padEnd(6, "·")}`;
+        meter(l, r);
       dom.elapsed.textContent = formatTime(position());
       const of = duration();
       if (!scrubbing && of > 0) dom.seek.value = String(Math.round((position() / of) * 1000));
@@ -945,6 +964,9 @@ export function start(): void {
       /** The phone code, and how many people are on the line for it. */
       code?: string;
       callers?: number;
+      /** Whether its player is running, and the live channels on it by name. */
+      playing?: boolean;
+      channels?: string[];
     }[];
     try {
       const response = await fetch("/api/directory");
@@ -965,19 +987,27 @@ export function start(): void {
       return;
     }
 
-    dom.directoryNote.textContent = `${streams.length} live ${streams.length === 1 ? "stream" : "streams"}:`;
+    dom.directoryNote.textContent =
+      `${streams.length} ${streams.length === 1 ? "server is" : "servers are"} on. ` +
+      "Connect to one to browse its files and watch what is live on it. No account needed.";
     for (const stream of streams) {
       const item = document.createElement("li");
-      const button = document.createElement("button");
-      button.type = "button";
 
+      // A server, and what a visitor would find on it: how much there is to
+      // browse, what its player is doing, and which channels are live. Then
+      // Connect. The row used to be one button whose only word was the
+      // server's name, which said nothing about what connecting would get you.
       // textContent, never innerHTML: these names are written by strangers.
+      const label = document.createElement("span");
+      label.className = "server-label";
       const name = document.createElement("span");
       name.className = "name";
       name.textContent = stream.name;
       const detail = document.createElement("span");
       detail.className = "detail";
-      const parts = [stream.nowPlaying, `${stream.tracks} tracks`].filter(Boolean);
+      const parts: string[] = [`${stream.tracks.toLocaleString()} files to browse`];
+      if (stream.playing !== false && stream.nowPlaying) parts.push(`playing ${stream.nowPlaying}`);
+      else parts.push("player idle");
       // The call-in code earns its place in the list: it is the only way to
       // hear this from a phone, and a code you cannot see is a code you
       // cannot dial.
@@ -987,14 +1017,26 @@ export function start(): void {
         );
       }
       detail.textContent = parts.join(" · ");
+      label.append(name, detail);
+      if (stream.channels && stream.channels.length > 0) {
+        const live = document.createElement("span");
+        live.className = "detail live";
+        live.textContent = `● live: ${stream.channels.join(", ")}`;
+        label.append(live);
+      }
 
-      button.append(name, detail);
-      button.addEventListener("click", () => {
+      const connect = document.createElement("button");
+      connect.type = "button";
+      connect.className = "button";
+      connect.textContent = "Connect";
+      connect.addEventListener("click", () => {
         dom.remoteUrl.value = stream.url;
         dom.directory.hidden = true;
         dom.remoteForm.requestSubmit();
       });
-      item.append(button);
+      item.append(label, connect);
+      // A heart, for somebody signed in: the way back to a server you liked.
+      if (meId) item.append(heartButton(stream.url, stream.name));
 
       // Following is for other people's streams, and only once we know who you
       // are: an anonymous visitor has nowhere to be notified.
@@ -1468,6 +1510,146 @@ export function start(): void {
    * the link opens straight into the player; where it was not, the address is
    * still the thing you needed.
    */
+  // ---- favourites: the servers you hearted ----------------------------------
+  //
+  // Kept against the nixamp.com account, so they are the same on every device.
+  // A favourite is the link that opens the server, matched by its origin,
+  // because the same machine can be reached by its view link and its admin
+  // link and either one is "that server".
+  let favoriteUrls = new Set<string>();
+
+  const originOf = (url: string): string => {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return url;
+    }
+  };
+  const isFavorite = (url: string): boolean =>
+    [...favoriteUrls].some((one) => originOf(one) === originOf(url));
+
+  async function loadFavorites(): Promise<void> {
+    if (!meId) {
+      favoriteUrls = new Set();
+      dom.favoritesPanel.hidden = true;
+      updateFavHere();
+      return;
+    }
+    try {
+      const answer = await fetch("/api/v1/favorites");
+      if (!answer.ok) {
+        dom.favoritesPanel.hidden = true;
+        return;
+      }
+      const body = (await answer.json()) as {
+        favorites?: { url: string; name: string; live: boolean; nowPlaying: string; channels: string[] }[];
+      };
+      const list = body.favorites ?? [];
+      favoriteUrls = new Set(list.map((one) => one.url));
+      dom.favoritesPanel.hidden = list.length === 0;
+      dom.favoritesNote.textContent = "Servers you hearted. Connect to one, or let it go.";
+      dom.favoritesList.replaceChildren(...list.map((fav) => {
+        const item = document.createElement("li");
+        const label = document.createElement("span");
+        label.className = "server-label";
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = fav.name || fav.url.replace(/^https?:\/\//, "");
+        const detail = document.createElement("span");
+        detail.className = fav.live ? "detail live" : "detail";
+        detail.textContent = fav.live
+          ? [
+              "● on now",
+              fav.nowPlaying ? `playing ${fav.nowPlaying}` : "",
+              fav.channels.length > 0 ? `live: ${fav.channels.join(", ")}` : "",
+            ].filter(Boolean).join(" · ")
+          : "not on right now";
+        label.append(name, detail);
+
+        const connect = document.createElement("button");
+        connect.type = "button";
+        connect.className = "button";
+        connect.textContent = "Connect";
+        connect.addEventListener("click", () => {
+          dom.remoteUrl.value = fav.url;
+          dom.remoteForm.requestSubmit();
+        });
+        item.append(label, connect, heartButton(fav.url, fav.name));
+        return item;
+      }));
+    } catch {
+      dom.favoritesPanel.hidden = true;
+    }
+    updateFavHere();
+  }
+
+  async function setFavorite(url: string, name: string, on: boolean): Promise<void> {
+    try {
+      const answer = on
+        ? await fetch("/api/v1/favorites", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ url, name }),
+          })
+        : await fetch(`/api/v1/favorites?url=${encodeURIComponent(url)}`, { method: "DELETE" });
+      if (!answer.ok) {
+        note = on ? "Could not save that favourite." : "Could not remove that favourite.";
+        draw();
+        return;
+      }
+    } catch {
+      note = "could not reach nixamp.com";
+      draw();
+      return;
+    }
+    if (on) favoriteUrls.add(url);
+    else for (const one of [...favoriteUrls]) if (originOf(one) === originOf(url)) favoriteUrls.delete(one);
+    await loadFavorites();
+  }
+
+  /** ♡ or ♥ for one server, wherever it is listed. */
+  function heartButton(url: string, name: string): HTMLButtonElement {
+    const heart = document.createElement("button");
+    heart.type = "button";
+    heart.className = "heart";
+    const paint = (): void => {
+      const on = isFavorite(url);
+      heart.textContent = on ? "♥" : "♡";
+      heart.dataset.on = on ? "yes" : "no";
+      heart.title = on ? "Remove from favourites" : "Add to favourites";
+      heart.setAttribute("aria-label", heart.title);
+    };
+    paint();
+    heart.addEventListener("click", (event) => {
+      event.stopPropagation();
+      // The favourite is the link that stays, not the admin link, if we have
+      // a choice: removing goes by origin, so either form takes it off.
+      const stored = [...favoriteUrls].find((one) => originOf(one) === originOf(url)) ?? url;
+      void setFavorite(isFavorite(url) ? stored : url, name, !isFavorite(url)).then(paint);
+    });
+    return heart;
+  }
+
+  /** The heart in the header, for the server we are connected to. */
+  function updateFavHere(): void {
+    const link = mode === "remote" ? remote.shareLink : "";
+    dom.favHere.hidden = !(meId && link);
+    if (dom.favHere.hidden) return;
+    const on = isFavorite(link);
+    dom.favHere.textContent = on ? "♥" : "♡";
+    dom.favHere.dataset.on = on ? "yes" : "no";
+    dom.favHere.title = on ? "Remove this server from your favourites" : "Add this server to your favourites";
+    dom.favHere.setAttribute("aria-label", dom.favHere.title);
+  }
+
+  dom.favHere.addEventListener("click", () => {
+    const link = remote.shareLink;
+    if (!link) return;
+    const stored = [...favoriteUrls].find((one) => originOf(one) === originOf(link)) ?? link;
+    void setFavorite(isFavorite(link) ? stored : link, serverName || remote.address, !isFavorite(link))
+      .then(updateFavHere);
+  });
+
   const loadServers = async (): Promise<void> => {
     dom.serversList.replaceChildren();
     try {
@@ -1856,7 +2038,7 @@ export function start(): void {
       ? `Signed in as ${email}.`
       : creating
         ? "Create an account on nixamp.com."
-        : "Sign in to nixamp.com to publish and get paid.";
+        : "Listening needs no account. Sign in to keep favourites, follow people, and publish.";
     dom.accountSubmit.textContent = creating ? "Create account" : "Sign in";
     dom.accountToggle.textContent = creating ? "I have one" : "Create one";
     dom.accountPassword.autocomplete = creating ? "new-password" : "current-password";
@@ -1910,6 +2092,8 @@ export function start(): void {
       meId = "";
       showAccount(null);
     }
+    // Signed in or not decides whether there is anybody to keep favourites for.
+    void loadFavorites();
     openInvitedStream();
   };
 
@@ -2053,6 +2237,9 @@ export function start(): void {
     dom.publishPanel.hidden = true;
     dom.adminPanel.hidden = true;
     dom.onairPanel.hidden = true;
+    dom.onairPanel.dataset.title = "Live on this server";
+    serverName = "";
+    updateFavHere();
     watchOnAir(false);
     mode = "local";
     remoteStatus = "idle";
@@ -2203,6 +2390,14 @@ export function start(): void {
         return;
       }
       air = (await answer.json()) as OnAir;
+      // The server's own name for itself, which is what the panels are
+      // titled with: "Files on ubuntu" says where you are, "Playlist" did not.
+      if (air.server.name && air.server.name !== serverName) {
+        serverName = air.server.name;
+        dom.onairPanel.dataset.title = `Live on ${serverName}`;
+        updateFavHere();
+        draw();
+      }
     } catch {
       dom.onairPanel.hidden = true;
       return;

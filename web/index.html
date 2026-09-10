@@ -23,6 +23,8 @@
         <span class="brand">⣿ NIXAMP</span>
         <span id="status" class="status" data-playing="false">■ STOPPED</span>
         <span id="source" class="chip">no source</span>
+        <button id="fav-here" type="button" class="heart" hidden
+                title="Add this server to your favourites" aria-label="Favourite this server">♡</button>
         <button id="install" type="button" class="ghost" hidden>Install</button>
       </header>
 
@@ -49,12 +51,27 @@
           </div>
         </section>
 
-        <section class="panel" id="playlist-panel" data-title="Playlist (0)">
-          <input id="filter" type="search" class="filter" placeholder="Filter these files"
-                 aria-label="Filter the playlist" />
-          <nav id="crumbs" class="crumbs" hidden></nav>
-          <ol id="playlist" class="playlist"></ol>
-        </section>
+        <!-- The right-hand column, connected to a server: its files to browse,
+             and directly beneath them what is live on it. The two things a
+             visitor came for, side by side with the player, before anything
+             about accounts or sharing. -->
+        <div class="stack">
+          <section class="panel" id="playlist-panel" data-title="Playlist (0)">
+            <input id="filter" type="search" class="filter" placeholder="Filter these files"
+                   aria-label="Filter the playlist" />
+            <nav id="crumbs" class="crumbs" hidden></nav>
+            <ol id="playlist" class="playlist"></ol>
+          </section>
+
+          <!-- What is on, on the server you are connected to: its own stream,
+               and anybody publishing into it. Two different things that were
+               only ever visible in two different places, so "what is on here?"
+               had no answer. -->
+          <section class="panel player-only" data-title="Live on this server" id="onair-panel" hidden>
+            <p class="hint" id="onair-note"></p>
+            <ul id="onair-list" class="directory-list"></ul>
+          </section>
+        </div>
       </div>
 
       <section class="transport">
@@ -83,16 +100,21 @@
           </div>
         </section>
 
-        <section class="panel col-b" data-title="Live now" id="directory" hidden>
-          <p class="hint" id="directory-note">Looking for live streams…</p>
+        <section class="panel col-b" data-title="Servers streaming now" id="directory" hidden>
+          <p class="hint" id="directory-note">Looking for servers…</p>
           <ul id="directory-list" class="directory-list"></ul>
           <p class="hint" id="recent-note" hidden>Recently live &mdash; follow them to hear next time:</p>
           <ul id="recent-list" class="directory-list"></ul>
           <p class="hint"><a href="/" id="directory-back" hidden>Back to the player</a></p>
         </section>
 
+        <section class="panel player-only col-a" data-title="Favourites" id="favorites-panel" hidden>
+          <p class="hint" id="favorites-note">Servers you hearted. Connect to one, or let it go.</p>
+          <ul id="favorites-list" class="directory-list"></ul>
+        </section>
+
         <section class="panel player-only col-a" data-title="Account" id="account-panel">
-          <p class="hint" id="account-note">Sign in to nixamp.com to publish and get paid.</p>
+          <p class="hint" id="account-note">Listening needs no account. Sign in to keep favourites, follow people, and publish.</p>
           <div id="account-providers" class="picker" hidden></div>
           <form id="account-form" class="picker">
             <input id="account-email" type="email" autocomplete="email"
@@ -138,15 +160,6 @@
         <section class="panel player-only col-a" data-title="Your servers" id="servers-panel" hidden>
           <p class="hint" id="servers-note">The machines on your account. Open one, or forget it.</p>
           <ul id="servers-list" class="directory-list"></ul>
-        </section>
-
-        <!-- What is on, on the server you are connected to: its own stream,
-             and anybody publishing into it. Two different things that were
-             only ever visible in two different places, so "what is on here?"
-             had no answer. -->
-        <section class="panel player-only col-b" data-title="Live on this server" id="onair-panel" hidden>
-          <p class="hint" id="onair-note"></p>
-          <ul id="onair-list" class="directory-list"></ul>
         </section>
 
         <!-- What to send somebody who is not technical: one link, one number,

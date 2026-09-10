@@ -579,3 +579,26 @@ test("with nobody at the terminal to ask, a server lists itself", async () => {
   // And at a terminal it is still asked, because somebody is there to say no.
   assert.equal(wanted("ask", true), false, "asked rather than assumed");
 });
+
+test("a listing says whether the player is running and which channels are on", () => {
+  const rich = parseAnnouncement({
+    name: "ubuntu", url: "https://a.test:4321/view/k", tracks: 5717, nowPlaying: "a film",
+    playing: false, channels: ["CNN", "MLB Network", 42, "", "\u001b[31mred\u001b[0m"],
+  });
+  assert.equal(rich?.playing, false);
+  // Cleaned like a name: no control characters, nothing empty, nothing that is not a string.
+  assert.deepEqual(rich?.channels, ["CNN", "MLB Network", "[31mred [0m"]);
+
+  // An older publisher says nothing about either, and is listed as it always was.
+  const old = parseAnnouncement({ name: "x", url: "https://a.test:4321/view/k", tracks: 1, nowPlaying: "" });
+  assert.equal(old?.playing, undefined);
+  assert.equal(old?.channels, undefined);
+
+  const directory = new Directory();
+  const listed = directory.announce(old!);
+  assert.equal(listed.playing, true);
+  assert.deepEqual(listed.channels, []);
+  const listedRich = directory.announce({ ...rich!, url: "https://b.test:4321/view/k" });
+  assert.equal(listedRich.playing, false);
+  assert.deepEqual(listedRich.channels, ["CNN", "MLB Network", "[31mred [0m"]);
+});

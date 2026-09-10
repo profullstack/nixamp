@@ -30,6 +30,10 @@ export interface PublishTarget {
    */
   tracks: () => number;
   nowPlaying: () => string;
+  /** Whether the player is actually running, so a stopped server is not listed as live. */
+  playing?: () => boolean;
+  /** The live channels on this server, by name, for the listing to show. */
+  channels?: () => string[];
   /**
    * The account this stream belongs to, from `nixamp login`.
    *
@@ -101,6 +105,8 @@ export class Publisher {
           ...(this.target.audio ? { audio: this.target.audio } : {}),
           tracks: this.target.tracks(),
           nowPlaying: this.target.nowPlaying(),
+          ...(this.target.playing ? { playing: this.target.playing() } : {}),
+          ...(this.target.channels ? { channels: this.target.channels() } : {}),
         }),
       });
       if (!response.ok) {

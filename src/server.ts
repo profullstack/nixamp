@@ -54,6 +54,7 @@ import { PartyLine, telnyxSms } from "./partyline.ts";
 import { CALL_IN_NUMBER, OPT_IN_PATH, optInPage } from "./optin.ts";
 import pg from "pg";
 import { Follows, phoneFrom } from "./follows.ts";
+import { Favorites, favoriteUrl } from "./favorites.ts";
 import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
@@ -1168,6 +1169,8 @@ export interface HandlerOptions {
    * the stream.
    */
   follows?: Follows;
+  /** The servers an account hearted. nixamp.com only, like follows. */
+  favorites?: Favorites;
   /** The VAPID public key a browser needs before it can subscribe. */
   vapidPublicKey?: string;
 }
@@ -1258,6 +1261,68 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // Behind the sign-in rather than the share key: a follow belongs to an
     // account, and an account is the only thing that makes "notify me on my
     // other device" mean anything.
+    // Favourites: the servers you hearted, kept against your account. Reading
+    // the directory and listening need no account; remembering where you
+    // listened does, because there has to be somebody to remember it for.
+    if (path === "/api/v1/favorites" && options.favorites && options.accounts) {
+      const me = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (me === null) {
+        json(response, 401, { error: "sign in to keep favourites" });
+        return;
+      }
+      const favorites = options.favorites;
+
+      if (request.method === "GET") {
+        const list = await favorites.list(me.id);
+        // Whether each is on right now, from the directory: a favourite that
+        // is live is the one to click first.
+        const live = new Map((options.directory?.list() ?? []).map((one) => [one.url, one]));
+        json(response, 200, {
+          favorites: list.map((one) => {
+            const on = live.get(one.url);
+            return {
+              ...one,
+              live: on !== undefined,
+              nowPlaying: on?.playing ? on.nowPlaying : "",
+              channels: on?.channels ?? [],
+            };
+          }),
+        });
+        return;
+      }
+
+      if (request.method === "PUT" || request.method === "POST") {
+        let body: { url?: unknown; name?: unknown } = {};
+        try {
+          body = JSON.parse(await readBody(request)) as typeof body;
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+        const address = favoriteUrl(body.url);
+        if (!address) {
+          json(response, 400, { error: "give the server's address" });
+          return;
+        }
+        await favorites.add(me.id, address, typeof body.name === "string" ? body.name : "");
+        json(response, 200, { favorite: true });
+        return;
+      }
+
+      if (request.method === "DELETE") {
+        const address = favoriteUrl(url.searchParams.get("url"));
+        if (!address) {
+          json(response, 400, { error: "give the server's address" });
+          return;
+        }
+        await favorites.remove(me.id, address);
+        json(response, 200, { favorite: false });
+        return;
+      }
+      json(response, 405, { error: "GET, PUT or DELETE" });
+      return;
+    }
+
     if (path.startsWith("/api/v1/follows") && options.follows && options.accounts) {
       const me = await options.accounts.whoIs(tokenFrom(request.headers));
       if (me === null) {
@@ -3350,6 +3415,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       ? new pg.Pool({ connectionString: process.env["DATABASE_URL"] })
       : undefined;
   const follows = pool ? new Follows(pool) : undefined;
+  const favorites = pool ? new Favorites(pool) : undefined;
   // The two things that were promises kept only in memory: a caller who was
   // told they would be texted, and the ended stream a code still points at.
   const durable = pool ? new Durable(pool, (message) => console.log(message)) : undefined;
@@ -3585,6 +3651,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     tag: (next) => loadTagged(tools, next),
     ...(directory ? { directory } : {}),
     ...(follows ? { follows, vapidPublicKey } : {}),
+    ...(favorites ? { favorites } : {}),
     ...(partyLine ? { partyLine } : {}),
     // Accounts live where the directory lives, and only there: a nixamp on a
     // laptop has nobody to be an account of.
@@ -3858,6 +3925,11 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         // Asked at every heartbeat rather than once, because the library is
         // read after the port opens and is still arriving when this is made.
         tracks: () => engine.snapshot(false).trackCount,
+        // What a visitor would find here: whether the player is running, and
+        // which channels are on. A directory row that says "5,717 files,
+        // live: CNN" is one somebody can decide about; "5717 tracks" was not.
+        playing: () => engine.snapshot(false).playing,
+        channels: () => channels.list().map((one) => one.name),
         // From `nixamp login`. The directory will not list a stream it cannot
         // attribute to somebody, because a listing is now a phone code that
         // costs money to answer.
