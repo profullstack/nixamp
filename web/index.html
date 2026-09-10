@@ -51,7 +51,16 @@
                   aria-label="Copy this stream's URL">⧉</button>
           <button id="fullscreen" type="button" class="ghost" hidden
                   title="Full screen" aria-label="Full screen">⛶</button>
+          <button id="download-now" type="button" class="ghost" hidden
+                  title="Download now: the server fetches the whole thing with yt-dlp and hands it to this device">⤓ Download</button>
         </div>
+        <!-- Any link, played. The server you are connected to works out where
+             the media is (yt-dlp) and plays it to you as a channel of its own. -->
+        <form id="link-form" class="picker link-form">
+          <input id="link-url" type="url" inputmode="url" placeholder="Paste a link: YouTube, a podcast, SoundCloud, a live…"
+                 aria-label="A link to play" />
+          <button type="submit" class="button">Play link</button>
+        </form>
       </section>
 
       <div class="split">
@@ -277,6 +286,8 @@
         <span><b>s</b> Stop</span>
         <span class="spacer"></span>
         <a href="https://github.com/profullstack/nixamp">github.com/profullstack/nixamp</a>
+        <span class="muted"> · </span>
+        <a href="https://www.reddit.com/r/nixamp">r/nixamp</a>
       </footer>
     </main>
     <script type="module" src="/src/main.ts"></script>

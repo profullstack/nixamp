@@ -367,6 +367,29 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   say "  macOS:          brew install ffmpeg"
 fi
 
+# yt-dlp turns a pasted page -- YouTube, a podcast, a live -- into something
+# ffmpeg can play, and hands over a file for the Download button. Fetched as
+# the standalone build, which needs no Python, into the same bin directory.
+if ! command -v yt-dlp >/dev/null 2>&1 && [ ! -x "$BIN/yt-dlp" ]; then
+  case "$OS-$ARCH" in
+    linux-x64)    YTDLP_ASSET=yt-dlp_linux ;;
+    linux-arm64)  YTDLP_ASSET=yt-dlp_linux_aarch64 ;;
+    darwin-*)     YTDLP_ASSET=yt-dlp_macos ;;
+    *)            YTDLP_ASSET="" ;;
+  esac
+  if [ -n "$YTDLP_ASSET" ]; then
+    say ""
+    say "  Fetching yt-dlp, so a pasted link plays and can be downloaded..."
+    if download "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$YTDLP_ASSET" "$BIN/yt-dlp.tmp" 2>/dev/null; then
+      mv "$BIN/yt-dlp.tmp" "$BIN/yt-dlp" && chmod +x "$BIN/yt-dlp"
+      say "  yt-dlp installed at $BIN/yt-dlp"
+    else
+      rm -f "$BIN/yt-dlp.tmp"
+      say "  could not fetch yt-dlp; pasted links will need a direct media address until it is installed."
+    fi
+  fi
+fi
+
 if [ "$FW_RESULT" = opened ]; then
   say ""
   say "  Opened $PORT/tcp in $FIREWALL, so a stream you publish is reachable."

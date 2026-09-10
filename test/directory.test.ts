@@ -289,6 +289,39 @@ test("two streams get two codes", () => {
   assert.equal(dir.liveByCode(b.code)?.name, "Someone");
 });
 
+test("each live on a server is its own room, with a code of its own", () => {
+  // One code per server put the people calling about the basketball in with
+  // the people calling about the film.
+  const { dir } = dated();
+  const first = dir.announce({ ...stream("https://a.example/listen"), channels: ["FIBA: China vs. France", "CNN"] });
+  const fiba = first.channelCodes["FIBA: China vs. France"];
+  const cnn = first.channelCodes["CNN"];
+  assert.match(fiba ?? "", /^\d{6}$/);
+  assert.match(cnn ?? "", /^\d{6}$/);
+  assert.notEqual(fiba, cnn);
+  assert.notEqual(fiba, first.code);
+
+  // A channel's code answers as the channel, so the phone line greets by it
+  // and plays nothing of the server's own.
+  const room = dir.liveByCode(fiba ?? "");
+  assert.equal(room?.name, "FIBA: China vs. France");
+  assert.equal(room?.nowPlaying, "");
+  assert.equal(room?.url, "https://a.example/listen");
+  assert.equal(dir.liveByCode(first.code)?.name, "Chovy");
+
+  // A heartbeat keeps the codes of the channels still on, and a channel that
+  // went gets none; one that arrives gets a fresh one.
+  const again = dir.announce({ ...stream("https://a.example/listen"), channels: ["CNN", "MLB"] });
+  assert.equal(again.channelCodes["CNN"], cnn);
+  assert.equal(again.channelCodes["FIBA: China vs. France"], undefined);
+  assert.match(again.channelCodes["MLB"] ?? "", /^\d{6}$/);
+  assert.notEqual(again.channelCodes["MLB"], cnn);
+  assert.equal(dir.liveByCode(fiba ?? ""), undefined);
+
+  // No channels is the honest empty map, and an older listing reads the same.
+  assert.deepEqual(dir.announce(stream("https://b.example/listen", "Someone")).channelCodes, {});
+});
+
 test("a stream that stops is remembered, with the time it stopped", () => {
   const { dir, tick } = dated();
   const live = dir.announce(stream("https://a.example/listen"));

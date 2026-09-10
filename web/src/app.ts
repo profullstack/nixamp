@@ -65,6 +65,9 @@ export function start(): void {
     album: need<HTMLElement>("album-line"),
     meta: need<HTMLElement>("meta-line"),
     liveLine: need<HTMLElement>("live-line"),
+    downloadNow: need<HTMLButtonElement>("download-now"),
+    linkForm: need<HTMLFormElement>("link-form"),
+    linkUrl: need<HTMLInputElement>("link-url"),
     goLiveNow: need<HTMLButtonElement>("go-live-now"),
     elapsed: need<HTMLElement>("elapsed"),
     total: need<HTMLElement>("total"),
@@ -270,6 +273,8 @@ export function start(): void {
     kind: "file" | "vod" | "channel" | "live";
     catalog?: { id: string; name: string };
     entry?: { id: string; title: string; group: string; logo?: string; live: boolean };
+    /** A pasted link, when that is what is playing: where it came from, and whether it can be kept. */
+    link?: { url: string; extractor: string; download: boolean; live: boolean; video: boolean };
   } | null = null;
   /** The last answer to "what is on", so the meta line can say who is watching. */
   let lastAir: OnAir | null = null;
@@ -510,8 +515,13 @@ export function start(): void {
       channelOn ? `Live on ${where}: ` : `Live from ${where}, now playing: `,
       boldly(what),
     ];
-    if (listed && phoneCode) {
-      parts.push(". To talk about it, call ", boldly(phoneNumber || "the line"), " and key ", boldly(phoneCode), ".");
+    // A channel's own room, not the server's: every live has its own code,
+    // so the people calling about this one are not put in with the rest.
+    const code = channelOn
+      ? (lastAir?.channels.find((one) => one.id === channelOn?.id)?.code ?? "")
+      : (listed ? phoneCode : "");
+    if (code) {
+      parts.push(". To talk about it, call ", boldly(phoneNumber || "the line"), " and key ", boldly(code), ".");
     }
     const key = parts.map((p) => (typeof p === "string" ? p : p.textContent)).join("");
     if (dom.liveLine.dataset.drawn === key) return;
@@ -704,6 +714,14 @@ export function start(): void {
         chips.push(nowMeta.entry?.group ? `${nowMeta.catalog.name} › ${nowMeta.entry.group}` : nowMeta.catalog.name);
         logo = nowMeta.entry?.logo ?? "";
       }
+      // A pasted link: which site, by yt-dlp's name for it, and its host.
+      if (channelOn && nowMeta?.link) {
+        let host = "";
+        try { host = new URL(nowMeta.link.url).hostname.replace(/^www\./, ""); } catch { /* not a URL */ }
+        chips.push(nowMeta.link.extractor && nowMeta.link.extractor !== "direct" && nowMeta.link.extractor !== "generic"
+          ? `${nowMeta.link.extractor} · ${host}`
+          : host || "link");
+      }
       // The phone number and code are on the live line above, in words,
       // when the page is on a live stream; the chip covers the admin driving
       // the server's own player, which is listed but not "joined".
@@ -755,6 +773,9 @@ export function start(): void {
     // The address of what is playing, for another player. A picked file has
     // none, and nothing loaded has nothing to copy.
     dom.copyNow.hidden = player.source === "";
+    // Keeping it is for a pasted link that is a whole file somewhere: the
+    // server fetches it and this device ends up with it. A live has no whole.
+    dom.downloadNow.hidden = !(channelOn && nowMeta?.link?.download);
     dom.album.textContent = currentAlbum();
 
     const at2 = position();
@@ -1156,6 +1177,71 @@ export function start(): void {
   dom.next.addEventListener("click", () => void step(1));
   dom.stop.addEventListener("click", () => void halt());
   dom.playPause.addEventListener("click", () => void toggle());
+
+  /**
+   * Play a pasted link. The server you are connected to works out where the
+   * media is and plays it as a channel of its own; this page only asks.
+   */
+  async function playLink(url: string): Promise<void> {
+    if (mode !== "remote") {
+      note = "Connect to a server first: it fetches the link and plays it to you.";
+      draw();
+      return;
+    }
+    note = `Reading ${url}…`;
+    await whileLoading(async () => {
+      let answer: Response;
+      let body: {
+        channel?: string; name?: string; live?: boolean; video?: boolean; download?: boolean;
+        extractor?: string; error?: string;
+      } = {};
+      try {
+        answer = await fetch(remote.url("/api/links/play"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
+        body = (await answer.json().catch(() => ({}))) as typeof body;
+      } catch {
+        note = "could not reach the server";
+        return;
+      }
+      if (!answer.ok || !body.channel) {
+        note = body.error ?? "that link would not play.";
+        return;
+      }
+      await watchChannel({ id: body.channel, name: body.name || url, video: body.video !== false }, true, {
+        kind: "channel",
+        link: {
+          url,
+          extractor: body.extractor ?? "",
+          download: body.download === true,
+          live: body.live === true,
+          video: body.video !== false,
+        },
+      });
+    });
+    draw();
+  }
+
+  dom.linkForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const url = dom.linkUrl.value.trim();
+    if (url === "") return;
+    void playLink(url);
+  });
+
+  dom.downloadNow.addEventListener("click", () => {
+    const link = nowMeta?.link;
+    if (!link || mode !== "remote") return;
+    // Opened as a page, not fetched: the browser's own download, with the
+    // name the server puts on it, lands in the person's Downloads.
+    const audio = link.video ? "" : "&audio=1";
+    globalThis.open(remote.url(`/api/links/download?url=${encodeURIComponent(link.url)}${audio}`), "_blank");
+    note = "Fetching it through the server; your browser will save it when it arrives.";
+    draw();
+  });
+
   dom.goLiveNow.addEventListener("click", () => {
     const what = whatToGoLiveWith();
     if (what) void goLiveWith(what, dom.goLiveNow);
@@ -1301,6 +1387,9 @@ export function start(): void {
       /** Whether its player is running, and the live channels on it by name. */
       playing?: boolean;
       channels?: string[];
+      /** Each channel's own phone code and how many are on the phone for it. */
+      channelCodes?: Record<string, string>;
+      channelCallers?: Record<string, number>;
       /** The control link, present only when this account owns the server. */
       admin?: string;
     }[];
@@ -1380,7 +1469,10 @@ export function start(): void {
         const row = document.createElement("li");
         const dot = document.createElement("span");
         dot.className = "detail live";
-        dot.textContent = `● ${channelName}`;
+        const code = stream.channelCodes?.[channelName] ?? "";
+        const onPhone = stream.channelCallers?.[channelName] ?? 0;
+        dot.textContent = `● ${channelName}` +
+          (code ? ` · ☎ ${code}${onPhone ? ` · ${onPhone} on the phone` : ""}` : "");
         const play = document.createElement("button");
         play.type = "button";
         play.className = "button";
@@ -3199,6 +3291,8 @@ export function start(): void {
     channels: {
       id: string; name: string; via: string; listeners: number; startedAt: number;
       kind?: "audio" | "video"; redials?: number; error?: string;
+      /** Its own phone code: every live is its own room. Empty until listed. */
+      code?: string;
     }[];
     restreams?: { name: string; at: number; tracks: number }[];
   }
@@ -3340,6 +3434,9 @@ export function start(): void {
       ];
       // How it has been going. A source that keeps dropping is worth knowing
       // about, and the last thing ffmpeg said is for whoever can act on it.
+      // Its own room on the phone line, because a code you cannot see is a
+      // code you cannot dial.
+      if (channel.code) detail.push(`☎ ${channel.code}`);
       if (channel.redials) detail.push(`redialled ${channel.redials}×`);
       if (canDrive && channel.error) detail.push(channel.error);
       rows.push(onAirRow({
@@ -3598,6 +3695,12 @@ export function start(): void {
         note = "Nothing is playing on this server right now.";
         draw();
       }
+      return;
+    }
+    // A link somebody pasted, shared on: this server plays it the same way.
+    if (asked.startsWith("link:")) {
+      askedToPlay = "";
+      void playLink(asked.slice("link:".length));
       return;
     }
     const wanted = asked.startsWith("channel:") ? asked.slice("channel:".length) : "";
