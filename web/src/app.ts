@@ -164,6 +164,12 @@ export function start(): void {
   let mode: Mode = "local";
   /** What the server we are connected to calls itself, once it has said. */
   let serverName = "";
+  /**
+   * Connected on purpose as a viewer: the page hides everything that
+   * administers, even when the server would obey. Chosen in the directory,
+   * where a server you own offers both ways in.
+   */
+  let viewerOnly = false;
   let local: LocalTrack[] = [];
   let index = 0;
   let snapshot: FullSnapshot = emptySnapshot();
@@ -977,6 +983,8 @@ export function start(): void {
       /** Whether its player is running, and the live channels on it by name. */
       playing?: boolean;
       channels?: string[];
+      /** The control link, present only when this account owns the server. */
+      admin?: string;
     }[];
     try {
       const response = await fetch("/api/directory");
@@ -1035,16 +1043,36 @@ export function start(): void {
         label.append(live);
       }
 
+      // Two ways in. Viewer is for everybody; Admin is for the account the
+      // server belongs to, and is shown greyed to everyone else so that what
+      // it would take to light it up is not a mystery.
+      // The directory hands the control link to the owning account only, so
+      // holding one is the whole test of whether Admin is yours to press.
+      const mine = Boolean(stream.admin);
+      const open = (asViewer: boolean): void => {
+        viewerOnly = asViewer;
+        dom.remoteUrl.value = asViewer ? stream.url : (stream.admin ?? stream.url);
+        dom.directory.hidden = true;
+        dom.remoteForm.requestSubmit();
+      };
       const connect = document.createElement("button");
       connect.type = "button";
       connect.className = "button";
-      connect.textContent = "Connect";
-      connect.addEventListener("click", () => {
-        dom.remoteUrl.value = stream.url;
-        dom.directory.hidden = true;
-        dom.remoteForm.requestSubmit();
-      });
-      item.append(label, connect);
+      connect.textContent = "Viewer";
+      connect.title = "Browse and watch. Changes nothing on the server.";
+      connect.addEventListener("click", () => open(true));
+      const admin = document.createElement("button");
+      admin.type = "button";
+      admin.className = "button";
+      admin.textContent = "Admin";
+      admin.disabled = !mine;
+      admin.title = mine
+        ? "Drive this server: what plays, what is live, what is on it."
+        : meId
+          ? "You do not administer this server."
+          : "Sign in as this server's owner to administer it.";
+      admin.addEventListener("click", () => open(false));
+      item.append(label, connect, admin);
       // A heart, for somebody signed in: the way back to a server you liked.
       if (meId) item.append(heartButton(stream.url, stream.name));
 
@@ -1324,6 +1352,9 @@ export function start(): void {
       allowed = false;
     }
 
+    // Asked to be a viewer, so a viewer: what the server would allow is not
+    // the question when the person chose the other button.
+    if (viewerOnly) allowed = false;
     dom.adminPanel.hidden = !allowed;
     if (adminTimer) clearInterval(adminTimer);
     adminTimer = null;

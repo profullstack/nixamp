@@ -147,6 +147,12 @@ body {
   min-width: 0;
 }
 
+/* A way in that is not yours: there, so you know it exists, and greyed. */
+.directory-list li > .button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* The heart. Outlined until it is yours, filled once it is. */
 .heart {
   border: 1px solid transparent;
