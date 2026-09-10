@@ -56,6 +56,11 @@ import pg from "pg";
 import { Follows, phoneFrom } from "./follows.ts";
 import { Favorites, favoriteUrl } from "./favorites.ts";
 import { Catalogs, shownCatalog, shownEntry } from "./catalogs.ts";
+import { Porkbun, isIPv4, isIPv6, type DnsZone } from "./dns.ts";
+import { NameError, Names } from "./names.ts";
+import { AcmeIssuer, Certs } from "./certs.ts";
+import { claimName, fetchCert, labelFor, readCertFiles, writeCertFiles } from "./naming.ts";
+import { createThrottle, presentedCredential, type Throttle } from "@profullstack/throttle";
 import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
@@ -120,6 +125,8 @@ export interface ServeOptions {
   newKey: boolean;
   /** Start without the noise it makes when it wakes up. */
   noJingle: boolean;
+  /** Do not ask nixamp.com for a name and a certificate, even when signed in. */
+  noName: boolean;
   /**
    * Ask the local firewall to let the port through, and put it back on the way
    * out. Off by default because it changes the machine, not just this process.
@@ -214,6 +221,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     key: true,
     newKey: false,
     noJingle: false,
+    noName: false,
     openPort: false,
     announce: false,
     directory: false,
@@ -290,6 +298,8 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       options.newKey = true;
     } else if (arg === "--no-jingle") {
       options.noJingle = true;
+    } else if (arg === "--no-name") {
+      options.noName = true;
     } else if (arg === "--ingest") {
       options.ingest = true;
     } else if (arg === "--rtmp-streams") {
@@ -914,6 +924,37 @@ export class PlayerEngine implements Engine {
  * it. An entry names where to start, so clicking it plays.
  */
 /**
+ * A fetch-shaped Request for the throttle, built from the Node one.
+ *
+ * @profullstack/throttle is written against the web Request so it runs at an
+ * edge; this server is Node's http. Only what the throttle reads is carried
+ * across: method, URL and headers. The body is not, because metering is
+ * decided before anybody reads it.
+ */
+export function requestFor(request: IncomingMessage, origin = "http://localhost"): Request {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (typeof value === "string") headers.set(name, value);
+    else if (Array.isArray(value)) headers.set(name, value.join(", "));
+  }
+  // The address, for a throttle that has no socket to ask.
+  if (!headers.has("x-forwarded-for") && request.socket?.remoteAddress) {
+    headers.set("x-forwarded-for", request.socket.remoteAddress);
+  }
+  return new Request(`${origin}${request.url ?? "/"}`, { method: request.method ?? "GET", headers });
+}
+
+/** Write a refusal the throttle produced back through the Node response. */
+export async function answerWith(response: ServerResponse, refused: Response): Promise<void> {
+  const headers: Record<string, string> = { ...CORS };
+  refused.headers.forEach((value, name) => {
+    headers[name] = value;
+  });
+  response.writeHead(refused.status, headers);
+  response.end(Buffer.from(await refused.arrayBuffer()));
+}
+
+/**
  * How many channels a server will start on demand at once. Each is an ffmpeg,
  * and a catalog has thousands of entries; this is what keeps a room full of
  * curious people from becoming a room full of decoders.
@@ -993,7 +1034,7 @@ const CORS: Record<string, string> = {
   // control API has to be reachable cross-origin. It exposes no filesystem
   // paths and takes six commands; binding to 127.0.0.1 is what keeps it shut.
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
   "access-control-allow-headers": "content-type",
   "access-control-max-age": "86400",
 };
@@ -1181,6 +1222,18 @@ export interface HandlerOptions {
   follows?: Follows;
   /** The servers an account hearted. nixamp.com only, like follows. */
   favorites?: Favorites;
+  /** Names under `<handle>.<zone>` for an account's servers. nixamp.com only. */
+  names?: Names;
+  /** One wildcard certificate per handle, issued and renewed here. nixamp.com only. */
+  certs?: Certs;
+  /** The zone the names live in, e.g. "nixamp.com". */
+  dnsZone?: string;
+  /**
+   * The rate limit over everything, from @profullstack/throttle. Fetch-shaped,
+   * so the handler builds a Request from the Node one and writes back the
+   * Response it is refused with.
+   */
+  throttle?: Throttle;
   /** The VAPID public key a browser needs before it can subscribe. */
   vapidPublicKey?: string;
 }
@@ -1229,6 +1282,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    // Metered before anything is done for the request, so a caller over its
+    // allowance costs nothing but this check. The throttle decides; this only
+    // carries its refusal back through Node's response.
+    if (options.throttle) {
+      const refused = await options.throttle.handle(requestFor(request));
+      if (refused) {
+        await answerWith(response, refused);
+        return;
+      }
+    }
+
     // Opening a share link is what hands a browser its key. It comes back as a
     // cookie, so every later fetch, EventSource and <audio src> carries it
     // without the page knowing anything about keys. Either key works here, and
@@ -1271,6 +1335,99 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // Behind the sign-in rather than the share key: a follow belongs to an
     // account, and an account is the only thing that makes "notify me on my
     // other device" mean anything.
+    // --- names and certificates for an account's servers --------------------
+    //
+    // A server that is signed in becomes `<label>.<handle>.<zone>`, with A and
+    // AAAA records nixamp.com writes with keys only nixamp.com holds, and it
+    // serves https with the one wildcard certificate its handle has. Nothing
+    // about DNS or ACME ever reaches the box; it asks, and is answered.
+    if ((path === "/api/v1/dns" || path.startsWith("/api/v1/dns/")) && options.names && options.accounts && options.handles) {
+      const me = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (me === null) {
+        json(response, 401, { error: "sign in to name a server" });
+        return;
+      }
+      const handle = await options.handles.of(me.id);
+      if (!handle) {
+        json(response, 422, { error: "this account has no handle yet" });
+        return;
+      }
+      const names = options.names;
+      const zone = `${handle}.${options.dnsZone ?? ""}`.replace(/\.$/, "");
+
+      if (path === "/api/v1/dns" && request.method === "GET") {
+        json(response, 200, { zone, names: await names.list(me.id, handle) });
+        return;
+      }
+      const label = decodeURIComponent(path.slice("/api/v1/dns/".length));
+      if (!label) {
+        json(response, 404, { error: "no such endpoint" });
+        return;
+      }
+      if (request.method === "PUT" || request.method === "POST") {
+        let body: { a?: unknown; aaaa?: unknown; ttl?: unknown } = {};
+        try {
+          body = JSON.parse((await readBody(request)) || "{}") as typeof body;
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+        // "auto" is the address this request came from, for whichever family
+        // it came in on: a server names itself without knowing its address.
+        const caller = callerOf(request.headers, request.socket.remoteAddress, options.behindProxy ?? false);
+        const family = (value: unknown, is: (ip: unknown) => boolean): string | null | undefined => {
+          if (value === null) return null;
+          if (value === undefined) return undefined;
+          if (value === "auto") return is(caller) ? caller : undefined;
+          return String(value);
+        };
+        try {
+          const name = await names.set(me.id, handle, label, {
+            a: family(body.a, isIPv4),
+            aaaa: family(body.aaaa, isIPv6),
+            ...(typeof body.ttl === "number" ? { ttl: body.ttl } : {}),
+          });
+          json(response, 200, { name });
+        } catch (error) {
+          const status = error instanceof NameError ? error.status : 500;
+          json(response, status, { error: (error as Error).message });
+        }
+        return;
+      }
+      if (request.method === "DELETE") {
+        const gone = await names.remove(me.id, handle, label);
+        json(response, gone ? 200 : 404, gone ? { ok: true } : { error: "no such name of yours" });
+        return;
+      }
+      json(response, 405, { error: "GET, PUT or DELETE" });
+      return;
+    }
+
+    if (path === "/api/v1/certs" && options.certs && options.accounts && options.handles) {
+      const me = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (me === null) {
+        json(response, 401, { error: "sign in to get a certificate" });
+        return;
+      }
+      const handle = await options.handles.of(me.id);
+      if (!handle) {
+        json(response, 422, { error: "this account has no handle yet" });
+        return;
+      }
+      const state = await options.certs.forHandle(handle);
+      const host = `*.${handle}.${options.dnsZone ?? ""}`.replace(/\.$/, "");
+      if (state.status === "ready") {
+        json(response, 200, { status: "ready", cert: state.cert, key: state.key, expiresAt: state.expiresAt, host, renewing: state.renewing });
+        return;
+      }
+      if (state.status === "failed") {
+        json(response, 503, { status: "failed", error: state.error, host });
+        return;
+      }
+      json(response, 202, { status: "issuing", host });
+      return;
+    }
+
     // Favourites: the servers you hearted, kept against your account. Reading
     // the directory and listening need no account; remembering where you
     // listened does, because there has to be somebody to remember it for.
@@ -3566,6 +3723,54 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       : undefined;
   const follows = pool ? new Follows(pool) : undefined;
   const favorites = pool ? new Favorites(pool) : undefined;
+
+  // Names and certificates for signed-in servers, and the rate limit over
+  // everything. All of it is nixamp.com's business: the DNS keys live only
+  // here, the certificates are issued here, and a personal nixamp has neither
+  // a database nor strangers to meter. Without the registrar's keys the names
+  // are simply not offered, rather than written into a zone that does not
+  // exist.
+  const zoneName = (() => {
+    try {
+      return new URL(process.env["NIXAMP_SITE"] ?? DEFAULT_DIRECTORY).hostname;
+    } catch {
+      return "nixamp.com";
+    }
+  })();
+  const porkbunKey = process.env["PORKBUN_API_KEY"] ?? "";
+  const porkbunSecret = process.env["PORKBUN_SECRET_API_KEY"] ?? "";
+  const zone: DnsZone | null = porkbunKey && porkbunSecret ? new Porkbun(zoneName, porkbunKey, porkbunSecret) : null;
+  const names = pool && zone ? new Names(pool, zone) : undefined;
+  let certs: Certs | undefined;
+  if (pool && zone) {
+    const issuer = new AcmeIssuer({
+      directoryUrl: process.env["NIXAMP_ACME_DIRECTORY"] ?? "https://acme-v02.api.letsencrypt.org/directory",
+      email: process.env["NIXAMP_ACME_EMAIL"] ?? `hostmaster@${zoneName}`,
+      // The key is kept by the store, so the issuer asks for it each time
+      // rather than holding one that a second instance would not share.
+      accountKey: () => (certs as Certs).accountKey(),
+    });
+    certs = new Certs(pool, zone, issuer, { log: (line) => console.log(`  ${line}`) });
+  }
+  const throttle = pool
+    ? createThrottle({
+        rules: [
+          // Sign-in stays address-bucketed however the request is dressed, or
+          // a guess with an Authorization header buys itself the bigger budget.
+          { path: "/api/v1/auth/", limit: 20, credential: false },
+          { path: "/api/v1/dns/", limit: 30 },
+          { path: "/api/v1/dns", limit: 30 },
+          { path: "/api/v1/certs", limit: 30 },
+          { path: "/api/health", open: true },
+          { path: "/api/directory", limit: 120 },
+        ],
+        // A signed-in browser carries its session as a cookie, and is a
+        // credential the same as a bearer token: a person on a dashboard is
+        // not an anonymous scraper.
+        credentialFrom: (request) =>
+          presentedCredential(request.headers) ?? (tokenFrom(Object.fromEntries(request.headers)) || null),
+      })
+    : undefined;
   // The two things that were promises kept only in memory: a caller who was
   // told they would be texted, and the ended stream a code still points at.
   const durable = pool ? new Durable(pool, (message) => console.log(message)) : undefined;
@@ -3717,7 +3922,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 
   // Read before listening, so a missing or unreadable certificate is a sentence
   // now rather than a connection that resets later.
-  const tls = options.tlsCert
+  let tls: { cert: string; key: string } | undefined = options.tlsCert
     ? (() => {
         try {
           return { cert: readFileSync(options.tlsCert, "utf8"), key: readFileSync(options.tlsKey, "utf8") };
@@ -3726,6 +3931,45 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         }
       })()
     : undefined;
+
+  // A signed-in server names itself.
+  //
+  // Nothing about DNS or certificates reaches this machine: it asks nixamp.com
+  // for `<label>.<handle>.<zone>` pointing at the address it is calling from,
+  // and for the handle's wildcard certificate, and serves https under that
+  // name. The registrar's keys stay on nixamp.com. Skipped when the operator
+  // named or certified the server by hand, when it listens on one interface
+  // only, or with --no-name.
+  let certExpiresAt = 0;
+  let namedHost = "";
+  const namedSession = readSession();
+  if (
+    !options.noName && !options.publicUrl && !options.tlsCert &&
+    (options.host === "0.0.0.0" || options.host === "::") && namedSession?.token
+  ) {
+    const say = (line: string): void => console.log(`  ${line}`);
+    const named = await claimName(namedSession.site, namedSession.token, labelFor(options.name, hostname()), say);
+    if (named) {
+      namedHost = named.host;
+      // The certificate is the handle's, so the cache is keyed by the handle's
+      // wildcard rather than by this machine's label.
+      const wildcard = `*.${named.host.split(".").slice(1).join(".")}`;
+      let files = readCertFiles(stateDir(), wildcard);
+      if (!files) {
+        const got = await fetchCert(namedSession.site, namedSession.token, {}, say);
+        if (got) {
+          writeCertFiles(stateDir(), got);
+          files = { cert: got.cert, key: got.key, expiresAt: got.expiresAt };
+        }
+      }
+      if (files) {
+        tls = { cert: files.cert, key: files.key };
+        certExpiresAt = files.expiresAt;
+      }
+      options.publicUrl = `${tls ? "https" : "http"}://${named.host}:${options.port}`;
+      console.log(`  This server is ${named.host}${tls ? "" : " -- no certificate yet, so http for now"}.`);
+    }
+  }
 
   // Filled in below, when the RTMP listeners are opened. Read through a
   // function so the handler sees the list rather than the empty array it was
@@ -3803,6 +4047,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(directory ? { directory } : {}),
     ...(follows ? { follows, vapidPublicKey } : {}),
     ...(favorites ? { favorites } : {}),
+    ...(names ? { names } : {}),
+    ...(certs ? { certs } : {}),
+    dnsZone: zoneName,
+    ...(throttle ? { throttle } : {}),
     ...(partyLine ? { partyLine } : {}),
     // Accounts live where the directory lives, and only there: a nixamp on a
     // laptop has nobody to be an account of.
@@ -3854,6 +4102,23 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   });
   const bound = server.address();
   const port = typeof bound === "object" && bound !== null ? bound.port : options.port;
+
+  // A named server keeps its certificate fresh without a restart: once a day
+  // it asks for the handle's certificate again and, when a newer one has been
+  // issued, swaps it into the running listener.
+  if (namedHost && namedSession?.token) {
+    const renew = setInterval(() => {
+      void fetchCert(namedSession.site, namedSession.token, { waitMs: 0 }, () => undefined).then((got) => {
+        if (!got || got.expiresAt <= certExpiresAt) return;
+        writeCertFiles(stateDir(), got);
+        certExpiresAt = got.expiresAt;
+        const secure = server as unknown as { setSecureContext?: (context: { cert: string; key: string }) => void };
+        secure.setSecureContext?.({ cert: got.cert, key: got.key });
+        console.log(`  Renewed the certificate for ${namedHost}.`);
+      });
+    }, 24 * 60 * 60 * 1000);
+    renew.unref();
+  }
 
   const io = {
     read: readIfPossible,

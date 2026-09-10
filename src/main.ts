@@ -77,6 +77,7 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp login [--with github]  sign in to nixamp.com, in a browser or here
   nixamp logout / whoami        forget it, or check it
   nixamp token create|list|revoke  tokens for a machine that cannot sign in
+  nixamp dns [set|rm]           names under your handle, for your servers
   nixamp server list|add|remove  the machines you run, kept against your account
   nixamp opendir list|add|remove  folders found on the web, published for everyone
   nixamp update [version]        re-run the installer, keeping your choices
@@ -190,6 +191,18 @@ NIXAMP_TOKEN in the environment is a signed-in nixamp with no login at all.
 A token is shown once because the server keeps only its hash. Put it in the
 environment as NIXAMP_TOKEN, or keep it here with \`nixamp login --token\`.
 Signing out does not touch it: that is what it is for.
+`,
+  dns: `nixamp dns — names under your handle, for your servers.
+
+  nixamp dns                     every name on your account, and where it points
+  nixamp dns set NAME            NAME.<handle>.nixamp.com, pointed at this machine
+  nixamp dns set NAME --a IP --aaaa IP   pointed somewhere you name; "off" clears one
+  nixamp dns set NAME --ttl N    how long resolvers may keep it (seconds)
+  nixamp dns rm NAME             take the name away
+
+The DNS keys stay on nixamp.com. A signed-in \`nixamp serve\` names itself
+this way on start and picks up the handle's certificate, so a server is
+https://NAME.<handle>.nixamp.com with nothing typed here.
 `,
   daemon: `nixamp daemon — a nixamp that outlives the terminal that started it.
 
@@ -361,6 +374,11 @@ export async function main(): Promise<void> {
   if (first === "token" || first === "tokens") {
     const { tokens } = await import("./session.ts");
     process.exitCode = await tokens(rest);
+    return;
+  }
+  if (first === "dns") {
+    const { dns } = await import("./session.ts");
+    process.exitCode = await dns(rest);
     return;
   }
   if (first === "logout" || first === "whoami") {
