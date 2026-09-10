@@ -108,9 +108,21 @@ export function cacheKey(name: string, kind: EnrichKind, year: number | null): s
   return `${kind}|${year ?? ""}|${name.trim().toLowerCase().replace(/\s+/g, " ")}`;
 }
 
-/** Whether a stored answer is still worth believing. */
-export function fresh(entry: Cached, now: number): boolean {
-  const ttl = entry.hit === null ? MISS_TTL_MS : entry.hit.kind === "fixture" ? FIXTURE_TTL_MS : HIT_TTL_MS;
+/**
+ * Whether a stored answer is still worth believing. A miss on a name that
+ * reads as a game is believed only as long as a score would be: the fixture
+ * may not be listed yet, and a channel named for tonight's game is asked
+ * about again while it plays, not six hours from now.
+ */
+export function fresh(entry: Cached, now: number, matchup = false): boolean {
+  const ttl =
+    entry.hit === null
+      ? matchup
+        ? FIXTURE_TTL_MS
+        : MISS_TTL_MS
+      : entry.hit.kind === "fixture"
+        ? FIXTURE_TTL_MS
+        : HIT_TTL_MS;
   return now - entry.at < ttl;
 }
 
@@ -214,7 +226,7 @@ export class Enricher {
     if (asked === "") return null;
     const key = cacheKey(asked, kind, year);
     const had = this.cache.get(key);
-    if (had && fresh(had, this.now())) return had.hit;
+    if (had && fresh(had, this.now(), isMatchupName(asked))) return had.hit;
     const running = this.inflight.get(key);
     if (running) return running;
     const work = this.ask(asked, kind, year)

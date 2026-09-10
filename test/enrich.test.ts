@@ -202,6 +202,10 @@ test("a miss is remembered for a while, a hit for longer, a fixture hardly at al
   assert.equal(fresh(title, now + HIT_TTL_MS - 1), true);
   assert.equal(fresh(title, now + HIT_TTL_MS + 1), false);
   assert.equal(fresh(fixture, now + FIXTURE_TTL_MS + 1), false);
+  // A miss on a name that reads as a game is believed only a minute: the
+  // fixture may be listed by the time the channel is on.
+  assert.equal(fresh(miss, now + FIXTURE_TTL_MS + 1, true), false);
+  assert.equal(fresh(miss, now + FIXTURE_TTL_MS - 1, true), true);
   assert.equal(cacheKey(" Top  Gun ", "auto", null), cacheKey("top gun", "auto", null));
   assert.notEqual(cacheKey("top gun", "auto", 1986), cacheKey("top gun", "auto", 2022));
 });
