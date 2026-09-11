@@ -74,6 +74,7 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp daemon start|restart|stop|status  serve in the background, and let go of it
   nixamp attach                  put the player back in front of the daemon
   nixamp admin [--url U] [--key K] who is connected, and re-stream to them
+  nixamp compression analyze|status|set|pull  lossless relay compression: measure, see, set
   nixamp login [--with github]  sign in to nixamp.com, in a browser or here
   nixamp logout / whoami        forget it, or check it
   nixamp token create|list|revoke  tokens for a machine that cannot sign in
@@ -400,6 +401,11 @@ export async function main(): Promise<void> {
   if (first === "admin") {
     const { admin } = await import("./admin.ts");
     await admin(rest);
+    return;
+  }
+  if (first === "compression") {
+    const { compression } = await import("./compression/cli.ts");
+    process.exitCode = await compression(rest);
     return;
   }
   if (first === "login" || first === "signup") {

@@ -51,7 +51,9 @@ import { stateDir } from "./daemon.ts";
 import { readSession } from "./session.ts";
 import { Directory, ENDED_TTL_MS, parseAnnouncement, type Listing } from "./directory.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
-import { HlsPackagers, withKey } from "./hls.ts";
+import { HlsPackagers, segmentType, withKey } from "./hls.ts";
+import { CompressionService } from "./compression/service.ts";
+import { handleChannelCompression, handleCompressionApi, handleStaticRelay, type RouteContext } from "./compression/routes.ts";
 import { DEFAULT_SITE as NICHEDB, Enricher, type EnrichKind, FIXTURE_TTL_MS } from "./enrich.ts";
 import {
   contentTypeFor, downloadArgs, fileNameFor, inputArgsFor, linkChannelId, mergeDownloadArgs, playableLink, resolveLink,
@@ -1275,6 +1277,8 @@ export interface HandlerOptions {
   ytdlp?: string[] | null;
   /** Channels as HLS, for Safari on a phone, which plays a live stream no other way. */
   hls?: HlsPackagers;
+  /** Lossless relay compression, its policies, diagnostics and static representations. */
+  compression?: CompressionService;
   /** What a name is -- a film, a channel, a fixture -- asked of nichedb.dev and remembered. */
   enricher?: Enricher;
   /** A Netscape cookies file for sites that want a signed-in browser, when there is one. */
@@ -1473,6 +1477,24 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
       return channelEvent;
     };
+    // What the compression routes need from this handler: how to answer,
+    // how to count a stream, and whether this caller holds the controls.
+    const compressionCtx = (): RouteContext | null =>
+      options.compression
+        ? {
+            service: options.compression,
+            json,
+            readBody: (incoming) => readBody(incoming),
+            cors: CORS,
+            watch: (incoming, outgoing, track) => watch(incoming, outgoing, "stream", track),
+            controls: async () => {
+              if (key === null) return true;
+              if (scopeOf(keyFrom(request, url), key, null) === "control") return true;
+              if (options.owner) return (await options.owner.check(false, tokenFrom(request.headers))).allowed;
+              return false;
+            },
+          }
+        : null;
 
     if (request.method === "OPTIONS") {
       response.writeHead(204, CORS);
@@ -3097,6 +3119,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // A channel is one publisher and everybody listening to them. Two or three
     // devices can publish at once, each to their own channel, and a listener
     // picks which to hear.
+    // The server's compression at a glance, its switch, and the analyses.
+    if (path.startsWith("/api/compression")) {
+      const compression = compressionCtx();
+      if (compression && (await handleCompressionApi(request, response, compression, path))) return;
+    }
+
     if (path === "/api/channels" && options.channels) {
       // Without the source. Anyone holding the listen link may ask what is
       // on, and the address a channel is pulled from is the one thing about
@@ -3135,6 +3163,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         }
       }
 
+      // Its compression policy, an analysis of it, and its relay to or from
+      // another nixamp. The ordinary playback URL above is untouched by any
+      // of it: a relay is a different media type on a different path.
+      const compression = compressionCtx();
+      if (compression && (await handleChannelCompression(request, response, compression, id, action, file))) return;
+
       // The same channel as HLS: a playlist of short files, which is what
       // Safari on an iPhone plays live -- it will not take the endless MP4
       // below, and spun on it a few times before giving up. Packaged on
@@ -3172,7 +3206,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         watch(request, response, "stream", id);
         response.writeHead(200, {
           ...CORS,
-          "content-type": "video/mp2t",
+          // By its name: a TS segment, an fMP4 media segment, or the init.
+          "content-type": segmentType(file ?? ""),
           "cache-control": "no-store",
           "content-length": statSync(segment).size,
         });
@@ -3216,9 +3251,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
 
       if (action === undefined && request.method === "DELETE") {
-        // Asked once: the second call would answer false, having just stopped
-        // the thing it was asking about.
-        const stopped = channels.stop(id);
+        // A channel fed by another nixamp's relay is taken off by stopping
+        // the relay, which takes the channel with it; otherwise it would
+        // dial again the moment the channel went. Asked once either way:
+        // the second call would answer false, having just stopped the
+        // thing it was asking about.
+        const stopped = (options.compression?.stopPull(id) ?? false) || channels.stop(id);
         // Taken off on purpose is forgotten on purpose: it must not come back
         // at the next restart.
         if (stopped) {
@@ -3709,6 +3747,30 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       } catch (error) {
         json(response, 422, { error: (error as Error).message.replace(/^nixamp: /, "") });
       }
+      return;
+    }
+
+    // A library file in the relay envelope: the same bytes as /api/media/N,
+    // framed and compressed once and kept. The original stays where it is
+    // and keeps answering ranges; this cannot be asked for one.
+    const staticRelay = /^\/api\/media\/(\d+)\/relay$/.exec(path);
+    if (staticRelay && request.method === "GET") {
+      const compression = compressionCtx();
+      if (!compression) {
+        json(response, 503, { error: "this server keeps no relay representations" });
+        return;
+      }
+      if (!options.media) {
+        json(response, 403, { error: "media streaming is off" });
+        return;
+      }
+      const index = Number(staticRelay[1]);
+      const file = engine.trackPath(index);
+      if (file === undefined) {
+        json(response, 404, { error: "no such track" });
+        return;
+      }
+      handleStaticRelay(request, response, compression, file, engine.snapshot().tracks?.[index]?.title ?? file);
       return;
     }
 
@@ -4298,10 +4360,22 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     cacheFile: join(stateDir(), "enrich.json"),
     onEvent: (message) => console.log(message),
   });
+  // Off unless a policy says otherwise: every channel plays exactly as it
+  // did, and a relay is a thing another nixamp asks for by name.
+  const compression = new CompressionService({
+    channels,
+    stateDir: stateDir(),
+    port: options.port,
+    ffprobe: tools.ffprobe,
+    cacheDir: join(stateDir(), "relay-cache"),
+    onEvent: (message) => console.log(message),
+  });
   const hls = new HlsPackagers({
     ffmpeg: tools.ffmpeg,
     listen: (id, listener) => channels.listen(id, listener),
     onEvent: (message) => console.log(message),
+    // TS unless the channel's policy, or the server's, asks for fMP4.
+    packaging: (id) => compression.packagingOf(id),
   });
 
   // The channels this server was carrying when it was last stopped, put back
@@ -4698,6 +4772,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ytdlp: tools.ytdlp ?? null,
     cookies: cookiesFile(),
     hls,
+    compression,
     enricher,
     ...(tls ? { tls } : {}),
     // Untagged, so a directory of five thousand files answers at once; the
@@ -5147,6 +5222,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const shutdown = (): void => {
     rtmp?.stop();
     enricher.save();
+    compression.stopAll();
     hls.stopAll();
     channels.stopAll();
     ingest?.stopRtmp();

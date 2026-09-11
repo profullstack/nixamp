@@ -223,6 +223,39 @@ is the whole point.
 Publishing is administering the server, so it needs the control link or the
 owner's account. Listening only needs the share link, like any other audio.
 
+### Relaying a channel to another nixamp, compressed
+
+A channel can be carried from one nixamp to another with fewer bytes on the
+wire and every byte restored at the far end. It is off until you turn it on,
+per channel, and nothing about ordinary playback changes when you do.
+
+```
+nixamp compression analyze --channel cnn          what a codec would make of it
+nixamp compression set --channel cnn --mode auto  compress when it pays, store when it does not
+nixamp compression status --channel cnn           what it is doing, in bytes
+nixamp compression off                            the whole server, at once
+```
+
+On the receiving nixamp:
+
+```
+nixamp compression pull --channel cnn --from https://host:4321/api/channels/cnn/relay --from-key KEY
+```
+
+and `cnn` is a channel there, heard at `/api/channels/cnn` like any other.
+The relay is `GET /api/channels/<id>/relay` as `application/vnd.nixamp.stream`,
+a framed stream of Zstandard blocks each carrying the length and SHA-256 of
+what it stands for, ending in a marker; a block that would not shrink is
+sent as it is, and the metrics say so rather than claiming a saving. A
+library file gets the same treatment at `/api/media/<n>/relay`, built once
+and kept. `nixamp compression analyze FILE` measures a file here with no
+server at all. The wire format, the policy, the limits and the switch are
+in [docs/stream-compression.md](docs/stream-compression.md).
+
+HLS can be packaged as fragmented MP4 instead of MPEG-TS
+(`--hls fmp4` on `compression set`, or server-wide): the same boxes the
+channel already carries, copied into files, never re-encoded.
+
 ## Streaming into it
 
 A nixamp can be the thing you broadcast *to*, not just from.
