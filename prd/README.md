@@ -1,6 +1,6 @@
 # LogicSRC PRDs
 
-Numbered [OpenPRD](https://github.com/profullstack/logicsrc/blob/master/docs/openprd.md) product requirements documents for this repo. One file
+Numbered [OpenPRD](../docs/openprd.md) product requirements documents for this repo. One file
 per PRD at `prd/<id>-<slug>.md`, four-digit ids, no gaps. `0000-template.md` is the copy-paste
 starting point.
 

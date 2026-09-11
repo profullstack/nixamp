@@ -10,7 +10,7 @@ repo: profullstack/nixamp
 created: "2026-09-11"
 updated: "2026-09-11"
 discussion: "https://www.reddit.com/r/compression/comments/1wdc46u/comment/p97uoz0/"
-implementation:
+implementation: "https://github.com/profullstack/nixamp/pull/124"
 tags: [nixamp, streaming, compression, lossless, mpegts, hls, performance]
 supersedes:
 superseded-by:
