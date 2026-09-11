@@ -219,11 +219,17 @@ export class Channel {
    * because you looked away, and a room where the picture depends on who is
    * in it is not a room anybody can be invited to.
    */
-  pull(source: string, encode: string[], paced = true, stall = STALL, input: string[] = []): void {
+  pull(source: string, encode: string[], paced = true, stall = STALL, input: string[] = [], audio = ""): void {
     this.stall = stall;
     if (this.info.kind === "video") this.fragments = new Fragments();
     const [command, ...prefix] = this.options.ffmpeg as [string, ...string[]];
     const remote = /^https?:\/\//i.test(source);
+    // What every remote input is told: dial again when the CDN drops it, and
+    // give up on a socket that has gone quiet. Input options apply to the
+    // input that follows them, so a second input is told again.
+    const remoteArgs = remote
+      ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5", "-rw_timeout", String(stall * 1000)]
+      : [];
 
     const dial = (): void => {
       if (this.closing) return;
@@ -237,12 +243,11 @@ export class Channel {
           // A dropped source is normal over hours, and a channel that dies
           // the first time a CDN hiccups is not a channel anybody can rely
           // on. ffmpeg redials on its own before we have to.
-          ...(remote ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] : []),
           // A connection that stops answering is an error after this long,
-          // and an error is a thing the reconnect above knows what to do
-          // with. Without it a silent socket is waited on for ever. In
+          // and an error is a thing the reconnect knows what to do with.
+          // Without it a silent socket is waited on for ever. In
           // microseconds, as ffmpeg wants it.
-          ...(remote ? ["-rw_timeout", String(stall * 1000)] : []),
+          ...remoteArgs,
           // Real time, always. A file read as fast as the disk allows is an
           // hour of film in ninety seconds and a room that cannot be in it
           // together; a live source is already paced and loses nothing.
@@ -252,6 +257,9 @@ export class Channel {
           // and a CDN that got them from yt-dlp and not from us answers 403.
           ...input,
           "-i", source,
+          // The sound, when the site keeps it apart from the picture: a
+          // second input, dialled the same way, that the encode maps in.
+          ...(audio ? [...remoteArgs, ...(paced ? ["-re"] : []), ...input, "-i", audio] : []),
           ...encode,
           "pipe:1",
         ],
@@ -617,6 +625,7 @@ export class Channels {
     paced = true,
     stall = STALL,
     input: string[] = [],
+    audio = "",
   ): Channel | null {
     if (this.open.has(id)) return null;
     const channel = new Channel(
@@ -635,7 +644,7 @@ export class Channels {
       (gone) => this.open.delete(gone),
     );
     this.open.set(id, channel);
-    channel.pull(source, encode, paced, stall, input);
+    channel.pull(source, encode, paced, stall, input, audio);
     return channel;
   }
 

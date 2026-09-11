@@ -54,7 +54,8 @@ import { PartyLine, telnyxSms } from "./partyline.ts";
 import { HlsPackagers, withKey } from "./hls.ts";
 import { DEFAULT_SITE as NICHEDB, Enricher, type EnrichKind, FIXTURE_TTL_MS } from "./enrich.ts";
 import {
-  contentTypeFor, downloadArgs, fileNameFor, inputArgsFor, linkChannelId, playableLink, resolveLink, saveFormat,
+  contentTypeFor, downloadArgs, fileNameFor, inputArgsFor, linkChannelId, mergeDownloadArgs, playableLink, resolveLink,
+  saveFormat,
   type ResolvedLink,
 } from "./links.ts";
 import { CALL_IN_NUMBER, OPT_IN_PATH, optInPage } from "./optin.ts";
@@ -985,15 +986,30 @@ export async function pullChannel(
   name: string,
   source: string,
   input: string[] = [],
+  audio = "",
 ): Promise<Channel | null> {
-  const codecs = await codecsOf({ ffmpeg: [], ffprobe, play: null }, source, input);
+  const tools = { ffmpeg: [], ffprobe, play: null };
+  // A pair is probed as a pair: the picture's file has no sound in it, and
+  // asked alone it would read as a silent film. The sound's codec comes from
+  // the sound's file; the picture's, and the container, from the picture's.
+  const [picture, sound] = await Promise.all([
+    codecsOf(tools, source, input),
+    audio ? codecsOf(tools, audio, input) : Promise.resolve(null),
+  ]);
+  const codecs = sound ? { ...picture, audio: sound.audio } : picture;
   const kind = codecs.video === "" ? "audio" : "video";
   const encode = kind === "video"
-    ? videoArgs(codecs)
+    ? [
+        // Which streams from which input, when there are two: the picture
+        // from the first, the sound from the second. With one input ffmpeg
+        // picks for itself, as it always did.
+        ...(audio ? ["-map", "0:v:0", "-map", "1:a:0"] : []),
+        ...videoArgs(codecs),
+      ]
     // No picture in it, so none is invented: MP3 is the thing every browser
     // plays and the thing a listener can join halfway through.
     : ["-vn", "-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"];
-  return channels.pull(id, name, source, encode, kind, true, undefined, input);
+  return channels.pull(id, name, source, encode, kind, true, undefined, input, kind === "video" ? audio : "");
 }
 
 /** What a link resolves to, kept so a download can be named without asking twice. */
@@ -2863,7 +2879,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       if (!options.channels.has(channelId)) {
         const started = await pullChannel(
           options.channels, options.ffprobe ?? ["ffprobe"], channelId, resolved.title, resolved.media,
-          inputArgsFor(resolved.headers),
+          inputArgsFor(resolved.headers), resolved.audio,
         );
         if (!started) {
           json(response, 409, { error: "that link is already starting" });
@@ -2908,11 +2924,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // as the plain MP3 the site also offers, and ".m4a" on an MP3 is a
       // file nothing will open.
       const saved = await resolveLink(options.ytdlp, link, { cookies: options.cookies ?? "", format: saveFormat(audioOnly) });
-      const fileName = fileNameFor("error" in saved ? resolved : { ...resolved, ext: saved.ext || resolved.ext }, audioOnly);
-      const [command, ...prefix] = options.ytdlp as [string, ...string[]];
-      const child = spawn(command, [...prefix, ...downloadArgs(link, audioOnly, options.cookies ?? "")], {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const chosen = "error" in saved ? resolved : { ...resolved, ext: saved.ext || resolved.ext, media: saved.media, audio: saved.audio, headers: saved.headers };
+      const fileName = fileNameFor(chosen, audioOnly);
+      // A picture and a sound kept apart by the site are put together here
+      // by ffmpeg, as they go: yt-dlp only merges into a file it can seek
+      // in, which a pipe is not. Anything else yt-dlp hands over whole.
+      const paired = !audioOnly && chosen.audio !== "";
+      const [command, ...prefix] = (paired ? (options.ffmpeg ?? ["ffmpeg"]) : options.ytdlp) as [string, ...string[]];
+      const child = spawn(
+        command,
+        [...prefix, ...(paired ? mergeDownloadArgs(chosen) : downloadArgs(link, audioOnly, options.cookies ?? ""))],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
       response.writeHead(200, {
         "content-type": contentTypeFor(fileName),
         "content-disposition": `attachment; filename="${fileName.replace(/["\\]/g, "")}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
