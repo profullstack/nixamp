@@ -185,7 +185,11 @@ export function start(): void {
    * is an empty box in most monospace faces, which is what the icons were
    * on a machine without an emoji font. These are drawn, not typed.
    */
-  const ICONS: Record<"link" | "copy" | "restart" | "remove" | "check" | "live", string> = {
+  const ICONS: Record<"link" | "copy" | "restart" | "remove" | "check" | "live" | "eye" | "gear", string> = {
+    // An eye is a viewer; a gear is an administrator. Both a size up from the
+    // row icons, because each is a way in rather than a thing to do to a row.
+    eye: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+    gear: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>',
     live: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><path d="M8.5 15.5a5 5 0 0 1 0-7"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M5.6 18.4a9 9 0 0 1 0-12.8"/><path d="M18.4 5.6a9 9 0 0 1 0 12.8"/></svg>',
     link: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
     copy: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
@@ -1734,22 +1738,27 @@ export function start(): void {
         row.append(dot, play);
         lives.append(row);
       }
+      // An eye and a gear rather than the words: the row is the server's name
+      // and what is on it, and two more words beside every one of them was
+      // noise. The words are still there for a screen reader and on hover.
       const connect = document.createElement("button");
       connect.type = "button";
-      connect.className = "button";
-      connect.textContent = "Viewer";
-      connect.title = "Browse and watch. Changes nothing on the server.";
+      connect.className = "icon way-in";
+      drawIcon(connect, "eye");
+      connect.title = "Viewer: browse and watch. Changes nothing on the server.";
+      connect.setAttribute("aria-label", `View ${stream.name}`);
       connect.addEventListener("click", () => open(true));
       const admin = document.createElement("button");
       admin.type = "button";
-      admin.className = "button";
-      admin.textContent = "Admin";
+      admin.className = "icon way-in";
+      drawIcon(admin, "gear");
       admin.disabled = !mine;
       admin.title = mine
-        ? "Drive this server: what plays, what is live, what is on it."
+        ? "Admin: drive this server. What plays, what is live, what is on it."
         : meId
-          ? "You do not administer this server."
-          : "Sign in as this server's owner to administer it.";
+          ? "Admin: you do not administer this server."
+          : "Admin: sign in as this server's owner to administer it.";
+      admin.setAttribute("aria-label", `Administer ${stream.name}`);
       admin.addEventListener("click", () => open(false));
       item.append(label, connect, admin);
       // A heart, for somebody signed in: the way back to a server you liked.
