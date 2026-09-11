@@ -1053,7 +1053,7 @@ body.tv #app { max-width: 1400px; }
 
 body.tv .row,
 body.tv .folder {
-  padding: 8px 10px;
+  padding: 5px 10px;
   border-radius: 4px;
 }
 body.tv .row:focus-visible,
