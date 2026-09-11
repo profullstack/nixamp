@@ -55,6 +55,14 @@ export const PANEL_REGISTRY: readonly PanelDefinition[] = [
   { type: "about", title: "About" },
   { type: "join", title: "Join" },
   { type: "stage", title: "Stage", permissions: ["room.speak"] },
+  // A show is watched as well as heard, and what surrounds it is how it earns.
+  { type: "stage-video", title: "Stage" },
+  { type: "setlist", title: "Setlist" },
+  { type: "tip-jar", title: "Tip Jar" },
+  { type: "merch", title: "Merch" },
+  { type: "tickets", title: "Tickets" },
+  { type: "lineup", title: "Lineup" },
+  { type: "soundcheck", title: "Soundcheck", permissions: ["event.perform"] },
   { type: "chat", title: "Chat" },
   { type: "participants", title: "People", permissions: ["room.listen"] },
   { type: "speakers", title: "Speakers", permissions: ["room.speak"] },
@@ -103,13 +111,19 @@ function presetPanel(
   };
 }
 
+/**
+ * A preset belongs to the family its name starts with -- `concert-artist` is
+ * the concert family -- so a new vertical is a set of presets and nothing else.
+ * The admin layout is the exception: it is a role, not a brand.
+ */
 function preset(name: string, panels: PanelInstance[]): Layout {
   const now = new Date(0).toISOString();
+  const family = name.split("-")[0] ?? name;
   return {
     id: name,
     name,
     scope: name === "nixamp-admin" ? "role" : "brand",
-    scopeId: name === "nixamp-admin" ? "admin" : "backtoschool",
+    scopeId: name === "nixamp-admin" ? "admin" : family,
     panels,
     version: 1,
     createdAt: now,
@@ -163,12 +177,75 @@ const adminPanels = [
   presetPanel("advanced-nixamp", "advanced-nixamp", "drawer", 23),
 ] satisfies PanelInstance[];
 
+/**
+ * A live show. The stage is the thing; the setlist says what is happening, the
+ * tip jar and the merch shelf are how a night pays, and the till is a panel
+ * like any other so a client that cannot sell tickets simply does not draw it.
+ */
+const concertViewerPanels = [
+  presetPanel("event-header", "event-header", "primary", 0),
+  presetPanel("stage-video", "stage-video", "primary", 1),
+  presetPanel("tickets", "tickets", "secondary", 2),
+  presetPanel("lineup", "lineup", "secondary", 3),
+  presetPanel("about", "about", "secondary", 4),
+  presetPanel("share", "share", "bottom", 5),
+  presetPanel("chat", "chat", "drawer", 6, { collapsed: true }),
+] satisfies PanelInstance[];
+
+const concertTicketHolderPanels = [
+  presetPanel("event-header", "event-header", "primary", 0),
+  presetPanel("stage-video", "stage-video", "primary", 1),
+  presetPanel("setlist", "setlist", "secondary", 2),
+  presetPanel("chat", "chat", "secondary", 3),
+  presetPanel("tip-jar", "tip-jar", "sidebar", 4),
+  presetPanel("merch", "merch", "sidebar", 5),
+  presetPanel("participants", "participants", "sidebar", 6),
+  presetPanel("share", "share", "bottom", 7),
+] satisfies PanelInstance[];
+
+const concertArtistPanels = [
+  presetPanel("event-header", "event-header", "primary", 0),
+  presetPanel("stage-video", "stage-video", "primary", 1),
+  presetPanel("setlist", "setlist", "secondary", 2),
+  presetPanel("soundcheck", "soundcheck", "secondary", 3),
+  presetPanel("chat", "chat", "sidebar", 4),
+  presetPanel("participants", "participants", "sidebar", 5),
+  presetPanel("invite", "invite", "sidebar", 6),
+  presetPanel("tip-jar", "tip-jar", "sidebar", 7),
+  presetPanel("merch", "merch", "sidebar", 8),
+  presetPanel("event-controls", "event-controls", "bottom", 9),
+  presetPanel("schedule", "schedule", "bottom", 10),
+  presetPanel("recording", "recording", "bottom", 11),
+  presetPanel("tickets", "tickets", "bottom", 12),
+  presetPanel("share", "share", "bottom", 13),
+] satisfies PanelInstance[];
+
 export const LAYOUT_PRESETS: Readonly<Record<string, Layout>> = {
   "backtoschool-viewer": preset("backtoschool-viewer", viewerPanels),
   "backtoschool-member": preset("backtoschool-member", memberPanels),
   "backtoschool-host": preset("backtoschool-host", hostPanels),
+  "concert-viewer": preset("concert-viewer", concertViewerPanels),
+  "concert-ticketholder": preset("concert-ticketholder", concertTicketHolderPanels),
+  "concert-artist": preset("concert-artist", concertArtistPanels),
   "nixamp-admin": preset("nixamp-admin", adminPanels),
 };
+
+/** Where a viewer stands in the room, whatever kind of room it is. */
+export type LayoutRole = "viewer" | "member" | "host";
+
+/**
+ * The preset for a kind of event and who is looking at it.
+ *
+ * One place, because otherwise every client invents its own mapping and a new
+ * kind of live means editing all of them. A kind with no presets of its own
+ * falls back to the general ones rather than to nothing.
+ */
+export function layoutNameFor(kind: string, role: LayoutRole): string {
+  if (kind === "concert") {
+    return role === "host" ? "concert-artist" : role === "member" ? "concert-ticketholder" : "concert-viewer";
+  }
+  return `backtoschool-${role}`;
+}
 
 const LAYOUT_SCHEMA = `
   CREATE TABLE IF NOT EXISTS nixamp_layouts (

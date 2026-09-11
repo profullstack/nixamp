@@ -172,6 +172,41 @@ on first use in the configured PostgreSQL database. `RESEND_API_KEY` and
 `NIXAMP_MAIL_FROM` are optional if invitation email should be sent rather than
 only returning a shareable link.
 
+## Live shows, and tickets
+
+A live event carries a **kind**: `talk`, `class`, or `concert`. The kind is
+what a branded client reads to pick a layout, and what `/api/v1/events?kind=`
+filters the directory by, so one NixAmp serves a school and a venue without
+either knowing about the other. `concert` brings its own presets
+(`concert-viewer`, `concert-ticketholder`, `concert-artist`) with a stage,
+a setlist, a tip jar, a merch shelf and a till.
+
+A concert also has doors and an encore. `POST /api/v1/events/:id/doors` opens
+the room before the music, `.../start` begins it, `.../encore` says the band
+came back, and `.../end` closes it. Opening, playing and coming back on are
+allowed to everyone on the stage; cancelling and archiving stay with the host.
+An **artist** is an invitation role beside moderator: they perform without
+being handed the guest list.
+
+**A ticket is a paid pass to one room**, over x402 and settled by CoinPay,
+exactly like the crawler paywall but scoped to a single event:
+
+```
+POST /api/v1/events/:id/tickets          # X-PAYMENT proof in, ticket out
+GET  /api/v1/events/:id/tickets          # what it costs and whether you hold one
+POST /api/v1/events/:id/tickets/comp     # the guest list, hosts only
+```
+
+Set `ticketPriceCents` and a `payTo` address on the event and the room answers
+402 to anyone without a ticket, quoting the price; the money goes to the
+event's own address, never to the platform. The ticket rides in
+`x-nixamp-ticket`, or in `?ticket=` for an `<audio>` or `<video>` element that
+cannot set a header. `COINPAY_X402_KEY` switches sales on; without it every
+event is simply a free one. `NIXAMP_TICKET_SECRET` signs the passes (it
+defaults to the CoinPay key), and each event's tickets are signed with a
+secret derived from it and the event id, so a ticket to Friday is not a ticket
+to Saturday.
+
 ## The directory
 
 [nixamp.com/directory](https://nixamp.com/directory) lists nixamps that agreed

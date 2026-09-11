@@ -4,19 +4,36 @@ import type { Queryable } from "./follows.ts";
 export const LIVE_EVENT_STATUSES = [
   "draft",
   "scheduled",
+  // Doors open: the room is reachable, the show has not started.
   "starting",
   "live",
+  // The set ended and the band came back. Its own state because a listener
+  // arriving now is arriving at something, and "ended" would turn them away.
+  "encore",
   "ended",
   "cancelled",
   "archived",
 ] as const;
 
 export const LIVE_EVENT_VISIBILITIES = ["public", "unlisted", "private"] as const;
-export const INVITATION_ROLES = ["listener", "speaker", "moderator"] as const;
+
+/**
+ * What kind of live this is. NixAmp owns the room; the kind is what a branded
+ * client reads to decide which layout, which words, and which panels. Nothing
+ * here is named after a site: "concert" is a concert whoever is showing it.
+ */
+export const LIVE_EVENT_KINDS = ["talk", "class", "concert"] as const;
+
+/**
+ * `artist` sits beside moderator: somebody who performs rather than presides.
+ * They go on stage and drive the show without being handed the guest list.
+ */
+export const INVITATION_ROLES = ["listener", "speaker", "artist", "moderator"] as const;
 export const INVITATION_STATES = ["pending", "accepted", "declined", "revoked", "expired"] as const;
 
 export type LiveEventStatus = (typeof LIVE_EVENT_STATUSES)[number];
 export type LiveEventVisibility = (typeof LIVE_EVENT_VISIBILITIES)[number];
+export type LiveEventKind = (typeof LIVE_EVENT_KINDS)[number];
 export type InvitationRole = (typeof INVITATION_ROLES)[number];
 export type InvitationState = (typeof INVITATION_STATES)[number];
 
@@ -27,6 +44,9 @@ export interface LiveEvent {
   title: string;
   description?: string;
   topic?: string;
+  kind: LiveEventKind;
+  /** When the room opens, ahead of the music. Optional, and never after startsAt. */
+  doorsOpenAt?: string;
   startsAt?: string;
   endsAt?: string;
   timezone: string;
@@ -36,7 +56,15 @@ export interface LiveEvent {
   roomId: string;
   inviteeIds: string[];
   speakerIds: string[];
+  artistIds: string[];
   moderatorIds: string[];
+  /** 0 is a free show. Above it, a ticket is a paid pass to this room. */
+  ticketPriceCents: number;
+  ticketCurrency: string;
+  /** How long one ticket admits for. A day by default, which covers a replay. */
+  ticketMinutes: number;
+  /** Where the ticket money goes: the performer's address, not the platform's. */
+  payTo?: string;
   chatEnabled: boolean;
   handRaiseEnabled: boolean;
   recordingEnabled: boolean;
@@ -68,6 +96,12 @@ export interface CreateLiveEventInput {
   title: unknown;
   description?: unknown;
   topic?: unknown;
+  kind?: unknown;
+  doorsOpenAt?: unknown;
+  ticketPriceCents?: unknown;
+  ticketCurrency?: unknown;
+  ticketMinutes?: unknown;
+  payTo?: unknown;
   startsAt?: unknown;
   endsAt?: unknown;
   timezone?: unknown;
@@ -88,6 +122,7 @@ export interface UpdateLiveEventInput extends Partial<CreateLiveEventInput> {
 export interface EventListQuery {
   ownerId?: string;
   status?: LiveEventStatus;
+  kind?: LiveEventKind;
   topic?: string;
   from?: string;
   limit?: number;
@@ -107,6 +142,12 @@ const EVENT_SCHEMA = `
     title                      TEXT NOT NULL,
     description                TEXT NOT NULL DEFAULT '',
     topic                      TEXT NOT NULL DEFAULT '',
+    kind                       TEXT NOT NULL DEFAULT 'talk',
+    doors_open_at              TIMESTAMPTZ,
+    ticket_price_cents         INTEGER NOT NULL DEFAULT 0,
+    ticket_currency            TEXT NOT NULL DEFAULT 'USD',
+    ticket_minutes             INTEGER NOT NULL DEFAULT 1440,
+    pay_to                     TEXT,
     starts_at                  TIMESTAMPTZ,
     ends_at                    TIMESTAMPTZ,
     timezone                   TEXT NOT NULL DEFAULT 'UTC',
@@ -122,8 +163,9 @@ const EVENT_SCHEMA = `
     version                    INTEGER NOT NULL DEFAULT 1,
     created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK (status IN ('draft', 'scheduled', 'starting', 'live', 'ended', 'cancelled', 'archived')),
     CHECK (visibility IN ('public', 'unlisted', 'private')),
+    CHECK (ticket_price_cents >= 0),
+    CHECK (ticket_minutes BETWEEN 1 AND 525600),
     CHECK (expected_duration_minutes IS NULL OR expected_duration_minutes BETWEEN 1 AND 1440),
     CHECK (ends_at IS NULL OR starts_at IS NULL OR ends_at > starts_at)
   );
@@ -131,6 +173,47 @@ const EVENT_SCHEMA = `
     ON live_events (visibility, status, starts_at, updated_at DESC);
   CREATE INDEX IF NOT EXISTS live_events_owner
     ON live_events (owner_id, updated_at DESC);
+  CREATE INDEX IF NOT EXISTS live_events_kind
+    ON live_events (kind, status, starts_at);
+
+  -- The repo has no migration runner, so a table that already exists is
+  -- brought forward here. Every statement is idempotent, and the CHECKs are
+  -- replaced by name rather than added twice: the originals were unnamed, so
+  -- the ones carrying the old status list are found by what they say.
+  ALTER TABLE live_events ADD COLUMN IF NOT EXISTS kind               TEXT    NOT NULL DEFAULT 'talk';
+  ALTER TABLE live_events ADD COLUMN IF NOT EXISTS doors_open_at      TIMESTAMPTZ;
+  ALTER TABLE live_events ADD COLUMN IF NOT EXISTS ticket_price_cents INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE live_events ADD COLUMN IF NOT EXISTS ticket_currency    TEXT    NOT NULL DEFAULT 'USD';
+  ALTER TABLE live_events ADD COLUMN IF NOT EXISTS ticket_minutes     INTEGER NOT NULL DEFAULT 1440;
+  ALTER TABLE live_events ADD COLUMN IF NOT EXISTS pay_to             TEXT;
+
+  DO $$
+  DECLARE stale record;
+  BEGIN
+    FOR stale IN
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'live_events'::regclass AND contype = 'c'
+        AND conname <> 'live_events_status_allowed'
+        AND pg_get_constraintdef(oid) LIKE '%archived%'
+    LOOP
+      EXECUTE format('ALTER TABLE live_events DROP CONSTRAINT %I', stale.conname);
+    END LOOP;
+    FOR stale IN
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'live_event_invitations'::regclass AND contype = 'c'
+        AND conname <> 'live_event_invitations_role_allowed'
+        AND pg_get_constraintdef(oid) LIKE '%moderator%'
+    LOOP
+      EXECUTE format('ALTER TABLE live_event_invitations DROP CONSTRAINT %I', stale.conname);
+    END LOOP;
+  END $$;
+
+  ALTER TABLE live_events DROP CONSTRAINT IF EXISTS live_events_status_allowed;
+  ALTER TABLE live_events ADD CONSTRAINT live_events_status_allowed
+    CHECK (status IN ('draft', 'scheduled', 'starting', 'live', 'encore', 'ended', 'cancelled', 'archived'));
+  ALTER TABLE live_events DROP CONSTRAINT IF EXISTS live_events_kind_allowed;
+  ALTER TABLE live_events ADD CONSTRAINT live_events_kind_allowed
+    CHECK (kind IN ('talk', 'class', 'concert'));
 
   CREATE TABLE IF NOT EXISTS live_event_invitations (
     id          TEXT PRIMARY KEY,
@@ -144,7 +227,6 @@ const EVENT_SCHEMA = `
     expires_at   TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK (role IN ('listener', 'speaker', 'moderator')),
     CHECK (state IN ('pending', 'accepted', 'declined', 'revoked', 'expired')),
     CHECK (invitee_id IS NOT NULL OR email IS NOT NULL)
   );
@@ -152,6 +234,10 @@ const EVENT_SCHEMA = `
     ON live_event_invitations (event_id, state, created_at);
   CREATE INDEX IF NOT EXISTS live_event_invitations_invitee
     ON live_event_invitations (invitee_id, state);
+
+  ALTER TABLE live_event_invitations DROP CONSTRAINT IF EXISTS live_event_invitations_role_allowed;
+  ALTER TABLE live_event_invitations ADD CONSTRAINT live_event_invitations_role_allowed
+    CHECK (role IN ('listener', 'speaker', 'artist', 'moderator'));
 `;
 
 const SELECT_EVENT = `
@@ -169,6 +255,11 @@ const SELECT_EVENT = `
     COALESCE((
       SELECT array_agg(DISTINCT i.invitee_id) FILTER (WHERE i.invitee_id IS NOT NULL)
       FROM live_event_invitations i
+      WHERE i.event_id = e.id AND i.state = 'accepted' AND i.role = 'artist'
+    ), ARRAY[]::text[]) AS artist_ids,
+    COALESCE((
+      SELECT array_agg(DISTINCT i.invitee_id) FILTER (WHERE i.invitee_id IS NOT NULL)
+      FROM live_event_invitations i
       WHERE i.event_id = e.id AND i.state = 'accepted' AND i.role = 'moderator'
     ), ARRAY[]::text[]) AS moderator_ids
   FROM live_events e
@@ -178,7 +269,9 @@ const TRANSITIONS: Record<LiveEventStatus, readonly LiveEventStatus[]> = {
   draft: ["scheduled", "starting", "live", "cancelled"],
   scheduled: ["draft", "starting", "live", "cancelled"],
   starting: ["live", "cancelled"],
-  live: ["ended", "cancelled"],
+  live: ["encore", "ended", "cancelled"],
+  // An encore can go back on: a second one is still the same show.
+  encore: ["live", "ended", "cancelled"],
   ended: ["archived"],
   cancelled: ["archived"],
   archived: [],
@@ -246,6 +339,36 @@ function strings(value: unknown): string[] {
   return [];
 }
 
+/** Whole cents, never negative, and nothing silly enough to be a typo. */
+function cents(value: unknown, fallback: number, name: string): number {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1_000_000) {
+    throw new LiveEventError(`${name} must be a whole number of cents between 0 and 1000000`, 422);
+  }
+  return value;
+}
+
+function minutes(value: unknown, fallback: number, name: string): number {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 525_600) {
+    throw new LiveEventError(`${name} must be between 1 and 525600`, 422);
+  }
+  return value;
+}
+
+/**
+ * Where a ticket is paid to. An address that is not an address is refused
+ * here rather than at the till, because a show whose money goes nowhere sells
+ * tickets happily and only fails once somebody has paid.
+ */
+export function payToAddress(value: unknown, name = "payTo"): string {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(value.trim())) {
+    throw new LiveEventError(`${name} must be an 0x EVM address`, 422);
+  }
+  return value.trim();
+}
+
 function eventFrom(row: Record<string, unknown>): LiveEvent {
   return {
     id: String(row["id"] ?? ""),
@@ -254,6 +377,10 @@ function eventFrom(row: Record<string, unknown>): LiveEvent {
     title: String(row["title"] ?? ""),
     ...(row["description"] ? { description: String(row["description"]) } : {}),
     ...(row["topic"] ? { topic: String(row["topic"]) } : {}),
+    kind: (LIVE_EVENT_KINDS.includes(String(row["kind"] ?? "talk") as LiveEventKind)
+      ? String(row["kind"] ?? "talk")
+      : "talk") as LiveEventKind,
+    ...(iso(row["doors_open_at"]) ? { doorsOpenAt: iso(row["doors_open_at"]) } : {}),
     ...(iso(row["starts_at"]) ? { startsAt: iso(row["starts_at"]) } : {}),
     ...(iso(row["ends_at"]) ? { endsAt: iso(row["ends_at"]) } : {}),
     timezone: String(row["timezone"] ?? "UTC"),
@@ -265,7 +392,12 @@ function eventFrom(row: Record<string, unknown>): LiveEvent {
     roomId: String(row["room_id"] ?? ""),
     inviteeIds: strings(row["invitee_ids"]),
     speakerIds: strings(row["speaker_ids"]),
+    artistIds: strings(row["artist_ids"]),
     moderatorIds: strings(row["moderator_ids"]),
+    ticketPriceCents: Number(row["ticket_price_cents"] ?? 0),
+    ticketCurrency: String(row["ticket_currency"] ?? "USD"),
+    ticketMinutes: Number(row["ticket_minutes"] ?? 1440),
+    ...(row["pay_to"] ? { payTo: String(row["pay_to"]) } : {}),
     chatEnabled: Boolean(row["chat_enabled"]),
     handRaiseEnabled: Boolean(row["hand_raise_enabled"]),
     recordingEnabled: Boolean(row["recording_enabled"]),
@@ -309,6 +441,70 @@ export function canTransition(from: LiveEventStatus, to: LiveEventStatus): boole
   return from === to || TRANSITIONS[from].includes(to);
 }
 
+export function canManageEvent(event: LiveEvent, accountId: string | undefined): boolean {
+  return Boolean(accountId && (event.ownerId === accountId || event.moderatorIds.includes(accountId)));
+}
+
+export function canPerformEvent(event: LiveEvent, accountId: string | undefined): boolean {
+  return canManageEvent(event, accountId) || Boolean(accountId && event.artistIds.includes(accountId));
+}
+
+/** Whether the room itself is open: doors, the show, and the encore. */
+export function isRoomOpen(event: LiveEvent): boolean {
+  return event.status === "starting" || event.status === "live" || event.status === "encore";
+}
+
+/** Whether a ticket has to be bought before this room admits anybody. */
+export function isTicketed(event: LiveEvent): boolean {
+  return event.ticketPriceCents > 0 && Boolean(event.payTo);
+}
+
+/**
+ * schema.org for one event.
+ *
+ * A concert is a MusicEvent with an Offer on it, because that is what a search
+ * engine will show as a ticket price and a date. Everything else stays a plain
+ * Event, which is what it was before concerts existed.
+ */
+export function eventStructuredData(event: LiveEvent, canonical: string): Record<string, unknown> {
+  const status = event.status === "cancelled"
+    ? "https://schema.org/EventCancelled"
+    : event.status === "live" || event.status === "encore" || event.status === "starting"
+      ? "https://schema.org/EventInProgress"
+      : event.status === "ended" || event.status === "archived"
+        ? "https://schema.org/EventCompleted"
+        : "https://schema.org/EventScheduled";
+  const description = event.description || `Listen to ${event.title} live.`;
+  const base: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": event.kind === "concert" ? "MusicEvent" : "Event",
+    name: event.title,
+    description,
+    eventStatus: status,
+    eventAttendanceMode: "https://schema.org/OnlineEventAttendanceMode",
+    ...(event.doorsOpenAt ? { doorTime: event.doorsOpenAt } : {}),
+    ...(event.startsAt ? { startDate: event.startsAt } : {}),
+    ...(event.endsAt ? { endDate: event.endsAt } : {}),
+    url: canonical,
+    location: { "@type": "VirtualLocation", url: canonical },
+  };
+  if (event.kind !== "concert") return base;
+  return {
+    ...base,
+    ...(event.topic ? { performer: { "@type": "MusicGroup", name: event.topic } } : {}),
+    offers: {
+      "@type": "Offer",
+      url: canonical,
+      price: (event.ticketPriceCents / 100).toFixed(2),
+      priceCurrency: event.ticketCurrency,
+      availability: event.status === "cancelled" || event.status === "ended" || event.status === "archived"
+        ? "https://schema.org/SoldOut"
+        : "https://schema.org/InStock",
+      category: isTicketed(event) ? "Ticket" : "Free",
+    },
+  };
+}
+
 export class LiveEvents {
   private ready: Promise<void> | null = null;
 
@@ -325,8 +521,17 @@ export class LiveEvents {
     const title = text(input.title, "title", 160, true);
     const startsAt = timestamp(input.startsAt, "startsAt");
     const endsAt = timestamp(input.endsAt, "endsAt");
+    const doorsOpenAt = timestamp(input.doorsOpenAt, "doorsOpenAt");
     if (startsAt && endsAt && endsAt <= startsAt) {
       throw new LiveEventError("endsAt must be after startsAt", 422);
+    }
+    if (doorsOpenAt && startsAt && doorsOpenAt > startsAt) {
+      throw new LiveEventError("doorsOpenAt must be at or before startsAt", 422);
+    }
+    const ticketPriceCents = cents(input.ticketPriceCents, 0, "ticketPriceCents");
+    const payTo = payToAddress(input.payTo);
+    if (ticketPriceCents > 0 && !payTo) {
+      throw new LiveEventError("a ticketed event needs a payTo address", 422);
     }
     const baseSlug = eventSlug(title);
     const values = [
@@ -336,6 +541,12 @@ export class LiveEvents {
       title,
       text(input.description, "description", 5000),
       text(input.topic, "topic", 100),
+      enumValue(input.kind, LIVE_EVENT_KINDS, "talk", "kind"),
+      doorsOpenAt,
+      ticketPriceCents,
+      text(input.ticketCurrency ?? "USD", "ticketCurrency", 8, true).toUpperCase(),
+      minutes(input.ticketMinutes, 1440, "ticketMinutes"),
+      payTo,
       startsAt,
       endsAt,
       text(input.timezone ?? "UTC", "timezone", 100, true),
@@ -353,11 +564,14 @@ export class LiveEvents {
     try {
       ({ rows } = await this.db.query(
         `INSERT INTO live_events (
-          id, slug, owner_id, title, description, topic, starts_at, ends_at, timezone,
+          id, slug, owner_id, title, description, topic, kind, doors_open_at,
+          ticket_price_cents, ticket_currency, ticket_minutes, pay_to,
+          starts_at, ends_at, timezone,
           expected_duration_minutes, status, visibility, room_id, chat_enabled,
           hand_raise_enabled, recording_enabled, layout_id
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, ''), $13, $14, $15,
+          $16, $17, $18, $19, $20, $21, $22, NULLIF($23, '')
         ) RETURNING *`,
         values,
       ));
@@ -366,18 +580,21 @@ export class LiveEvents {
       values[1] = `${baseSlug}-${id.slice(0, 6)}`;
       ({ rows } = await this.db.query(
         `INSERT INTO live_events (
-          id, slug, owner_id, title, description, topic, starts_at, ends_at, timezone,
+          id, slug, owner_id, title, description, topic, kind, doors_open_at,
+          ticket_price_cents, ticket_currency, ticket_minutes, pay_to,
+          starts_at, ends_at, timezone,
           expected_duration_minutes, status, visibility, room_id, chat_enabled,
           hand_raise_enabled, recording_enabled, layout_id
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, ''), $13, $14, $15,
+          $16, $17, $18, $19, $20, $21, $22, NULLIF($23, '')
         ) RETURNING *`,
         values,
       ));
     }
     const row = rows[0];
     if (!row) throw new LiveEventError("could not create the event", 500);
-    return eventFrom({ ...row, invitee_ids: [], speaker_ids: [], moderator_ids: [] });
+    return eventFrom({ ...row, invitee_ids: [], speaker_ids: [], artist_ids: [], moderator_ids: [] });
   }
 
   async list(query: EventListQuery = {}): Promise<LiveEvent[]> {
@@ -395,6 +612,10 @@ export class LiveEvents {
       values.push(query.status);
       where.push(`e.status = $${values.length}`);
     }
+    if (query.kind) {
+      values.push(query.kind);
+      where.push(`e.kind = $${values.length}`);
+    }
     if (query.topic) {
       values.push(query.topic);
       where.push(`lower(e.topic) = lower($${values.length})`);
@@ -411,7 +632,9 @@ export class LiveEvents {
       `${SELECT_EVENT}
        WHERE ${where.join(" AND ")}
        ORDER BY
-         CASE e.status WHEN 'live' THEN 0 WHEN 'starting' THEN 1 WHEN 'scheduled' THEN 2 ELSE 3 END,
+         CASE e.status
+           WHEN 'live' THEN 0 WHEN 'encore' THEN 0 WHEN 'starting' THEN 1
+           WHEN 'scheduled' THEN 2 ELSE 3 END,
          e.starts_at NULLS LAST, e.updated_at DESC
        LIMIT $${values.length}`,
       values,
@@ -464,7 +687,16 @@ export class LiveEvents {
   }
 
   canManage(event: LiveEvent, accountId: string | undefined): boolean {
-    return Boolean(accountId && (event.ownerId === accountId || event.moderatorIds.includes(accountId)));
+    return canManageEvent(event, accountId);
+  }
+
+  /**
+   * Who may put sound on this stage. The owner, a moderator, and an invited
+   * artist who accepted: performing and presiding are different jobs, and a
+   * support act should not need the guest list to play.
+   */
+  canPerform(event: LiveEvent, accountId: string | undefined): boolean {
+    return canPerformEvent(event, accountId);
   }
 
   async update(reference: string, ownerId: string, input: UpdateLiveEventInput): Promise<LiveEvent> {
@@ -481,8 +713,19 @@ export class LiveEvents {
     const title = input.title === undefined ? current.title : text(input.title, "title", 160, true);
     const startsAt = input.startsAt === undefined ? current.startsAt ?? null : timestamp(input.startsAt, "startsAt");
     const endsAt = input.endsAt === undefined ? current.endsAt ?? null : timestamp(input.endsAt, "endsAt");
+    const doorsOpenAt = input.doorsOpenAt === undefined
+      ? current.doorsOpenAt ?? null
+      : timestamp(input.doorsOpenAt, "doorsOpenAt");
     if (startsAt && endsAt && endsAt <= startsAt) {
       throw new LiveEventError("endsAt must be after startsAt", 422);
+    }
+    if (doorsOpenAt && startsAt && doorsOpenAt > startsAt) {
+      throw new LiveEventError("doorsOpenAt must be at or before startsAt", 422);
+    }
+    const ticketPriceCents = cents(input.ticketPriceCents, current.ticketPriceCents, "ticketPriceCents");
+    const payTo = input.payTo === undefined ? current.payTo ?? "" : payToAddress(input.payTo);
+    if (ticketPriceCents > 0 && !payTo) {
+      throw new LiveEventError("a ticketed event needs a payTo address", 422);
     }
     const nextStatus = enumValue(input.status, LIVE_EVENT_STATUSES, current.status, "status");
     if (!canTransition(current.status, nextStatus)) {
@@ -508,6 +751,12 @@ export class LiveEvents {
         recording_enabled = $15,
         recording_id = $16,
         layout_id = $17,
+        kind = $18,
+        doors_open_at = $19,
+        ticket_price_cents = $20,
+        ticket_currency = $21,
+        ticket_minutes = $22,
+        pay_to = NULLIF($23, ''),
         version = version + 1,
         updated_at = now()
        WHERE (id = $1 OR slug = $1) AND owner_id = $2 AND version = $3
@@ -532,6 +781,14 @@ export class LiveEvents {
         boolean(input.recordingEnabled, current.recordingEnabled, "recordingEnabled"),
         input.recordingId === undefined ? current.recordingId ?? null : text(input.recordingId, "recordingId", 160) || null,
         input.layoutId === undefined ? current.layoutId ?? null : text(input.layoutId, "layoutId", 100) || null,
+        enumValue(input.kind, LIVE_EVENT_KINDS, current.kind, "kind"),
+        doorsOpenAt,
+        ticketPriceCents,
+        input.ticketCurrency === undefined
+          ? current.ticketCurrency
+          : text(input.ticketCurrency, "ticketCurrency", 8, true).toUpperCase(),
+        minutes(input.ticketMinutes, current.ticketMinutes, "ticketMinutes"),
+        payTo,
       ],
     );
     const row = rows[0];
@@ -540,6 +797,7 @@ export class LiveEvents {
       ...row,
       invitee_ids: current.inviteeIds,
       speaker_ids: current.speakerIds,
+      artist_ids: current.artistIds,
       moderator_ids: current.moderatorIds,
     });
   }
