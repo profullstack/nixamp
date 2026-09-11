@@ -43,7 +43,7 @@ test("the installed binary actually runs the CLI",
 
 test("what npm publishes contains what the binary and the server need", () => {
   assert.equal(manifest.bin.nixamp, "./bin/nixamp.mjs");
-  for (const needed of ["dist", "bin", "web/dist"]) {
+  for (const needed of ["dist", "bin", "web/dist", "backtoschool/dist"]) {
     assert.ok(manifest.files.includes(needed), `"${needed}" is not in files`);
   }
 });

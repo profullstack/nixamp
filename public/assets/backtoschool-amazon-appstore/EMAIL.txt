@@ -1,0 +1,41 @@
+Hi Anthony,
+
+Attached is the complete English (U.S.) Amazon Appstore asset package for the BackToSchool.help Fire TV e-learning app.
+
+DISPLAY TITLE
+BackToSchool.help
+
+SHORT DESCRIPTION
+Learn something live on Fire TV. Explore public audio classes and conversations, discover upcoming sessions, join classroom Q&A, and replay recorded lessons when available.
+
+LONG DESCRIPTION
+BackToSchool.help turns your Fire TV into a front-row seat for live learning. Drop into public audio classes, workshops, and thoughtful conversations led by people who have something useful to share.
+
+Browse what is live now, discover upcoming sessions, and open a class to see its topic, description, schedule, and audience status. Public lessons are available without an account, so listening is always one tap away.
+
+Sign in when you want to take part. Join the classroom chat, raise your hand to ask a question or contribute to the conversation, and enter private or unlisted sessions when a host invites you. Hosts and moderators can manage participation through the same BackToSchool.help event room.
+
+When a host records a session, the lesson can remain available as a replay for listening after class. Replay availability depends on the host and the event.
+
+BackToSchool.help focuses on live audio so lessons remain simple, accessible, and easy to follow on the biggest screen in the room. Events and audio are powered by NixAmp, while the experience stays focused on learning together.
+
+An account is not required to listen to public events. An account is required for chat, hand-raising, hosting, moderation, and other participation features. Live and replay availability depends on participating hosts.
+
+PRODUCT FEATURE BULLETS
+Listen to live audio classes and conversations on Fire TV
+Browse public lessons by topic
+Discover scheduled and upcoming sessions
+Replay recorded lessons when hosts make them available
+Listen to public events without creating an account
+Join classroom chat after signing in
+Raise your hand to ask a question or contribute
+Open private and unlisted sessions through invitations
+See event status and live audience information
+Use a clear interface designed for comfortable big-screen reading
+
+KEYWORDS
+education, learning, live classes, online lessons, workshops, lectures, classroom, study, audio learning, questions, replays, backtoschool, fire tv
+
+The ZIP contains all tablet icons and screenshots, the optional promotional image and H.264 video, all Fire TV artwork, a manifest, and this listing copy. README.md maps every Amazon upload field to the correct filename.
+
+— Codex

@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BackToSchool.help Amazon marketplace artwork</title>
+  <style>
+    :root {
+      --ink: #201a32;
+      --purple: #34246d;
+      --purple-2: #5b43a4;
+      --coral: #f56f5d;
+      --yellow: #ffd465;
+      --paper: #f7f2e8;
+      --paper-deep: #eee5d6;
+      --white: #fffdf8;
+      --green: #217a53;
+      --muted: #6f6879;
+      --line: rgba(32, 26, 50, .14);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      color: var(--ink);
+      background: var(--paper);
+      font: 16px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .canvas {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      padding: 24px 34px 30px;
+      overflow: hidden;
+      background:
+        radial-gradient(rgba(52, 36, 109, .1) .7px, transparent .7px) 0 0 / 7px 7px,
+        linear-gradient(145deg, #fffaf0 0%, var(--paper) 64%, #eee4d4 100%);
+    }
+
+    .shell { height: 100%; display: flex; flex-direction: column; gap: 18px; }
+    .site-header { min-height: 58px; display: flex; align-items: center; gap: 26px; border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 12px; color: var(--purple); font-weight: 850; letter-spacing: -.035em; font-size: 21px; }
+    .brand img { width: 40px; height: 40px; }
+    .brand i { color: var(--coral); font-style: normal; }
+    .site-nav { margin-left: auto; display: flex; align-items: center; gap: 26px; color: var(--muted); font-size: 14px; font-weight: 650; }
+    .site-nav .active { color: var(--purple); }
+    .account { padding: 9px 16px; border-radius: 999px; color: var(--purple); background: rgba(52, 36, 109, .08); }
+    .eyebrow { color: var(--coral); font-size: 12px; font-weight: 850; letter-spacing: .13em; text-transform: uppercase; }
+    .button { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 0 20px; border-radius: 999px; font-weight: 780; }
+    .button-primary { color: white; background: var(--purple); box-shadow: 0 8px 20px rgba(52, 36, 109, .2); }
+    .button-secondary { color: var(--purple); border: 1px solid rgba(52, 36, 109, .25); background: transparent; }
+    .live-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--coral); box-shadow: 0 0 0 5px rgba(245, 111, 93, .18); }
+    .status, .topic { display: inline-flex; width: fit-content; align-items: center; min-height: 24px; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase; }
+    .status { color: #9c2f28; background: #ffe1db; }
+    .topic { color: var(--green); background: #dcefdc; }
+
+    .home-screen { flex: 1; min-height: 0; display: grid; grid-template-rows: 1fr 226px; gap: 18px; }
+    .home-hero { min-height: 0; display: grid; grid-template-columns: 1.05fr .82fr; align-items: center; gap: 54px; }
+    .hero-copy { padding-left: 24px; }
+    .hero-copy h1 { margin: 10px 0 17px; color: var(--purple); font: 750 72px/.86 Georgia, "Times New Roman", serif; letter-spacing: -.065em; }
+    .hero-copy h1 em { color: var(--coral); font-style: normal; }
+    .hero-copy p { max-width: 560px; margin: 0; color: var(--muted); font-size: 17px; line-height: 1.55; }
+    .hero-actions { display: flex; gap: 11px; margin-top: 25px; }
+    .hero-note { margin-top: 12px !important; font-size: 12px !important; }
+    .board {
+      position: relative;
+      min-height: 310px;
+      padding: 42px 40px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      color: #fffbe9;
+      border: 9px solid #bd8654;
+      border-radius: 6px;
+      background: #285e4d;
+      box-shadow: 0 24px 54px rgba(32, 26, 50, .2), inset 0 0 50px rgba(0,0,0,.12);
+      transform: rotate(1deg);
+    }
+    .board::before { content: ""; position: absolute; inset: 0; opacity: .15; background: radial-gradient(ellipse at 35% 30%, white 0, transparent 45%), linear-gradient(95deg, transparent 49%, rgba(255,255,255,.25) 50%, transparent 52%); background-size: 220px 50px, 240px 100%; }
+    .tape { position: absolute; width: 82px; height: 26px; background: rgba(255,221,141,.76); transform: rotate(-7deg); }
+    .tape-one { top: -21px; left: 38px; }
+    .tape-two { right: 25px; bottom: -18px; transform: rotate(-4deg); }
+    .board small, .board strong, .board p, .board a { position: relative; }
+    .board small { font: italic 15px Georgia, serif; opacity: .76; }
+    .board strong { max-width: 430px; margin: 17px 0 12px; font: 600 37px/1.03 Georgia, serif; letter-spacing: -.035em; }
+    .board p { margin: 0; opacity: .72; }
+    .board a { width: fit-content; margin-top: 25px; padding-bottom: 3px; color: white; border-bottom: 1px solid rgba(255,255,255,.55); font-weight: 750; }
+    .board a span { color: var(--yellow); }
+    .event-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .event-card { min-width: 0; padding: 22px; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,253,248,.88); box-shadow: 0 5px 18px rgba(52,36,109,.05); }
+    .card-top { display: flex; justify-content: space-between; gap: 10px; }
+    .event-card h2 { margin: 18px 0 8px; font: 700 24px/1.08 Georgia, serif; letter-spacing: -.025em; }
+    .event-card p { margin: 0; color: var(--muted); font-size: 13px; }
+    .event-card footer { margin-top: auto; display: flex; justify-content: space-between; color: var(--purple); font-size: 13px; font-weight: 800; }
+
+    .classroom-screen { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.4fr .72fr; grid-template-rows: 1fr 154px; gap: 18px; }
+    .classroom-main { min-height: 0; display: grid; grid-template-rows: 1.05fr .78fr; gap: 18px; }
+    .lesson-hero { position: relative; min-height: 0; padding: 36px 44px; display: flex; align-items: end; overflow: hidden; border-radius: 20px; color: white; background: var(--purple); box-shadow: 0 16px 44px rgba(52,36,109,.18); }
+    .lesson-hero::after { content: "✦"; position: absolute; right: 4px; top: -110px; color: rgba(255,255,255,.08); font-size: 260px; transform: rotate(17deg); }
+    .lesson-title { position: relative; z-index: 1; }
+    .lesson-title h1 { max-width: 780px; margin: 17px 0 9px; font: 700 52px/.94 Georgia, serif; letter-spacing: -.055em; }
+    .lesson-title p { max-width: 680px; margin: 0; color: rgba(255,255,255,.72); }
+    .lesson-title .topic { margin-left: 9px; }
+    .player-card, .chat-card, .mini-panel, .replay-card { border: 1px solid var(--line); border-radius: 20px; background: rgba(255,253,248,.9); box-shadow: 0 4px 18px rgba(52,36,109,.05); }
+    .player-card { min-height: 0; padding: 26px 30px; display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 26px; }
+    .sound-orbit { position: relative; width: 112px; height: 112px; display: grid; place-items: center; border-radius: 50%; background: #ffe3dc; }
+    .sound-orbit::before, .sound-orbit::after { content: ""; position: absolute; border: 2px solid rgba(245,111,93,.35); border-radius: 50%; }
+    .sound-orbit::before { inset: 13px; } .sound-orbit::after { inset: 1px; }
+    .sound-orbit b { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--coral); font-size: 22px; }
+    .player-card h2 { margin: 5px 0 4px; color: var(--purple); font: 700 30px Georgia, serif; }
+    .player-card p { margin: 0 0 16px; color: var(--muted); }
+    .chat-card { min-height: 0; padding: 27px; display: flex; flex-direction: column; }
+    .panel-title { display: block; margin-bottom: 18px; color: var(--muted); font-size: 11px; font-weight: 850; letter-spacing: .11em; text-transform: uppercase; }
+    .messages { min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+    .message { display: grid; grid-template-columns: 35px 1fr; gap: 10px; }
+    .avatar { width: 35px; height: 35px; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--purple-2); font-size: 12px; font-weight: 850; }
+    .message strong { display: block; font-size: 13px; }
+    .message p { margin: 3px 0 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+    .chat-input { margin-top: auto; padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px; color: #8a8390; background: white; font-size: 13px; }
+    .classroom-bottom { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr 1.35fr; gap: 18px; }
+    .mini-panel { padding: 22px 25px; }
+    .mini-panel strong { display: block; color: var(--purple); font: 700 24px Georgia, serif; }
+    .mini-panel p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+    .raise { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+
+    .replay-screen { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.2fr .8fr; gap: 18px; }
+    .featured-replay { position: relative; padding: 44px; display: flex; flex-direction: column; justify-content: end; overflow: hidden; border-radius: 22px; color: white; background: var(--purple); }
+    .featured-replay::before { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 78% 28%, rgba(255,212,101,.28), transparent 24%), radial-gradient(circle at 82% 38%, rgba(245,111,93,.42), transparent 30%); }
+    .book-lines { position: absolute; right: -5%; top: 14%; width: 48%; height: 54%; border: 3px solid rgba(255,255,255,.45); border-radius: 50% 50% 12% 12%; transform: rotate(-7deg); }
+    .book-lines::before, .book-lines::after { content: ""; position: absolute; inset: 13% 8%; border: 2px solid rgba(255,255,255,.2); border-radius: inherit; }
+    .book-lines::after { inset: 27% 16%; }
+    .featured-replay > *:not(.book-lines) { position: relative; z-index: 1; }
+    .featured-replay h1 { max-width: 650px; margin: 18px 0 12px; font: 700 58px/.94 Georgia, serif; letter-spacing: -.05em; }
+    .featured-replay p { max-width: 560px; margin: 0 0 25px; color: rgba(255,255,255,.73); }
+    .featured-replay .button { width: fit-content; color: var(--purple); background: var(--white); }
+    .replay-list { min-height: 0; display: grid; grid-template-rows: auto repeat(3, 1fr); gap: 13px; }
+    .replay-heading h2 { margin: 5px 0 0; color: var(--purple); font: 700 38px Georgia, serif; }
+    .replay-card { min-height: 0; padding: 20px 22px; display: grid; grid-template-columns: 54px 1fr auto; align-items: center; gap: 16px; }
+    .play { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--coral); }
+    .replay-card h3 { margin: 0 0 5px; font: 700 20px Georgia, serif; }
+    .replay-card p, .duration { margin: 0; color: var(--muted); font-size: 12px; }
+
+    .marketing { position: absolute; inset: 0; display: flex; align-items: center; background: var(--purple) url("education-backdrop.png") center / cover no-repeat; }
+    .marketing::before { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(35,23,83,.97) 0%, rgba(52,36,109,.88) 38%, rgba(52,36,109,.08) 76%); }
+    .marketing-copy { position: relative; z-index: 1; width: 58%; padding: 7.5%; color: white; }
+    .lockup { display: flex; align-items: center; gap: 20px; }
+    .lockup img { width: 112px; height: 112px; filter: drop-shadow(0 14px 28px rgba(21,12,55,.3)); }
+    .lockup strong { font-size: 52px; line-height: 1; letter-spacing: -.04em; }
+    .lockup strong i { color: var(--coral); font-style: normal; }
+    .marketing h1 { margin: 36px 0 14px; font: 750 58px/.92 Georgia, serif; letter-spacing: -.055em; }
+    .marketing p { margin: 0; color: var(--yellow); font-size: 17px; font-weight: 800; letter-spacing: .11em; }
+    .fire-icon { justify-content: center; }
+    .fire-icon::before { background: linear-gradient(90deg, rgba(52,36,109,.88), rgba(52,36,109,.25)); }
+    .fire-icon .marketing-copy { width: auto; padding: 0; }
+    .fire-icon .lockup img { width: 190px; height: 190px; }
+    .fire-icon .lockup strong { font-size: 86px; }
+    .background-only { padding: 0; background: var(--purple) url("education-backdrop.png") center / cover no-repeat; }
+    .logo-only { padding: 0; display: grid; place-items: center; background: var(--purple); }
+    .logo-only .lockup { gap: 14px; }
+    .logo-only .lockup img { width: 112px; height: 112px; }
+    .logo-only .lockup strong { color: white; font-size: 38px; }
+    .icon-only { padding: 0; display: grid; place-items: center; background: transparent; }
+    .icon-only img { display: block; width: 100%; height: 100%; }
+    body.icon-page { background: transparent; }
+
+    body.tv { font-size: 20px; }
+    body.tv .canvas { padding: 38px 58px 46px; }
+    body.tv .shell { gap: 25px; }
+    body.tv .site-header { min-height: 70px; }
+    body.tv .brand { font-size: 29px; }
+    body.tv .brand img { width: 52px; height: 52px; }
+    body.tv .site-nav { font-size: 18px; gap: 34px; }
+    body.tv .home-screen { grid-template-rows: 1fr 285px; gap: 24px; }
+    body.tv .home-hero { gap: 90px; }
+    body.tv .hero-copy h1 { font-size: 102px; }
+    body.tv .hero-copy p { font-size: 23px; }
+    body.tv .button { min-height: 54px; padding: 0 28px; }
+    body.tv .board { min-height: 430px; padding: 58px 52px; }
+    body.tv .board strong { font-size: 52px; }
+    body.tv .event-card { padding: 29px; }
+    body.tv .event-card h2 { font-size: 32px; }
+    body.tv .event-card p, body.tv .event-card footer { font-size: 16px; }
+    body.tv .classroom-screen { gap: 24px; grid-template-rows: 1fr 205px; }
+    body.tv .classroom-main { gap: 24px; }
+    body.tv .lesson-hero { padding: 52px 60px; }
+    body.tv .lesson-title h1 { font-size: 74px; }
+    body.tv .lesson-title p { font-size: 20px; }
+    body.tv .player-card { padding: 34px 40px; grid-template-columns: 150px 1fr; }
+    body.tv .sound-orbit { width: 142px; height: 142px; }
+    body.tv .chat-card { padding: 34px; }
+    body.tv .message p, body.tv .message strong, body.tv .chat-input { font-size: 16px; }
+    body.tv .mini-panel { padding: 28px 32px; }
+    body.tv .mini-panel strong { font-size: 32px; }
+    body.tv .mini-panel p { font-size: 16px; }
+    body.tv .replay-screen { gap: 24px; }
+    body.tv .featured-replay { padding: 62px; }
+    body.tv .featured-replay h1 { font-size: 82px; }
+    body.tv .featured-replay p { font-size: 21px; }
+    body.tv .replay-list { gap: 19px; }
+    body.tv .replay-heading h2 { font-size: 50px; }
+    body.tv .replay-card { padding: 27px 30px; }
+    body.tv .replay-card h3 { font-size: 28px; }
+    body.tv .replay-card p, body.tv .duration { font-size: 15px; }
+  </style>
+</head>
+<body>
+  <main id="asset" class="canvas"></main>
+  <script>
+    const icon = `<img src="../../../backtoschool/public/icon.svg" alt="">`;
+    const brand = `<span class="brand">${icon}<span>BackToSchool<i>.help</i></span></span>`;
+    const header = (active = "Live now") => `<header class="site-header">${brand}<nav class="site-nav"><span class="${active === "Live now" ? "active" : ""}">Live now</span><span class="${active === "Upcoming" ? "active" : ""}">Upcoming</span><span class="${active === "Replays" ? "active" : ""}">Replays</span><span class="account">Sign in</span></nav></header>`;
+    const card = (status, topic, title, description, action) => `<article class="event-card"><div class="card-top"><span class="status">${status}</span><span class="topic">${topic}</span></div><h2>${title}</h2><p>${description}</p><footer><span>${action}</span><span>→</span></footer></article>`;
+
+    const home = `<div class="shell">${header()}<section class="home-screen"><div class="home-hero"><div class="hero-copy"><span class="eyebrow">Go back to school whenever you want</span><h1>Learn something<br><em>live.</em></h1><p>Drop into thoughtful lessons, ask real questions, or start a room about something you know.</p><div class="hero-actions"><span class="button button-primary"><span class="live-dot"></span>Explore live classes</span><span class="button button-secondary">See what’s next</span></div><p class="hero-note">Listening is one tap away. No account required.</p></div><div class="board"><span class="tape tape-one"></span><span class="tape tape-two"></span><small>Today’s lesson</small><strong>Design Your First Tiny Garden</strong><p>Happening right now · 48 listening</p><a>Listen now <span>↗</span></a></div></div><div class="event-row">${card("Live", "Creativity", "Drawing Faces with Simple Shapes", "A welcoming sketch session for complete beginners.", "Listen live")}${card("Live", "Technology", "Build a Personal Website in One Hour", "Learn the pieces behind a fast, useful home page.", "Listen live")}${card("Tonight", "Wellbeing", "The Science of Better Sleep", "Practical ideas for building a calmer evening routine.", "Save your seat")}</div></section></div>`;
+
+    const classroom = `<div class="shell">${header()}<section class="classroom-screen"><div class="classroom-main"><article class="lesson-hero"><div class="lesson-title"><span class="status"><span class="live-dot"></span>Live now</span><span class="topic">Wellbeing</span><h1>The Science of Better Sleep</h1><p>A practical conversation about light, rhythm, routines, and the habits that help us rest.</p></div></article><article class="player-card"><div class="sound-orbit"><b>▶</b></div><div><span class="eyebrow">On air now</span><h2>Listen live</h2><p>Press play and you’re in. No sign-up, no setup.</p><span class="button button-primary"><span class="live-dot"></span>You’re listening</span></div></article></div><aside class="chat-card"><span class="panel-title">Classroom chat</span><div class="messages"><div class="message"><span class="avatar">JM</span><div><strong>Jamie</strong><p>Does the same routine matter on weekends?</p></div></div><div class="message"><span class="avatar">DR</span><div><strong>Dr. Rivera · Host</strong><p>Consistency helps, but it doesn’t have to be perfect.</p></div></div><div class="message"><span class="avatar">AL</span><div><strong>Alex</strong><p>The light explanation finally made this click.</p></div></div><div class="message"><span class="avatar">SK</span><div><strong>Sam</strong><p>Could you share the evening checklist?</p></div></div></div><div class="chat-input">Add to the conversation…</div></aside><div class="classroom-bottom"><article class="mini-panel"><span class="panel-title">People here</span><strong>48 listening</strong><p>Live learners from 9 places</p></article><article class="mini-panel"><span class="panel-title">Hosted with</span><strong>NixAmp Live</strong><p>Clear, low-latency live audio</p></article><article class="mini-panel raise"><div><span class="panel-title">Questions</span><strong>Have something to add?</strong><p>Let the host know you’d like to speak.</p></div><span class="button button-secondary">Raise hand</span></article></div></section></div>`;
+
+    const replay = `<div class="shell">${header("Replays")}<section class="replay-screen"><article class="featured-replay"><div class="book-lines"></div><span class="eyebrow">Featured replay · Creativity</span><h1>Make Better Photos with Any Camera</h1><p>Composition, light, and the small choices that turn everyday moments into memorable images.</p><span class="button">▶ Play lesson · 42 min</span></article><section class="replay-list"><div class="replay-heading"><span class="eyebrow">Listen after class</span><h2>Recent replays</h2></div><article class="replay-card"><span class="play">▶</span><div><h3>Write a Short Story That Moves</h3><p>Storytelling · Morgan Lee</p></div><span class="duration">36 min</span></article><article class="replay-card"><span class="play">▶</span><div><h3>Houseplants Without the Guesswork</h3><p>Home & garden · Priya Shah</p></div><span class="duration">51 min</span></article><article class="replay-card"><span class="play">▶</span><div><h3>A Friendly Introduction to Stargazing</h3><p>Science · Jamie Cole</p></div><span class="duration">44 min</span></article></section></section></div>`;
+
+    const params = new URLSearchParams(location.search);
+    const scene = params.get("scene") || "home";
+    if (params.has("tv")) document.body.classList.add("tv");
+    const target = document.querySelector("#asset");
+    if (scene === "home") target.innerHTML = home;
+    if (scene === "classroom") target.innerHTML = classroom;
+    if (scene === "replay") target.innerHTML = replay;
+    if (scene === "promo") target.innerHTML = `<section class="marketing"><div class="marketing-copy"><div class="lockup">${icon}<strong>BackToSchool<i>.help</i></strong></div><h1>Learn something<br>live.</h1><p>LIVE CLASSES · Q&amp;A · REPLAYS</p></div></section>`;
+    if (scene === "fire-icon") target.innerHTML = `<section class="marketing fire-icon"><div class="marketing-copy"><div class="lockup">${icon}<strong>BackToSchool<i>.help</i></strong></div></div></section>`;
+    if (scene === "background") target.className = "canvas background-only";
+    if (scene === "logo") target.className = "canvas logo-only", target.innerHTML = `<div class="lockup">${icon}<strong>BackToSchool<i>.help</i></strong></div>`;
+    if (scene === "icon") { document.body.classList.add("icon-page"); target.className = "canvas icon-only"; target.innerHTML = icon; }
+  </script>
+</body>
+</html>
