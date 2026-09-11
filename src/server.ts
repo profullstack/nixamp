@@ -45,7 +45,8 @@ import {
   signInFailedPage,
   SignIn,
 } from "./oauth.ts";
-import { needsAdmin, Owner } from "./owner.ts";
+import { needsAdmin, needsMember, Owner } from "./owner.ts";
+import { createHash as sha } from "node:crypto";
 import { playJingle } from "./jingle.ts";
 import { stateDir } from "./daemon.ts";
 import { readSession } from "./session.ts";
@@ -977,6 +978,46 @@ export const MAX_ON_DEMAND = 4;
  * somewhere inside this, and REWIND covers the gap.
  */
 export const REMEMBER_EVERY_MS = 15_000;
+
+/**
+ * What a member may have on the air at once, here, and what all members
+ * together may. Each is a decoder on this machine. The owner is not counted:
+ * it is their machine.
+ */
+export const MEMBER_LIVES_EACH = 2;
+export const MEMBER_LIVES_TOTAL = 8;
+/** How many times a minute one member may ask to go live. Three is a person. */
+export const MEMBER_STARTS_PER_MINUTE = 3;
+
+/**
+ * Going live, metered per member. The session rides in the query from
+ * another origin, which is where the throttle is told to look for who is
+ * asking; the same session in a header or cookie counts as the same caller.
+ * No gateway: over the limit is a 429 with Retry-After, not an offer.
+ */
+const memberThrottle = createThrottle({
+  limit: MEMBER_STARTS_PER_MINUTE,
+  // A credential buys a caller the larger budget by default -- six hundred a
+  // minute, sized for a host of people behind one address. Here the
+  // credential is the person, and the person gets the same three; the
+  // ceiling is what one address may spend across every session it presents.
+  credential: { limit: MEMBER_STARTS_PER_MINUTE, ceiling: MEMBER_STARTS_PER_MINUTE * 10 },
+  credentialFrom: (request) =>
+    new URL(request.url).searchParams.get("session") ?? presentedCredential(request.headers) ?? null,
+});
+
+/** Why a member may not put one more thing on the air here, or "" when they may. */
+export function memberLiveRefusal(channels: Channels, account: string): string {
+  const mine = channels.list().filter((one) => one.startedBy === account).length;
+  if (mine >= MEMBER_LIVES_EACH) {
+    return `you already have ${MEMBER_LIVES_EACH} on the air here; take one off first`;
+  }
+  const all = channels.list().filter((one) => one.startedBy).length;
+  if (all >= MEMBER_LIVES_TOTAL) {
+    return `this server is carrying ${MEMBER_LIVES_TOTAL} members' streams already; try again when one ends`;
+  }
+  return "";
+}
 
 /**
  * Probe a source and start carrying it as a channel of its own.
@@ -1957,6 +1998,24 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
 
+      /**
+       * The session itself, for the page to carry to a server on another
+       * origin. The cookie is this host's and stays here; a server elsewhere
+       * can only be shown the session in the query, the way it is shown the
+       * key. Only a signed-in caller gets one, and it is the token they
+       * already hold -- nothing new is minted.
+       */
+      if (path === "/api/v1/auth/token") {
+        const token = tokenFrom(request.headers);
+        const who = await accounts.whoIs(token);
+        if (who === null) {
+          json(response, 401, { error: "not signed in" });
+          return;
+        }
+        json(response, 200, { token });
+        return;
+      }
+
       if (path === "/api/v1/auth/logout") {
         // The cookie going is what the browser notices; the token going is
         // what makes it stop working on a machine you no longer have.
@@ -2579,27 +2638,53 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // Administering is a different question from listening, and it is asked
     // after the share key: the control key answers both, but a listen key or a
     // nixamp.com session answers only one of them.
+    /**
+     * The member this request is from, when it is a member going live rather
+     * than the owner administering: the nixamp.com account id. Read by the
+     * handlers that put things on the air, to mark what they put on and to
+     * count it against what a member may have on at once.
+     */
+    let liveBy = "";
     if (options.owner && needsAdmin(path, request.method ?? "GET")) {
       // A server started with --no-key has said that anyone who can reach the
       // port may drive it, and prints exactly that. Locking administration to
       // nobody would contradict it and leave such a server unadministrable.
       const holdsControl =
         key === null || scopeOf(keyFrom(request, url), key, null) === "control";
-      const check = await options.owner.check(holdsControl, tokenFrom(request.headers));
+      // A session in the query as well as in a header or a cookie: from
+      // nixamp.com's page a server is another origin, and the cookie stays
+      // home, so the session travels the way the key does.
+      const sessionToken = tokenFrom(request.headers) || url.searchParams.get("session") || "";
+      const check = await options.owner.check(holdsControl, sessionToken);
+      // Not the owner, but somebody: a signed-in nixamp.com account is a
+      // member, and a member may go live here.
+      const member = check.allowed ? "" : await options.owner.accountFor(sessionToken);
 
       if (path === "/api/admin") {
         // Always answered, and honestly: the page has to know whether to draw
         // an admin panel at all, and "no" is a real answer rather than a 403.
-        json(response, 200, { allowed: check.allowed, as: check.as, claimed: options.owner.claimed });
+        json(response, 200, { allowed: check.allowed, as: check.as, claimed: options.owner.claimed, member: member !== "" });
         return;
       }
       if (!check.allowed) {
-        json(response, 403, {
-          error: options.owner.claimed
-            ? "sign in to nixamp.com as this server's owner, or use its control link"
-            : "this server has no owner signed in; use its control link",
-        });
-        return;
+        if (member !== "" && needsMember(path, request.method ?? "GET")) {
+          // Metered per member, before anything is done: going live is a
+          // decoder on this machine, and a script could ask for one a
+          // second. Three a minute is a person; more is not.
+          const refused = await memberThrottle.handle(requestFor(request));
+          if (refused) {
+            await answerWith(response, refused);
+            return;
+          }
+          liveBy = member;
+        } else {
+          json(response, 403, {
+            error: options.owner.claimed
+              ? "sign in to nixamp.com as this server's owner, or use its control link"
+              : "this server has no owner signed in; use its control link",
+          });
+          return;
+        }
       }
     }
 
@@ -2661,6 +2746,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // How it has been going, for whoever may do something about it.
           redials: one.redials ?? 0,
           error: one.error ?? "",
+          // The member who put it on, when one did: theirs to take off.
+          startedBy: one.startedBy ?? "",
         })),
         // Anything re-streamed into this server is a live stream too, and was
         // sitting in the middle of the playlist among the files -- which is
@@ -2810,11 +2897,24 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           return;
         }
         const channelId = cleanId(`cat-${entry.id}`);
+        // A member's, if a member asked: counted against what they may have
+        // on, and theirs to take off. Something already on stays whose it was.
+        if (liveBy && !options.channels.has(channelId)) {
+          const refusal = memberLiveRefusal(options.channels, liveBy);
+          if (refusal) {
+            json(response, 429, { error: refusal });
+            return;
+          }
+        }
         if (!options.channels.has(channelId)) {
           const started = await pullChannel(options.channels, options.ffprobe ?? ["ffprobe"], channelId, entry.title, entry.source);
           if (!started) {
             json(response, 409, { error: "that channel is already starting" });
             return;
+          }
+          if (liveBy) {
+            const info = options.channels.info(channelId);
+            if (info) info.startedBy = liveBy;
           }
         }
         options.channels.keep(channelId);
@@ -3015,6 +3115,55 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    /**
+     * A file on this server, on the air as a channel of its own.
+     *
+     * The same act as going live with a catalog entry, for a file in the
+     * library: its own room, its own phone code, kept, remembered, listed.
+     * It used to take over the server's one player, which a member must not
+     * do and which made two files at once impossible for anybody. The owner
+     * and any member may; the caps and the throttle above say how much.
+     */
+    const trackLive = /^\/api\/tracks\/(\d+)\/live$/.exec(path);
+    if (trackLive && request.method === "POST") {
+      if (!options.channels) {
+        json(response, 503, { error: "this server cannot carry channels" });
+        return;
+      }
+      const index = Number(trackLive[1]);
+      const source = engine.trackPath(index);
+      if (!source || isRemote(source)) {
+        json(response, 404, { error: "no such file on this server" });
+        return;
+      }
+      const name = engine.snapshot().tracks?.[index]?.title || source.split("/").pop() || `track ${index + 1}`;
+      // Named for the file, so the same file is the same channel whoever asks.
+      const channelId = cleanId(`file-${sha("sha1").update(source).digest("hex").slice(0, 12)}`);
+      if (liveBy && !options.channels.has(channelId)) {
+        const refusal = memberLiveRefusal(options.channels, liveBy);
+        if (refusal) {
+          json(response, 429, { error: refusal });
+          return;
+        }
+      }
+      if (!options.channels.has(channelId)) {
+        const started = await pullChannel(options.channels, options.ffprobe ?? ["ffprobe"], channelId, name, source);
+        if (!started) {
+          json(response, 409, { error: "that file is already going on the air" });
+          return;
+        }
+        if (liveBy) {
+          const info = options.channels.info(channelId);
+          if (info) info.startedBy = liveBy;
+        }
+      }
+      options.channels.keep(channelId);
+      options.rememberChannels?.(rememberedNow(options.channels));
+      void options.live?.announce?.();
+      json(response, 200, { channel: channelId, name });
+      return;
+    }
+
     // A channel is one publisher and everybody listening to them. Two or three
     // devices can publish at once, each to their own channel, and a listener
     // picks which to hear.
@@ -3120,6 +3269,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       if (action === undefined && request.method === "DELETE") {
         // Asked once: the second call would answer false, having just stopped
         // the thing it was asking about.
+        // A member takes off what they put on, and nothing else.
+        if (liveBy && channels.info(id)?.startedBy !== liveBy) {
+          json(response, 403, { error: "that stream is not yours to take off" });
+          return;
+        }
         const stopped = channels.stop(id);
         // Taken off on purpose is forgotten on purpose: it must not come back
         // at the next restart.
@@ -3170,6 +3324,23 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         if (!channels.has(id)) {
           json(response, 404, { error: "nothing is playing on that channel" });
           return;
+        }
+        // Keeping something started on demand is putting it on the air: for
+        // a member, counted and marked like anything else they put on.
+        if (liveBy) {
+          const info = channels.info(id);
+          if (info && !info.startedBy && !channels.isEphemeral(id)) {
+            json(response, 403, { error: "that stream is the owner's" });
+            return;
+          }
+          if (info && !info.startedBy) {
+            const refusal = memberLiveRefusal(channels, liveBy);
+            if (refusal) {
+              json(response, 429, { error: refusal });
+              return;
+            }
+            info.startedBy = liveBy;
+          }
         }
         channels.keep(id);
         options.rememberChannels?.(rememberedNow(channels));

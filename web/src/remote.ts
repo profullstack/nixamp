@@ -139,6 +139,13 @@ export class RemoteClient {
   /** Which door the key was handed over at: /a/ administers, /v/ only views. */
   private shape = "/admin/";
   private lastRevision = -1;
+  /**
+   * The nixamp.com session, for a server on another origin. A cookie is
+   * same-origin and the server answers access-control-allow-origin: *, so
+   * a session can only travel the way the key does: in the query. It is
+   * how a server knows a member from a stranger.
+   */
+  session = "";
 
   constructor(private readonly handlers: RemoteHandlers) {}
 
@@ -146,9 +153,11 @@ export class RemoteClient {
     return this.base;
   }
 
-  /** Any endpoint on the connected server, with the key already on it. */
+  /** Any endpoint on the connected server, with the key -- and the session, on another origin -- already on it. */
   url(path: string): string {
-    return apiUrl(this.base, path, this.key);
+    const url = apiUrl(this.base, path, this.key);
+    if (this.base === "" || this.session === "") return url;
+    return `${url}${url.includes("?") ? "&" : "?"}session=${encodeURIComponent(this.session)}`;
   }
 
   /**

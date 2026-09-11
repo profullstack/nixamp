@@ -486,6 +486,14 @@ export function start(): void {
 
   /** Whether this page may drive the server it is connected to. */
   const isAdmin = (): boolean => mode === "remote" && !dom.adminPanel.hidden;
+  /** Signed in to nixamp.com and known to the server we are on, without owning it. */
+  let memberHere = false;
+  /**
+   * Who may put something on the air here: the owner, or any member. A
+   * directory of servers nobody but their owners can go live on is a
+   * directory of empty rooms.
+   */
+  const canGoLive = (): boolean => isAdmin() || (mode === "remote" && memberHere);
 
   /**
    * Whether a live channel should be asked for as HLS.
@@ -539,15 +547,17 @@ export function start(): void {
     draw();
     try {
       let link = "";
-      if (what.kind === "track") {
-        // The server plays it, whatever this device is doing: going live with
-        // a file is the server's player, not this tab's.
-        await remote.send({ type: "play", index: what.index });
-        link = "live";
-      } else {
-        const path = what.kind === "entry"
-          ? `/api/catalogs/${encodeURIComponent(what.catalog.id)}/entries/${encodeURIComponent(what.entry.id)}/live`
-          : `/api/channels/${encodeURIComponent(what.id)}/keep`;
+      {
+        // A file goes on the air as a channel of its own, like a catalog
+        // entry: its own room, its own phone code, and the server's own
+        // player left to whoever is driving it. It used to take that player
+        // over, which a member must not, and which made two files at once
+        // impossible for anybody.
+        const path = what.kind === "track"
+          ? `/api/tracks/${what.index}/live`
+          : what.kind === "entry"
+            ? `/api/catalogs/${encodeURIComponent(what.catalog.id)}/entries/${encodeURIComponent(what.entry.id)}/live`
+            : `/api/channels/${encodeURIComponent(what.id)}/keep`;
         const answer = await fetch(remote.url(path), { method: "POST" });
         const body = (await answer.json().catch(() => ({}))) as { error?: string; channel?: string };
         if (!answer.ok) {
@@ -555,7 +565,7 @@ export function start(): void {
           draw();
           return;
         }
-        link = `channel:${what.kind === "entry" ? (body.channel ?? "") : what.id}`;
+        link = `channel:${what.kind === "channel" ? what.id : (body.channel ?? "")}`;
       }
 
       // Listed, so it is in the directory and has a phone code. Already
@@ -583,6 +593,16 @@ export function start(): void {
   }
 
   /** A row's go-live icon, for whoever may. */
+  /**
+   * "Join live", with the stream icon, on a button: the one label for the
+   * one act, wherever a live is shown. Static markup for the icon, then the
+   * words as text, never the other way round.
+   */
+  function joinLiveLabel(button: HTMLButtonElement, text = "Join live"): void {
+    drawIcon(button, "live");
+    button.append(document.createTextNode(` ${text}`));
+  }
+
   function goLiveButton(what: () => GoLiveWith, name: string): HTMLButtonElement {
     const button = document.createElement("button");
     button.type = "button";
@@ -1041,7 +1061,7 @@ export function start(): void {
     drawMeta();
     // Going live is for whoever administers this server, with something to
     // go live with. Play is everybody's; this is the one beside it.
-    dom.goLiveNow.hidden = !isAdmin() || whatToGoLiveWith() === null;
+    dom.goLiveNow.hidden = !canGoLive() || whatToGoLiveWith() === null;
     // The tab says what is on, the way a radio does, so a row of tabs reads
     // as "CNN" rather than as five copies of the site's name.
     const tab = live ? `${currentName()} · ${baseTitle}` : baseTitle;
@@ -1325,7 +1345,7 @@ export function start(): void {
             void copyText(pageLinkFor(`track:${row.index}`, watching === row.index ? player.position : 0), copy, "✓");
           });
           item.append(copy);
-          if (isAdmin()) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: row.name }), row.name));
+          if (canGoLive()) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: row.name }), row.name));
         }
         children.push(item);
       }
@@ -1958,8 +1978,8 @@ export function start(): void {
         const play = document.createElement("button");
         play.type = "button";
         play.className = "button";
-        play.textContent = "Play";
-        play.title = `Watch ${channelName}, live on ${stream.name}`;
+        joinLiveLabel(play);
+        play.title = `Join ${channelName}, live on ${stream.name}`;
         play.addEventListener("click", () => open(true, `channel:${channelName}`));
         row.append(dot, play);
         lives.append(row);
@@ -2241,16 +2261,18 @@ export function start(): void {
     let allowed = false;
     let as: string | null = null;
     let claimedOwner = false;
+    let member = false;
     try {
       // The server this page is connected to, not the origin the page came
       // from. Relative, these two calls asked nixamp.com whether somebody may
       // administer a machine nixamp.com has never heard of.
       const answer = await fetch(remote.url("/api/admin"));
       if (answer.ok) {
-        const body = (await answer.json()) as { allowed?: boolean; as?: string | null; claimed?: boolean };
+        const body = (await answer.json()) as { allowed?: boolean; as?: string | null; claimed?: boolean; member?: boolean };
         allowed = body.allowed === true;
         as = body.as ?? null;
         claimedOwner = body.claimed === true;
+        member = body.member === true;
       }
     } catch {
       allowed = false;
@@ -2259,6 +2281,9 @@ export function start(): void {
     // Asked to be a viewer, so a viewer: what the server would allow is not
     // the question when the person chose the other button.
     if (viewerOnly) allowed = false;
+    // A member: signed in to nixamp.com, known to this server, not its
+    // owner. May go live here, and take off what they put on.
+    memberHere = member && !allowed;
     dom.adminPanel.hidden = !allowed;
     if (adminTimer) clearInterval(adminTimer);
     adminTimer = null;
@@ -2893,7 +2918,7 @@ export function start(): void {
       }
       // Going live with it is for whoever may: on the air for everyone,
       // listed, with a link to send. Play is for you.
-      if (isAdmin()) {
+      if (canGoLive()) {
         item.append(goLiveButton(
           () => ({ kind: "entry", catalog: { id: catalog.id, name: catalog.name }, entry }),
           entry.title,
@@ -3493,6 +3518,22 @@ export function start(): void {
       meId = "";
       showAccount(null);
     }
+    // Signed in: the session, to carry to a server on another origin, which
+    // is how that server knows a member from a stranger. Asked of the host
+    // that set the cookie, which is the only one that can read it. Kept in
+    // memory only, and handed only to the server being connected to.
+    remote.session = "";
+    if (meId !== "") {
+      try {
+        const answer = await fetch("/api/v1/auth/token");
+        const body = (await answer.json().catch(() => ({}))) as { token?: string };
+        remote.session = answer.ok && typeof body.token === "string" ? body.token : "";
+      } catch {
+        remote.session = "";
+      }
+      // Already on a server: it may now know us as a member.
+      if (mode === "remote") void checkAdmin();
+    }
     // Signed in or not decides whether there is anybody to keep favourites for.
     void loadFavorites();
     openInvitedStream();
@@ -3766,6 +3807,8 @@ export function start(): void {
       kind?: "audio" | "video"; redials?: number; error?: string;
       /** Its own phone code: every live is its own room. Empty until listed. */
       code?: string;
+      /** The member who put it on, when one did: theirs to take off. */
+      startedBy?: string;
     }[];
     restreams?: { name: string; at: number; tracks: number }[];
   }
@@ -3928,7 +3971,8 @@ export function start(): void {
         onRestart: canDrive && channel.via === "pull"
           ? () => { void restartChannel(channel.id, channel.name); }
           : undefined,
-        onStop: canDrive
+        // A member takes off what they put on, and nothing else.
+        onStop: canDrive || (memberHere && meId !== "" && channel.startedBy === meId)
           ? () => { void removeChannel(channel.id, channel.name); }
           : undefined,
       }));
@@ -4233,7 +4277,9 @@ export function start(): void {
     const play = document.createElement("button");
     play.type = "button";
     play.className = "button";
-    play.textContent = row.playLabel ?? "Play";
+    // One word for the one thing, wherever a live is: Join live, with the
+    // stream icon. It was Play here and Join live there, for the same act.
+    joinLiveLabel(play, row.playLabel ?? "Join live");
     play.addEventListener("click", row.onPlay);
     actions.append(play);
 

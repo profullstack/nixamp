@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CACHE_MS, Owner, needsAdmin } from "../src/owner.ts";
+import { CACHE_MS, Owner, needsAdmin, needsMember } from "../src/owner.ts";
 
 /** A nixamp.com that answers for exactly one token, and counts the asking. */
 function fakeSite(knownToken: string, accountId: string) {
@@ -113,6 +113,28 @@ test("forgetting takes effect at once", async () => {
   assert.equal(site.asked(), 2);
 });
 
+test("a member may go live, and take off what they put on, and nothing else that administers", () => {
+  // Going live: a file here, a catalog entry, keeping something started on demand.
+  assert.equal(needsMember("/api/tracks/3/live", "POST"), true);
+  assert.equal(needsMember("/api/catalogs/k/entries/e/live", "POST"), true);
+  assert.equal(needsMember("/api/channels/cat-e/keep", "POST"), true);
+  // Taking off: the handler checks whose; the gate lets a member ask.
+  assert.equal(needsMember("/api/channels/cat-e", "DELETE"), true);
+  // Not a member's: the source, the connections, the catalogs, the links,
+  // restarting somebody else's channel, publishing.
+  assert.equal(needsMember("/api/source", "POST"), false);
+  assert.equal(needsMember("/api/connections", "GET"), false);
+  assert.equal(needsMember("/api/catalogs", "POST"), false);
+  assert.equal(needsMember("/api/links/play", "POST"), false);
+  assert.equal(needsMember("/api/channels/cat-e/restart", "POST"), false);
+  assert.equal(needsMember("/api/channels/cat-e", "POST"), false);
+  assert.equal(needsMember("/api/live/start", "POST"), false);
+  // Everything a member may do is something that needs administering at all.
+  for (const [path, method] of [["/api/tracks/3/live", "POST"], ["/api/catalogs/k/entries/e/live", "POST"], ["/api/channels/x/keep", "POST"], ["/api/channels/x", "DELETE"]] as const) {
+    assert.equal(needsAdmin(path, method), true, `${method} ${path}`);
+  }
+});
+
 test("the paths that need an administrator, and the ones that do not", () => {
   assert.equal(needsAdmin("/api/connections"), true);
   assert.equal(needsAdmin("/api/source"), true);
@@ -130,6 +152,9 @@ test("the paths that need an administrator, and the ones that do not", () => {
   assert.equal(needsAdmin("/api/links/download", "GET"), true);
   assert.equal(needsAdmin("/api/channels/cat-e/keep", "POST"), true);
   assert.equal(needsAdmin("/api/channels/cat-e", "GET"), false);
+  // A file on this server going on the air is the same act as a catalog entry.
+  assert.equal(needsAdmin("/api/tracks/12/live", "POST"), true);
+  assert.equal(needsAdmin("/api/tracks/12/live-ish", "POST"), false);
   // Asking what a name is reveals nothing about this server.
   assert.equal(needsAdmin("/api/enrich", "GET"), false);
 
