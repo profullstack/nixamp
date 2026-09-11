@@ -45,6 +45,9 @@ import {
   signInFailedPage,
   SignIn,
 } from "./oauth.ts";
+import { AuthorizationServer, clientsFrom } from "./oauth-server.ts";
+import { handleOAuthApi, oauthApiPath } from "./oauth-api.ts";
+import { WatchParties } from "./watch-party.ts";
 import { needsAdmin, needsMember, Owner } from "./owner.ts";
 import { createHash as sha } from "node:crypto";
 import { playJingle } from "./jingle.ts";
@@ -1258,6 +1261,10 @@ export function isSignInPath(path: string): boolean {
     // Public to read, so it must not be behind a share key either.
     path === "/api/v1/opendirs" ||
     path.startsWith("/api/v1/opendirs/") ||
+    // nixamp as an authorization server: a client arriving here has no share
+    // key and is not asking for one, and the metadata document is public by
+    // the RFC that defines where it lives.
+    oauthApiPath(path) ||
     OAUTH_ROUTE.test(path)
   );
 }
@@ -1486,6 +1493,14 @@ export interface HandlerOptions {
   /** Tickets: a paid pass to one event's room. Absent means every show is free. */
   tickets?: Tickets;
   /**
+   * nixamp as an OAuth 2.1 authorization server, so another site can act on
+   * an account here. nixamp.com only: a nixamp on a laptop keeps no accounts
+   * and so has nobody to authorize.
+   */
+  authServer?: AuthorizationServer;
+  /** Watch parties bridged from a client site into nixamp rooms. */
+  parties?: WatchParties;
+  /**
    * How an invite is sent: by email, by text, and the site the watch link is
    * built on. nixamp.com only; a personal nixamp has no mail to send from.
    */
@@ -1599,6 +1614,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       response.end();
       return;
     }
+
+    // nixamp as an authorization server, and the watch parties that pairing
+    // exists for. Before the share-key check for the same reason sign-in is:
+    // a client site holds an account's token, never a server's key.
+    if (options.authServer && options.accounts && await handleOAuthApi(request, response, url, {
+      server: options.authServer,
+      accounts: options.accounts,
+      ...(options.parties ? { parties: options.parties } : {}),
+      ...(options.handles ? { handles: options.handles } : {}),
+      secureCookies: options.secureCookies ?? false,
+    })) return;
 
     if (options.events && await handleLiveApi(request, response, url, {
       events: options.events,
@@ -4622,6 +4648,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       : undefined;
   const follows = pool ? new Follows(pool) : undefined;
   const favorites = pool ? new Favorites(pool) : undefined;
+  const nixampSite = (process.env["NIXAMP_SITE"] ?? DEFAULT_DIRECTORY).replace(/\/+$/, "");
   const events = pool ? new LiveEvents(pool) : undefined;
   const layouts = pool ? new Layouts(pool) : undefined;
   const rooms = pool ? new Rooms(pool) : undefined;
@@ -4631,6 +4658,57 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ? ticketsFromEnv(process.env["NIXAMP_SITE"] ?? DEFAULT_DIRECTORY)
     : null;
   const tickets = ticketConfig ? new Tickets(ticketConfig) : undefined;
+
+  // Accounts live where the directory lives, and only there: a nixamp on a
+  // laptop has nobody to be an account of. Made here rather than inline in
+  // the handler options because the authorization server issues its access
+  // tokens out of the same table -- an OAuth token IS a nixamp token with a
+  // client's name on it, which is why every existing route understands one.
+  const accounts =
+    options.directory && process.env["DATABASE_URL"]
+      ? new Accounts({
+          connectionString: process.env["DATABASE_URL"],
+          secret: process.env["NIXAMP_JWT_SECRET"] ?? "",
+        })
+      : undefined;
+
+  // nixamp as an OAuth 2.1 authorization server, and the watch parties a
+  // client site bridges through it. Both need the same three things -- a
+  // database, accounts, and a site to be the issuer of -- so both appear or
+  // neither does.
+  const authServer =
+    pool && accounts?.tokens
+      ? new AuthorizationServer({
+          db: pool,
+          tokens: accounts.tokens,
+          clients: clientsFrom(process.env),
+          issuer: nixampSite,
+        })
+      : undefined;
+  const parties =
+    pool && events && authServer
+      ? new WatchParties({
+          db: pool,
+          events,
+          site: nixampSite,
+          // A client may only point a watch link at its own site, which is
+          // read off the redirect URIs it registered rather than configured
+          // twice. Without it, "come and watch" could be sent anywhere.
+          hostsFor: (origin) => {
+            const client = authServer.client(origin);
+            if (!client) return [];
+            const hosts = new Set<string>();
+            for (const uri of client.redirectUris) {
+              try {
+                hosts.add(new URL(uri).hostname);
+              } catch {
+                // A malformed registration names no host, which allows none.
+              }
+            }
+            return [...hosts];
+          },
+        })
+      : undefined;
 
   // Names and certificates for signed-in servers, and the rate limit over
   // everything. All of it is nixamp.com's business: the DNS keys live only
@@ -4671,6 +4749,12 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
           { path: "/api/v1/invite", limit: 10 },
           { path: "/api/v1/dns", limit: 30 },
           { path: "/api/v1/certs", limit: 30 },
+          // A token endpoint is where a stolen code or refresh token would be
+          // tried, so it is address-bucketed: a client presenting its own id
+          // must not get the credentialed budget to guess with.
+          { path: "/api/v1/oauth/token", limit: 30, credential: false },
+          { path: "/api/v1/oauth/", limit: 60, credential: false },
+          { path: "/api/v1/watch-parties", limit: 60 },
           { path: "/api/health", open: true },
           { path: "/api/directory", limit: 120 },
         ],
@@ -4974,6 +5058,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(layouts ? { layouts } : {}),
     ...(rooms ? { rooms } : {}),
     ...(tickets ? { tickets } : {}),
+    ...(authServer ? { authServer } : {}),
+    ...(parties ? { parties } : {}),
     // Invites go out the same way follow notifications do, and only from a
     // site that has somebody to send them for.
     ...(pool
@@ -5008,12 +5094,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(partyLine ? { partyLine } : {}),
     // Accounts live where the directory lives, and only there: a nixamp on a
     // laptop has nobody to be an account of.
-    ...(options.directory && process.env["DATABASE_URL"]
+    ...(accounts
       ? {
-          accounts: new Accounts({
-            connectionString: process.env["DATABASE_URL"],
-            secret: process.env["NIXAMP_JWT_SECRET"] ?? "",
-          }),
+          accounts,
           secureCookies: (process.env["NIXAMP_SITE"] ?? "").startsWith("https://"),
           // A deployment reached over https is one behind somebody's proxy, so
           // the socket address is that proxy and the forwarded header is the

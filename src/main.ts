@@ -80,6 +80,8 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp dns [set|rm]           names under your handle, for your servers
   nixamp library [folder]       where the media is; the daemon serves this and nothing outside it
   nixamp server list|add|remove  the machines you run, kept against your account
+  nixamp party list|join|host   watch parties, here and on the sites nixamp is connected to
+  nixamp mcp                     speak Model Context Protocol on stdin, for an agent
   nixamp opendir list|add|remove  folders found on the web, published for everyone
   nixamp update [version]        re-run the installer, keeping your choices
   nixamp uninstall [--yes]       remove everything the installer created
@@ -234,6 +236,35 @@ A share link printed in a terminal you have since closed is a server you have
 lost. This keeps the address against your account, so the answer is the same
 here, in the browser and in the desktop app. The share key is kept with it only
 if you pass one, since it is the secret that opens the machine.
+`,
+  party: `nixamp party — watch parties, here and on the sites nixamp is connected to.
+
+  nixamp party list                     the ones you could join right now
+  nixamp party join CODE                the room, the links, and where the film is
+  nixamp party join CODE --open         and open the picture in a browser
+  nixamp party host CODE --url URL      put a party on the air as a nixamp room
+  nixamp party sync CODE --at 1234      say where playback is (hosts only)
+  nixamp party end CODE                 end it
+
+A watch party lives on the site that has the film — bittorrented.com, say —
+and is bridged into nixamp as a room, so every nixamp client can join it: the
+browser, this terminal, the desktop app, the television and an agent over MCP.
+The film stays where it is; what nixamp carries is the room, the chat and the
+second everybody is supposed to be at.
+
+The site connects to your nixamp account with OAuth 2.1, which you approve
+once in a browser. The Account panel on nixamp.com lists what is connected and
+takes it away again.
+`,
+  mcp: `nixamp mcp — nixamp as a tool an agent can use.
+
+  nixamp mcp    speak Model Context Protocol on stdin and stdout
+
+It offers the watch party tools: list them, read one, put one on the air,
+say where playback is, end it. It acts as whoever this machine is signed in
+as, so \`nixamp login\` (or NIXAMP_TOKEN) comes first.
+
+Point an MCP client at it as a stdio server running \`nixamp mcp\`.
 `,
   attach: `nixamp attach — the player, in front of the running daemon.
 
@@ -422,6 +453,16 @@ export async function main(): Promise<void> {
   if (first === "server" || first === "servers") {
     const { servers } = await import("./session.ts");
     process.exitCode = await servers(rest);
+    return;
+  }
+  if (first === "party" || first === "parties" || first === "watch-party") {
+    const { party } = await import("./party.ts");
+    process.exitCode = await party(rest);
+    return;
+  }
+  if (first === "mcp") {
+    const { mcp } = await import("./mcp.ts");
+    process.exitCode = await mcp();
     return;
   }
   if (first === "token" || first === "tokens") {
