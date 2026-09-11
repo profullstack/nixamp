@@ -50,7 +50,32 @@ export interface ChannelInfo {
   error?: string;
   /** How many times the source has been dialled again since it started. */
   redials?: number;
+  /**
+   * For a pulled film: how far into it we are, in seconds, read off ffmpeg
+   * as it goes. This is what a restart and a redial go back to. A live
+   * source has no such place, and says so with `live`.
+   */
+  position?: number;
+  live?: boolean;
+  /** What the source turned out to hold, so a restart need not ask again. */
+  codecs?: { video: string; audio: string; container: string; duration?: number };
 }
+
+/** Where a pulled source is picked up from, and whether it can be at all. */
+export interface PullResume {
+  /** A live source is joined where it is now; a film is joined where it was. */
+  live: boolean;
+  /** Seconds into a film to start from. */
+  position: number;
+}
+
+/**
+ * How far back of the saved place a film is picked up from, in seconds. The
+ * place is written down every so often and a restart lands between two
+ * writes; a few seconds repeated is a hiccup, a few seconds missed is a
+ * line of dialogue.
+ */
+export const REWIND = 3;
 
 /** How long to wait before dialling a dropped source again. */
 export const REDIAL = 2000;
@@ -219,11 +244,21 @@ export class Channel {
    * because you looked away, and a room where the picture depends on who is
    * in it is not a room anybody can be invited to.
    */
-  pull(source: string, encode: string[], paced = true, stall = STALL, input: string[] = [], audio = ""): void {
+  pull(
+    source: string,
+    encode: string[],
+    paced = true,
+    stall = STALL,
+    input: string[] = [],
+    audio = "",
+    resume: PullResume = { live: true, position: 0 },
+  ): void {
     this.stall = stall;
     if (this.info.kind === "video") this.fragments = new Fragments();
     const [command, ...prefix] = this.options.ffmpeg as [string, ...string[]];
     const remote = /^https?:\/\//i.test(source);
+    this.info.live = resume.live;
+    if (!resume.live) this.info.position = Math.max(0, resume.position);
     // What every remote input is told: dial again when the CDN drops it, and
     // give up on a socket that has gone quiet. Input options apply to the
     // input that follows them, so a second input is told again.
@@ -234,12 +269,23 @@ export class Channel {
     const dial = (): void => {
       if (this.closing) return;
       this.stderr = "";
+      // Where to pick a film up from: a little before where it was, since
+      // the place was written down a moment ago and a moment of it twice is
+      // better than a moment of it missing. A live source is joined as is,
+      // and a film that has barely started is started.
+      const from = resume.live ? 0 : Math.max(0, Math.floor((this.info.position ?? 0) - REWIND));
+      const seek = from > 0 ? ["-ss", String(from)] : [];
       const child = spawn(
         command,
         [
           ...prefix,
           "-hide_banner",
           "-loglevel", "error",
+          // How far it has got, once a second, on a pipe of its own: this is
+          // what is written down for a restart and what a redial goes back
+          // to. Not stderr, which is for what went wrong.
+          "-progress", "pipe:3",
+          "-stats_period", "1",
           // A dropped source is normal over hours, and a channel that dies
           // the first time a CDN hiccups is not a channel anybody can rely
           // on. ffmpeg redials on its own before we have to.
@@ -256,19 +302,36 @@ export class Channel {
           // referer, a cookie. A link resolved by yt-dlp comes with these,
           // and a CDN that got them from yt-dlp and not from us answers 403.
           ...input,
+          ...seek,
           "-i", source,
           // The sound, when the site keeps it apart from the picture: a
           // second input, dialled the same way, that the encode maps in.
-          ...(audio ? [...remoteArgs, ...(paced ? ["-re"] : []), ...input, "-i", audio] : []),
+          ...(audio ? [...remoteArgs, ...(paced ? ["-re"] : []), ...input, ...seek, "-i", audio] : []),
           ...encode,
           "pipe:1",
         ],
-        { stdio: ["ignore", "pipe", "pipe"] },
+        { stdio: ["ignore", "pipe", "pipe", "pipe"] },
       );
 
       let sent = false;
       this.child = child;
       this.rearm(child);
+      // ffmpeg's progress: key=value lines, out_time_us being how much it
+      // has written, from where it was told to start. Read whole lines,
+      // since a chunk can end mid-number. Drained whatever it says, for
+      // the same reason stderr is.
+      let progress = "";
+      (child.stdio[3] as Readable | null)?.on("data", (chunk: Buffer) => {
+        progress = (progress + chunk.toString("utf8")).slice(-4000);
+        if (this.child !== child || resume.live) return;
+        const lines = progress.split("\n");
+        progress = lines.pop() ?? "";
+        for (const line of lines) {
+          const match = /^out_time_us=(\d+)/.exec(line.trim());
+          if (match) this.info.position = from + Number(match[1]) / 1e6;
+        }
+      });
+      (child.stdio[3] as Readable | null)?.on("error", () => undefined);
       child.stdout?.on("data", (chunk: Buffer) => {
         // An ffmpeg that was replaced can still have a chunk in the pipe.
         if (this.child !== child) return;
@@ -626,6 +689,7 @@ export class Channels {
     stall = STALL,
     input: string[] = [],
     audio = "",
+    resume: PullResume = { live: true, position: 0 },
   ): Channel | null {
     if (this.open.has(id)) return null;
     const channel = new Channel(
@@ -644,7 +708,7 @@ export class Channels {
       (gone) => this.open.delete(gone),
     );
     this.open.set(id, channel);
-    channel.pull(source, encode, paced, stall, input, audio);
+    channel.pull(source, encode, paced, stall, input, audio, resume);
     return channel;
   }
 
@@ -758,6 +822,19 @@ export interface RememberedChannel {
   id: string;
   name: string;
   source: string;
+  /**
+   * What it was, so a restart need not ask the source again. Asking is not
+   * free: a film on an IPTV panel allows one connection, and while the old
+   * ffmpeg's is still being counted a probe of it gets an error page and no
+   * streams -- which read as "no picture", and two films came back on the
+   * air as sound alone.
+   */
+  kind?: "audio" | "video";
+  codecs?: { video: string; audio: string; container: string; duration?: number };
+  /** Where a film had got to, in seconds, so it picks up there. */
+  position?: number;
+  /** A live source has nowhere to pick up from. */
+  live?: boolean;
 }
 
 const REMEMBERED = "channels.json";
@@ -767,16 +844,51 @@ export function rememberedChannels(dir: string, port: number): RememberedChannel
     const all = JSON.parse(readFileSync(join(dir, REMEMBERED), "utf8")) as Record<string, unknown>;
     const list = all[String(port)];
     if (!Array.isArray(list)) return [];
-    return list.filter(
-      (one): one is RememberedChannel =>
-        typeof one === "object" && one !== null &&
-        typeof (one as RememberedChannel).id === "string" &&
-        typeof (one as RememberedChannel).name === "string" &&
-        typeof (one as RememberedChannel).source === "string",
-    );
+    return list
+      .filter(
+        (one): one is Record<string, unknown> =>
+          typeof one === "object" && one !== null &&
+          typeof (one as RememberedChannel).id === "string" &&
+          typeof (one as RememberedChannel).name === "string" &&
+          typeof (one as RememberedChannel).source === "string",
+      )
+      .map((one) => {
+        const kept: RememberedChannel = { id: one["id"] as string, name: one["name"] as string, source: one["source"] as string };
+        if (one["kind"] === "audio" || one["kind"] === "video") kept.kind = one["kind"];
+        const codecs = one["codecs"];
+        if (codecs && typeof codecs === "object") {
+          const c = codecs as Record<string, unknown>;
+          if (typeof c["video"] === "string" && typeof c["audio"] === "string" && typeof c["container"] === "string") {
+            kept.codecs = { video: c["video"], audio: c["audio"], container: c["container"] };
+            if (typeof c["duration"] === "number" && Number.isFinite(c["duration"])) kept.codecs.duration = c["duration"];
+          }
+        }
+        if (typeof one["position"] === "number" && Number.isFinite(one["position"]) && one["position"] > 0) kept.position = one["position"];
+        if (typeof one["live"] === "boolean") kept.live = one["live"];
+        return kept;
+      });
   } catch {
     return [];
   }
+}
+
+/**
+ * What to write down about the channels a server is carrying: the pulled,
+ * kept ones, with what they turned out to be and where they have got to.
+ * The same answer everywhere one is added, kept, or taken off, so that no
+ * path forgets the position.
+ */
+export function rememberedNow(channels: Channels): RememberedChannel[] {
+  return channels.list()
+    .filter((one) => one.via === "pull" && one.source && !channels.isEphemeral(one.id))
+    .map((one) => {
+      const kept: RememberedChannel = { id: one.id, name: one.name, source: one.source as string };
+      if (one.kind) kept.kind = one.kind;
+      if (one.codecs) kept.codecs = one.codecs;
+      if (typeof one.live === "boolean") kept.live = one.live;
+      if (!one.live && typeof one.position === "number" && one.position > 0) kept.position = Math.floor(one.position);
+      return kept;
+    });
 }
 
 export function rememberChannels(dir: string, port: number, list: RememberedChannel[]): void {

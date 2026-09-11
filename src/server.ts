@@ -27,7 +27,7 @@ import {
 } from "./broadcast.ts";
 import { Ingest, normaliseFormat } from "./ingest.ts";
 import {
-  Channels, cleanId, generatedId, rememberChannels, rememberedChannels,
+  Channels, cleanId, generatedId, rememberChannels, rememberedChannels, rememberedNow,
   type Channel, type RememberedChannel,
 } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
@@ -81,7 +81,7 @@ import {
   paywallFromEnv,
 } from "./paywall.ts";
 import { isRemote, playsInBrowser, sourceLabel } from "./sources.ts";
-import { codecsOf, probeAsync, videoArgs } from "./audio.ts";
+import { codecsOf, probeAsync, videoArgs, type Codecs } from "./audio.ts";
 import {
   allowedForListening,
   elevate,
@@ -973,12 +973,30 @@ export async function answerWith(response: ServerResponse, refused: Response): P
 export const MAX_ON_DEMAND = 4;
 
 /**
+ * How often where each film has got to is written down. A restart lands
+ * somewhere inside this, and REWIND covers the gap.
+ */
+export const REMEMBER_EVERY_MS = 15_000;
+
+/**
  * Probe a source and start carrying it as a channel of its own.
  *
  * Shared by the request that puts one on and the boot that puts remembered
  * ones back, so that both agree on what a source is encoded as. Null when
  * that channel id is already on.
  */
+/** What is already known about a source, so it need not be asked, or asked twice. */
+export interface KnownSource {
+  kind?: "audio" | "video";
+  codecs?: Codecs;
+  position?: number;
+  live?: boolean;
+}
+
+/** How many times a source that answers nothing is asked, and how far apart. */
+export const PROBE_TRIES = 3;
+export const PROBE_RETRY_MS = 1500;
+
 export async function pullChannel(
   channels: Channels,
   ffprobe: string[],
@@ -987,17 +1005,42 @@ export async function pullChannel(
   source: string,
   input: string[] = [],
   audio = "",
+  known: KnownSource = {},
 ): Promise<Channel | null> {
   const tools = { ffmpeg: [], ffprobe, play: null };
+  const empty = (c: Codecs): boolean => c.video === "" && c.audio === "";
   // A pair is probed as a pair: the picture's file has no sound in it, and
   // asked alone it would read as a silent film. The sound's codec comes from
   // the sound's file; the picture's, and the container, from the picture's.
-  const [picture, sound] = await Promise.all([
-    codecsOf(tools, source, input),
-    audio ? codecsOf(tools, audio, input) : Promise.resolve(null),
-  ]);
-  const codecs = sound ? { ...picture, audio: sound.audio } : picture;
-  const kind = codecs.video === "" ? "audio" : "video";
+  const probe = async (): Promise<Codecs> => {
+    const [picture, sound] = await Promise.all([
+      codecsOf(tools, source, input),
+      audio ? codecsOf(tools, audio, input) : Promise.resolve(null),
+    ]);
+    return sound ? { ...picture, audio: sound.audio } : picture;
+  };
+  // Known already: a restart puts back what it wrote down and asks nobody.
+  // Otherwise ask, and ask again when the answer is nothing: a film on an
+  // IPTV panel allows one connection, and while the last ffmpeg's is still
+  // being counted a probe gets an error page and no streams. Nothing, read
+  // as "no picture", is how two films came back on the air as sound alone.
+  let codecs: Codecs = known.codecs && !empty(known.codecs) ? known.codecs : { video: "", audio: "", container: "" };
+  let assumed = false;
+  if (empty(codecs)) {
+    for (let attempt = 0; attempt < PROBE_TRIES; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, PROBE_RETRY_MS));
+      codecs = await probe();
+      if (!empty(codecs)) break;
+    }
+    assumed = empty(codecs);
+  }
+  // A source that would not say is carried as what it was last time, or as
+  // video: a picture-less MP4 still plays, whereas a film as MP3 is a film
+  // with no picture until somebody notices.
+  const kind = codecs.video !== "" ? "video" : codecs.audio !== "" ? "audio" : (known.kind ?? "video");
+  if (assumed) console.log(`  "${id}": the source would not say what it holds; carrying it as ${kind}.`);
+  // A film has a length and a place to go back to; a live source has neither.
+  const live = known.live ?? !((codecs.duration ?? 0) > 0);
   const encode = kind === "video"
     ? [
         // Which streams from which input, when there are two: the picture
@@ -1009,7 +1052,12 @@ export async function pullChannel(
     // No picture in it, so none is invented: MP3 is the thing every browser
     // plays and the thing a listener can join halfway through.
     : ["-vn", "-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"];
-  return channels.pull(id, name, source, encode, kind, true, undefined, input, kind === "video" ? audio : "");
+  const channel = channels.pull(
+    id, name, source, encode, kind, true, undefined, input, kind === "video" ? audio : "",
+    { live, position: known.position ?? 0 },
+  );
+  if (channel && !assumed) channel.info.codecs = codecs;
+  return channel;
 }
 
 /** What a link resolves to, kept so a download can be named without asking twice. */
@@ -2770,13 +2818,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           }
         }
         options.channels.keep(channelId);
-        if (options.rememberChannels) {
-          options.rememberChannels(
-            options.channels.list()
-              .filter((one) => one.via === "pull" && one.source && !options.channels?.isEphemeral(one.id))
-              .map((one) => ({ id: one.id, name: one.name, source: one.source as string })),
-          );
-        }
+        options.rememberChannels?.(rememberedNow(options.channels));
         void options.live?.announce?.();
         json(response, 200, { channel: channelId, name: entry.title, kind: entry.live ? "live" : "vod" });
         return;
@@ -3066,13 +3108,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         const stopped = channels.stop(id);
         // Taken off on purpose is forgotten on purpose: it must not come back
         // at the next restart.
-        if (stopped && options.rememberChannels) {
-          options.rememberChannels(
-            channels.list()
-              .filter((one) => one.via === "pull" && one.source)
-              .map((one) => ({ id: one.id, name: one.name, source: one.source as string })),
-          );
-        }
+        if (stopped) options.rememberChannels?.(rememberedNow(channels));
         json(response, stopped ? 200 : 404, { ok: stopped });
         return;
       }
@@ -3116,13 +3152,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           return;
         }
         channels.keep(id);
-        if (options.rememberChannels) {
-          options.rememberChannels(
-            channels.list()
-              .filter((one) => one.via === "pull" && one.source && !channels.isEphemeral(one.id))
-              .map((one) => ({ id: one.id, name: one.name, source: one.source as string })),
-          );
-        }
+        options.rememberChannels?.(rememberedNow(channels));
         void options.live?.announce?.();
         json(response, 200, { ok: true });
         return;
@@ -3178,14 +3208,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           return;
         }
         // Written down, so a restart puts it back on the air.
-        if (options.rememberChannels) {
-          options.rememberChannels([
-            ...channels.list()
-              .filter((one) => one.via === "pull" && one.source && one.id !== wanted)
-              .map((one) => ({ id: one.id, name: one.name, source: one.source as string })),
-            { id: wanted, name: called, source },
-          ]);
-        }
+        options.rememberChannels?.(rememberedNow(channels));
         json(response, 200, { ok: true, channel: channel.info });
         return;
       }
@@ -4148,11 +4171,32 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // every restart used to take CNN off the air until somebody noticed.
   const remembering = (list: RememberedChannel[]): void => rememberChannels(stateDir(), options.port, list);
   for (const one of rememberedChannels(stateDir(), options.port)) {
-    console.log(`  Putting "${one.id}" (${one.name}) back on the air.`);
-    void pullChannel(channels, tools.ffprobe, one.id, one.name, one.source).then((channel) => {
+    const where = one.position && !one.live ? `, from ${Math.floor(one.position / 60)}m${Math.floor(one.position % 60)}s` : "";
+    console.log(`  Putting "${one.id}" (${one.name}) back on the air${where}.`);
+    // With what was written down about it: what it holds, so the source is
+    // not asked again, and where it had got to, so a film carries on.
+    void pullChannel(channels, tools.ffprobe, one.id, one.name, one.source, [], "", {
+      ...(one.kind ? { kind: one.kind } : {}),
+      ...(one.codecs ? { codecs: one.codecs } : {}),
+      ...(one.position !== undefined ? { position: one.position } : {}),
+      ...(one.live !== undefined ? { live: one.live } : {}),
+    }).then((channel) => {
       if (!channel) console.log(`  "${one.id}" is already on.`);
     });
   }
+  // Where each film has got to, written down every so often, so a restart
+  // picks it up from about there rather than from the start. Only when it
+  // has changed: a server carrying nothing but live television writes
+  // nothing.
+  let lastRemembered = "";
+  setInterval(() => {
+    const now = rememberedNow(channels);
+    if (!now.some((one) => one.position !== undefined)) return;
+    const text = JSON.stringify(now);
+    if (text === lastRemembered) return;
+    lastRemembered = text;
+    remembering(now);
+  }, REMEMBER_EVERY_MS).unref();
 
   // The m3u catalogs kept here: read from disk now, and any that were never
   // read are fetched in the background so browsing does not wait on a provider.

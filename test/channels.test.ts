@@ -497,3 +497,83 @@ test("going live with an on-demand channel keeps it up with nobody watching", as
   assert.equal(set.keep("nothing"), false);
   set.stopAll();
 });
+import { readFileSync } from "node:fs";
+import { rememberedNow } from "../src/channels.ts";
+
+/** A fake ffmpeg that writes its arguments to a file, reports how far it got on the progress pipe, and then does as told. */
+function tellingFfmpeg(argsFile: string, outTimeUs: number, then: string): string[] {
+  return ["sh", "-c", `echo "$@" >> ${argsFile}; echo out_time_us=${outTimeUs} >&3; echo progress=continue >&3; ${then}`, "--"];
+}
+
+test("a pulled film knows where it is, starts a little before it, and a redial goes back there", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nixamp-resume-"));
+  const argsFile = join(dir, "args.txt");
+
+  // Told to pick up at 100 s: ffmpeg is started 3 s before that, and what it
+  // reports having written is added to where it started.
+  const set = new Channels({ ffmpeg: tellingFfmpeg(argsFile, 5_000_000, "sleep 30") });
+  const film = set.pull("film", "A Film", "http://x.test/film.mp4", [], "video", true, undefined, [], "", { live: false, position: 100 });
+  assert.ok(film);
+  await new Promise((done) => setTimeout(done, 300));
+  const first = readFileSync(argsFile, "utf8");
+  assert.match(first, /-ss 97 -i http:\/\/x\.test\/film\.mp4/, "started REWIND seconds before the saved place");
+  assert.match(first, /-progress pipe:3/);
+  assert.equal(film?.info.live, false);
+  assert.equal(film?.info.position, 102);
+  set.stopAll();
+
+  // A live source is joined as it is: no seek, no position.
+  const liveArgs = join(dir, "live.txt");
+  const live = new Channels({ ffmpeg: tellingFfmpeg(liveArgs, 5_000_000, "sleep 30") });
+  const tv = live.pull("tv", "TV", "http://x.test/tv.m3u8", [], "video");
+  await new Promise((done) => setTimeout(done, 300));
+  assert.doesNotMatch(readFileSync(liveArgs, "utf8"), /-ss /);
+  assert.equal(tv?.info.live, true);
+  assert.equal(tv?.info.position, undefined);
+  live.stopAll();
+
+  // A film started at 97 s that wrote 20 s and dropped had got to 117 s,
+  // and is dialled again from 114 s, not from the start. The fake exits at
+  // once, which is a drop.
+  const againArgs = join(dir, "again.txt");
+  const again = new Channels({ ffmpeg: tellingFfmpeg(againArgs, 20_000_000, "exit 0") });
+  again.pull("film", "A Film", "http://x.test/film.mp4", [], "video", true, undefined, [], "", { live: false, position: 100 });
+  await new Promise((done) => setTimeout(done, REDIAL + 600));
+  const dials = readFileSync(againArgs, "utf8").trim().split("\n");
+  assert.ok(dials.length >= 2, "dialled again");
+  assert.match(dials[0] ?? "", /-ss 97 /);
+  assert.match(dials[1] ?? "", /-ss 114 /, "picked up where it had got to");
+  again.stopAll();
+});
+
+test("what a channel is and where it got to are remembered, and only for kept pulled channels", () => {
+  const dir = mkdtempSync(join(tmpdir(), "nixamp-remember-more-"));
+  const codecs = { video: "h264", audio: "aac", container: "mov,mp4", duration: 5400 };
+  rememberChannels(dir, 4321, [
+    { id: "film", name: "A Film", source: "http://x.test/film.mp4", kind: "video", codecs, position: 1234, live: false },
+    { id: "tv", name: "TV", source: "http://x.test/tv.m3u8", kind: "video", live: true },
+  ]);
+  const back = rememberedChannels(dir, 4321);
+  assert.deepEqual(back[0], { id: "film", name: "A Film", source: "http://x.test/film.mp4", kind: "video", codecs, position: 1234, live: false });
+  assert.deepEqual(back[1], { id: "tv", name: "TV", source: "http://x.test/tv.m3u8", kind: "video", live: true });
+
+  // Junk in the optional fields is dropped, not believed.
+  writeFileSync(join(dir, "channels.json"), JSON.stringify({ 4321: [
+    { id: "x", name: "X", source: "s", kind: "movie", codecs: { video: 1 }, position: -5, live: "yes" },
+  ] }));
+  assert.deepEqual(rememberedChannels(dir, 4321), [{ id: "x", name: "X", source: "s" }]);
+
+  // From a running set: a kept film with its place, a live channel without
+  // one, and an on-demand channel not at all.
+  const set = new Channels({ ffmpeg: ["true"] });
+  const film = set.pull("film", "A Film", "http://x.test/film.mp4", [], "video", true, undefined, [], "", { live: false, position: 100 });
+  if (film) film.info.codecs = codecs;
+  set.pull("tv", "TV", "http://x.test/tv.m3u8", [], "video");
+  set.pull("ondemand", "Somebody's", "http://x.test/od.mp4", [], "video", true, undefined, [], "", { live: false, position: 7 });
+  set.ephemeral("ondemand");
+  const now = rememberedNow(set);
+  assert.deepEqual(now.map((one) => one.id), ["film", "tv"]);
+  assert.deepEqual(now[0], { id: "film", name: "A Film", source: "http://x.test/film.mp4", kind: "video", codecs, live: false, position: 100 });
+  assert.deepEqual(now[1], { id: "tv", name: "TV", source: "http://x.test/tv.m3u8", kind: "video", live: true });
+  set.stopAll();
+});
