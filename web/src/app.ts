@@ -39,6 +39,13 @@ const VOLUME_KEY = "nixamp.volume";
  */
 const LISTEN_HERE_KEY = "nixamp.listenHere";
 /**
+ * How often the directory is asked again while it is on screen. A server
+ * tells nixamp.com the moment something goes on or off the air, so this is
+ * how long the page can be behind, and ten seconds of a list of servers
+ * is a small price for not leaning on it.
+ */
+const DIRECTORY_EVERY_MS = 10_000;
+/**
  * Whether this page has already made its noise.
  *
  * Per page rather than per tab. It was per tab, which meant refreshing the
@@ -1734,10 +1741,26 @@ export function start(): void {
    * /api/directory and finds nothing, which is the honest answer: it does not
    * host one.
    */
-  const loadDirectory = async (): Promise<void> => {
+  /** The listing as last drawn, so a poll that brings the same news redraws nothing. */
+  let directorySeen = "";
+  /**
+   * Asked again while the directory is on screen. A channel put on the air
+   * is told to nixamp.com at once, and the page that lists it used to ask
+   * exactly once, on opening, so the admin who went live on a server and
+   * looked at the directory did not see it there until a reload.
+   */
+  let directoryTimer: ReturnType<typeof setInterval> | null = null;
+  const loadDirectory = async (quiet = false): Promise<void> => {
     dom.directory.hidden = false;
-    dom.directoryNote.textContent = "Looking for live streams…";
-    dom.directoryList.replaceChildren();
+    if (!quiet) {
+      dom.directoryNote.textContent = "Looking for live streams…";
+      dom.directoryList.replaceChildren();
+    }
+    if (!directoryTimer) {
+      directoryTimer = setInterval(() => {
+        if (!dom.directory.hidden && document.visibilityState === "visible") void loadDirectory(true);
+      }, DIRECTORY_EVERY_MS);
+    }
 
     let streams: {
       id: string;
@@ -1767,11 +1790,25 @@ export function start(): void {
         recent?: RecentStream[];
       };
       streams = body.streams ?? [];
+      // The same news is not news. Without the clock fields, which every
+      // heartbeat moves and which nobody sees; with the buttons under a
+      // pointer, which a redraw would take away for nothing.
+      const seen = JSON.stringify({
+        streams: streams.map(({ ...one }) => {
+          const { updatedAt: _u, startedAt: _s, ...rest } = one as typeof one & { updatedAt?: number; startedAt?: number };
+          return rest;
+        }),
+        recent: body.recent ?? [],
+        me: meId,
+      });
+      if (quiet && seen === directorySeen) return;
+      directorySeen = seen;
       showRecent(body.recent ?? []);
     } catch {
-      dom.directoryNote.textContent = "The directory is not answering. Type an address instead.";
+      if (!quiet) dom.directoryNote.textContent = "The directory is not answering. Type an address instead.";
       return;
     }
+    dom.directoryList.replaceChildren();
 
     if (streams.length === 0) {
       dom.directoryNote.textContent = "Nobody is streaming right now.";
@@ -1915,6 +1952,12 @@ export function start(): void {
       dom.directoryList.append(item);
     }
   };
+
+  // Coming back to the tab is a reason to ask now rather than at the next
+  // tick: what changed while you were away is what you came back for.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !dom.directory.hidden) void loadDirectory(true);
+  });
 
   // /directory is a page, not a drawer. Opening it showed the player with the
   // list somewhere below the fold, which read as "the directory is broken".
