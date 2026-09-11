@@ -1417,3 +1417,78 @@ test("a remembered channel is put back without asking the source, and a silent s
   assert.equal(radio?.info.kind, "audio");
   set.stopAll();
 });
+
+test("a member may put a file on the air, up to a point, and take only their own off", { timeout: 30_000 }, async () => {
+  // nixamp.com, faked: two members, neither the owner.
+  const members: Record<string, string> = { "member-token": "member-9", "other-token": "member-2", "third-token": "member-3" };
+  const site = (async (_url: string | URL, init?: RequestInit) => {
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const token = /^Bearer (.+)$/.exec(headers["authorization"] ?? "")?.[1] ?? "";
+    const id = members[token];
+    return { ok: Boolean(id), json: async () => (id ? { account: { id } } : { error: "no" }) } as unknown as Response;
+  }) as unknown as typeof fetch;
+  const say = (json: string): string[] => ["sh", "-c", `printf '%s' '${json}'`];
+  const told = say('{"streams":[{"codec_type":"video","codec_name":"h264"},{"codec_type":"audio","codec_name":"aac"}],"format":{"format_name":"mov,mp4","duration":"100"}}');
+  const engine = new PlayerEngine(
+    ["/m/a.mp4", "/m/b.mp4", "/m/c.mp4", "/m/d.mp4"].map(track),
+    "/m",
+    { ffmpeg: ["true"], ffprobe: told, play: null },
+  );
+  const channels = new Channels({ ffmpeg: ["true"] });
+  const server = createServer(engine, {
+    web: null, media: false, version: "test",
+    key: "ctrl-key", listenKey: "listen-key",
+    owner: new Owner({ ownerId: "owner-1", site: "https://nixamp.com", fetcher: site }),
+    channels, ffprobe: told,
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+  const post = (path: string, session = ""): Promise<Response> =>
+    fetch(`${base}${path}?k=listen-key${session ? `&session=${session}` : ""}`, { method: "POST" });
+  const take = (id: string, session: string): Promise<Response> =>
+    fetch(`${base}/api/channels/${id}?k=listen-key&session=${session}`, { method: "DELETE" });
+
+  try {
+    // The page asks who it is here: a member, not the owner. The owner's
+    // control link is the owner, and not a member.
+    const asMember = (await (await fetch(`${base}/api/admin?k=listen-key&session=member-token`)).json()) as { allowed: boolean; member: boolean };
+    assert.deepEqual([asMember.allowed, asMember.member], [false, true]);
+    const asOwner = (await (await fetch(`${base}/api/admin?k=ctrl-key`)).json()) as { allowed: boolean; member: boolean };
+    assert.deepEqual([asOwner.allowed, asOwner.member], [true, false]);
+    const asNobody = (await (await fetch(`${base}/api/admin?k=listen-key`)).json()) as { allowed: boolean; member: boolean };
+    assert.deepEqual([asNobody.allowed, asNobody.member], [false, false]);
+
+    // A stranger with the listen link may not; a member may, and it is theirs.
+    assert.equal((await post("/api/tracks/0/live")).status, 403);
+    const first = await post("/api/tracks/0/live", "member-token");
+    assert.equal(first.status, 200);
+    const { channel } = (await first.json()) as { channel: string };
+    assert.match(channel, /^file-[0-9a-f]{12}$/);
+    assert.equal(channels.info(channel)?.startedBy, "member-9");
+    assert.equal(channels.isEphemeral(channel), false, "kept, not on demand");
+    assert.equal((await post("/api/tracks/1/live", "member-token")).status, 200);
+    // Somebody else may not take it off; they may.
+    assert.equal((await take(channel, "third-token")).status, 403);
+    assert.equal((await take(channel, "member-token")).status, 200);
+    // A fourth ask inside the minute is the throttle's no, whatever it asks.
+    const throttled = await post("/api/tracks/2/live", "member-token");
+    assert.equal(throttled.status, 429);
+    assert.ok(throttled.headers.get("retry-after") || throttled.headers.get("ratelimit-remaining") !== null, "said when to try again");
+
+    // Two on at once is the cap: the other member gets two, and no third.
+    assert.equal((await post("/api/tracks/2/live", "other-token")).status, 200);
+    assert.equal((await post("/api/tracks/3/live", "other-token")).status, 200);
+    const capped = await post("/api/tracks/0/live", "other-token");
+    assert.equal(capped.status, 429);
+    assert.match(((await capped.json()) as { error: string }).error, /already have 2 on the air/);
+
+    // The list says whose each is, so the page can offer Remove to the right person.
+    const streams = (await (await fetch(`${base}/api/streams?k=listen-key`)).json()) as { channels: { id: string; startedBy: string }[] };
+    assert.deepEqual(new Set(streams.channels.map((one) => one.startedBy)), new Set(["member-9", "member-2"]));
+  } finally {
+    channels.stopAll();
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});

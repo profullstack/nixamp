@@ -660,15 +660,15 @@ test("go live sits beside play, for whoever may, and puts it on the air for ever
   const play = html.indexOf('id="play-pause"');
   const goLive = html.indexOf('id="go-live-now"');
   assert.ok(goLive > play && goLive < html.indexOf('id="stop"'));
-  assert.match(app, /dom\.goLiveNow\.hidden = !isAdmin\(\) \|\| whatToGoLiveWith\(\) === null/);
-  // Every row that plays offers it too, to an admin.
+  assert.match(app, /dom\.goLiveNow\.hidden = !canGoLive\(\) \|\| whatToGoLiveWith\(\) === null/);
+  // Every row that plays offers it too, to whoever may: the owner, or a member.
   assert.equal((app.match(/goLiveButton\(/g) ?? []).length >= 3, true);
-  // A catalog entry becomes a kept channel; a channel is kept; a file is
-  // played on the server. Then it is listed, and the link is copied.
-  const body = app.slice(app.indexOf("async function goLiveWith"), app.indexOf("function goLiveButton"));
+  // A catalog entry becomes a kept channel; a channel is kept; a file becomes
+  // a kept channel of its own. Then it is listed, and the link is copied.
+  const body = app.slice(app.indexOf("async function goLiveWith"), app.indexOf("function joinLiveLabel"));
   assert.match(body, /\/live`/);
   assert.match(body, /\/keep`/);
-  assert.match(body, /type: "play", index: what\.index/);
+  assert.match(body, /`\/api\/tracks\/\$\{what\.index\}\/live`/);
   assert.match(body, /if \(!listed\) await setLive\(true\)/);
   assert.match(body, /copyText\(page, button/);
 });
@@ -964,4 +964,27 @@ test("wherever a server is shown, the eye and the gear are the way in", () => {
   assert.match(app, /ownedServers = new Map\(list\.map\(\(entry\) => \[originOf\(entry\.url\)/);
   // In the header only the other way is offered: no eye to a viewer, no gear to an admin.
   assert.match(app, /eye\.hidden = !driving;\s*gear\.hidden = driving;/);
+});
+
+test("a member may go live, a file goes on the air as its own channel, and every live says Join live", () => {
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const remote = readFileSync(join(webDir, "src/remote.ts"), "utf8");
+  // The session travels to a server on another origin in the query, the way the key does.
+  assert.match(remote, /session=\$\{encodeURIComponent\(this\.session\)\}/);
+  assert.match(app, /fetch\("\/api\/v1\/auth\/token"\)/);
+  // The server says whether we are a member; the owner or any member may go live.
+  assert.match(app, /memberHere = member && !allowed;/);
+  assert.match(app, /const canGoLive = \(\): boolean => isAdmin\(\) \|\| \(mode === "remote" && memberHere\);/);
+  assert.equal((app.match(/if \(canGoLive\(\)\) \{?\s*item\.append\(goLiveButton\(/g) ?? []).length, 2, "both go-live rows ask canGoLive");
+  assert.doesNotMatch(app, /if \(isAdmin\(\)\) item\.append\(goLiveButton\(/);
+  // A file goes on the air as a channel of its own, never by taking over the server's player.
+  assert.match(app, /\? `\/api\/tracks\/\$\{what\.index\}\/live`/);
+  assert.doesNotMatch(app, /remote\.send\(\{ type: "play", index: what\.index \}\)/);
+  // A member takes off what they put on.
+  assert.match(app, /onStop: canDrive \|\| \(memberHere && meId !== "" && channel\.startedBy === meId\)/);
+  // One label for the one act: Join live with the stream icon, in the live list and the directory.
+  assert.match(app, /function joinLiveLabel\(button: HTMLButtonElement, text = "Join live"\)/);
+  assert.match(app, /joinLiveLabel\(play, row\.playLabel \?\? "Join live"\)/);
+  assert.match(app, /joinLiveLabel\(play\);\s*play\.title = `Join \$\{channelName\}, live on \$\{stream\.name\}`/);
+  assert.doesNotMatch(app, /play\.textContent = "Play"/);
 });
