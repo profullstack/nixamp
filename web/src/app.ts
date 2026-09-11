@@ -19,6 +19,7 @@ import {
 } from "./remote.ts";
 import { bandEdges, bands, decay, drawSpectrum, holdPeaks } from "./spectrum.ts";
 import { fixtureState, scoreLine } from "./score.ts";
+import { isTelevision, pageSize, pageWindow } from "./tv.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
 
@@ -57,6 +58,15 @@ function need<T extends Element>(id: string): T {
 }
 
 export function start(): void {
+  // A television first, before anything is measured: the lists lose their
+  // own scrollbars and page with buttons, and the type grows, because a
+  // remote's ring cannot scroll a box inside the page and 14px is nothing
+  // from the sofa.
+  const television = isTelevision(navigator.userAgent, location.search);
+  document.body.classList.toggle("tv", television);
+  /** How many rows of a list are on screen at once. */
+  const LIST_PAGE = pageSize(television);
+
   const dom = {
     status: need<HTMLElement>("status"),
     source: need<HTMLElement>("source"),
@@ -81,6 +91,7 @@ export function start(): void {
     glyphs: need<HTMLElement>("glyphs"),
     levels: need<HTMLElement>("levels"),
     playlist: need<HTMLOListElement>("playlist"),
+    playlistPager: need<HTMLElement>("playlist-pager"),
     crumbs: need<HTMLElement>("crumbs"),
     filter: need<HTMLInputElement>("filter"),
     playlistTitle: need<HTMLElement>("playlist-panel"),
@@ -988,6 +999,56 @@ export function start(): void {
    * what happens when the current track ends.
    */
   let openFolder = "";
+  /**
+   * Which page of the folder is on screen. A page, not a scrollbar: a
+   * television cannot scroll a box inside the page, and a folder of two
+   * hundred files is a list nobody wants in one go anyway.
+   */
+  let listPage = 0;
+
+  /** Look somewhere else in the library, from its first page. */
+  function lookAt(folder: string): void {
+    openFolder = folder;
+    listPage = 0;
+    renderedFor = "";
+    renderPlaylist();
+  }
+
+  /**
+   * Previous, where we are, Next. Buttons, because a button is the one thing
+   * every remote can press.
+   */
+  function drawPager(total: number, page: number, pages: number, from: number, to: number): void {
+    dom.playlistPager.hidden = pages <= 1;
+    if (pages <= 1) {
+      dom.playlistPager.replaceChildren();
+      return;
+    }
+    const step = (label: string, to: number, tip: string): HTMLButtonElement => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ghost";
+      button.textContent = label;
+      button.title = tip;
+      button.disabled = to < 0 || to >= pages;
+      button.addEventListener("click", () => {
+        listPage = to;
+        renderedFor = "";
+        renderPlaylist();
+        // The list is what was just asked for; put its top where the eye is.
+        dom.playlist.scrollIntoView({ block: "nearest" });
+      });
+      return button;
+    };
+    const where = document.createElement("span");
+    where.className = "pager-where";
+    where.textContent = `${from + 1}–${to} of ${total.toLocaleString()}`;
+    dom.playlistPager.replaceChildren(
+      step("‹ Previous", page - 1, "The page before this one"),
+      where,
+      step("Next ›", page + 1, "The page after this one"),
+    );
+  }
 
   /** The path back out, one clickable step at a time. */
   function drawCrumbs(needed: boolean): void {
@@ -1004,11 +1065,7 @@ export function start(): void {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = label;
-      button.addEventListener("click", () => {
-        openFolder = to;
-        renderedFor = "";
-        renderPlaylist();
-      });
+      button.addEventListener("click", () => lookAt(to));
       return button;
     };
 
@@ -1034,11 +1091,9 @@ export function start(): void {
     amount.className = "count";
     amount.textContent = `${count} file${count === 1 ? "" : "s"}`;
     item.append(label, amount);
-    item.addEventListener("click", () => {
-      openFolder = openFolder === "" ? name : `${openFolder}/${name}`;
-      renderedFor = "";
-      renderPlaylist();
-    });
+    // Focusable, so a remote in navigation mode can land on it and press OK.
+    item.tabIndex = 0;
+    item.addEventListener("click", () => lookAt(openFolder === "" ? name : `${openFolder}/${name}`));
     return item;
   }
   function renderPlaylist(): void {
@@ -1090,16 +1145,29 @@ export function start(): void {
     }
     const files = rows.filter((row) => here(row.folder) && inside(row.folder));
 
-    const key = `${mode}:${openFolder}:${wanted}:${[...folders].join(",")}:${files
+    // One page of what is here: the folders first, then the files, and a
+    // window over the two of them together. The page is pulled back into
+    // range, so a deep page number does not survive into a smaller folder.
+    const sortedFolders = [...folders].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
+    const slice = pageWindow(sortedFolders.length + files.length, listPage, LIST_PAGE);
+    listPage = slice.page;
+    const foldersShown = sortedFolders.slice(slice.from, slice.to);
+    const filesShown = files.slice(
+      Math.max(0, slice.from - sortedFolders.length),
+      Math.max(0, slice.to - sortedFolders.length),
+    );
+
+    const key = `${mode}:${openFolder}:${wanted}:${slice.page}/${LIST_PAGE}:${sortedFolders.join(",")}:${files
       .map((r) => `${r.index}@${r.name}@${r.seconds}@${r.group}`)
       .join("|")}`;
     if (key !== renderedFor) {
       renderedFor = key;
       // No crumbs while filtering: what is on screen is not a place.
-      drawCrumbs(wanted === "" && ([...folders.keys()].length > 0 || openFolder !== ""));
+      drawCrumbs(wanted === "" && (sortedFolders.length > 0 || openFolder !== ""));
+      drawPager(sortedFolders.length + files.length, slice.page, slice.pages, slice.from, slice.to);
       const children: HTMLElement[] = [];
 
-      for (const [name, count] of [...folders].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))) {
+      for (const [name, count] of foldersShown) {
         children.push(folderRow(name, count));
       }
 
@@ -1108,13 +1176,15 @@ export function start(): void {
       // here too; on an ordinary server every track is the library and a
       // heading saying so is noise.
       const grouped = files.some((row) => row.group !== "");
-      for (const row of files) {
+      for (const row of filesShown) {
         if (row.group !== heading && (grouped || row.group !== "")) {
           heading = row.group;
           children.push(groupHeading(row.group));
         }
         const item = document.createElement("li");
         item.className = "row";
+        // Focusable, so a remote in navigation mode can land on it and press OK.
+        item.tabIndex = 0;
         // The index into the whole playlist, not into what is on screen: what
         // plays is a track number the server knows, and folders are a way of
         // looking rather than a different list.
@@ -1177,6 +1247,15 @@ export function start(): void {
     // own -- and the fix is not to scroll when there is no news.
     if (active !== scrolledTo) {
       scrolledTo = active;
+      // On another page of this folder: turn to it, the way the list used to
+      // scroll to it. Somewhere else in the library: leave the page alone.
+      const among = files.findIndex((row) => row.index === active);
+      if (among >= 0 && !selected) {
+        listPage = Math.floor((sortedFolders.length + among) / LIST_PAGE);
+        renderedFor = "";
+        renderPlaylist();
+        return;
+      }
       selected?.scrollIntoView({ block: "nearest" });
     }
   }
@@ -1293,8 +1372,20 @@ export function start(): void {
   // ---- wiring -------------------------------------------------------------
 
   dom.filter.addEventListener("input", () => {
+    // A new question starts from its first answer.
+    listPage = 0;
     renderedFor = "";
     renderPlaylist();
+  });
+
+  // OK on a remote, Enter on a keyboard: the row under focus is the row
+  // meant. A row is a list item, which no browser presses on its own.
+  dom.playlist.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const row = (event.target as HTMLElement | null)?.closest<HTMLElement>("li.row, li.folder");
+    if (!row || row !== event.target) return;
+    event.preventDefault();
+    row.click();
   });
 
   dom.playlist.addEventListener("click", (event) => {
@@ -2303,7 +2394,9 @@ export function start(): void {
   interface CatalogEntry {
     id: string; title: string; group: string; logo?: string; live: boolean; duration: number;
   }
-  const CATALOG_PAGE = 200;
+  // A television shows a screenful and a Show more; anything else can take
+  // a couple of hundred, since its list scrolls.
+  const CATALOG_PAGE = television ? LIST_PAGE : 200;
   let catalogs: CatalogSummary[] = [];
   /** Where in the walk we are: nothing, a catalog, or a group inside one. */
   let openCatalog: CatalogSummary | null = null;

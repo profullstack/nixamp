@@ -12,6 +12,7 @@ import {
   refusesUs, splitShareLink,
 } from "../src/remote.ts";
 import { byName, isPlayable, needsVideoElement } from "../src/player.ts";
+import { isTelevision, pageSize, pageWindow } from "../src/tv.ts";
 import { fixtureState, kickoff, scoreLine } from "../src/score.ts";
 import { isMatchupName } from "../../src/matchup.ts";
 import { NEVER_CACHE, serviceWorkerSource } from "../scripts/sw.ts";
@@ -841,4 +842,36 @@ test("the jingle plays into silence, never over a stream that was asked for", ()
   assert.match(jingle, /const busy = \(\): boolean => player\.source !== ""/);
   assert.match(jingle, /if \(src === "" \|\| busy\(\)\) return;/);
   assert.match(jingle, /if \(busy\(\)\) return;/);
+});
+
+test("a television is told from a desk, a phone, and a Fire tablet", () => {
+  const fireTv = "Mozilla/5.0 (Linux; Android 9; AFTKA Build/PS7285) AppleWebKit/537.36 (KHTML, like Gecko) Silk/126.3.1 like Chrome/126.0.6478.71 Safari/537.36";
+  const fireTablet = "Mozilla/5.0 (Linux; Android 11; KFTRWI) AppleWebKit/537.36 (KHTML, like Gecko) Silk/126.3.1 like Chrome/126.0.6478.71 Safari/537.36";
+  const androidTv = "Mozilla/5.0 (Linux; Android 12; SHIELD Android TV Build/SR3; wv) AppleWebKit/537.36";
+  const tizen = "Mozilla/5.0 (SMART-TV; LINUX; Tizen 7.0) AppleWebKit/537.36 (KHTML, like Gecko) Version/7.0 TV Safari/537.36";
+  const desk = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+  const phone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+
+  assert.equal(isTelevision(fireTv), true);
+  assert.equal(isTelevision(androidTv), true);
+  assert.equal(isTelevision(tizen), true);
+  assert.equal(isTelevision(fireTablet), false);
+  assert.equal(isTelevision(desk), false);
+  assert.equal(isTelevision(phone), false);
+  // Asked for from a desk, or refused from a set.
+  assert.equal(isTelevision(desk, "?tv=1"), true);
+  assert.equal(isTelevision(desk, "?url=x&tv"), true);
+  assert.equal(isTelevision(fireTv, "?tv=0"), false);
+
+  assert.equal(pageSize(true) < pageSize(false), true);
+});
+
+test("a page is a window that is pulled back into range", () => {
+  assert.deepEqual(pageWindow(0, 0, 25), { page: 0, from: 0, to: 0, pages: 1 });
+  assert.deepEqual(pageWindow(80, 0, 25), { page: 0, from: 0, to: 25, pages: 4 });
+  assert.deepEqual(pageWindow(80, 3, 25), { page: 3, from: 75, to: 80, pages: 4 });
+  // A page number from a bigger folder lands on this one's last page.
+  assert.deepEqual(pageWindow(80, 9, 25), { page: 3, from: 75, to: 80, pages: 4 });
+  assert.deepEqual(pageWindow(80, -2, 25), { page: 0, from: 0, to: 25, pages: 4 });
+  assert.deepEqual(pageWindow(25, 1, 25), { page: 0, from: 0, to: 25, pages: 1 });
 });

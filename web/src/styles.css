@@ -981,3 +981,66 @@ body.route-directory .player-only { display: none; }
   border-radius: 4px;
   padding: 0.4rem 0.5rem;
 }
+
+/* ---- a page at a time ------------------------------------------------- */
+
+/* Previous, where you are, Next, under a list that has more than one page.
+   Buttons, because a button is the one thing every remote can press. */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--edge);
+}
+.pager .pager-where { color: var(--muted); font-variant-numeric: tabular-nums; }
+.pager button:disabled { opacity: 0.35; cursor: default; }
+
+/* ---- on a television ---------------------------------------------------- */
+
+/*
+ * A television is a different room. Silk on a Fire TV moves a pointer with
+ * the remote's ring and scrolls the page when that pointer hits an edge; what
+ * it cannot do is scroll a box inside the page. So every list that had its
+ * own scrollbar gives it up here and runs to its full height -- the page is
+ * the one thing that scrolls -- with the lists paged by button instead. And
+ * the type is sized for three metres, with rows tall enough to land a
+ * pointer on from across the room.
+ */
+body.tv { font-size: 19px; }
+
+body.tv .playlist,
+body.tv #catalogs-entries,
+body.tv .directory-list,
+body.tv .admin-table {
+  max-height: none;
+  overflow-y: visible;
+}
+
+body.tv #app { max-width: 1400px; }
+
+body.tv .row,
+body.tv .folder {
+  padding: 8px 10px;
+  border-radius: 4px;
+}
+body.tv .row:focus-visible,
+body.tv .folder:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: -2px;
+  background: #142019;
+}
+
+body.tv button,
+body.tv .button,
+body.tv .directory-list button {
+  min-height: 2.4em;
+  padding: 8px 16px;
+}
+body.tv .row-copy { min-height: 0; padding: 0 8px; }
+body.tv .icon { min-width: 2.4em; height: 2.4em; }
+body.tv .directory-list li + li { margin-top: 0.6rem; }
+body.tv .server-lives li > .button { font-size: 0.9em; padding: 6px 14px; }
+body.tv input, body.tv .filter { font-size: 1em; padding: 8px 10px; }

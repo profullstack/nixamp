@@ -85,6 +85,10 @@
                    aria-label="Filter the playlist" />
             <nav id="crumbs" class="crumbs" hidden></nav>
             <ol id="playlist" class="playlist"></ol>
+            <!-- A page at a time. A television cannot scroll a box inside the
+                 page, and a folder of two hundred files is a list nobody
+                 wants in one go anyway. -->
+            <nav id="playlist-pager" class="pager" hidden></nav>
           </section>
 
           <!-- What is on, on the server you are connected to: its own stream,
