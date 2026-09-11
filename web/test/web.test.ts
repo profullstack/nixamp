@@ -946,3 +946,22 @@ test("the directory keeps asking while it is on screen, and redraws only on news
   // Coming back to the tab asks now.
   assert.match(app, /visibilitychange[^]*?if \(document\.visibilityState === "visible" && !dom\.directory\.hidden\) void loadDirectory\(true\)/);
 });
+
+test("wherever a server is shown, the eye and the gear are the way in", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // One helper, so a person learns the two buttons once.
+  assert.match(app, /function wayIn\(server: \{ name: string; view: string; admin: string \| null \}/);
+  // The directory, favourites, the machines on your account, and the header.
+  assert.match(app, /const \[connect, admin\] = wayIn\(\s*\{ name: stream\.name, view: stream\.url, admin: adminLink \}/);
+  assert.match(app, /wayIn\(\{ name: fav\.name \|\| fav\.url, view: fav\.url, admin: adminLinkFor\(fav\.url\) \}\)/);
+  assert.match(app, /const \[open, admin\] = wayIn\(\{ name: entry\.name, view: driving, admin: driving \}\)/);
+  assert.match(app, /function drawWayInHere\(\)/);
+  assert.ok(html.includes('id="way-in-here"'));
+  // The gear is greyed, not gone, when the server is not yours.
+  assert.match(app, /gear\.disabled = server\.admin === null/);
+  // A favourite learns whether it is yours from the machines on your account.
+  assert.match(app, /ownedServers = new Map\(list\.map\(\(entry\) => \[originOf\(entry\.url\)/);
+  // In the header only the other way is offered: no eye to a viewer, no gear to an admin.
+  assert.match(app, /eye\.hidden = !driving;\s*gear\.hidden = driving;/);
+});
