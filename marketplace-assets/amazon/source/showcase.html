@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NixAmp marketplace artwork</title>
+  <style>
+    :root {
+      --bg: #080c09;
+      --panel: #0c120e;
+      --panel-2: #101a13;
+      --edge: #1d2c22;
+      --green: #4af689;
+      --green-dim: #227a4a;
+      --fg: #cfe8d8;
+      --muted: #6d8a79;
+      --accent: #7ef0c4;
+      --warn: #e8c35a;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font: 18px/1.45 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    .canvas {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      padding: 34px 42px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 85% 5%, rgba(74,246,137,.12), transparent 31%),
+        repeating-linear-gradient(to bottom, rgba(74,246,137,.025) 0 1px, transparent 1px 4px),
+        var(--bg);
+    }
+
+    .canvas::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      box-shadow: inset 0 0 140px rgba(0,0,0,.55);
+    }
+
+    .shell { position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; gap: 20px; }
+    .topbar { display: flex; align-items: center; gap: 18px; min-height: 44px; }
+    .brand { color: var(--green); font-weight: 800; letter-spacing: .16em; font-size: 26px; }
+    .status { color: var(--green); font-weight: 700; }
+    .status .dot, .live-dot { display: inline-block; width: .62em; height: .62em; border-radius: 50%; background: var(--green); box-shadow: 0 0 20px rgba(74,246,137,.8); }
+    .server-chip { margin-left: auto; padding: 7px 14px; border: 1px solid var(--edge); border-radius: 999px; color: var(--muted); background: rgba(12,18,14,.7); }
+    .screen-title { color: var(--muted); font-size: 14px; letter-spacing: .16em; text-transform: uppercase; }
+
+    .grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.25fr .92fr; gap: 20px; }
+    .stack { min-height: 0; display: grid; grid-template-rows: 1fr 1fr; gap: 20px; }
+    .panel {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      padding: 28px;
+      border: 1px solid var(--edge);
+      border-radius: 10px;
+      background: linear-gradient(145deg, rgba(16,26,19,.96), rgba(10,16,12,.96));
+      box-shadow: 0 18px 50px rgba(0,0,0,.24);
+    }
+    .panel::before {
+      content: attr(data-title);
+      position: absolute;
+      top: -.72em;
+      left: 20px;
+      padding: 0 10px;
+      background: var(--panel);
+      color: var(--green-dim);
+      font-size: 14px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .now { display: grid; grid-template-rows: 1fr auto auto; gap: 22px; }
+    .now-main { display: grid; grid-template-columns: minmax(230px, .8fr) 1.2fr; align-items: center; gap: 34px; }
+    .cover {
+      aspect-ratio: 1;
+      max-height: 370px;
+      border: 1px solid #315a3e;
+      border-radius: 7px;
+      background:
+        linear-gradient(135deg, rgba(126,240,196,.18), transparent 48%),
+        repeating-linear-gradient(90deg, transparent 0 18px, rgba(74,246,137,.10) 18px 20px),
+        radial-gradient(circle at 55% 45%, #227a4a, #101a13 48%, #080c09 72%);
+      display: grid;
+      place-items: center;
+      box-shadow: 0 24px 70px rgba(34,122,74,.18);
+    }
+    .cover-bars { width: 68%; height: 48%; display: flex; gap: 5%; align-items: end; }
+    .cover-bars i { flex: 1; height: var(--h); background: var(--green); box-shadow: 0 0 18px rgba(74,246,137,.35); }
+    .cover-bars i::before { content: ""; display: block; height: 5px; background: var(--accent); transform: translateY(-12px); }
+    .eyebrow { margin: 0 0 9px; color: var(--green); font-size: 14px; letter-spacing: .18em; text-transform: uppercase; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 12px; color: #effff4; font-size: clamp(34px, 4vw, 60px); line-height: 1.04; letter-spacing: -.05em; }
+    h2 { margin-bottom: 8px; color: #effff4; font-size: 28px; line-height: 1.16; }
+    h3 { margin-bottom: 4px; color: #e6f7ec; font-size: 19px; }
+    .sub { color: var(--muted); }
+    .meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 22px; }
+    .tag { padding: 5px 9px; border: 1px solid var(--edge); border-radius: 4px; color: var(--accent); font-size: 13px; }
+
+    .spectrum { height: 132px; display: flex; align-items: end; gap: 7px; padding: 14px 4px 7px; border-bottom: 4px solid var(--green-dim); }
+    .spectrum i { flex: 1; height: var(--h); min-width: 4px; background: linear-gradient(to top, var(--green-dim), var(--green)); box-shadow: 0 0 14px rgba(74,246,137,.22); }
+    .scrub { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: center; color: var(--muted); }
+    .rail { height: 5px; border-radius: 999px; background: var(--edge); overflow: hidden; }
+    .rail::before { content: ""; display: block; width: 57%; height: 100%; background: var(--green); box-shadow: 0 0 12px var(--green); }
+    .controls { display: flex; align-items: center; justify-content: center; gap: 12px; }
+    .control { min-width: 58px; padding: 12px 16px; border: 1px solid var(--edge); border-radius: 6px; color: var(--fg); text-align: center; background: var(--panel); }
+    .control.primary { color: var(--bg); border-color: var(--green); background: var(--green); font-weight: 900; }
+    .volume { margin-left: auto; color: var(--green-dim); }
+
+    .playlist { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+    .playlist li { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; padding: 10px 9px; border-radius: 5px; color: var(--muted); }
+    .playlist li.active { color: var(--green); background: rgba(74,246,137,.08); }
+    .playlist .n { color: var(--green-dim); }
+    .folder { display: flex; align-items: center; justify-content: space-between; padding: 12px 4px; border-bottom: 1px solid var(--edge); color: var(--accent); }
+    .folder small { color: var(--muted); }
+    .onair { display: grid; gap: 10px; }
+    .air-row { display: grid; grid-template-columns: auto 1fr auto; gap: 13px; align-items: center; padding: 11px 0; border-bottom: 1px solid var(--edge); }
+    .air-row:last-child { border-bottom: 0; }
+    .air-row small { display: block; color: var(--muted); }
+    .listeners { color: var(--accent); font-size: 14px; }
+
+    .directory-screen { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.45fr .7fr; gap: 20px; }
+    .directory-list { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .stream-card { min-height: 180px; padding: 24px; border: 1px solid var(--edge); border-radius: 9px; background: linear-gradient(135deg, rgba(34,122,74,.18), rgba(12,18,14,.94)); display: flex; flex-direction: column; }
+    .stream-card .top { display: flex; justify-content: space-between; color: var(--green); font-size: 14px; text-transform: uppercase; letter-spacing: .1em; }
+    .stream-card h2 { margin: auto 0 7px; }
+    .stream-card p { margin: 0; color: var(--muted); }
+    .side-list { display: grid; gap: 12px; }
+    .person { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--edge); border-radius: 7px; }
+    .avatar { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; color: var(--bg); background: var(--green); font-weight: 900; }
+    .person small { display: block; color: var(--muted); }
+    .directory-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: 22px; }
+    .directory-heading h1 { margin: 0; }
+
+    .remote-screen { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.25fr .75fr; grid-template-rows: 1fr auto; gap: 20px; }
+    .hero-player { display: grid; grid-template-columns: 1.1fr .9fr; align-items: center; gap: 32px; }
+    .hero-player .cover { max-height: 420px; }
+    .big-controls { display: flex; gap: 12px; margin-top: 28px; }
+    .big-controls .control { min-width: 72px; padding: 17px; }
+    .servers { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .server-card { padding: 18px 20px; border: 1px solid var(--edge); border-radius: 8px; background: var(--panel); }
+    .server-card.active { border-color: var(--green-dim); box-shadow: inset 4px 0 0 var(--green); }
+    .server-card small { display: block; color: var(--muted); }
+
+    .marketing {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      background: #080c09 url("audio-backdrop.png") center / cover no-repeat;
+    }
+    .marketing::before { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(8,12,9,.98) 0%, rgba(8,12,9,.86) 36%, rgba(8,12,9,.14) 78%); }
+    .marketing-copy { position: relative; z-index: 1; width: 57%; padding: 8%; }
+    .lockup { display: flex; align-items: center; gap: 26px; }
+    .lockup img { width: 132px; height: 132px; filter: drop-shadow(0 18px 40px rgba(0,0,0,.45)); }
+    .lockup strong { color: #effff4; font-size: 70px; line-height: 1; letter-spacing: .13em; }
+    .marketing-copy h1 { margin: 46px 0 18px; font-size: 54px; text-transform: uppercase; letter-spacing: -.025em; }
+    .marketing-copy p { color: var(--accent); font-size: 21px; letter-spacing: .13em; }
+
+    .fire-icon { justify-content: center; }
+    .fire-icon::before { background: linear-gradient(90deg, rgba(8,12,9,.91), rgba(8,12,9,.46), rgba(8,12,9,.10)); }
+    .fire-icon .marketing-copy { width: auto; padding: 0; }
+    .fire-icon .lockup img { width: 210px; height: 210px; }
+    .fire-icon .lockup strong { font-size: 108px; }
+
+    .logo-only { background: transparent; display: grid; place-items: center; }
+    .logo-only::after { display: none; }
+    .logo-only .lockup { gap: 22px; }
+    .logo-only .lockup img { width: 172px; height: 172px; }
+    .logo-only .lockup strong { color: var(--green); font-size: 72px; text-shadow: 0 0 26px rgba(74,246,137,.18); }
+
+    .background-only { padding: 0; background: #080c09 url("audio-backdrop.png") center / cover no-repeat; }
+    .background-only::before { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(8,12,9,.72), transparent 52%), linear-gradient(0deg, rgba(8,12,9,.38), transparent 45%); }
+    .background-only::after { box-shadow: inset 0 0 200px rgba(0,0,0,.5); }
+
+    body.tv { font-size: 22px; }
+    body.tv .canvas { padding: 54px 70px; }
+    body.tv .shell { gap: 28px; }
+    body.tv .topbar { min-height: 58px; }
+    body.tv .brand { font-size: 34px; }
+    body.tv .panel { padding: 36px; border-radius: 13px; }
+    body.tv .panel::before { font-size: 17px; }
+    body.tv .grid, body.tv .directory-screen, body.tv .remote-screen, body.tv .stack { gap: 28px; }
+    body.tv .stream-card { min-height: 230px; padding: 32px; }
+    body.tv .playlist li { padding: 15px 12px; }
+    body.tv .spectrum { height: 170px; }
+  </style>
+</head>
+<body>
+  <main id="asset" class="canvas"></main>
+  <script>
+    const bars = (values, className = "spectrum") => `<div class="${className}">${values.map((height) => `<i style="--h:${height}%"></i>`).join("")}</div>`;
+    const topbar = (title, live = true) => `<header class="topbar"><span class="brand">⣿ NIXAMP</span><span class="status">${live ? '<span class="dot"></span> PLAYING' : '■ READY'}</span><span class="screen-title">${title}</span><span class="server-chip">studio-mac.nixamp.com</span></header>`;
+    const cover = `<div class="cover">${bars([34,58,82,48,100,70,53,29], "cover-bars")}</div>`;
+    const controls = `<div class="controls"><span class="control">|◀◀</span><span class="control primary">▶</span><span class="control">■</span><span class="control">▶▶|</span><span class="volume">VOL ▰▰▰▰▰▰▱▱</span></div>`;
+    const playlist = `<ol class="playlist">
+      <li><span class="n">01</span><span>First Light</span><span>05:44</span></li>
+      <li class="active"><span class="n">02</span><span>Open Circuit</span><span>04:43</span></li>
+      <li><span class="n">03</span><span>Green Horizon</span><span>05:26</span></li>
+      <li><span class="n">04</span><span>Relay</span><span>04:37</span></li>
+    </ol>`;
+
+    const player = `<div class="shell">${topbar("YOUR LIBRARY · ANY DEVICE")}<div class="grid">
+      <section class="panel now" data-title="Now Playing"><div class="now-main">${cover}<div><p class="eyebrow">Now playing from studio-mac</p><h1>Neon Fjord — Open Circuit</h1><p class="sub">Night Transit · lossless audio</p><div class="meta"><span class="tag">FLAC</span><span class="tag">44.1 KHZ</span><span class="tag">2 listeners</span></div></div></div>
+      ${bars([22,39,67,48,83,92,57,44,76,100,63,48,80,71,36,58,88,65,43,74,54,31,47,27])}
+      <div class="scrub"><span>02:41</span><span class="rail"></span><span>04:43</span></div>${controls}</section>
+      <div class="stack"><section class="panel" data-title="Playlist (24)"><div class="folder"><span>Neon Fjord / Night Transit /</span><small>8 tracks</small></div>${playlist}</section>
+      <section class="panel" data-title="Live on this server"><div class="onair"><div class="air-row"><span class="live-dot"></span><span><strong>Sunday Vinyl Session</strong><small>Turntable · studio</small></span><span class="listeners">18 listening</span></div><div class="air-row"><span class="live-dot"></span><span><strong>Lo-fi Coding Radio</strong><small>HTTP channel · live</small></span><span class="listeners">42 listening</span></div></div></section></div>
+    </div></div>`;
+
+    const directory = `<div class="shell">${topbar("LIVE DIRECTORY", false)}<div class="directory-screen">
+      <section class="panel" data-title="Servers streaming now"><div class="directory-heading"><div><p class="eyebrow">Open the door. Press play.</p><h1>Live across NixAmp</h1></div><span class="tag">8 streams online</span></div><div class="directory-list">
+        <article class="stream-card"><div class="top"><span><span class="live-dot"></span> Live</span><span>84 listening</span></div><h2>Midnight Signals</h2><p>Synthwave from a tiny studio in Portland.</p></article>
+        <article class="stream-card"><div class="top"><span><span class="live-dot"></span> Live</span><span>42 listening</span></div><h2>Lo-fi Coding Radio</h2><p>Quiet beats for making difficult things.</p></article>
+        <article class="stream-card"><div class="top"><span><span class="live-dot"></span> Live</span><span>18 listening</span></div><h2>Sunday Vinyl Session</h2><p>Records, dust, and no algorithm.</p></article>
+        <article class="stream-card"><div class="top"><span><span class="live-dot"></span> Live</span><span>11 listening</span></div><h2>Open Source FM</h2><p>Music and maintainers from Berlin.</p></article>
+      </div></section>
+      <div class="stack"><section class="panel" data-title="Following"><div class="side-list"><div class="person"><span class="avatar">MS</span><span><strong>Midnight Signals</strong><small>Live now · web notification on</small></span></div><div class="person"><span class="avatar">OV</span><span><strong>Open Vinyl</strong><small>Last live yesterday</small></span></div><div class="person"><span class="avatar">SF</span><span><strong>Sunday FM</strong><small>Usually live at 10 AM</small></span></div></div></section><section class="panel" data-title="One player, everywhere"><p class="eyebrow">Listen without an account</p><h2>Open files. Follow streams. Control your own NixAmp.</h2><p class="sub">A terminal player, a web player, and a remote for every screen you own.</p><div class="meta"><span class="tag">WEB</span><span class="tag">DESKTOP</span><span class="tag">TV</span><span class="tag">TERMINAL</span></div></section></div>
+    </div></div>`;
+
+    const remote = `<div class="shell">${topbar("REMOTE · LIVING ROOM")}<div class="remote-screen">
+      <section class="panel hero-player" data-title="Now Playing"><div>${cover}</div><div><p class="eyebrow">Playing here</p><h1>Signal Bloom — Northbound</h1><p class="sub">Afterglow Maps · 05:00</p>${bars([28,45,74,57,91,68,82,49,100,61,76,42])}<div class="big-controls"><span class="control">|◀◀</span><span class="control primary">❚❚</span><span class="control">■</span><span class="control">▶▶|</span></div></div></section>
+      <section class="panel" data-title="Live on studio-mac"><div class="onair"><div class="air-row"><span class="live-dot"></span><span><strong>Main room</strong><small>Signal Bloom</small></span><span class="listeners">playing</span></div><div class="air-row"><span class="live-dot"></span><span><strong>Vinyl desk</strong><small>Sunday Session</small></span><span class="listeners">18</span></div><div class="air-row"><span class="live-dot"></span><span><strong>Kitchen radio</strong><small>Open Radio · Seattle</small></span><span class="listeners">7</span></div></div><div class="meta"><span class="tag">LISTEN HERE ✓</span><span class="tag">HI-RES AUDIO</span></div></section>
+      <div class="servers"><article class="server-card active"><h3>studio-mac</h3><small>Connected · administrator</small></article><article class="server-card"><h3>living-room</h3><small>Online · 3 channels</small></article><article class="server-card"><h3>workshop</h3><small>Online · 126 tracks</small></article></div>
+    </div></div>`;
+
+    const params = new URLSearchParams(location.search);
+    const scene = params.get("scene") || "player";
+    if (params.has("tv")) document.body.classList.add("tv");
+    const target = document.querySelector("#asset");
+    if (scene === "player") target.innerHTML = player;
+    if (scene === "directory") target.innerHTML = directory;
+    if (scene === "remote") target.innerHTML = remote;
+    if (scene === "promo") target.innerHTML = `<section class="marketing"><div class="marketing-copy"><div class="lockup"><img src="../../../web/public/icons/icon-512.png" alt=""><strong>NIXAMP</strong></div><h1>Your sound.<br>Every screen.</h1><p>FILES · STREAMS · REMOTE</p></div></section>`;
+    if (scene === "fire-icon") target.innerHTML = `<section class="marketing fire-icon"><div class="marketing-copy"><div class="lockup"><img src="../../../web/public/icons/icon-512.png" alt=""><strong>NIXAMP</strong></div></div></section>`;
+    if (scene === "background") target.className = "canvas background-only";
+    if (scene === "logo") { target.className = "canvas logo-only"; target.innerHTML = `<div class="lockup"><img src="../../../web/public/icons/icon-512.png" alt=""><strong>NIXAMP</strong></div>`; }
+  </script>
+</body>
+</html>
