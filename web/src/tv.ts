@@ -43,9 +43,16 @@ function isYes(value: string): boolean {
   return value !== "0" && value !== "no" && value !== "off" && value !== "false";
 }
 
-/** How many rows of a list are on screen at once. */
+/**
+ * How many rows of a list are on screen at once.
+ *
+ * On a television the list has no scrollbar of its own, so a page has to
+ * fit the screen: twelve rows of 19px type with room around each is about
+ * 500px, which sits under the player on a 1080p set with the Previous and
+ * Next buttons still in view. Twenty-five ran off the bottom.
+ */
 export function pageSize(television: boolean): number {
-  return television ? 25 : 100;
+  return television ? 12 : 100;
 }
 
 /**
