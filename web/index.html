@@ -85,6 +85,10 @@
                    aria-label="Filter the playlist" />
             <nav id="crumbs" class="crumbs" hidden></nav>
             <ol id="playlist" class="playlist"></ol>
+            <!-- A page at a time. A television cannot scroll a box inside the
+                 page, and a folder of two hundred files is a list nobody
+                 wants in one go anyway. -->
+            <nav id="playlist-pager" class="pager" hidden></nav>
           </section>
 
           <!-- What is on, on the server you are connected to: its own stream,
@@ -288,6 +292,10 @@
         <span><b>n/p</b> Next/Prev</span>
         <span><b>s</b> Stop</span>
         <span class="spacer"></span>
+        <!-- For a set whose browser does not say what it is: one press, and
+             the page is laid out for a remote and a sofa. -->
+        <button id="tv-toggle" type="button" class="ghost tv-toggle">TV mode</button>
+        <span class="muted"> · </span>
         <a href="https://github.com/profullstack/nixamp">github.com/profullstack/nixamp</a>
         <span class="muted"> · </span>
         <a href="https://www.reddit.com/r/nixamp">r/nixamp</a>

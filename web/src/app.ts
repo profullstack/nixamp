@@ -19,6 +19,7 @@ import {
 } from "./remote.ts";
 import { bandEdges, bands, decay, drawSpectrum, holdPeaks } from "./spectrum.ts";
 import { fixtureState, scoreLine } from "./score.ts";
+import { isTelevision, pageSize, pageWindow, TV_KEY } from "./tv.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
 
@@ -57,6 +58,37 @@ function need<T extends Element>(id: string): T {
 }
 
 export function start(): void {
+  // A television first, before anything is measured: the lists lose their
+  // own scrollbars and page with buttons, and the type grows, because a
+  // remote's ring cannot scroll a box inside the page and 14px is nothing
+  // from the sofa.
+  let remembered: string | null = null;
+  try { remembered = localStorage.getItem(TV_KEY); } catch { /* private mode */ }
+  const television = isTelevision(navigator.userAgent, location.search, navigator.maxTouchPoints, remembered);
+  document.body.classList.toggle("tv", television);
+  // Told by the address, remembered: the next visit from the same set is
+  // the same room, and nobody types a query string on a remote twice.
+  if (new URLSearchParams(location.search).has("tv")) {
+    try { localStorage.setItem(TV_KEY, television ? "1" : "0"); } catch { /* private mode */ }
+  }
+  // The switch in the footer, for a set whose browser does not say what it
+  // is. One press, remembered, and the page redraws itself as the other room.
+  const tvToggle = document.getElementById("tv-toggle") as HTMLButtonElement | null;
+  if (tvToggle) {
+    tvToggle.textContent = television ? "TV mode: on" : "TV mode";
+    tvToggle.title = television
+      ? "Back to the ordinary layout: lists with their own scrollbars, smaller type."
+      : "For a television: bigger type, lists a page at a time, and nothing to scroll but the page.";
+    tvToggle.addEventListener("click", () => {
+      try { localStorage.setItem(TV_KEY, television ? "0" : "1"); } catch { /* private mode */ }
+      const address = new URL(location.href);
+      address.searchParams.delete("tv");
+      location.replace(address.toString());
+    });
+  }
+  /** How many rows of a list are on screen at once. */
+  const LIST_PAGE = pageSize(television);
+
   const dom = {
     status: need<HTMLElement>("status"),
     source: need<HTMLElement>("source"),
@@ -81,6 +113,7 @@ export function start(): void {
     glyphs: need<HTMLElement>("glyphs"),
     levels: need<HTMLElement>("levels"),
     playlist: need<HTMLOListElement>("playlist"),
+    playlistPager: need<HTMLElement>("playlist-pager"),
     crumbs: need<HTMLElement>("crumbs"),
     filter: need<HTMLInputElement>("filter"),
     playlistTitle: need<HTMLElement>("playlist-panel"),
@@ -174,7 +207,11 @@ export function start(): void {
    * is an empty box in most monospace faces, which is what the icons were
    * on a machine without an emoji font. These are drawn, not typed.
    */
-  const ICONS: Record<"link" | "copy" | "restart" | "remove" | "check" | "live", string> = {
+  const ICONS: Record<"link" | "copy" | "restart" | "remove" | "check" | "live" | "eye" | "gear", string> = {
+    // An eye is a viewer; a gear is an administrator. Both a size up from the
+    // row icons, because each is a way in rather than a thing to do to a row.
+    eye: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+    gear: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>',
     live: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><path d="M8.5 15.5a5 5 0 0 1 0-7"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M5.6 18.4a9 9 0 0 1 0-12.8"/><path d="M18.4 5.6a9 9 0 0 1 0 12.8"/></svg>',
     link: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
     copy: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
@@ -988,6 +1025,56 @@ export function start(): void {
    * what happens when the current track ends.
    */
   let openFolder = "";
+  /**
+   * Which page of the folder is on screen. A page, not a scrollbar: a
+   * television cannot scroll a box inside the page, and a folder of two
+   * hundred files is a list nobody wants in one go anyway.
+   */
+  let listPage = 0;
+
+  /** Look somewhere else in the library, from its first page. */
+  function lookAt(folder: string): void {
+    openFolder = folder;
+    listPage = 0;
+    renderedFor = "";
+    renderPlaylist();
+  }
+
+  /**
+   * Previous, where we are, Next. Buttons, because a button is the one thing
+   * every remote can press.
+   */
+  function drawPager(total: number, page: number, pages: number, from: number, to: number): void {
+    dom.playlistPager.hidden = pages <= 1;
+    if (pages <= 1) {
+      dom.playlistPager.replaceChildren();
+      return;
+    }
+    const step = (label: string, to: number, tip: string): HTMLButtonElement => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ghost";
+      button.textContent = label;
+      button.title = tip;
+      button.disabled = to < 0 || to >= pages;
+      button.addEventListener("click", () => {
+        listPage = to;
+        renderedFor = "";
+        renderPlaylist();
+        // The list is what was just asked for; put its top where the eye is.
+        dom.playlist.scrollIntoView({ block: "nearest" });
+      });
+      return button;
+    };
+    const where = document.createElement("span");
+    where.className = "pager-where";
+    where.textContent = `${from + 1}–${to} of ${total.toLocaleString()}`;
+    dom.playlistPager.replaceChildren(
+      step("‹ Previous", page - 1, "The page before this one"),
+      where,
+      step("Next ›", page + 1, "The page after this one"),
+    );
+  }
 
   /** The path back out, one clickable step at a time. */
   function drawCrumbs(needed: boolean): void {
@@ -1004,11 +1091,7 @@ export function start(): void {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = label;
-      button.addEventListener("click", () => {
-        openFolder = to;
-        renderedFor = "";
-        renderPlaylist();
-      });
+      button.addEventListener("click", () => lookAt(to));
       return button;
     };
 
@@ -1034,11 +1117,9 @@ export function start(): void {
     amount.className = "count";
     amount.textContent = `${count} file${count === 1 ? "" : "s"}`;
     item.append(label, amount);
-    item.addEventListener("click", () => {
-      openFolder = openFolder === "" ? name : `${openFolder}/${name}`;
-      renderedFor = "";
-      renderPlaylist();
-    });
+    // Focusable, so a remote in navigation mode can land on it and press OK.
+    item.tabIndex = 0;
+    item.addEventListener("click", () => lookAt(openFolder === "" ? name : `${openFolder}/${name}`));
     return item;
   }
   function renderPlaylist(): void {
@@ -1090,16 +1171,29 @@ export function start(): void {
     }
     const files = rows.filter((row) => here(row.folder) && inside(row.folder));
 
-    const key = `${mode}:${openFolder}:${wanted}:${[...folders].join(",")}:${files
+    // One page of what is here: the folders first, then the files, and a
+    // window over the two of them together. The page is pulled back into
+    // range, so a deep page number does not survive into a smaller folder.
+    const sortedFolders = [...folders].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
+    const slice = pageWindow(sortedFolders.length + files.length, listPage, LIST_PAGE);
+    listPage = slice.page;
+    const foldersShown = sortedFolders.slice(slice.from, slice.to);
+    const filesShown = files.slice(
+      Math.max(0, slice.from - sortedFolders.length),
+      Math.max(0, slice.to - sortedFolders.length),
+    );
+
+    const key = `${mode}:${openFolder}:${wanted}:${slice.page}/${LIST_PAGE}:${sortedFolders.join(",")}:${files
       .map((r) => `${r.index}@${r.name}@${r.seconds}@${r.group}`)
       .join("|")}`;
     if (key !== renderedFor) {
       renderedFor = key;
       // No crumbs while filtering: what is on screen is not a place.
-      drawCrumbs(wanted === "" && ([...folders.keys()].length > 0 || openFolder !== ""));
+      drawCrumbs(wanted === "" && (sortedFolders.length > 0 || openFolder !== ""));
+      drawPager(sortedFolders.length + files.length, slice.page, slice.pages, slice.from, slice.to);
       const children: HTMLElement[] = [];
 
-      for (const [name, count] of [...folders].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))) {
+      for (const [name, count] of foldersShown) {
         children.push(folderRow(name, count));
       }
 
@@ -1108,13 +1202,15 @@ export function start(): void {
       // here too; on an ordinary server every track is the library and a
       // heading saying so is noise.
       const grouped = files.some((row) => row.group !== "");
-      for (const row of files) {
+      for (const row of filesShown) {
         if (row.group !== heading && (grouped || row.group !== "")) {
           heading = row.group;
           children.push(groupHeading(row.group));
         }
         const item = document.createElement("li");
         item.className = "row";
+        // Focusable, so a remote in navigation mode can land on it and press OK.
+        item.tabIndex = 0;
         // The index into the whole playlist, not into what is on screen: what
         // plays is a track number the server knows, and folders are a way of
         // looking rather than a different list.
@@ -1177,6 +1273,15 @@ export function start(): void {
     // own -- and the fix is not to scroll when there is no news.
     if (active !== scrolledTo) {
       scrolledTo = active;
+      // On another page of this folder: turn to it, the way the list used to
+      // scroll to it. Somewhere else in the library: leave the page alone.
+      const among = files.findIndex((row) => row.index === active);
+      if (among >= 0 && !selected) {
+        listPage = Math.floor((sortedFolders.length + among) / LIST_PAGE);
+        renderedFor = "";
+        renderPlaylist();
+        return;
+      }
       selected?.scrollIntoView({ block: "nearest" });
     }
   }
@@ -1293,8 +1398,20 @@ export function start(): void {
   // ---- wiring -------------------------------------------------------------
 
   dom.filter.addEventListener("input", () => {
+    // A new question starts from its first answer.
+    listPage = 0;
     renderedFor = "";
     renderPlaylist();
+  });
+
+  // OK on a remote, Enter on a keyboard: the row under focus is the row
+  // meant. A row is a list item, which no browser presses on its own.
+  dom.playlist.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const row = (event.target as HTMLElement | null)?.closest<HTMLElement>("li.row, li.folder");
+    if (!row || row !== event.target) return;
+    event.preventDefault();
+    row.click();
   });
 
   dom.playlist.addEventListener("click", (event) => {
@@ -1603,6 +1720,8 @@ export function start(): void {
         );
       }
       detail.textContent = parts.join(" · ");
+      // Cut to one line on screen; the whole of it on hover.
+      detail.title = detail.textContent;
       label.append(name, detail);
 
       // Two ways in. Viewer is for everybody; Admin is for the account the
@@ -1643,22 +1762,27 @@ export function start(): void {
         row.append(dot, play);
         lives.append(row);
       }
+      // An eye and a gear rather than the words: the row is the server's name
+      // and what is on it, and two more words beside every one of them was
+      // noise. The words are still there for a screen reader and on hover.
       const connect = document.createElement("button");
       connect.type = "button";
-      connect.className = "button";
-      connect.textContent = "Viewer";
-      connect.title = "Browse and watch. Changes nothing on the server.";
+      connect.className = "icon way-in";
+      drawIcon(connect, "eye");
+      connect.title = "Viewer: browse and watch. Changes nothing on the server.";
+      connect.setAttribute("aria-label", `View ${stream.name}`);
       connect.addEventListener("click", () => open(true));
       const admin = document.createElement("button");
       admin.type = "button";
-      admin.className = "button";
-      admin.textContent = "Admin";
+      admin.className = "icon way-in";
+      drawIcon(admin, "gear");
       admin.disabled = !mine;
       admin.title = mine
-        ? "Drive this server: what plays, what is live, what is on it."
+        ? "Admin: drive this server. What plays, what is live, what is on it."
         : meId
-          ? "You do not administer this server."
-          : "Sign in as this server's owner to administer it.";
+          ? "Admin: you do not administer this server."
+          : "Admin: sign in as this server's owner to administer it.";
+      admin.setAttribute("aria-label", `Administer ${stream.name}`);
       admin.addEventListener("click", () => open(false));
       item.append(label, connect, admin);
       // A heart, for somebody signed in: the way back to a server you liked.
@@ -2303,7 +2427,9 @@ export function start(): void {
   interface CatalogEntry {
     id: string; title: string; group: string; logo?: string; live: boolean; duration: number;
   }
-  const CATALOG_PAGE = 200;
+  // A television shows a screenful and a Show more; anything else can take
+  // a couple of hundred, since its list scrolls.
+  const CATALOG_PAGE = television ? LIST_PAGE : 200;
   let catalogs: CatalogSummary[] = [];
   /** Where in the walk we are: nothing, a catalog, or a group inside one. */
   let openCatalog: CatalogSummary | null = null;
