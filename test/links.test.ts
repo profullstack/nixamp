@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   contentTypeFor, directLink, downloadArgs, fileNameFor, inputArgsFor, isDirectMedia, linkChannelId,
-  parseResolved, playableLink, reasonFrom, resolveArgs, resolveLink,
+  mergeDownloadArgs, parseResolved, playableLink, reasonFrom, resolveArgs, resolveLink,
 } from "../src/links.ts";
 
 /** What yt-dlp said about a SoundCloud track on 2026-09-10, trimmed. */
@@ -184,4 +184,54 @@ test("a link that never answers is given up on", async () => {
   const link = await resolveLink([script], "https://x.example/slow", { timeoutMs: 200 });
   assert.ok("error" in link);
   assert.match(link.error, /too long/);
+});
+
+test("a picture and a sound kept apart come back as a pair, and are put together by ffmpeg", () => {
+  // What yt-dlp prints for a bv*+ba choice: no url of its own, and the two
+  // parts under requested_formats, each with its own address and headers.
+  const pair = parseResolved({
+    title: "Never Gonna Give You Up",
+    ext: "mp4",
+    extractor: "youtube",
+    duration: 212,
+    requested_formats: [
+      { url: "https://v.example/137", vcodec: "avc1.640028", acodec: "none", ext: "mp4", http_headers: { "User-Agent": "yt", Referer: "https://www.youtube.com/" } },
+      { url: "https://a.example/140", vcodec: "none", acodec: "mp4a.40.2", ext: "m4a", http_headers: { "User-Agent": "yt" } },
+    ],
+  }, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+  assert.ok(pair);
+  assert.equal(pair?.media, "https://v.example/137");
+  assert.equal(pair?.audio, "https://a.example/140");
+  assert.equal(pair?.video, true);
+  assert.equal(pair?.ext, "mp4");
+  assert.deepEqual(pair?.headers, { "User-Agent": "yt", Referer: "https://www.youtube.com/" });
+
+  // One part only, with sound in it, is a plain link with no pair.
+  const one = parseResolved({ requested_formats: [{ url: "https://x.example/18", vcodec: "avc1", acodec: "mp4a" }] }, "https://x");
+  assert.equal(one?.media, "https://x.example/18");
+  assert.equal(one?.audio, "");
+  // A url of its own wins over the parts, and a plain answer has no pair.
+  const plain = parseResolved({ url: "https://x.example/file.mp4", vcodec: "h264" }, "https://x");
+  assert.equal(plain?.audio, "");
+
+  // Playing asks for a combined format first and a pair second.
+  const format = resolveArgs("https://x.example/page")[4] ?? "";
+  assert.match(format, /^b\[vcodec!=none\]\[acodec!=none\]\//);
+  assert.ok(format.includes("+ba"), "a pair is asked for when there is no combined format");
+
+  // The download of a pair is ffmpeg copying both into one file down a pipe.
+  if (!pair) return;
+  const merge = mergeDownloadArgs(pair);
+  assert.equal(merge.filter((one) => one === "-i").length, 2);
+  assert.ok(merge.includes("https://v.example/137") && merge.includes("https://a.example/140"));
+  assert.deepEqual(merge.slice(merge.indexOf("-map"), merge.indexOf("-map") + 4), ["-map", "0:v:0", "-map", "1:a:0"]);
+  assert.ok(merge.includes("frag_keyframe+empty_moov+default_base_moof"), "an MP4 pair is a fragmented MP4");
+  assert.equal(merge[merge.length - 1], "pipe:1");
+  assert.equal(fileNameFor(pair, false), "Never Gonna Give You Up.mp4");
+  // A VP9 picture goes into Matroska, and the name says so.
+  const webm = { ...pair, ext: "webm" };
+  assert.ok(mergeDownloadArgs(webm).includes("matroska"));
+  assert.equal(fileNameFor(webm, false), "Never Gonna Give You Up.mkv");
+  // Sound alone is still yt-dlp's own pipe, named for the sound.
+  assert.equal(fileNameFor(pair, true), "Never Gonna Give You Up.m4a");
 });
