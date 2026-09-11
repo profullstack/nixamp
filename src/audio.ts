@@ -10,6 +10,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isTransportStream } from "./sources.ts";
 
 export const RATE = 44100;
 export const CHANNELS = 2;
@@ -404,6 +405,19 @@ export interface Codecs {
    * restart; a live channel is wherever it is now.
    */
   duration?: number;
+  /**
+   * The size of the picture, when there is one.
+   *
+   * It decides the one thing that costs real money: whether a re-encode is
+   * asked to do 4K. Measured on this machine, 3840x2160 through libx264
+   * -preset veryfast runs at about half of real time, so a 4K film re-encoded
+   * at its own size arrives slower than it plays -- a stream that falls
+   * further behind every second. The same source scaled to 1080p runs at
+   * about 1.6x real time and keeps up. Copying, of course, costs nothing at
+   * any size, which is why what is inside matters more than how big it is.
+   */
+  width?: number;
+  height?: number;
 }
 
 /**
@@ -425,7 +439,14 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
         ...rest,
         "-v", "quiet",
         "-print_format", "json",
-        "-show_entries", "format=format_name,duration:stream=codec_type,codec_name",
+        "-show_entries", "format=format_name,duration:stream=codec_type,codec_name,width,height",
+        // A transport stream needs looking further into than a file with an
+        // index does: there is no header listing the tracks, only packets, and
+        // a 4K recording can carry a second of null padding and a long gap to
+        // its first keyframe. ffprobe's default gives up before the picture on
+        // exactly the recordings this is for, and "no video stream" is how a
+        // film comes back as its own soundtrack.
+        ...transportProbeArgs(path),
         // Headers the source's site expects, for a link resolved by yt-dlp.
         ...input,
         path,
@@ -440,18 +461,21 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
     child.on("close", () => {
       try {
         const parsed = JSON.parse(out) as {
-          streams?: { codec_type?: string; codec_name?: string }[];
+          streams?: { codec_type?: string; codec_name?: string; width?: number; height?: number }[];
           format?: { format_name?: string; duration?: string };
         };
         const streams = parsed.streams ?? [];
         // ffprobe prints seconds as a string, and "N/A" for a stream with no
         // end; both of those read as 0.
         const seconds = Number(parsed.format?.duration ?? 0);
+        const picture = streams.find((s) => s.codec_type === "video");
         return done({
-          video: streams.find((s) => s.codec_type === "video")?.codec_name ?? "",
+          video: picture?.codec_name ?? "",
           audio: streams.find((s) => s.codec_type === "audio")?.codec_name ?? "",
           container: parsed.format?.format_name ?? "",
           duration: Number.isFinite(seconds) && seconds > 0 ? seconds : 0,
+          ...(typeof picture?.width === "number" && picture.width > 0 ? { width: picture.width } : {}),
+          ...(typeof picture?.height === "number" && picture.height > 0 ? { height: picture.height } : {}),
         });
       } catch {
         return done(empty);
@@ -459,6 +483,78 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
     });
   });
 }
+
+/** How much of a transport stream is read before deciding what is in it. */
+export const TRANSPORT_PROBE_BYTES = 20 * 1024 * 1024;
+export const TRANSPORT_ANALYSE_US = 10_000_000;
+
+/**
+ * What to tell ffmpeg or ffprobe before it opens a transport stream.
+ *
+ * A `.ts` has no index and no header: it is packets, and the tracks are
+ * whatever turns up in them. The defaults are tuned for a file that describes
+ * itself, so a 4K recording -- padded with null packets, seconds between
+ * keyframes, sometimes several programmes -- gets read as having no picture,
+ * or no sound, or neither. Reading twenty megabytes before deciding costs a
+ * fraction of a second on a local disk and is the difference between a
+ * television recording and "nothing to play here".
+ *
+ * `+genpts` is for the other half of it: a recording that starts mid-stream
+ * has no timestamp on its first frames, and a fragmented MP4 built out of
+ * those has a duration of nothing and a seek bar that does not move.
+ * `+discardcorrupt` drops the half-packet at a cut rather than passing
+ * rubbish to the decoder.
+ */
+export function transportProbeArgs(path: string, container = ""): string[] {
+  if (!isTransportSource(path, container)) return [];
+  return ["-probesize", String(TRANSPORT_PROBE_BYTES), "-analyzeduration", String(TRANSPORT_ANALYSE_US)];
+}
+
+/** The same, for a decode rather than a probe: the timestamps matter too. */
+export function transportInputArgs(path: string, container = ""): string[] {
+  if (!isTransportSource(path, container)) return [];
+  return [...transportProbeArgs(path, container), "-fflags", "+genpts+discardcorrupt"];
+}
+
+/**
+ * Whether this source is a transport stream, by its name or by what a probe
+ * already found in it. The container is the better answer where there is one:
+ * an IPTV URL ending in `/301` is an mpegts and says so nowhere in its name.
+ */
+function isTransportSource(path: string, container = ""): boolean {
+  if (container.includes("mpegts")) return true;
+  return isTransportStream(path);
+}
+
+/** How the two sides of `-c:v copy` are told apart in a name a person reads. */
+export interface VideoOptions {
+  /**
+   * Whether the thing at the other end can decode H.265.
+   *
+   * Safari and most televisions can; Chrome on a desktop cannot, and hands
+   * back nothing at all rather than an error anybody sees. So HEVC is only
+   * ever copied when the client said it could take it -- which is worth
+   * asking, because the alternative for a 4K HEVC film is an encode that does
+   * not keep up with playback.
+   */
+  allowHevc?: boolean;
+  /**
+   * The tallest picture a re-encode may produce. A copy is never resized: a
+   * 4K stream a browser can already decode is handed over as it is.
+   */
+  maxHeight?: number;
+}
+
+/**
+ * The tallest re-encode that keeps up with playback.
+ *
+ * Measured on this box (8 cores, libx264 -preset veryfast, a 4K HEVC source):
+ * 4K out ran at 0.52x real time, 1080p out at 1.65x. An encode slower than
+ * real time is a live channel that falls behind for ever and a film that
+ * stalls every few seconds, so a re-encode of anything taller comes down to
+ * this. Copying is exempt, and copying is the ordinary case.
+ */
+export const MAX_TRANSCODE_HEIGHT = 1080;
 
 /**
  * How to get this file into a browser, given what is inside it.
@@ -468,14 +564,21 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
  * is wrong. Rewrapping that costs nothing and looks identical; re-encoding it
  * would cost a core per viewer and look worse. So the streams decide, one part
  * at a time -- a film can have its video copied and only its DTS re-encoded.
+ *
+ * Resolution is deliberately not one of the deciders for a copy. 1080p and 4K
+ * H.264 out of a transport stream are copied exactly as 720p is, because the
+ * work of copying does not grow with the picture and a browser that can decode
+ * 4K should be given 4K.
  */
-export function videoArgs(codecs: Codecs, capKbps = 0): string[] {
+export function videoArgs(codecs: Codecs, capKbps = 0, options: VideoOptions = {}): string[] {
   // A ceiling means re-encoding whatever is there, because you cannot cap the
   // bitrate of a stream you are copying: copying is what "unchanged" means.
   if (capKbps > 0) return cappedArgs(capKbps);
 
-  // What a browser can play inside MP4 without help.
-  const keepVideo = codecs.video === "h264";
+  // What a browser can play inside MP4 without help -- and H.265, when the
+  // other end has said it can decode it, which saves re-encoding 4K.
+  const keepHevc = codecs.video === "hevc" && options.allowHevc === true;
+  const keepVideo = codecs.video === "h264" || keepHevc;
   // A transport stream's audio is never copied. Its AAC is ADTS-framed, which
   // MP4 refuses without a bitstream filter -- ffmpeg writes nothing at all and
   // says "Malformed AAC bitstream detected" -- and the track ffmpeg picks off
@@ -483,13 +586,23 @@ export function videoArgs(codecs: Codecs, capKbps = 0): string[] {
   // no browser plays. Re-encoding audio is cheap; this failing is total.
   const transportStream = codecs.container.includes("mpegts");
   const keepAudio = !transportStream && (codecs.audio === "aac" || codecs.audio === "mp3");
+  // A re-encode of something taller than this comes down to it, because an
+  // encode slower than real time is not a stream. A copy keeps its size.
+  const ceiling = options.maxHeight ?? MAX_TRANSCODE_HEIGHT;
+  const tooTall = !keepVideo && (codecs.height ?? 0) > ceiling;
   return [
     "-c:v", keepVideo ? "copy" : "libx264",
+    // H.265 in MP4 is `hvc1` to Safari and to every television; ffmpeg writes
+    // `hev1` by default, which Safari opens and then plays as a black panel.
+    ...(keepHevc ? ["-tag:v", "hvc1"] : []),
     // A keyframe every two seconds when encoding. A fragment starts on a
     // keyframe, so this is how soon a joiner sees a picture -- and an HLS
     // segment, which is cut on keyframes too, was ten seconds long on
     // x264's default and made a phone wait thirty before it played.
     ...(keepVideo ? [] : ["-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0"]),
+    // -2 keeps the aspect ratio and an even height, which H.264 requires; the
+    // min() never enlarges, so a 720p source asked for 1080p stays 720p.
+    ...(tooTall ? ["-vf", `scale=-2:'min(${ceiling},ih)'`] : []),
     "-c:a", keepAudio ? "copy" : "aac",
     ...(keepAudio ? [] : ["-b:a", "160k", "-ac", "2"]),
     "-f", "mp4",

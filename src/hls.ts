@@ -27,11 +27,25 @@ export const IDLE_MS = 60_000;
 /** How long the first playlist may take to appear before it is a failure. */
 export const FIRST_PLAYLIST_MS = 20_000;
 
-const SEGMENT = /^seg\d{5}\.ts$/;
+/**
+ * The names a packager writes: MPEG-TS segments, or -- for a channel carrying
+ * H.265 -- an fMP4 init file and its parts.
+ *
+ * HLS in transport-stream segments is defined for H.264 and nothing else.
+ * Apple's own rule for H.265 is fMP4, and Safari, which is the whole reason
+ * this path exists, plays an HEVC channel packaged as TS as a black screen
+ * with sound.
+ */
+const SEGMENT = /^(?:seg\d{5}\.(?:ts|m4s)|init\.mp4)$/;
 
 /** A segment file name, or "" for anything that is not one. Never a path. */
 export function segmentName(requested: string): string {
   return SEGMENT.test(requested) ? requested : "";
+}
+
+/** What to call a segment on the way out: a transport stream, or a piece of MP4. */
+export function segmentType(name: string): string {
+  return name.endsWith(".ts") ? "video/mp2t" : "video/mp4";
 }
 
 /**
@@ -50,7 +64,7 @@ export function withKey(playlist: string, key: string): string {
 }
 
 /** The ffmpeg arguments: copy what arrives on stdin into a rolling playlist. */
-export function packagerArgs(dir: string): string[] {
+export function packagerArgs(dir: string, fmp4 = false): string[] {
   return [
     "-hide_banner",
     "-loglevel", "error",
@@ -63,8 +77,9 @@ export function packagerArgs(dir: string): string[] {
     // keyframe so a joiner can begin anywhere; written whole then renamed so
     // a request never reads half a file.
     "-hls_flags", "delete_segments+omit_endlist+independent_segments+temp_file",
-    "-hls_segment_type", "mpegts",
-    "-hls_segment_filename", join(dir, "seg%05d.ts"),
+    ...(fmp4
+      ? ["-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", join(dir, "seg%05d.m4s")]
+      : ["-hls_segment_type", "mpegts", "-hls_segment_filename", join(dir, "seg%05d.ts")]),
     join(dir, "index.m3u8"),
   ];
 }
@@ -89,6 +104,8 @@ class Packager implements Packaged {
     private readonly ffmpeg: string[],
     private readonly onStop: (id: string) => void,
     private readonly onEvent: (message: string) => void,
+    /** Whether this channel has to be cut into fMP4 rather than TS: H.265. */
+    private readonly fmp4 = false,
   ) {
     this.dir = mkdtempSync(join(tmpdir(), `nixamp-hls-${id}-`));
   }
@@ -96,7 +113,7 @@ class Packager implements Packaged {
   start(listen: (listener: Packaged) => (() => void) | null): boolean {
     const [command, ...prefix] = this.ffmpeg as [string, ...string[]];
     try {
-      this.child = spawn(command, [...prefix, ...packagerArgs(this.dir)], { stdio: ["pipe", "ignore", "pipe"] });
+      this.child = spawn(command, [...prefix, ...packagerArgs(this.dir, this.fmp4)], { stdio: ["pipe", "ignore", "pipe"] });
     } catch (error) {
       this.onEvent(`  HLS for "${this.id}" could not start: ${(error as Error).message}`);
       this.stop();
@@ -225,10 +242,10 @@ export class HlsPackagers {
    * and waiting for the first segments to exist. Null when the channel is not
    * there or nothing could be packaged.
    */
-  async playlist(id: string): Promise<string | null> {
+  async playlist(id: string, fmp4 = false): Promise<string | null> {
     let packager = this.running.get(id);
     if (!packager) {
-      packager = new Packager(id, this.options.ffmpeg, (gone) => this.running.delete(gone), this.options.onEvent ?? (() => undefined));
+      packager = new Packager(id, this.options.ffmpeg, (gone) => this.running.delete(gone), this.options.onEvent ?? (() => undefined), fmp4);
       this.running.set(id, packager);
       if (!packager.start((listener) => this.options.listen(id, listener))) return null;
     }

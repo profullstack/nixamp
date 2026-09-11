@@ -512,6 +512,19 @@ A bare `ffmpeg` on `PATH` is used when there is one; `mise` shims are detected a
 
 Whatever your ffmpeg was built with: mp3, flac, ogg, opus, m4a, aac, wav, wma, aiff, alac, and the audio track of mp4 and webm.
 
+Video too, including raw transport streams — a `.ts`, `.m2ts` or `.mts` off a
+capture card, a receiver or an IPTV recorder, at 1080p or 4K. H.264 is copied
+into the fragmented MP4 a browser is sent, at whatever size it already is, so
+a 4K recording costs no encoding to watch or to put on the air. H.265 is
+copied too when the browser asking for it says it can decode one, and
+otherwise re-encoded down to 1080p, because a 4K encode does not keep up with
+playing it. A channel, which has one encode and a whole audience, re-encodes
+H.265 by default; `NIXAMP_HEVC_CHANNELS=1` copies it through instead, for an
+audience of phones and televisions.
+
+A `.ts` is opened rather than taken on its name: it is as often a TypeScript
+file as a transport stream, and a checkout is not a playlist.
+
 ## Status
 
 Early. It plays a directory, shows tags and timings, and draws what it hears —
