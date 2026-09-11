@@ -1374,3 +1374,46 @@ test("a name somebody chose outlives what the stream says about itself", () => {
   assert.deepEqual(liveOnes(engine).map((one) => one.name), ["MLB Network"]);
   engine.stop();
 });
+import { PROBE_RETRY_MS, PROBE_TRIES, pullChannel } from "../src/server.ts";
+import { Channels } from "../src/channels.ts";
+
+// Asking a silent source PROBE_TRIES times takes a few seconds, twice over.
+test("a remembered channel is put back without asking the source, and a silent source is not taken for a radio", { timeout: 20_000 }, async () => {
+  const say = (json: string): string[] => ["sh", "-c", `printf '%s' '${json}'`];
+  const codecs = { video: "h264", audio: "aac", container: "mov,mp4", duration: 5400 };
+
+  // Known already: a failing probe is never run, and the film picks up
+  // where it was written down.
+  const set = new Channels({ ffmpeg: ["true"] });
+  const known = await pullChannel(set, ["false"], "film", "A Film", "http://x.test/film.mp4", [], "", {
+    kind: "video", codecs, position: 50, live: false,
+  });
+  assert.ok(known);
+  assert.equal(known?.info.kind, "video");
+  assert.equal(known?.info.live, false);
+  assert.equal(known?.info.position, 50);
+  assert.deepEqual(known?.info.codecs, codecs);
+
+  // Asked, and told: a film with a length is not live.
+  const told = await pullChannel(set, say(JSON.stringify({
+    streams: [{ codec_type: "video", codec_name: "h264" }, { codec_type: "audio", codec_name: "aac" }],
+    format: { format_name: "mov,mp4", duration: "5400" },
+  })), "film2", "Another", "http://x.test/film2.mp4");
+  assert.equal(told?.info.kind, "video");
+  assert.equal(told?.info.live, false);
+  assert.equal(told?.info.codecs?.duration, 5400);
+
+  // Asked, and told nothing, PROBE_TRIES times: carried as video, with
+  // nothing written down about what it holds. Two films came back on the
+  // air as sound alone because nothing used to read as "no picture".
+  const before = Date.now();
+  const silent = await pullChannel(set, ["true"], "mute", "Mute", "http://x.test/mute.mp4");
+  assert.ok(Date.now() - before >= (PROBE_TRIES - 1) * PROBE_RETRY_MS - 50, "asked again before giving up");
+  assert.equal(silent?.info.kind, "video");
+  assert.equal(silent?.info.codecs, undefined);
+  assert.equal(silent?.info.live, true);
+  // What was remembered last time wins over the guess.
+  const radio = await pullChannel(set, ["true"], "radio", "Radio", "http://x.test/radio", [], "", { kind: "audio" });
+  assert.equal(radio?.info.kind, "audio");
+  set.stopAll();
+});

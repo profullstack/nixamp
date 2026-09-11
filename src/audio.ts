@@ -391,6 +391,12 @@ export interface Codecs {
    * is a track no browser will play.
    */
   container: string;
+  /**
+   * How long it is, in seconds; 0 when it has no end, which is what tells a
+   * live channel from a film. A film has a place to go back to after a
+   * restart; a live channel is wherever it is now.
+   */
+  duration?: number;
 }
 
 /**
@@ -412,7 +418,7 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
         ...rest,
         "-v", "quiet",
         "-print_format", "json",
-        "-show_entries", "format=format_name:stream=codec_type,codec_name",
+        "-show_entries", "format=format_name,duration:stream=codec_type,codec_name",
         // Headers the source's site expects, for a link resolved by yt-dlp.
         ...input,
         path,
@@ -428,13 +434,17 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
       try {
         const parsed = JSON.parse(out) as {
           streams?: { codec_type?: string; codec_name?: string }[];
-          format?: { format_name?: string };
+          format?: { format_name?: string; duration?: string };
         };
         const streams = parsed.streams ?? [];
+        // ffprobe prints seconds as a string, and "N/A" for a stream with no
+        // end; both of those read as 0.
+        const seconds = Number(parsed.format?.duration ?? 0);
         return done({
           video: streams.find((s) => s.codec_type === "video")?.codec_name ?? "",
           audio: streams.find((s) => s.codec_type === "audio")?.codec_name ?? "",
           container: parsed.format?.format_name ?? "",
+          duration: Number.isFinite(seconds) && seconds > 0 ? seconds : 0,
         });
       } catch {
         return done(empty);

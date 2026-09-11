@@ -336,3 +336,15 @@ test("decoding is paced to real time, or the clock is a lie", () => {
   const input = source.indexOf('"-i", track.path');
   assert.ok(at > 0 && at < input, "-re must come before -i or it paces nothing");
 });
+import { codecsOf } from "../src/audio.ts";
+
+test("a probe says how long a source is, and a live one has no length", async () => {
+  const say = (json: string): string[] => ["sh", "-c", `printf '%s' '${json}'`];
+  const tools = (ffprobe: string[]) => ({ ffmpeg: [], ffprobe, play: null });
+  const film = await codecsOf(tools(say('{"streams":[{"codec_type":"video","codec_name":"h264"},{"codec_type":"audio","codec_name":"aac"}],"format":{"format_name":"mov,mp4","duration":"5400.5"}}')), "x");
+  assert.deepEqual(film, { video: "h264", audio: "aac", container: "mov,mp4", duration: 5400.5 });
+  const live = await codecsOf(tools(say('{"streams":[{"codec_type":"video","codec_name":"h264"}],"format":{"format_name":"mpegts","duration":"N/A"}}')), "x");
+  assert.equal(live.duration, 0);
+  // A probe that says nothing at all is nothing, not a crash.
+  assert.deepEqual(await codecsOf(tools(["true"]), "x"), { video: "", audio: "", container: "" });
+});
