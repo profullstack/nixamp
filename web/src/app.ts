@@ -110,6 +110,7 @@ export function start(): void {
     liveLine: need<HTMLElement>("live-line"),
     downloadNow: need<HTMLButtonElement>("download-now"),
     makePublic: need<HTMLButtonElement>("make-public"),
+    wayInHere: need<HTMLElement>("way-in-here"),
     embed: need<HTMLElement>("embed"),
     embedFrame: need<HTMLIFrameElement>("embed-frame"),
     linkForm: need<HTMLFormElement>("link-form"),
@@ -250,6 +251,55 @@ export function start(): void {
   let askedToPlay = "";
   /** And from what second, for a file. */
   let askedTime = 0;
+  /**
+   * The servers on your account, by origin, each with the link that drives
+   * it. This is how a favourite, or the server you are on as a viewer, knows
+   * whether the gear is yours to press: the directory hands out a control
+   * link only for what you own, and a favourite is only an address.
+   */
+  let ownedServers = new Map<string, string>();
+  /** The link that drives this server, when it is yours. (originOf is the favourites' helper, further down.) */
+  const adminLinkFor = (url: string): string | null => ownedServers.get(originOf(url)) ?? null;
+
+  /**
+   * The two ways into a server: an eye and a gear.
+   *
+   * Everywhere a server is shown -- the directory, your favourites, the
+   * machines on your account, the one you are on -- these are the same two
+   * buttons, so a person learns them once. The eye connects as a viewer,
+   * which hides everything that administers even when the link would obey;
+   * the gear connects with the link that drives it, and is greyed, not gone,
+   * when that is not yours, so that what it would take is not a mystery.
+   */
+  function wayIn(server: { name: string; view: string; admin: string | null }, before?: () => void): [HTMLButtonElement, HTMLButtonElement] {
+    const go = (asViewer: boolean): void => {
+      viewerOnly = asViewer;
+      askedToPlay = "";
+      dom.remoteUrl.value = asViewer ? server.view : (server.admin ?? server.view);
+      before?.();
+      dom.remoteForm.requestSubmit();
+    };
+    const eye = document.createElement("button");
+    eye.type = "button";
+    eye.className = "icon way-in";
+    drawIcon(eye, "eye");
+    eye.title = "Viewer: browse and watch. Changes nothing on the server.";
+    eye.setAttribute("aria-label", `View ${server.name}`);
+    eye.addEventListener("click", () => go(true));
+    const gear = document.createElement("button");
+    gear.type = "button";
+    gear.className = "icon way-in";
+    drawIcon(gear, "gear");
+    gear.disabled = server.admin === null;
+    gear.title = server.admin
+      ? "Admin: drive this server. What plays, what is live, what is on it."
+      : meId
+        ? "Admin: you do not administer this server."
+        : "Admin: sign in as this server's owner to administer it.";
+    gear.setAttribute("aria-label", `Administer ${server.name}`);
+    gear.addEventListener("click", () => go(false));
+    return [eye, gear];
+  }
   /**
    * The server's view-only link, once it has said what it is. Every link
    * this page hands out is built on this and never on the link the page
@@ -1025,6 +1075,7 @@ export function start(): void {
     dom.source.textContent = mode === "remote"
       ? `connected · ${serverName || remote.address.replace(/^https?:\/\//, "") || "—"}`
       : local.length > 0 ? `local · ${local.length} files` : "no source";
+    drawWayInHere();
 
     dom.remoteState.textContent = mode === "remote"
       ? `${remoteStatus}${remoteDetail ? ` — ${remoteDetail}` : ""}`
@@ -1402,6 +1453,32 @@ export function start(): void {
       if (!scrubbing && of > 0) dom.seek.value = String(Math.round((position() / of) * 1000));
     }
     requestAnimationFrame(frame);
+  }
+
+  /**
+   * The eye and the gear for the server you are on, beside its name in the
+   * header: the way to step down to viewing, or up to driving, without
+   * finding the server in a list again. Drawn only when the way in would
+   * change: the eye is not offered to a viewer, nor the gear to an admin.
+   */
+  let wayInHereFor = "";
+  function drawWayInHere(): void {
+    if (mode !== "remote") {
+      dom.wayInHere.hidden = true;
+      wayInHereFor = "";
+      return;
+    }
+    const driving = isAdmin() && !viewerOnly;
+    const view = viewLink || remote.address;
+    const admin = driving ? null : adminLinkFor(remote.address);
+    const key = `${view}|${admin ?? ""}|${driving ? "admin" : "view"}`;
+    if (key === wayInHereFor) return;
+    wayInHereFor = key;
+    const [eye, gear] = wayIn({ name: serverName || "this server", view, admin });
+    eye.hidden = !driving;
+    gear.hidden = driving;
+    dom.wayInHere.replaceChildren(eye, gear);
+    dom.wayInHere.hidden = false;
   }
 
   function showVideo(on: boolean): void {
@@ -1854,11 +1931,11 @@ export function start(): void {
       // it would take to light it up is not a mystery.
       // The directory hands the control link to the owning account only, so
       // holding one is the whole test of whether Admin is yours to press.
-      const mine = Boolean(stream.admin);
+      const adminLink = stream.admin ?? adminLinkFor(stream.url);
       const open = (asViewer: boolean, play = ""): void => {
         viewerOnly = asViewer;
         askedToPlay = play;
-        dom.remoteUrl.value = asViewer ? stream.url : (stream.admin ?? stream.url);
+        dom.remoteUrl.value = asViewer ? stream.url : (adminLink ?? stream.url);
         dom.directory.hidden = true;
         dom.remoteForm.requestSubmit();
       };
@@ -1887,28 +1964,11 @@ export function start(): void {
         row.append(dot, play);
         lives.append(row);
       }
-      // An eye and a gear rather than the words: the row is the server's name
-      // and what is on it, and two more words beside every one of them was
-      // noise. The words are still there for a screen reader and on hover.
-      const connect = document.createElement("button");
-      connect.type = "button";
-      connect.className = "icon way-in";
-      drawIcon(connect, "eye");
-      connect.title = "Viewer: browse and watch. Changes nothing on the server.";
-      connect.setAttribute("aria-label", `View ${stream.name}`);
-      connect.addEventListener("click", () => open(true));
-      const admin = document.createElement("button");
-      admin.type = "button";
-      admin.className = "icon way-in";
-      drawIcon(admin, "gear");
-      admin.disabled = !mine;
-      admin.title = mine
-        ? "Admin: drive this server. What plays, what is live, what is on it."
-        : meId
-          ? "Admin: you do not administer this server."
-          : "Admin: sign in as this server's owner to administer it.";
-      admin.setAttribute("aria-label", `Administer ${stream.name}`);
-      admin.addEventListener("click", () => open(false));
+      // The same eye and gear as everywhere else a server is shown.
+      const [connect, admin] = wayIn(
+        { name: stream.name, view: stream.url, admin: adminLink },
+        () => { dom.directory.hidden = true; },
+      );
       item.append(label, connect, admin);
       // A heart, for somebody signed in: the way back to a server you liked.
       if (meId) item.append(heartButton(stream.url, stream.name));
@@ -2453,15 +2513,9 @@ export function start(): void {
           : "not on right now";
         label.append(name, detail);
 
-        const connect = document.createElement("button");
-        connect.type = "button";
-        connect.className = "button";
-        connect.textContent = "Connect";
-        connect.addEventListener("click", () => {
-          dom.remoteUrl.value = fav.url;
-          dom.remoteForm.requestSubmit();
-        });
-        item.append(label, connect, heartButton(fav.url, fav.name));
+        // The eye and the gear, as in the directory. A favourite is only an
+        // address, so the gear lights only for a machine on your account.
+        item.append(label, ...wayIn({ name: fav.name || fav.url, view: fav.url, admin: adminLinkFor(fav.url) }), heartButton(fav.url, fav.name));
         return item;
       }));
     } catch {
@@ -3009,10 +3063,13 @@ export function start(): void {
         servers?: { id: string; name: string; url: string; key: string }[];
       };
       const list = body.servers ?? [];
+      // Remembered by origin, so a favourite or the server you are on knows
+      // whether the gear is yours: these are the machines you administer.
+      ownedServers = new Map(list.map((entry) => [originOf(entry.url), entry.key ? `${entry.url}/admin/${entry.key}` : entry.url]));
       dom.serversPanel.hidden = false;
       dom.serversNote.textContent = list.length === 0
         ? "No servers yet. `nixamp server add --here` remembers the one you are running."
-        : "The machines on your account. Open one, or forget it.";
+        : "The machines on your account. View one, administer it, or forget it.";
 
       for (const entry of list) {
         const item = document.createElement("li");
@@ -3032,15 +3089,11 @@ export function start(): void {
         // this same page. Going there gains nothing -- it is the same player
         // against the same server -- and it loses the account you are signed
         // in to, which is the half that knows who you are.
-        const open = document.createElement("button");
-        open.type = "button";
-        open.className = "button";
-        open.textContent = "Open";
-        open.addEventListener("click", () => {
-          // The key kept against your account is the one that administers.
-          dom.remoteUrl.value = entry.key ? `${entry.url}/admin/${entry.key}` : entry.url;
-          dom.remoteForm.requestSubmit();
-        });
+        // The key kept against your account is the one that administers;
+        // the eye uses it too, as a viewer, since a machine of yours has no
+        // separate listen link on the account.
+        const driving = entry.key ? `${entry.url}/admin/${entry.key}` : entry.url;
+        const [open, admin] = wayIn({ name: entry.name, view: driving, admin: driving });
 
         // Asked rather than assumed. A machine you turned off looks exactly
         // like a machine that is up until you click Open and nothing happens,
@@ -3053,7 +3106,8 @@ export function start(): void {
           detail.textContent = `${entry.url} · not answering`;
           item.classList.add("offline");
           open.disabled = true;
-          open.title = "That machine is not answering. Start nixamp on it.";
+          admin.disabled = true;
+          open.title = admin.title = "That machine is not answering. Start nixamp on it.";
         });
 
         const forget = document.createElement("button");
@@ -3072,7 +3126,7 @@ export function start(): void {
           })();
         });
 
-        item.append(label, open, forget);
+        item.append(label, open, admin, forget);
         dom.serversList.append(item);
       }
     } catch {
