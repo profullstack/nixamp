@@ -20,9 +20,18 @@
         "typescript": "^7.0.2",
       },
     },
+    "backtoschool": {
+      "name": "@nixamp/backtoschool-web",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/node": "^26",
+        "typescript": "^7.0.2",
+        "vite": "^8.2.2",
+      },
+    },
     "desktop": {
       "name": "@nixamp/desktop",
-      "version": "0.9.2",
+      "version": "0.15.1",
       "devDependencies": {
         "electron": "^44.2.0",
         "electron-builder": "^26.15.3",
@@ -30,7 +39,7 @@
     },
     "web": {
       "name": "@nixamp/web",
-      "version": "0.9.2",
+      "version": "0.15.1",
       "dependencies": {
         "@profullstack/player": "^0.7.0",
       },
@@ -74,6 +83,8 @@
     "@malept/flatpak-bundler": ["@malept/flatpak-bundler@0.4.0", "", { "dependencies": { "debug": "^4.1.1", "fs-extra": "^9.0.0", "lodash": "^4.17.15", "tmp-promise": "^3.0.2" } }, "sha512-9QOtNffcOF/c1seMCDnjckb3R9WHcG34tky+FHpNKKCW0wc/scYLwMtO+ptyGUfMW0/b/n4qRiALlaFHc9Oj7Q=="],
 
     "@mongodb-js/saslprep": ["@mongodb-js/saslprep@1.5.2", "", { "dependencies": { "sparse-bitfield": "^3.0.3" } }, "sha512-UBvCBdPHAmiiDNEpD2ORBGzna4qYr06fLELfGDPW3/KZ9uLK+cGT9npAc/x/6/8SLzdbILMuc3HWFQ0FvJMhCw=="],
+
+    "@nixamp/backtoschool-web": ["@nixamp/backtoschool-web@workspace:backtoschool"],
 
     "@nixamp/desktop": ["@nixamp/desktop@workspace:desktop"],
 

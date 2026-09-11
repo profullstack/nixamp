@@ -73,6 +73,10 @@ import { createThrottle, presentedCredential, type Throttle } from "@profullstac
 import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
 import { inviteSubject, inviteText, isEmail, isPhone, watchLink } from "./invite.ts";
+import { handleLiveApi } from "./live-api.ts";
+import { LiveEvents, type LiveEvent } from "./live-events.ts";
+import { Layouts } from "./layouts.ts";
+import { Rooms } from "./rooms.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
   applyRemoteConfig,
@@ -1229,6 +1233,46 @@ function html(response: ServerResponse, code: number, body: string): void {
   response.end(body);
 }
 
+function htmlText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function eventDocument(shell: string, event: Awaited<ReturnType<LiveEvents["get"]>>, site: string): string {
+  if (!event) return shell;
+  const title = `${event.title} — BackToSchool.help`;
+  const description = event.description || `Listen to ${event.title} live on BackToSchool.help.`;
+  const canonical = `${site.replace(/\/$/, "")}/live/${encodeURIComponent(event.slug)}`;
+  const structured = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "Event",
+    name: event.title,
+    description,
+    eventStatus: event.status === "cancelled"
+      ? "https://schema.org/EventCancelled"
+      : event.status === "live"
+        ? "https://schema.org/EventInProgress"
+        : event.status === "ended"
+          ? "https://schema.org/EventCompleted"
+          : "https://schema.org/EventScheduled",
+    eventAttendanceMode: "https://schema.org/OnlineEventAttendanceMode",
+    ...(event.startsAt ? { startDate: event.startsAt } : {}),
+    ...(event.endsAt ? { endDate: event.endsAt } : {}),
+    url: canonical,
+    location: { "@type": "VirtualLocation", url: canonical },
+  }).replaceAll("<", "\\u003c");
+  return shell
+    .replace(/<title>.*?<\/title>/s, `<title>${htmlText(title)}</title>`)
+    .replace(/<meta name="description" content="[^"]*"\s*\/>/, `<meta name="description" content="${htmlText(description)}" />`)
+    .replace(/<meta property="og:title" content="[^"]*"\s*\/>/, `<meta property="og:title" content="${htmlText(event.title)}" />`)
+    .replace(/<meta property="og:description" content="[^"]*"\s*\/>/, `<meta property="og:description" content="${htmlText(description)}" />`)
+    .replace("</head>", `${event.visibility === "public" ? "" : '<meta name="robots" content="noindex,nofollow" />'}\n    <meta property="og:url" content="${htmlText(canonical)}" />\n    <link rel="canonical" href="${htmlText(canonical)}" />\n    <script type="application/ld+json">${structured}</script>\n  </head>`);
+}
+
 function json(response: ServerResponse, code: number, body: unknown): void {
   const text = JSON.stringify(body);
   response.writeHead(code, {
@@ -1390,6 +1434,12 @@ export interface HandlerOptions {
   follows?: Follows;
   /** The servers an account hearted. nixamp.com only, like follows. */
   favorites?: Favorites;
+  /** Scheduled and live sessions, kept by NixAmp and shared by branded clients. */
+  events?: LiveEvents;
+  /** Versioned panel layouts, including event and user overrides. */
+  layouts?: Layouts;
+  /** Persistent participation state that must not be coupled to live audio. */
+  rooms?: Rooms;
   /**
    * How an invite is sent: by email, by text, and the site the watch link is
    * built on. nixamp.com only; a personal nixamp has no mail to send from.
@@ -1452,6 +1502,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     const key = options.key ?? null;
     const behindProxy = options.behindProxy ?? false;
     const listenKey = options.listenKey ?? null;
+    const channelParts = path.startsWith("/api/channels/")
+      ? path.slice("/api/channels/".length).split("/")
+      : null;
+    const channelId = channelParts ? cleanId(channelParts[0]) : "";
+    const channelAction = channelParts?.[1];
+    let channelEvent: LiveEvent | null | undefined;
+    const eventForChannel = async (): Promise<LiveEvent | null> => {
+      if (channelEvent === undefined) {
+        channelEvent = channelId ? await options.events?.byRoom(channelId) ?? null : null;
+      }
+      return channelEvent;
+    };
 
     if (request.method === "OPTIONS") {
       response.writeHead(204, CORS);
@@ -1492,6 +1554,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       response.end();
       return;
     }
+
+    if (options.events && await handleLiveApi(request, response, url, {
+      events: options.events,
+      ...(options.accounts ? { accounts: options.accounts } : {}),
+      ...(options.layouts ? { layouts: options.layouts } : {}),
+      ...(options.rooms ? { rooms: options.rooms } : {}),
+      ...(options.invites?.site ? { site: options.invites.site } : {}),
+      ...(options.invites?.email ? { email: options.invites.email } : {}),
+    })) return;
 
     // The page explaining the reminder texts. Public for the same reason the
     // webhook is: the reader is a carrier reviewing the number, or somebody
@@ -1936,11 +2007,13 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // /api/health answers unauthenticated on purpose: it is how you check the
     // port is open from another device before wondering whether the link is
     // wrong, and it says nothing about the library.
+    const eventChannelRequest = Boolean(channelId && await eventForChannel());
     if (
       key !== null &&
       path !== "/api/health" &&
       path !== "/api/directory" &&
-      !isSignInPath(path)
+      !isSignInPath(path) &&
+      !eventChannelRequest
     ) {
       let scope = scopeOf(keyFrom(request, url), key, listenKey);
       // A key is how somebody who was invited proves it. It is not the only way
@@ -2645,7 +2718,13 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
      * count it against what a member may have on at once.
      */
     let liveBy = "";
-    if (options.owner && needsAdmin(path, request.method ?? "GET")) {
+    const eventMediaOperation = Boolean(
+      channelId &&
+      ((request.method === "POST" && (channelAction === undefined || channelAction === "chunk")) ||
+        (request.method === "DELETE" && channelAction === undefined)) &&
+      eventChannelRequest,
+    );
+    if (options.owner && needsAdmin(path, request.method ?? "GET") && !eventMediaOperation) {
       // A server started with --no-key has said that anyone who can reach the
       // port may drive it, and prints exactly that. Locking administration to
       // nobody would contradict it and leave such a server unadministrable.
@@ -3185,6 +3264,25 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       const rest = path.slice("/api/channels/".length);
       const [rawId, action, file] = rest.split("/");
       const id = cleanId(rawId);
+      const event = await eventForChannel();
+      if (event) {
+        const account = await options.accounts?.whoIs(tokenFrom(request.headers)) ?? null;
+        if (request.method === "GET") {
+          const invited = await options.events!.invitationAllows(event.id, url.searchParams.get("invite") ?? "");
+          if (!(await options.events!.canAccess(event, account?.id)) && !invited) {
+            json(response, 404, { error: "nothing is playing on that channel" });
+            return;
+          }
+        } else if (!options.events!.canManage(event, account?.id)) {
+          json(response, account ? 403 : 401, { error: account ? "only the event host can publish here" : "sign in to host this event" });
+          return;
+        } else if (request.method === "POST" &&
+                   (action === undefined || action === "chunk") &&
+                   event.status !== "live") {
+          json(response, 409, { error: "start the event before publishing audio" });
+          return;
+        }
+      }
 
       // The same channel as HLS: a playlist of short files, which is what
       // Safari on an iPhone plays live -- it will not take the endless MP4
@@ -3282,6 +3380,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // Off the air is news too: told now, so the directory drops it
           // rather than listing it until the next heartbeat.
           void options.live?.announce?.();
+          if (event && event.status === "live") {
+            await options.events?.transition(event.id, event.ownerId, "ended", event.version).catch(() => undefined);
+          }
         }
         json(response, stopped ? 200 : 404, { ok: stopped });
         return;
@@ -3889,6 +3990,23 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // A single-page app: any unknown path is the shell, and the client routes.
       else if (isFile(join(options.web, "index.html"))) file = join(options.web, "index.html");
       if (file !== null) {
+        if (file.endsWith("index.html") && path.startsWith("/live/") && options.events) {
+          try {
+            const slug = decodeURIComponent(path.slice("/live/".length).replace(/\/$/, ""));
+            const event = await options.events.get(slug);
+            const account = await options.accounts?.whoIs(tokenFrom(request.headers)) ?? null;
+            const invited = event
+              ? await options.events.invitationAllows(event.id, url.searchParams.get("invite") ?? "")
+              : false;
+            if (event && (await options.events.canAccess(event, account?.id) || invited)) {
+              const shell = readIfPossible(file);
+              if (shell !== null) {
+                html(response, 200, eventDocument(shell, event, options.invites?.site ?? "https://backtoschool.help"));
+                return;
+              }
+            }
+          } catch {}
+        }
         sendFile(request, response, file);
         return;
       }
@@ -4418,6 +4536,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       : undefined;
   const follows = pool ? new Follows(pool) : undefined;
   const favorites = pool ? new Favorites(pool) : undefined;
+  const events = pool ? new LiveEvents(pool) : undefined;
+  const layouts = pool ? new Layouts(pool) : undefined;
+  const rooms = pool ? new Rooms(pool) : undefined;
 
   // Names and certificates for signed-in servers, and the rate limit over
   // everything. All of it is nixamp.com's business: the DNS keys live only
@@ -4757,6 +4878,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(directory ? { directory } : {}),
     ...(follows ? { follows, vapidPublicKey } : {}),
     ...(favorites ? { favorites } : {}),
+    ...(events ? { events } : {}),
+    ...(layouts ? { layouts } : {}),
+    ...(rooms ? { rooms } : {}),
     // Invites go out the same way follow notifications do, and only from a
     // site that has somebody to send them for.
     ...(pool

@@ -136,6 +136,42 @@ DATABASE_URL=postgres://user:pass@host/nixamp NIXAMP_JWT_SECRET=… nixamp serve
 Accounts live where the directory lives and nowhere else: a nixamp on a laptop
 has nobody to be an account of.
 
+## BackToSchool.help
+
+BackToSchool.help is a branded, mobile-first client for NixAmp live events. It
+uses the same NixAmp accounts, PostgreSQL data, rooms, invitations, layouts, and
+channel transport as the main app; it has no separate backend or user store.
+
+Build the server and both web clients from the repository root:
+
+```
+bun install --frozen-lockfile
+bun run build
+bun run web:build
+bun run backtoschool:build
+```
+
+A directory deployment can serve the BackToSchool client instead of the default
+NixAmp PWA by pointing `--web` at its build output:
+
+```
+DATABASE_URL=postgres://user:pass@host/nixamp \
+NIXAMP_JWT_SECRET=replace-with-a-long-random-secret \
+NIXAMP_SITE=https://backtoschool.help \
+bun src/main.ts serve /srv/nixamp/media \
+  --directory --web "$PWD/backtoschool/dist" --host 127.0.0.1 --port 4321 --no-publish
+```
+
+Put an HTTPS reverse proxy for `backtoschool.help` in front of that port and
+forward the whole origin, including `/api` and `/live`. Do not buffer responses
+under `/api/channels/`; those responses carry live audio. Keeping the client and
+API on one origin lets the HttpOnly NixAmp session cookie authenticate hosting,
+chat, invitations, and moderation. HTTPS is also required for browser microphone
+access outside localhost. Event, room, layout, and invitation tables are created
+on first use in the configured PostgreSQL database. `RESEND_API_KEY` and
+`NIXAMP_MAIL_FROM` are optional if invitation email should be sent rather than
+only returning a shareable link.
+
 ## The directory
 
 [nixamp.com/directory](https://nixamp.com/directory) lists nixamps that agreed

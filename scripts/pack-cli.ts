@@ -122,6 +122,7 @@ const parts: { from: string; to: string; why: string }[] = [
   { from: join(repo, "dist"), to: "dist", why: "run `bun run build`" },
   { from: join(repo, "bin"), to: "bin", why: "the repo is incomplete" },
   { from: join(repo, "web", "dist"), to: join("web", "dist"), why: "run `bun run web:build`" },
+  { from: join(repo, "backtoschool", "dist"), to: join("backtoschool", "dist"), why: "run `bun run backtoschool:build`" },
   { from: join(repo, "package.json"), to: "package.json", why: "the repo is incomplete" },
   { from: join(repo, "README.md"), to: "README.md", why: "the repo is incomplete" },
   { from: join(repo, "LICENSE"), to: "LICENSE", why: "the repo is incomplete" },

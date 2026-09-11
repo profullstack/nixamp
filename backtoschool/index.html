@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#34246d" />
+    <meta name="description" content="Learn something live. Listen to public conversations, classes, and talks powered by NixAmp." />
+    <meta property="og:site_name" content="BackToSchool.help" />
+    <meta property="og:title" content="BackToSchool.help — Learn something live" />
+    <meta property="og:description" content="Live conversations with people who know." />
+    <meta property="og:type" content="website" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <title>BackToSchool.help — Learn something live</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="site-header">
+        <a class="wordmark" href="/" aria-label="BackToSchool.help home">
+          <span class="wordmark-mark" aria-hidden="true">B</span>
+          <span>BackToSchool<span>.help</span></span>
+        </a>
+        <nav class="site-nav" aria-label="Main navigation">
+          <a href="/#live">Live now</a>
+          <a href="/#upcoming">Upcoming</a>
+          <button class="button button-quiet" id="account-button" type="button">Sign in</button>
+        </nav>
+      </header>
+      <main id="main" tabindex="-1">
+        <section class="loading-page" aria-live="polite">
+          <span class="eyebrow">BackToSchool.help</span>
+          <h1>Learn something live.</h1>
+          <p>Finding today’s conversations…</p>
+        </section>
+      </main>
+      <footer class="site-footer">
+        <span>Live audio, made simple.</span>
+        <span>Powered by <a href="https://nixamp.com">NixAmp</a></span>
+      </footer>
+    </div>
+
+    <dialog id="account-dialog" class="dialog">
+      <button class="dialog-close" type="button" data-close aria-label="Close">×</button>
+      <span class="eyebrow">Your NixAmp account</span>
+      <h2 id="account-title">Welcome back</h2>
+      <p id="account-copy">Sign in to host, chat, or raise your hand.</p>
+      <form id="account-form" class="form-stack">
+        <label>Email<input name="email" type="email" autocomplete="email" required /></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" minlength="8" required /></label>
+        <p class="form-error" id="account-error" role="alert"></p>
+        <button class="button button-primary" type="submit">Sign in</button>
+        <button class="text-button" id="account-mode" type="button">New here? Create an account</button>
+      </form>
+    </dialog>
+
+    <dialog id="event-dialog" class="dialog dialog-wide">
+      <button class="dialog-close" type="button" data-close aria-label="Close">×</button>
+      <span class="eyebrow" id="event-kicker">Start a conversation</span>
+      <h2 id="event-form-title">Go live</h2>
+      <form id="event-form" class="form-stack">
+        <label>Title<input name="title" maxlength="160" placeholder="What will people learn?" required /></label>
+        <label>Description<textarea name="description" maxlength="5000" rows="3" placeholder="A short introduction for listeners"></textarea></label>
+        <div class="form-pair">
+          <label>Topic<input name="topic" maxlength="100" placeholder="Technology, music…" /></label>
+          <label>Who can listen
+            <select name="visibility">
+              <option value="public">Public</option>
+              <option value="unlisted">Anyone with the link</option>
+              <option value="private">Invited people</option>
+            </select>
+          </label>
+        </div>
+        <div id="schedule-fields" class="form-pair" hidden>
+          <label>Date and time<input name="startsAt" type="datetime-local" /></label>
+          <label>Expected length
+            <select name="expectedDurationMinutes">
+              <option value="30">30 minutes</option>
+              <option value="60" selected>1 hour</option>
+              <option value="90">90 minutes</option>
+              <option value="120">2 hours</option>
+            </select>
+          </label>
+        </div>
+        <div class="form-checks">
+          <label><input name="chatEnabled" type="checkbox" checked /> Chat</label>
+          <label><input name="handRaiseEnabled" type="checkbox" checked /> Raise hand</label>
+          <label><input name="recordingEnabled" type="checkbox" /> Record</label>
+        </div>
+        <p class="form-error" id="event-error" role="alert"></p>
+        <button class="button button-primary" type="submit" id="event-submit">Create live</button>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

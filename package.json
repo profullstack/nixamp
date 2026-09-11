@@ -13,11 +13,13 @@
     "bin",
     "src",
     "web/dist",
+    "backtoschool/dist",
     "README.md",
     "LICENSE"
   ],
   "workspaces": [
     "web",
+    "backtoschool",
     "desktop"
   ],
   "engines": {
@@ -28,12 +30,15 @@
     "start": "bun src/main.ts",
     "serve": "bun src/main.ts serve",
     "build": "bun x tsc -p tsconfig.json",
-    "typecheck": "bun x tsc -p tsconfig.json --noEmit && bun run --filter '@nixamp/web' typecheck",
+    "typecheck": "bun x tsc -p tsconfig.json --noEmit && bun run --filter '@nixamp/web' typecheck && bun run --filter '@nixamp/backtoschool-web' typecheck",
     "test": "bun test test web/test",
     "icons": "bun web/scripts/icons.ts",
     "web:dev": "bun run --filter '@nixamp/web' dev",
     "web:build": "bun run --filter '@nixamp/web' build",
     "web:preview": "bun run --filter '@nixamp/web' preview",
+    "backtoschool:dev": "bun run --filter '@nixamp/backtoschool-web' dev",
+    "backtoschool:build": "bun run --filter '@nixamp/backtoschool-web' build",
+    "backtoschool:preview": "bun run --filter '@nixamp/backtoschool-web' preview",
     "desktop:dev": "bun run --filter '@nixamp/desktop' dev",
     "desktop:build": "bun run --filter '@nixamp/desktop' build",
     "pack:cli": "bun scripts/pack-cli.ts"

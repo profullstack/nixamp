@@ -1,0 +1,44 @@
+{
+  "product": "NixAmp",
+  "locale": "en-US",
+  "listingCopy": "LISTING-COPY.md",
+  "tablet": {
+    "icon512": {
+      "file": "tablet/icon-512.png",
+      "dimensions": "512x512",
+      "format": "PNG",
+      "transparency": true
+    },
+    "icon114": {
+      "file": "tablet/icon-114.png",
+      "dimensions": "114x114",
+      "format": "PNG",
+      "transparency": true
+    },
+    "screenshots": [
+      "tablet/screenshot-01-player-1280x800.png",
+      "tablet/screenshot-02-live-directory-1280x800.png",
+      "tablet/screenshot-03-remote-1280x800.png"
+    ],
+    "promotionalImage": "tablet/promotional-1024x500.png",
+    "promotionalVideo": {
+      "file": "tablet/nixamp-promo-960x540.mp4",
+      "codec": "H.264",
+      "dimensions": "960x540",
+      "frameRate": 30,
+      "targetBitrateKbps": 3000
+    }
+  },
+  "fireTv": {
+    "appIcon": "fire-tv/app-icon-1280x720.png",
+    "screenshots": [
+      "fire-tv/screenshot-01-player-1920x1080.png",
+      "fire-tv/screenshot-02-live-directory-1920x1080.png",
+      "fire-tv/screenshot-03-remote-1920x1080.png"
+    ],
+    "backgroundImage": "fire-tv/background-1920x1080.png",
+    "featuredContentLogo": "fire-tv/featured-content-logo-640x260.png",
+    "featuredContentBackground": "fire-tv/featured-content-background-1920x720.png",
+    "transparency": false
+  }
+}

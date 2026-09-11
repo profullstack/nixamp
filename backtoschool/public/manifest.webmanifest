@@ -1,0 +1,17 @@
+{
+  "name": "BackToSchool.help",
+  "short_name": "BackToSchool",
+  "description": "Learn something live.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f2e8",
+  "theme_color": "#34246d",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
