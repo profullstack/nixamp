@@ -10,21 +10,37 @@
  * is sized for a screen three metres away.
  */
 
+/** Where the page remembers that it is on a television, once told. */
+export const TV_KEY = "nixamp.tv";
+
 /**
  * Fire TV (Silk on an AFT* device), Android TV, Google TV, the Samsung and
  * LG and Sony sets, Roku, Chromecast, the consoles. Silk on a Fire tablet is
- * not a television, which is what the AFT check is for.
+ * not a television, which is what the AFT check is for -- and a Silk that
+ * has no touch screen at all is a television whatever it calls its device.
  */
 const TELEVISION = /\bAFT\w*\b.*\bSilk\b|\bSilk\b.*\bAFT\w*\b|Android ?TV|Google ?TV|SMART-?TV|Tizen|Web0S|WebOS|BRAVIA|CrKey|Roku|Xbox|PlayStation|HbbTV|NetCast|VIDAA|Viera|AppleTV/i;
 
 /**
- * Whether this page is on a television. `?tv=1` says so from any browser,
- * which is how it is looked at from a desk; `?tv=0` says the opposite.
+ * Whether this page is on a television.
+ *
+ * In order: `?tv=1` or `?tv=0` in the address says so from any browser and
+ * is how it is looked at from a desk; then what the page was told last time
+ * (the switch in the footer, for a set whose browser does not say what it
+ * is); then the browser's own account of itself. A Silk with no touch screen
+ * is a television however it names its device: a tablet always has one.
  */
-export function isTelevision(userAgent: string, search = ""): boolean {
+export function isTelevision(userAgent: string, search = "", touchPoints = 1, remembered: string | null = null): boolean {
   const forced = new URLSearchParams(search).get("tv");
-  if (forced !== null) return forced !== "0" && forced !== "no" && forced !== "off";
+  if (forced !== null) return isYes(forced);
+  if (remembered !== null && remembered !== "") return isYes(remembered);
+  if (/\bSilk\b/.test(userAgent) && touchPoints === 0) return true;
   return TELEVISION.test(userAgent);
+}
+
+/** What `?tv=` or the remembered switch means: anything but a no. */
+function isYes(value: string): boolean {
+  return value !== "0" && value !== "no" && value !== "off" && value !== "false";
 }
 
 /** How many rows of a list are on screen at once. */

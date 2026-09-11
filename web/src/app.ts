@@ -19,7 +19,7 @@ import {
 } from "./remote.ts";
 import { bandEdges, bands, decay, drawSpectrum, holdPeaks } from "./spectrum.ts";
 import { fixtureState, scoreLine } from "./score.ts";
-import { isTelevision, pageSize, pageWindow } from "./tv.ts";
+import { isTelevision, pageSize, pageWindow, TV_KEY } from "./tv.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
 
@@ -62,8 +62,30 @@ export function start(): void {
   // own scrollbars and page with buttons, and the type grows, because a
   // remote's ring cannot scroll a box inside the page and 14px is nothing
   // from the sofa.
-  const television = isTelevision(navigator.userAgent, location.search);
+  let remembered: string | null = null;
+  try { remembered = localStorage.getItem(TV_KEY); } catch { /* private mode */ }
+  const television = isTelevision(navigator.userAgent, location.search, navigator.maxTouchPoints, remembered);
   document.body.classList.toggle("tv", television);
+  // Told by the address, remembered: the next visit from the same set is
+  // the same room, and nobody types a query string on a remote twice.
+  if (new URLSearchParams(location.search).has("tv")) {
+    try { localStorage.setItem(TV_KEY, television ? "1" : "0"); } catch { /* private mode */ }
+  }
+  // The switch in the footer, for a set whose browser does not say what it
+  // is. One press, remembered, and the page redraws itself as the other room.
+  const tvToggle = document.getElementById("tv-toggle") as HTMLButtonElement | null;
+  if (tvToggle) {
+    tvToggle.textContent = television ? "TV mode: on" : "TV mode";
+    tvToggle.title = television
+      ? "Back to the ordinary layout: lists with their own scrollbars, smaller type."
+      : "For a television: bigger type, lists a page at a time, and nothing to scroll but the page.";
+    tvToggle.addEventListener("click", () => {
+      try { localStorage.setItem(TV_KEY, television ? "0" : "1"); } catch { /* private mode */ }
+      const address = new URL(location.href);
+      address.searchParams.delete("tv");
+      location.replace(address.toString());
+    });
+  }
   /** How many rows of a list are on screen at once. */
   const LIST_PAGE = pageSize(television);
 
@@ -1698,6 +1720,8 @@ export function start(): void {
         );
       }
       detail.textContent = parts.join(" · ");
+      // Cut to one line on screen; the whole of it on hover.
+      detail.title = detail.textContent;
       label.append(name, detail);
 
       // Two ways in. Viewer is for everybody; Admin is for the account the

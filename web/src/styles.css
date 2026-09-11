@@ -248,7 +248,10 @@ body {
   padding: 4px 2px;
 }
 .directory-list li > .server-label .name { font-weight: 600; }
-.directory-list li > .server-label .detail { color: var(--muted); white-space: normal; }
+/* One line, cut short with an ellipsis: the whole of it is in the title on
+   hover. Wrapped, a long filename made every server three lines tall, and
+   the list is for telling servers apart, not for reading filenames. */
+.directory-list li > .server-label .detail { color: var(--muted); white-space: nowrap; }
 .directory-list li > .server-label .live { color: var(--green); }
 
 @media (max-width: 720px) {
@@ -761,6 +764,17 @@ button.golive:disabled { opacity: 0.5; cursor: progress; }
 }
 
 .statusbar b { color: var(--green); font-weight: 700; }
+/* The switch to the other room, drawn like the links beside it. */
+.statusbar .tv-toggle {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  text-decoration: underline;
+  font: inherit;
+  cursor: pointer;
+}
+body.tv .statusbar .tv-toggle { color: var(--green); }
 .statusbar .spacer { flex: 1; }
 .statusbar a { color: var(--muted); }
 

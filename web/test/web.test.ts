@@ -862,6 +862,18 @@ test("a television is told from a desk, a phone, and a Fire tablet", () => {
   assert.equal(isTelevision(desk, "?tv=1"), true);
   assert.equal(isTelevision(desk, "?url=x&tv"), true);
   assert.equal(isTelevision(fireTv, "?tv=0"), false);
+  // A Silk with no touch screen is a television whatever it calls itself;
+  // a Fire tablet has one.
+  const silkDesktopMode = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Silk/126.3.1 like Chrome/126.0.6478.71 Safari/537.36";
+  assert.equal(isTelevision(silkDesktopMode, "", 0), true);
+  assert.equal(isTelevision(fireTablet, "", 5), false);
+  assert.equal(isTelevision(desk, "", 0), false);
+  // The switch in the footer, remembered, beats the browser's own account
+  // of itself; the address beats the switch.
+  assert.equal(isTelevision(desk, "", 0, "1"), true);
+  assert.equal(isTelevision(fireTv, "", 0, "0"), false);
+  assert.equal(isTelevision(fireTv, "?tv=1", 0, "0"), true);
+  assert.equal(isTelevision(fireTv, "", 0, ""), true);
 
   assert.equal(pageSize(true) < pageSize(false), true);
 });
