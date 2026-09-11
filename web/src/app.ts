@@ -145,6 +145,10 @@ export function start(): void {
     accountProviders: need<HTMLDivElement>("account-providers"),
     accountPanel: need<HTMLElement>("account-panel"),
     accountElsewhere: need<HTMLParagraphElement>("account-elsewhere"),
+    welcome: need<HTMLElement>("welcome"),
+    welcomeCreate: need<HTMLButtonElement>("welcome-create"),
+    welcomeBrowse: need<HTMLButtonElement>("welcome-browse"),
+    welcomeHide: need<HTMLButtonElement>("welcome-hide"),
     accountSignOut: need<HTMLButtonElement>("account-signout"),
     accountNote: need<HTMLParagraphElement>("account-note"),
     adminPanel: need<HTMLElement>("admin-panel"),
@@ -3415,6 +3419,26 @@ export function start(): void {
   let creating = false;
   /** The signed-in account, so the directory knows whose stream is whose. */
   let meId = "";
+  /** Whether this nixamp keeps accounts at all: nixamp.com does, a laptop does not. */
+  let keepsAccounts = false;
+
+  // --- the welcome ------------------------------------------------------
+  //
+  // The pitch, for somebody who has never seen this before. Only where
+  // accounts live, only signed out, and only until they hide it: on your own
+  // server you already know what this is, and once you have an account so do
+  // you. Remembered per device, because the server has nobody to remember it
+  // for.
+  const WELCOME_HIDDEN = "nixamp.welcome";
+  const showWelcome = (): void => {
+    let hiddenByThem = false;
+    try {
+      hiddenByThem = localStorage.getItem(WELCOME_HIDDEN) === "hidden";
+    } catch {
+      // A private window may refuse storage; then it shows every time.
+    }
+    dom.welcome.hidden = !keepsAccounts || meId !== "" || hiddenByThem;
+  };
 
   const showAccount = (email: string | null): void => {
     const signedIn = email !== null;
@@ -3443,6 +3467,7 @@ export function start(): void {
     dom.accountSubmit.textContent = creating ? "Create account" : "Sign in";
     dom.accountToggle.textContent = creating ? "I have one" : "Create one";
     dom.accountPassword.autocomplete = creating ? "new-password" : "current-password";
+    showWelcome();
   };
 
   /**
@@ -3455,7 +3480,7 @@ export function start(): void {
    */
   const showProviders = async (): Promise<void> => {
     let offered: { id: string; name: string }[] = [];
-    let keepsAccounts = false;
+    keepsAccounts = false;
     try {
       const answer = await fetch("/api/v1/auth/providers");
       if (answer.ok) {
@@ -3474,6 +3499,7 @@ export function start(): void {
     // nixamp.com, so that is where the panel points instead.
     dom.accountPanel.hidden = !keepsAccounts;
     dom.accountElsewhere.hidden = keepsAccounts;
+    showWelcome();
     for (const provider of offered) {
       const link = document.createElement("a");
       link.className = "button";
@@ -3524,6 +3550,27 @@ export function start(): void {
   dom.accountToggle.addEventListener("click", () => {
     creating = !creating;
     showAccount(null);
+  });
+
+  // The welcome's buttons lead into the page rather than away from it: the
+  // form below, already switched to creating, and the directory.
+  dom.welcomeCreate.addEventListener("click", () => {
+    creating = true;
+    showAccount(null);
+    dom.accountPanel.scrollIntoView({ behavior: "smooth", block: "center" });
+    dom.accountEmail.focus({ preventScroll: true });
+  });
+  dom.welcomeBrowse.addEventListener("click", () => {
+    if (dom.directory.hidden) dom.browse.click();
+    else dom.directory.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
+  dom.welcomeHide.addEventListener("click", () => {
+    try {
+      localStorage.setItem(WELCOME_HIDDEN, "hidden");
+    } catch {
+      // Then it comes back next visit, which is the most it can do.
+    }
+    dom.welcome.hidden = true;
   });
 
   dom.accountForm.addEventListener("submit", (event) => {

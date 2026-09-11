@@ -236,6 +236,24 @@ test("the shell links the manifest, the icons and the theme colour", () => {
 });
 
 
+test("the shell says what nixamp is, and asks a stranger to sign up", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  // The title is what a search result and a link preview show. It has to say
+  // what the thing is, and it must not dare anybody to send a takedown.
+  assert.match(html, /<title>nixamp: open source live streaming from your own machine<\/title>/);
+  assert.doesNotMatch(html, /DMCA/);
+  // The pitch is in the shell itself, hidden until app.ts decides, so a
+  // crawler reads it without running anything.
+  assert.match(html, /id="welcome"[^>]*hidden/);
+  assert.match(html, /id="welcome-create"/);
+  assert.match(html, /id="welcome-browse"/);
+  assert.match(html, /id="welcome-hide"/);
+  assert.match(html, /curl -fsSL https:\/\/nixamp\.com\/install\.sh \| sh/);
+  // And app.ts only ever shows it where accounts live.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  assert.match(app, /dom\.welcome\.hidden = !keepsAccounts \|\| meId !== ""/);
+});
+
 test("the service worker can receive a push and act on a click", () => {
   const source = serviceWorkerSource(["/assets/app-abc123.js"], "build-9");
 

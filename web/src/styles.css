@@ -60,6 +60,49 @@ body {
   gap: 10px;
 }
 
+/* ---- the welcome ------------------------------------------------------- */
+
+/* The pitch. Bigger type than anything else on the page, once, because it is
+   the only panel a stranger reads before deciding whether to stay. */
+.welcome-title {
+  margin: 4px 0 8px;
+  font-size: 22px;
+  line-height: 1.25;
+  color: var(--green);
+  font-weight: 600;
+}
+.welcome-lead { margin: 0 0 14px; max-width: 70ch; color: var(--fg); }
+.welcome-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.welcome-grid h2 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--green-dim);
+}
+.welcome-grid p { margin: 0; color: var(--muted); font-size: 13px; }
+.welcome-grid code, .welcome-install { color: var(--accent); }
+.welcome-actions { gap: 10px; }
+.welcome-install {
+  font-size: 12px;
+  padding: 6px 10px;
+  border: 1px dashed var(--edge);
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+/* A stranger's first button is the same shape as every other, but green. */
+.welcome .button.primary { color: var(--green); border-color: var(--green-dim); }
+
+@media (max-width: 720px) {
+  .welcome-grid { grid-template-columns: 1fr; }
+  .welcome-title { font-size: 19px; }
+}
+
 /* ---- header ------------------------------------------------------------ */
 
 .bar {
