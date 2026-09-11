@@ -696,9 +696,16 @@ test("a pasted link is played by the server you are on, and a whole one can be k
   assert.ok(html.includes('id="link-form"') && html.includes('id="link-url"'));
   assert.ok(html.includes('id="download-now"'));
   const body = app.slice(app.indexOf("async function playLink"), app.indexOf("dom.linkForm.addEventListener"));
-  // Not connected is said, not silently nothing.
-  assert.match(body, /Connect to a server first/);
+  // A link plays here first -- a site's player in a frame, or a file in the
+  // page's own -- and only Make public asks the server, which is for whoever
+  // administers it. Not connected, and not allowed, are said, not silently nothing.
+  assert.match(body, /localPlayback\(url, wantsHls\(\)\)/);
+  assert.match(body, /dom\.embedFrame\.src = local\.src/);
+  assert.match(body, /if \(!isAdmin\(\)\) \{/);
+  assert.match(body, /Connect to a server you administer/);
   assert.match(body, /\/api\/links\/play/);
+  assert.match(body, /\/keep`\)/);
+  assert.ok(html.includes('id="make-public"') && html.includes('id="embed-frame"'));
   // The answer is watched as a channel, remembering where it came from.
   assert.match(body, /watchChannel\(/);
   assert.match(body, /download: body\.download === true/);
@@ -886,4 +893,39 @@ test("a page is a window that is pulled back into range", () => {
   assert.deepEqual(pageWindow(80, 9, 25), { page: 3, from: 75, to: 80, pages: 4 });
   assert.deepEqual(pageWindow(80, -2, 25), { page: 0, from: 0, to: 25, pages: 4 });
   assert.deepEqual(pageWindow(25, 1, 25), { page: 0, from: 0, to: 25, pages: 1 });
+});
+import { localPlayback } from "../src/links.ts";
+
+test("a pasted link plays here when it can: YouTube, Vimeo and SoundCloud in a frame, a file in the player", () => {
+  const yt = localPlayback("https://www.youtube.com/watch?v=i5GTwBTCQJI&t=42");
+  assert.equal(yt?.kind, "embed");
+  assert.equal(yt?.kind === "embed" && yt.site, "youtube");
+  assert.equal(yt?.kind === "embed" && yt.src, "https://www.youtube-nocookie.com/embed/i5GTwBTCQJI?autoplay=1&playsinline=1&rel=0&start=42");
+  for (const spelled of ["https://youtu.be/i5GTwBTCQJI", "https://m.youtube.com/watch?v=i5GTwBTCQJI", "https://www.youtube.com/shorts/i5GTwBTCQJI", "https://www.youtube.com/live/i5GTwBTCQJI?feature=share"]) {
+    const one = localPlayback(spelled);
+    assert.equal(one?.kind === "embed" && one.src.includes("/embed/i5GTwBTCQJI?"), true, spelled);
+  }
+  // A YouTube address without a video in it is not a video.
+  assert.equal(localPlayback("https://www.youtube.com/"), null);
+  assert.equal(localPlayback("https://www.youtube.com/watch?v=short"), null);
+
+  const vimeo = localPlayback("https://vimeo.com/76979871");
+  assert.equal(vimeo?.kind === "embed" && vimeo.src, "https://player.vimeo.com/video/76979871?autoplay=1&playsinline=1");
+  const sc = localPlayback("https://soundcloud.com/forss/flickermood");
+  assert.equal(sc?.kind === "embed" && sc.site, "soundcloud");
+  assert.ok(sc?.kind === "embed" && sc.src.startsWith("https://w.soundcloud.com/player/?url=https%3A%2F%2Fsoundcloud.com%2Fforss%2Fflickermood"));
+  assert.equal(localPlayback("https://soundcloud.com/forss"), null, "a profile is not a track");
+
+  // A file plays in the page's own player, told apart by its ending.
+  assert.deepEqual(localPlayback("https://x.example/ep/01.mp3?token=1"), { kind: "direct", url: "https://x.example/ep/01.mp3?token=1", video: false, label: "01.mp3" });
+  const film = localPlayback("https://x.example/film.mp4");
+  assert.equal(film?.kind === "direct" && film.video, true);
+  // A playlist of segments only where the browser plays those itself.
+  assert.equal(localPlayback("https://x.example/live.m3u8"), null);
+  assert.equal(localPlayback("https://x.example/live.m3u8", true)?.kind, "direct");
+
+  // Anything else -- a podcast's page, a TikTok live -- is a server's job.
+  assert.equal(localPlayback("https://www.tiktok.com/@a/live"), null);
+  assert.equal(localPlayback("not a link"), null);
+  assert.equal(localPlayback("javascript:alert(1)"), null);
 });

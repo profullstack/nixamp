@@ -125,14 +125,13 @@ test("the paths that need an administrator, and the ones that do not", () => {
   // started on demand, is administering; picking something to play is not.
   assert.equal(needsAdmin("/api/catalogs/k/entries/e/live", "POST"), true);
   assert.equal(needsAdmin("/api/catalogs/k/entries/e/play", "POST"), false);
+  // Having the server fetch a link is a decoder on somebody else's machine.
+  assert.equal(needsAdmin("/api/links/play", "POST"), true);
+  assert.equal(needsAdmin("/api/links/download", "GET"), true);
   assert.equal(needsAdmin("/api/channels/cat-e/keep", "POST"), true);
   assert.equal(needsAdmin("/api/channels/cat-e", "GET"), false);
-  // Pasting a link to play, or keeping what it points at, is what the link
-  // is for: the server does the fetching, the person gets the file.
-  assert.equal(needsAdmin("/api/links/play", "POST"), false);
   // Asking what a name is reveals nothing about this server.
   assert.equal(needsAdmin("/api/enrich", "GET"), false);
-  assert.equal(needsAdmin("/api/links/download", "GET"), false);
 
   // Listening is not administering.
   assert.equal(needsAdmin("/api/state"), false);

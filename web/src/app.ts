@@ -20,6 +20,7 @@ import {
 import { bandEdges, bands, decay, drawSpectrum, holdPeaks } from "./spectrum.ts";
 import { fixtureState, scoreLine } from "./score.ts";
 import { isTelevision, pageSize, pageWindow, TV_KEY } from "./tv.ts";
+import { localPlayback } from "./links.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
 
@@ -101,6 +102,9 @@ export function start(): void {
     metaBlurb: need<HTMLParagraphElement>("meta-blurb"),
     liveLine: need<HTMLElement>("live-line"),
     downloadNow: need<HTMLButtonElement>("download-now"),
+    makePublic: need<HTMLButtonElement>("make-public"),
+    embed: need<HTMLElement>("embed"),
+    embedFrame: need<HTMLIFrameElement>("embed-frame"),
     linkForm: need<HTMLFormElement>("link-form"),
     linkUrl: need<HTMLInputElement>("link-url"),
     goLiveNow: need<HTMLButtonElement>("go-live-now"),
@@ -310,7 +314,7 @@ export function start(): void {
    * catalog, the server's own live stream.
    */
   let nowMeta: {
-    kind: "file" | "vod" | "channel" | "live";
+    kind: "file" | "vod" | "channel" | "live" | "link";
     catalog?: { id: string; name: string };
     entry?: { id: string; title: string; group: string; logo?: string; live: boolean };
     /** A pasted link, when that is what is playing: where it came from, and whether it can be kept. */
@@ -318,6 +322,18 @@ export function start(): void {
   } | null = null;
   /** The last answer to "what is on", so the meta line can say who is watching. */
   let lastAir: OnAir | null = null;
+  /**
+   * A pasted link playing here, in this browser: by its site's own player
+   * in a frame, or by the page's own player from a file. Not a channel and
+   * not a track -- and the thing Make public sends to the server.
+   */
+  let localLink: { url: string; label: string; kind: "embed" | "direct" } | null = null;
+
+  /** The site's player, gone: the picture is the page's own again. */
+  function clearEmbed(): void {
+    if (!dom.embed.hidden) dom.embedFrame.src = "about:blank";
+    dom.embed.hidden = true;
+  }
   /**
    * What nichedb says the thing playing is: a poster and a year for a film, a
    * logo and a country for a channel, a rating, a synopsis. Asked of the
@@ -612,12 +628,14 @@ export function start(): void {
     // On a channel, the channel: it is not in the playlist, and naming the
     // server's own track over CNN said the wrong thing was playing.
     if (channelOn) return channelOn.name;
+    if (localLink) return localLink.label;
     const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
     return track ? displayName(track) : "Nothing loaded.";
   };
 
   const currentAlbum = (): string => {
     if (channelOn) return "live on this server";
+    if (localLink) return "playing here, in this browser";
     if (nowMeta?.kind === "live" && mode === "remote") return `live on ${serverName || "this server"}`;
     const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
     return track?.album || "—";
@@ -765,6 +783,9 @@ export function start(): void {
   }
 
   async function halt(): Promise<void> {
+    // A link playing here is stopped here, whatever the server is doing.
+    clearEmbed();
+    localLink = null;
     if (remoteDrives()) {
       await remote.send({ type: "stop" });
       return;
@@ -974,6 +995,8 @@ export function start(): void {
     // Keeping it is for a pasted link that is a whole file somewhere: the
     // server fetches it and this device ends up with it. A live has no whole.
     dom.downloadNow.hidden = !(channelOn && nowMeta?.link?.download);
+    // Offered over a link playing here, to whoever administers the server.
+    dom.makePublic.hidden = !(localLink && isAdmin());
     dom.album.textContent = currentAlbum();
 
     const at2 = position();
@@ -1379,6 +1402,10 @@ export function start(): void {
     // The button goes with the picture. Over a song there is nothing to make
     // full screen, and a control that can only do nothing is worse than none.
     dom.fullscreen.hidden = !on;
+    // The page's player has something, so a site's player in a frame is
+    // over. A link played here sets itself up after this call.
+    clearEmbed();
+    localLink = null;
   }
 
   function updateMediaSession(): void {
@@ -1457,16 +1484,68 @@ export function start(): void {
   dom.playPause.addEventListener("click", () => void toggle());
 
   /**
-   * Play a pasted link. The server you are connected to works out where the
-   * media is and plays it as a channel of its own; this page only asks.
+   * Play a pasted link, here.
+   *
+   * YouTube, Vimeo and SoundCloud have players made to be put in a page, and
+   * this browser is the viewer's own, which those sites serve where they
+   * refuse a server's datacenter address with "sign in to confirm you're not
+   * a bot". A link straight to a file plays in the page's own player. The
+   * server is asked only to make a link public, which is administering it.
    */
   async function playLink(url: string): Promise<void> {
-    if (mode !== "remote") {
-      note = "Connect to a server first: it fetches the link and plays it to you.";
+    const local = localPlayback(url, wantsHls());
+    if (!local) {
+      // Nothing this browser plays on its own: the server would have to
+      // fetch it, and that is for whoever administers it to ask.
+      if (!isAdmin()) {
+        note = "That link would need a server to fetch it, which only whoever administers the server may ask. "
+          + "YouTube, Vimeo, SoundCloud and links straight to a file play here.";
+        draw();
+        return;
+      }
+      await makePublic(url);
+      return;
+    }
+    // One thing plays: the page's own player is done with whatever it had.
+    // The server is not told to stop -- a room listening to it is not ours
+    // to silence because we opened a video.
+    channelOn = null;
+    player.stop();
+    if (local.kind === "embed") {
+      nowMeta = { kind: "link", link: { url, extractor: local.site, download: false, live: false, video: true } };
+      showVideo(false);
+      dom.embedFrame.src = local.src;
+      dom.embed.hidden = false;
+      localLink = { url, label: local.label, kind: "embed" };
+      note = `Playing ${local.label} here, in this browser.`;
       draw();
       return;
     }
-    note = `Reading ${url}…`;
+    nowMeta = { kind: "link", link: { url, extractor: "direct", download: false, live: false, video: local.video } };
+    await whileLoading(() => player.load({
+      title: local.label, artist: "", album: "", duration: 0, url: local.url, video: local.video, objectUrl: false,
+    }, true));
+    showVideo(local.video);
+    localLink = { url, label: local.label, kind: "direct" };
+    note = `Playing ${local.label} here, in this browser.`;
+    draw();
+  }
+
+  /**
+   * A link, on the air for everybody: the server fetches it and carries it
+   * as a channel, kept -- up with nobody watching, remembered across a
+   * restart, listed with a phone code. Administering, so only offered to
+   * whoever may; and asked of the server once here, so a site that refuses
+   * the server is an answer on this page rather than a channel that dies.
+   */
+  async function makePublic(url: string): Promise<void> {
+    if (mode !== "remote") {
+      note = "Connect to a server you administer to put a link on the air.";
+      draw();
+      return;
+    }
+    note = `Asking ${serverName || "the server"} to fetch ${url}…`;
+    draw();
     await whileLoading(async () => {
       let answer: Response;
       let body: {
@@ -1488,6 +1567,11 @@ export function start(): void {
         note = body.error ?? "that link would not play.";
         return;
       }
+      // Kept: up with nobody watching, remembered, and listed with a code.
+      // On the air either way if this fails; it just would not outlive us.
+      try {
+        await fetch(remote.url(`/api/channels/${encodeURIComponent(body.channel)}/keep`), { method: "POST" });
+      } catch { /* on the air, unkept */ }
       await watchChannel({ id: body.channel, name: body.name || url, video: body.video !== false }, true, {
         kind: "channel",
         link: {
@@ -1507,6 +1591,10 @@ export function start(): void {
     const url = dom.linkUrl.value.trim();
     if (url === "") return;
     void playLink(url);
+  });
+
+  dom.makePublic.addEventListener("click", () => {
+    if (localLink) void makePublic(localLink.url);
   });
 
   dom.downloadNow.addEventListener("click", () => {

@@ -97,8 +97,15 @@ export function detectTools(): Tools {
   // yt-dlp is not an ffmpeg, so mise's ffmpeg tree is not where it lives;
   // the installer puts it beside nixamp, and pip puts it in ~/.local/bin too.
   // Asked with its own spelling: ffmpeg answers -version, yt-dlp only --version.
-  const ytdlp = [["yt-dlp"], [join(homedir(), ".local", "bin", "yt-dlp")], ["/usr/local/bin/yt-dlp"], ["/usr/bin/yt-dlp"], ["/opt/homebrew/bin/yt-dlp"]]
+  const found = [["yt-dlp"], [join(homedir(), ".local", "bin", "yt-dlp")], ["/usr/local/bin/yt-dlp"], ["/usr/bin/yt-dlp"], ["/opt/homebrew/bin/yt-dlp"]]
     .find((argv) => works(argv, "--version")) ?? null;
+  // yt-dlp wants a JavaScript runtime for YouTube now, and looks only for
+  // deno unless told otherwise; without one it warns and some formats are
+  // missing. This is a Node program, so the Node it is running on is handed
+  // over. Only when yt-dlp knows the flag: an older one refuses it.
+  const runtime = process.versions.bun ? "bun" : "node";
+  const withRuntime = found ? [...found, "--js-runtimes", `${runtime}:${process.execPath}`] : null;
+  const ytdlp = withRuntime && works(withRuntime, "--version") ? withRuntime : found;
   return {
     ffmpeg: ffmpeg ?? ["ffmpeg"],
     ffprobe: ffprobe ?? ["ffprobe"],

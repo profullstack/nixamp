@@ -2919,6 +2919,21 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
       links.set(link, resolved);
       if (!options.channels.has(channelId)) {
+        // Asked of the site first, once, with the headers yt-dlp said to
+        // send. A media address that answers nothing is a site refusing
+        // this server -- YouTube does, for many videos, to a datacenter --
+        // and the honest answer is that, now, rather than a channel that
+        // starts, gets 403 five times, and quietly stops.
+        const reachable = await codecsOf(
+          { ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, resolved.media, inputArgsFor(resolved.headers),
+        );
+        if (reachable.video === "" && reachable.audio === "") {
+          links.delete(link);
+          json(response, 422, {
+            error: `${resolved.extractor || "the site"} would not hand this server the media (often a sign-in or a bot check on a datacenter address). It plays in a browser instead.`,
+          });
+          return;
+        }
         const started = await pullChannel(
           options.channels, options.ffprobe ?? ["ffprobe"], channelId, resolved.title, resolved.media,
           inputArgsFor(resolved.headers), resolved.audio,

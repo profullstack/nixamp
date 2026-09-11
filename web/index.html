@@ -30,6 +30,13 @@
 
       <section class="panel player-only" data-title="Now Playing">
         <video id="video" playsinline hidden></video>
+        <!-- A pasted YouTube, Vimeo or SoundCloud link, played by that site's
+             own player, here in this browser: the viewer's own address and
+             session, which the site will serve when it refuses a server's. -->
+        <div id="embed" class="embed" hidden>
+          <iframe id="embed-frame" title="The link, played" allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                  allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+        </div>
         <audio id="audio"></audio>
         <div id="title-line" class="track-title">Nothing loaded.</div>
         <div id="album-line" class="track-sub">—</div>
@@ -56,11 +63,18 @@
                   title="Full screen" aria-label="Full screen">⛶</button>
           <button id="download-now" type="button" class="ghost" hidden
                   title="Download now: the server fetches the whole thing with yt-dlp and hands it to this device">⤓ Download</button>
+          <!-- For whoever administers the connected server: have it fetch the
+               link that is playing here and put it on the air for everybody,
+               listed, with a phone code. -->
+          <button id="make-public" type="button" class="golive" hidden
+                  title="Make public: the server fetches this link and puts it on the air for everyone, listed in the directory">● MAKE PUBLIC</button>
         </div>
-        <!-- Any link, played. The server you are connected to works out where
-             the media is (yt-dlp) and plays it to you as a channel of its own. -->
+        <!-- Any link, played here: YouTube, Vimeo and SoundCloud by their own
+             players in a frame, a file by the page's own. Whoever administers
+             the connected server can then make it public: the server fetches
+             it (yt-dlp) and carries it as a channel of its own. -->
         <form id="link-form" class="picker link-form">
-          <input id="link-url" type="url" inputmode="url" placeholder="Paste a link: YouTube, a podcast, SoundCloud, a live…"
+          <input id="link-url" type="url" inputmode="url" placeholder="Paste a link: YouTube, Vimeo, SoundCloud, a file…"
                  aria-label="A link to play" />
           <button type="submit" class="button">Play link</button>
         </form>
