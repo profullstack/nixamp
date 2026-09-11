@@ -358,6 +358,10 @@ export function allowedForListening(path: string): boolean {
   // answers: a joiner is told the number to call and the code to key, and
   // the code is in the public directory anyway.
   if (path === "/api/live/start" || path === "/api/live/stop") return false;
+  // Having the server fetch a link is a decoder and a download on somebody
+  // else's machine: the control link's to ask for, not the listen link's. A
+  // viewer's link plays in their own browser.
+  if (path === "/api/links" || path.startsWith("/api/links/")) return false;
   return true;
 }
 

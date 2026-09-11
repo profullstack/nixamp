@@ -1074,3 +1074,19 @@ body.tv .icon { min-width: 2.4em; height: 2.4em; }
 body.tv .directory-list li + li { margin-top: 0.6rem; }
 body.tv .server-lives li > .button { font-size: 0.9em; padding: 6px 14px; }
 body.tv input, body.tv .filter { font-size: 1em; padding: 8px 10px; }
+
+/* ---- a link, played by its own site's player ---------------------------- */
+
+/* Where the picture goes, the same size as the picture: 16:9, no taller
+   than the video element is allowed to be, so the controls stay in reach. */
+.embed {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 46vh;
+  background: #000;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.embed iframe { width: 100%; height: 100%; border: 0; display: block; }

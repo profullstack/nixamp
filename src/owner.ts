@@ -122,5 +122,10 @@ export function needsAdmin(path: string, method = "GET"): boolean {
   // Adding, refreshing or removing a catalog is administering; browsing one,
   // and picking something in it to play, is what the link is for.
   if (path.startsWith("/api/catalogs") && method !== "GET" && !path.endsWith("/play")) return true;
+  // Having the server fetch a link -- to put it on the air, or to download
+  // it -- is administering: it is a decoder and a download on somebody
+  // else's machine, and a listen link used to be able to start as many as
+  // it liked. A link a viewer wants to watch plays in their own browser.
+  if (path.startsWith("/api/links")) return true;
   return false;
 }
