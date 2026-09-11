@@ -929,3 +929,20 @@ test("a pasted link plays here when it can: YouTube, Vimeo and SoundCloud in a f
   assert.equal(localPlayback("not a link"), null);
   assert.equal(localPlayback("javascript:alert(1)"), null);
 });
+
+test("the directory keeps asking while it is on screen, and redraws only on news", () => {
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // A channel put on the air is told to nixamp.com at once; the page that
+  // lists it asked exactly once, on opening, so an admin who went live and
+  // looked at the directory did not see it there until a reload.
+  assert.match(app, /const DIRECTORY_EVERY_MS = 10_000/);
+  const load = app.slice(app.indexOf("const loadDirectory = async"), app.indexOf("// /directory is a page"));
+  assert.match(load, /setInterval\(\(\) => \{\s*if \(!dom\.directory\.hidden && document\.visibilityState === "visible"\) void loadDirectory\(true\);/);
+  // Quietly: no "Looking for…" and no emptied list on a poll that changes nothing.
+  assert.match(load, /if \(quiet && seen === directorySeen\) return;/);
+  assert.match(load, /if \(!quiet\) \{\s*dom\.directoryNote\.textContent = "Looking for live streams…";/);
+  // The clock fields every heartbeat moves are not news.
+  assert.match(load, /updatedAt: _u, startedAt: _s/);
+  // Coming back to the tab asks now.
+  assert.match(app, /visibilitychange[^]*?if \(document\.visibilityState === "visible" && !dom\.directory\.hidden\) void loadDirectory\(true\)/);
+});

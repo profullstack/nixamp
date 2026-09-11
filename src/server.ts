@@ -3123,7 +3123,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         const stopped = channels.stop(id);
         // Taken off on purpose is forgotten on purpose: it must not come back
         // at the next restart.
-        if (stopped) options.rememberChannels?.(rememberedNow(channels));
+        if (stopped) {
+          options.rememberChannels?.(rememberedNow(channels));
+          // Off the air is news too: told now, so the directory drops it
+          // rather than listing it until the next heartbeat.
+          void options.live?.announce?.();
+        }
         json(response, stopped ? 200 : 404, { ok: stopped });
         return;
       }
