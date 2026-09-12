@@ -230,6 +230,15 @@ body {
 .panel.dragging { opacity: 0.45; }
 .panel.drop-before { box-shadow: 0 -4px 0 0 var(--accent); }
 .panel.drop-after { box-shadow: 0 4px 0 0 var(--accent); }
+/* The trollbox: a scrolling column of lines, newest at the bottom. */
+.trollbox-list { list-style: none; margin: 0 0 8px; padding: 0; max-height: 320px; overflow-y: auto; font-size: 13px; }
+.trollbox-list li { display: flex; gap: 6px; align-items: baseline; padding: 2px 0; border-bottom: 1px dotted var(--edge); }
+.trollbox-list .when { color: var(--muted); font-size: 11px; flex: 0 0 auto; }
+.trollbox-list .who { color: var(--accent); flex: 0 0 auto; }
+.trollbox-list .who::after { content: ":"; }
+.trollbox-list .line { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.trollbox-list .icon-btn { font-size: 11px; padding: 0 4px; }
+
 /* The Panels list: one switch per panel, on or off, and what state it is in. */
 .panels-list li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
 .panels-list li label { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; cursor: pointer; }

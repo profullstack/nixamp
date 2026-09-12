@@ -1202,3 +1202,32 @@ test("every panel has a grip, a shade and a close, snaps where it is dropped, an
   assert.match(body, /localStorage\.getItem\(PANELS_KEY\)/);
   assert.match(body, /localStorage\.setItem\(PANELS_KEY, serializeLayout\(layout\)\)/);
 });
+
+test("the trollbox follows the live you joined: one room per server and channel, read by anybody, written on nixamp.com", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  for (const id of ["trollbox-panel", "trollbox-note", "trollbox-list", "trollbox-form", "trollbox-input"]) {
+    assert.ok(html.includes(`id="${id}"`), id);
+  }
+  const body = app.slice(app.indexOf("---- the trollbox: the chat for the live you have joined"), app.indexOf("function playableNow"));
+  // The room is the server's origin (never a key) and the channel joined, or "live" for the server's own stream.
+  assert.match(body, /const \{ base \} = splitShareLink\(shareableLink\(\)\)/);
+  assert.match(body, /server = new URL\(base\)\.origin/);
+  assert.match(body, /const channel = channelOn \? channelOn\.id : nowMeta\?\.kind === "live" \? "live" : ""/);
+  // At nixamp.com, relative there so the sign-in cookie goes; absolute from anybody's own server.
+  assert.match(body, /\/\(\^\|\\\.\)nixamp\\\.com\$\/\.test\(globalThis\.location\.hostname\) \? "" : "https:\/\/nixamp\.com"/);
+  assert.match(body, /\/api\/v1\/trollbox\?/);
+  // Polled while on screen, appended by id, capped, and drawn with textContent only.
+  assert.match(body, /const TROLLBOX_EVERY_MS = 3000/);
+  assert.match(body, /trollboxSeen\.has\(one\.id\)/);
+  assert.match(body, /TROLLBOX_KEEP = 200/);
+  assert.match(body, /who\.textContent = message\.handle/);
+  assert.match(body, /body\.textContent = message\.body/);
+  assert.doesNotMatch(body, /innerHTML/);
+  // A line of your own only when nixamp.com says who you are; otherwise the panel says how.
+  assert.match(body, /dom\.trollboxForm\.hidden = you === ""/);
+  assert.match(body, /open this stream on nixamp\.com and sign in/);
+  // Follows the live from draw(), and is quiet when nothing is joined.
+  assert.match(app, /drawTrollbox\(\);/);
+  assert.match(body, /dom\.trollboxPanel\.hidden = room === null/);
+});

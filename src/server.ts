@@ -83,6 +83,7 @@ import { LiveEvents, eventStructuredData, isTicketed, type LiveEvent } from "./l
 import { Tickets, needsTicket, ticketFrom, ticketsFromEnv } from "./tickets.ts";
 import { Layouts } from "./layouts.ts";
 import { Rooms } from "./rooms.ts";
+import { Trollbox, TrollboxError, fallbackHandle, roomFor } from "./trollbox.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
   applyRemoteConfig,
@@ -1581,6 +1582,8 @@ export interface HandlerOptions {
   layouts?: Layouts;
   /** Persistent participation state that must not be coupled to live audio. */
   rooms?: Rooms;
+  /** The trollbox: a chat per live room, kept at nixamp.com. */
+  trollbox?: Trollbox;
   /** Tickets: a paid pass to one event's room. Absent means every show is free. */
   tickets?: Tickets;
   /**
@@ -2526,6 +2529,88 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // Separate from the address on purpose. The address is a credential and
     // a way to reach somebody; publishing it in a directory listing or an
     // invite would be publishing what they log in with.
+    /*
+     * The trollbox: the chat for one live room, keyed by the server and
+     * the channel so every viewer of a stream is in the same box whichever
+     * page they came from. Reading is open; a line needs a nixamp.com
+     * account and is signed with its public handle; taking one down is the
+     * author's, or the listing owner's.
+     */
+    if ((path === "/api/v1/trollbox" || path.startsWith("/api/v1/trollbox/")) && options.trollbox && options.accounts) {
+      const trollbox = options.trollbox;
+      const child = path.startsWith("/api/v1/trollbox/") ? path.slice("/api/v1/trollbox/".length) : "";
+      try {
+        if (request.method === "GET" && child === "") {
+          const where = roomFor(url.searchParams.get("server"), url.searchParams.get("channel"));
+          if (!where) {
+            json(response, 400, { error: "a room is a server address and a channel" });
+            return;
+          }
+          const who = await options.accounts.whoIs(tokenFrom(request.headers));
+          const lines = await trollbox.messages(where.room, url.searchParams.get("after") ?? undefined);
+          json(response, 200, {
+            room: where.room,
+            you: who ? ((await options.handles?.of(who.id)) || fallbackHandle(who.id)) : "",
+            messages: lines.map((one) => ({
+              id: one.id, handle: one.handle, body: one.body, createdAt: one.createdAt, mine: who !== null && one.authorId === who.id,
+            })),
+          });
+          return;
+        }
+        if (request.method === "POST" && child === "") {
+          const who = await options.accounts.whoIs(tokenFrom(request.headers));
+          if (who === null) {
+            json(response, 401, { error: "sign in to nixamp.com to chat" });
+            return;
+          }
+          let body: { server?: unknown; channel?: unknown; body?: unknown } = {};
+          try {
+            body = JSON.parse(await readBody(request)) as typeof body;
+          } catch {
+            json(response, 400, { error: "bad JSON" });
+            return;
+          }
+          const where = roomFor(body.server, body.channel);
+          if (!where) {
+            json(response, 400, { error: "a room is a server address and a channel" });
+            return;
+          }
+          const handle = (await options.handles?.of(who.id)) || fallbackHandle(who.id);
+          const line = await trollbox.post(where, who.id, handle, body.body);
+          json(response, 201, { message: { id: line.id, handle: line.handle, body: line.body, createdAt: line.createdAt, mine: true } });
+          return;
+        }
+        if (request.method === "DELETE" && child !== "") {
+          const who = await options.accounts.whoIs(tokenFrom(request.headers));
+          if (who === null) {
+            json(response, 401, { error: "sign in to nixamp.com first" });
+            return;
+          }
+          const where = roomFor(url.searchParams.get("server"), url.searchParams.get("channel"));
+          if (!where) {
+            json(response, 400, { error: "a room is a server address and a channel" });
+            return;
+          }
+          // The listing owner moderates their own server's rooms.
+          const moderator = (options.directory?.list() ?? []).some((listing) => {
+            try {
+              return listing.ownerId === who.id && new URL(listing.url).origin === where.server;
+            } catch {
+              return false;
+            }
+          });
+          const removed = await trollbox.remove(where.room, child, who.id, moderator);
+          json(response, removed ? 200 : 404, removed ? { ok: true } : { error: "not your line, or already gone" });
+          return;
+        }
+        json(response, 405, { error: "GET, POST or DELETE" });
+      } catch (error) {
+        if (error instanceof TrollboxError) json(response, error.status, { error: error.message });
+        else throw error;
+      }
+      return;
+    }
+
     if (path === "/api/v1/me/handle" && options.handles && options.accounts) {
       const handles = options.handles;
       const who = await options.accounts.whoIs(tokenFrom(request.headers));
@@ -4946,6 +5031,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const events = pool ? new LiveEvents(pool) : undefined;
   const layouts = pool ? new Layouts(pool) : undefined;
   const rooms = pool ? new Rooms(pool) : undefined;
+  const trollbox = pool ? new Trollbox(pool) : undefined;
   // Tickets need somewhere for the money to go and a key to settle it with.
   // Without a CoinPay key every event is simply a free one.
   const ticketConfig = events
@@ -5353,6 +5439,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(events ? { events } : {}),
     ...(layouts ? { layouts } : {}),
     ...(rooms ? { rooms } : {}),
+    ...(trollbox ? { trollbox } : {}),
     ...(tickets ? { tickets } : {}),
     ...(authServer ? { authServer } : {}),
     ...(parties ? { parties } : {}),
