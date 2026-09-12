@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   BACKLOG_SECONDS, BACKLOG_VIDEO, BACKLOG_VIDEO_MAX, Channels, REDIAL, cleanId, generatedId,
-  rememberChannels, rememberedChannels,
+  rememberChannels, rememberedChannels, rememberedNow,
 } from "../src/channels.ts";
 import { needsAdmin } from "../src/owner.ts";
 
@@ -613,5 +613,46 @@ test("what a channel is and where it got to are remembered, and only for kept pu
   assert.deepEqual(now[0], { id: "film", name: "A Film", source: "http://x.test/film.mp4", kind: "video", codecs, live: false, position: 100, startedBy: "member-7" });
   assert.equal(set.info("nope"), undefined);
   assert.deepEqual(now[1], { id: "tv", name: "TV", source: "http://x.test/tv.m3u8", kind: "video", live: true });
+  set.stopAll();
+});
+
+test("a channel playing a list moves to the next entry when one ends, and starts over at the last", async () => {
+  // "ffmpeg" here prints a byte and exits: an entry that played to its end.
+  const set = new Channels({ ffmpeg: ["sh", "-c", "printf x"] });
+  const list = ["http://x.test/ep1.mp3", "http://x.test/ep2.mp3", "http://x.test/ep3.mp3"];
+  const channel = set.pull("show", "A Show", list[0] as string, [], "audio", true, 30_000, [], "", { live: true, position: 0, playlist: list });
+  assert.ok(channel);
+  assert.deepEqual(channel.info.playlist, list);
+  assert.equal(channel.info.playlistAt, 0);
+  // Entries end and the next is dialled at once, not after the redial wait.
+  const seen = new Set<number>();
+  for (let i = 0; i < 40 && seen.size < 3; i++) {
+    seen.add(channel.info.playlistAt ?? -1);
+    await wait(25);
+  }
+  assert.deepEqual([...seen].sort(), [0, 1, 2]);
+  // An entry that ended is not a source that dropped: no redial counted, no error kept.
+  assert.equal(channel.info.redials ?? 0, 0);
+  assert.equal(channel.info.error, undefined);
+  set.stopAll();
+});
+
+test("a list is written down with where it had got to, and read back", () => {
+  const dir = mkdtempSync(join(tmpdir(), "nixamp-list-"));
+  rememberChannels(dir, 4321, [
+    { id: "show", name: "A Show", source: "http://x.test/ep2.mp3", kind: "audio", live: true, playlist: ["http://x.test/ep1.mp3", "http://x.test/ep2.mp3"], playlistAt: 1 },
+    { id: "cnn", name: "CNN", source: "http://x.test/301", kind: "video" },
+  ]);
+  const back = rememberedChannels(dir, 4321);
+  assert.deepEqual(back[0]?.playlist, ["http://x.test/ep1.mp3", "http://x.test/ep2.mp3"]);
+  assert.equal(back[0]?.playlistAt, 1);
+  assert.equal(back[1]?.playlist, undefined);
+  // What a running list reports is the same shape, entry included.
+  const set = new Channels({ ffmpeg: ["true"] });
+  set.pull("show", "A Show", "http://x.test/ep1.mp3", [], "audio", true, 30_000, [], "", { live: true, position: 0, playlist: ["http://x.test/ep1.mp3", "http://x.test/ep2.mp3"] });
+  set.keep("show");
+  const now = rememberedNow(set);
+  assert.deepEqual(now[0]?.playlist, ["http://x.test/ep1.mp3", "http://x.test/ep2.mp3"]);
+  assert.equal(typeof now[0]?.playlistAt, "number");
   set.stopAll();
 });

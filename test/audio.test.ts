@@ -336,7 +336,7 @@ test("decoding is paced to real time, or the clock is a lie", () => {
   const input = source.indexOf('"-i", track.path');
   assert.ok(at > 0 && at < input, "-re must come before -i or it paces nothing");
 });
-import { codecsOf } from "../src/audio.ts";
+import { codecsOf, isCoverArt } from "../src/audio.ts";
 
 test("a probe says how long a source is, and a live one has no length", async () => {
   const say = (json: string): string[] => ["sh", "-c", `printf '%s' '${json}'`];
@@ -347,4 +347,33 @@ test("a probe says how long a source is, and a live one has no length", async ()
   assert.equal(live.duration, 0);
   // A probe that says nothing at all is nothing, not a crash.
   assert.deepEqual(await codecsOf(tools(["true"]), "x"), { video: "", audio: "", container: "" });
+});
+
+test("cover art in an audio file is not a picture, so a podcast goes on as sound", async () => {
+  const say = (json: string): string[] => ["sh", "-c", `printf '%s' '${json}'`];
+  const tools = (ffprobe: string[]) => ({ ffmpeg: [], ffprobe, play: null });
+  // What ffprobe says about an MP3 with its sleeve embedded: the JPEG is a
+  // video stream, flagged as an attached picture. Read as video, ffmpeg
+  // wrote an MP4 with no frames and the channel died after three redials.
+  const podcast = await codecsOf(tools(say(
+    '{"streams":[{"codec_type":"audio","codec_name":"mp3","disposition":{"attached_pic":0}},'
+    + '{"codec_type":"video","codec_name":"mjpeg","width":1400,"height":1400,"disposition":{"attached_pic":1}}],'
+    + '"format":{"format_name":"mp3","duration":"5584.3"}}',
+  )), "x");
+  assert.deepEqual(podcast, { video: "", audio: "mp3", container: "mp3", duration: 5584.3 });
+  // A still-image codec is the same thing from a container that does not flag it.
+  const flac = await codecsOf(tools(say(
+    '{"streams":[{"codec_type":"video","codec_name":"png"},{"codec_type":"audio","codec_name":"flac"}],"format":{"format_name":"flac","duration":"200"}}',
+  )), "x");
+  assert.equal(flac.video, "");
+  assert.equal(flac.audio, "flac");
+  // A real MJPEG picture -- a webcam -- is still a picture.
+  const cam = await codecsOf(tools(say(
+    '{"streams":[{"codec_type":"video","codec_name":"mjpeg","width":640,"height":480,"disposition":{"attached_pic":0}}],"format":{"format_name":"mjpeg","duration":"N/A"}}',
+  )), "x");
+  assert.equal(cam.video, "mjpeg");
+  assert.equal(isCoverArt({ codec_name: "h264" }), false);
+  assert.equal(isCoverArt({ codec_name: "mjpeg", disposition: { attached_pic: 1 } }), true);
+  // The probe asks for the flag, or none of this is known.
+  assert.match(readFileSync(join(import.meta.dirname, "../src/audio.ts"), "utf8"), /stream_disposition=attached_pic/);
 });

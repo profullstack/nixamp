@@ -759,10 +759,20 @@ test("a pasted link is played by the server you are on, and a whole one can be k
   // server itself; the keep after is for a server from before the word.
   assert.match(body, /JSON\.stringify\(\{ url, live: true \}\)/);
   assert.match(body, /\/keep`\)/);
-  assert.ok(html.includes('id="make-public"') && html.includes('id="embed-frame"'));
-  // Go live is offered to whoever may go live, not only the owner.
-  assert.match(app, /dom\.makePublic\.hidden = !\(localLink && canGoLive\(\)\)/);
+  assert.ok(!html.includes('id="make-public"') && html.includes('id="embed-frame"'));
+  // One Go live for a link: the one beside the box. The bar's own goes live
+  // with what the server plays, and a link playing here is not that -- it
+  // used to offer the server's track from a second button that looked the same.
+  assert.doesNotMatch(app, /dom\.makePublic/);
+  assert.match(app, /if \(localLink\) return null;/);
+  assert.match(app, /dom\.linkUrl\.value\.trim\(\) \|\| localLink\?\.url/);
   assert.ok(html.includes("● GO LIVE") && !html.includes("MAKE PUBLIC"));
+  // A server with no ffmpeg says so and is not offered; the picker goes to
+  // one that can, and Go live connects there and carries on by itself.
+  assert.match(app, /serverCarries = air\.server\.carries !== false/);
+  assert.match(app, /if \(here !== "" && serverCarries\) \{/);
+  assert.match(app, /goLiveAfter = url;/);
+  assert.match(app, /if \(canGoLive\(\)\) void makePublic\(waiting\)/);
   // Which server goes live with it: the connected one, or any in the directory.
   assert.ok(html.includes('id="link-server"'));
   // Filled at the start, not only after Browse; and a Go live button beside
