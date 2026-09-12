@@ -17,12 +17,34 @@ export interface LocalTrack {
   video: boolean;
   /** Set for picked files, so the URL can be revoked when the list is replaced. */
   objectUrl: boolean;
+  /**
+   * What the bytes are, when the URL cannot say.
+   *
+   * A picked file is a blob URL with no name and no extension on it, so
+   * `detectKind` can only answer "unknown" -- and a raw transport stream
+   * handed to a <video> as if it were an MP4 plays as nothing at all. The
+   * file's own name is the answer, read once when the list is built.
+   */
+  kind?: "mp4" | "hls" | "mpegts" | "audio";
 }
 
 const AUDIO_EXTENSIONS = new Set([
   "mp3", "flac", "ogg", "oga", "opus", "m4a", "aac",
   "wav", "wma", "aiff", "aif", "alac", "mp4", "webm", "mkv", "mov", "m4v", "ogv",
+  // Transport streams, which a browser cannot open by itself but mpegts.js
+  // can: a 1080p or 4K recording dragged into the page plays here rather than
+  // being filtered out of the list as if it were not media at all.
+  "ts", "m2ts", "mts", "m2t", "trp", "tp",
 ]);
+
+/** The extensions that mean a transport stream, which needs its own engine. */
+const TRANSPORT_EXTENSIONS = new Set(["ts", "m2ts", "mts", "m2t", "trp", "tp"]);
+
+/** Whether a picked file is a transport stream, by its name: a blob URL has none. */
+export function isTransportFile(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && TRANSPORT_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
+}
 
 export function isPlayable(name: string, type = ""): boolean {
   if (type.startsWith("audio/") || type.startsWith("video/")) return true;
@@ -52,6 +74,9 @@ export function tracksFromFiles(files: File[]): LocalTrack[] {
       url: URL.createObjectURL(file),
       video: isVideoFile(file.name, file.type),
       objectUrl: true,
+      // Taken off the name now, because the blob URL about to be made of it
+      // carries no name at all.
+      ...(isTransportFile(file.name) ? { kind: "mpegts" as const } : {}),
     }));
 }
 
@@ -246,7 +271,9 @@ export class BrowserPlayer {
     // A picked file is a blob URL with nothing to read a kind from, so the
     // flag the file itself carried decides; a remote track has a real URL and
     // the package can tell.
-    const kind = track.objectUrl ? (track.video ? "mp4" : "audio") : detectKind({ src: track.url });
+    // What it is, said by whoever knew: the list, for a picked file whose
+    // name has already been read; the address, for anything with one.
+    const kind = track.kind ?? (track.objectUrl ? (track.video ? "mp4" : "audio") : detectKind({ src: track.url }));
     const wanted = needsVideoElement(track.video, kind) ? this.elements.video : this.elements.audio;
     if (wanted !== this.active) {
       this.active.pause();

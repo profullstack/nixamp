@@ -71,10 +71,45 @@ export function splitShareLink(input: string): { base: string; key: string } {
   return { base: normalizeBase(`${url.origin}${url.pathname}`), key: decodeURIComponent(key) };
 }
 
+/**
+ * Whether this browser decodes H.265, which is the one thing about a 4K film
+ * the server cannot work out for itself.
+ *
+ * Safari, every recent iPhone and every television say yes; Chrome on a
+ * desktop mostly says nothing at all. Worth asking, because the answer is the
+ * difference between a 4K HEVC film copied straight through -- free, and at
+ * its own size -- and one re-encoded down to 1080p so that the encode keeps up
+ * with playing it.
+ */
+let hevcAnswer: boolean | null = null;
+
+export function canPlayHevc(probe?: { canPlayType(type: string): string }): boolean {
+  // Asked once. The answer cannot change while the page is open, and this is
+  // on the path of every track that loads.
+  if (!probe && hevcAnswer !== null) return hevcAnswer;
+  const element = probe ?? (typeof document === "undefined" ? null : document.createElement("video"));
+  if (!element) return false;
+  try {
+    // The spelling that matters is hvc1 in MP4, which is what the server
+    // writes; a browser answers "probably", "maybe" or "".
+    const answer = element.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"') !== "";
+    if (!probe) hevcAnswer = answer;
+    return answer;
+  } catch {
+    return false;
+  }
+}
+
 /** Where the browser fetches a track's bytes from, to play it here. */
-export function mediaUrl(base: string, index: number, kbps = 0, key = ""): string {
-  const path = kbps > 0 ? `/api/media/${index}?kbps=${Math.round(kbps)}` : `/api/media/${index}`;
-  return apiUrl(base, path, key);
+export function mediaUrl(base: string, index: number, kbps = 0, key = "", hevc = false): string {
+  const query = [
+    ...(kbps > 0 ? [`kbps=${Math.round(kbps)}`] : []),
+    // Said only when true, so a URL keeps the shape it always had for a
+    // browser that cannot take H.265 -- and so the answer is never guessed
+    // at by the server from a user agent.
+    ...(hevc ? ["hevc=1"] : []),
+  ].join("&");
+  return apiUrl(base, query ? `/api/media/${index}?${query}` : `/api/media/${index}`, key);
 }
 
 /** A snapshot off the wire is untrusted JSON; missing fields get defaults. */
@@ -220,8 +255,8 @@ export class RemoteClient {
     if (snapshot) this.handlers.onSnapshot(snapshot);
   }
 
-  media(index: number, kbps = 0): string {
-    return mediaUrl(this.base, index, kbps, this.key);
+  media(index: number, kbps = 0, hevc = canPlayHevc()): string {
+    return mediaUrl(this.base, index, kbps, this.key, hevc);
   }
 
   close(): void {

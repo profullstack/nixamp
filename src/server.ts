@@ -52,7 +52,7 @@ import { stateDir } from "./daemon.ts";
 import { readSession } from "./session.ts";
 import { Directory, ENDED_TTL_MS, parseAnnouncement, type Listing } from "./directory.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
-import { HlsPackagers, withKey } from "./hls.ts";
+import { HlsPackagers, segmentType, withKey } from "./hls.ts";
 import { DEFAULT_SITE as NICHEDB, Enricher, type EnrichKind, FIXTURE_TTL_MS } from "./enrich.ts";
 import {
   contentTypeFor, downloadArgs, fileNameFor, inputArgsFor, linkChannelId, mergeDownloadArgs, playableLink, resolveLink,
@@ -86,8 +86,8 @@ import {
   type PaywallConfig,
   paywallFromEnv,
 } from "./paywall.ts";
-import { isRemote, playsInBrowser, sourceLabel } from "./sources.ts";
-import { codecsOf, probeAsync, videoArgs, type Codecs } from "./audio.ts";
+import { isRemote, isTransportStream, playsInBrowser, sourceLabel } from "./sources.ts";
+import { codecsOf, probeAsync, transportInputArgs, videoArgs, type Codecs } from "./audio.ts";
 import {
   allowedForListening,
   elevate,
@@ -551,11 +551,21 @@ export function toRemoteTracks(tracks: Loaded[]): RemoteTrack[] {
 }
 
 /** Video containers, as opposed to the songs that are most of a library. */
-const PICTURE = new Set([".mp4", ".mkv", ".avi", ".mov", ".m4v", ".webm", ".mpg", ".mpeg", ".wmv", ".flv"]);
+const PICTURE = new Set([
+  ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".webm", ".mpg", ".mpeg", ".wmv", ".flv",
+  // Raw transport streams: a recording off a card, a receiver or an IPTV
+  // dump, which is 1080p or 4K television and was arriving as its own
+  // soundtrack because none of these names were on this list.
+  ".m2ts", ".mts", ".m2t", ".trp", ".tp",
+]);
 
 export function hasPicture(path: string): boolean {
   const dot = path.lastIndexOf(".");
-  return dot > 0 && PICTURE.has(path.slice(dot).toLowerCase());
+  if (dot > 0 && PICTURE.has(path.slice(dot).toLowerCase())) return true;
+  // A `.ts` is a transport stream or a TypeScript file, and only its first
+  // bytes know which. Asked of the file rather than of the name, and the
+  // answer is remembered, because this is asked once per track per listing.
+  return isTransportStream(path);
 }
 
 /**
@@ -1043,6 +1053,22 @@ export interface KnownSource {
 export const PROBE_TRIES = 3;
 export const PROBE_RETRY_MS = 1500;
 
+/**
+ * Whether a channel may carry H.265 as it is.
+ *
+ * A channel has one encode and many viewers, so it has to be something they
+ * can all play, and H.265 is not that: Safari and televisions decode it,
+ * Chrome on a desktop mostly does not and shows nothing rather than saying
+ * so. So an HEVC source is re-encoded by default -- to 1080p H.264, because a
+ * 4K re-encode does not keep up with playback -- and an operator whose
+ * audience is phones and televisions can say `NIXAMP_HEVC_CHANNELS=1` and
+ * have the 4K copied through untouched. A single viewer asking for a file
+ * over /api/media is a different matter: there the browser says for itself.
+ */
+export function hevcChannelsAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env["NIXAMP_HEVC_CHANNELS"] === "1";
+}
+
 export async function pullChannel(
   channels: Channels,
   ffprobe: string[],
@@ -1093,16 +1119,27 @@ export async function pullChannel(
         // from the first, the sound from the second. With one input ffmpeg
         // picks for itself, as it always did.
         ...(audio ? ["-map", "0:v:0", "-map", "1:a:0"] : []),
-        ...videoArgs(codecs),
+        ...videoArgs(codecs, 0, { allowHevc: hevcChannelsAllowed() }),
       ]
     // No picture in it, so none is invented: MP3 is the thing every browser
     // plays and the thing a listener can join halfway through.
     : ["-vn", "-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"];
+  // A transport stream is read further into before it is decoded, and given
+  // the timestamps a recording cut mid-stream does not carry. Ahead of the
+  // caller's own input arguments, which are headers for the address itself.
+  const opening = [...transportInputArgs(source, codecs.container), ...input];
   const channel = channels.pull(
-    id, name, source, encode, kind, true, undefined, input, kind === "video" ? audio : "",
+    id, name, source, encode, kind, true, undefined, opening, kind === "video" ? audio : "",
     { live, position: known.position ?? 0 },
   );
   if (channel && !assumed) channel.info.codecs = codecs;
+  // What comes out, as opposed to what went in. An H.265 source copied
+  // through stays H.265; one re-encoded arrives as H.264, and a packager
+  // told otherwise would cut fMP4 segments for a stream that did not need
+  // them.
+  if (channel && kind === "video") {
+    channel.info.emits = encode.includes("libx264") ? "h264" : codecs.video || "h264";
+  }
   return channel;
 }
 
@@ -3020,7 +3057,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         watch(request, response, "stream", entry.title);
         const codecs = await codecsOf({ ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, entry.source);
         if (codecs.video !== "") {
-          pipeFfmpeg(request, response, entry.source, options.ffmpeg ?? ["ffmpeg"], videoArgs(codecs), "video/mp4");
+          pipeFfmpeg(
+            request, response, entry.source, options.ffmpeg ?? ["ffmpeg"],
+            videoArgs(codecs, 0, { allowHevc: url.searchParams.get("hevc") === "1" }), "video/mp4",
+            transportInputArgs(entry.source, codecs.container),
+          );
         } else {
           transcode(request, response, entry.source, options.ffmpeg ?? ["ffmpeg"]);
         }
@@ -3324,7 +3365,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           return;
         }
         if (file === "index.m3u8") {
-          const playlist = await options.hls.playlist(id);
+          // A channel carrying H.265 is cut into fMP4 rather than transport
+          // segments: HLS in TS is defined for H.264 only, and Safari plays
+          // an HEVC channel packaged as TS as sound over a black screen.
+          const playlist = await options.hls.playlist(id, channels.info(id)?.emits === "hevc");
           if (playlist === null) {
             json(response, 503, { error: "that channel could not be packaged as HLS yet; try again in a moment" });
             return;
@@ -3347,7 +3391,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         watch(request, response, "stream", id);
         response.writeHead(200, {
           ...CORS,
-          "content-type": "video/mp2t",
+          "content-type": segmentType(file ?? ""),
           "cache-control": "no-store",
           "content-length": statSync(segment).size,
         });
@@ -3930,6 +3974,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // and above 20 megabits the original was always the better answer.
       const asked = Number(url.searchParams.get("kbps") ?? "");
       const capKbps = Number.isFinite(asked) && asked > 0 ? Math.min(20_000, Math.max(200, asked)) : 0;
+      // Whether this browser decodes H.265, which only it can know: Safari and
+      // televisions do, Chrome on a desktop does not and says nothing when
+      // handed it. Copying a 4K HEVC film is free; re-encoding one does not
+      // keep up with playing it, so the answer is worth carrying in the URL.
+      const allowHevc = url.searchParams.get("hevc") === "1";
 
       if (playsInBrowser(file) && capKbps === 0) {
         sendFile(request, response, file);
@@ -3948,7 +3997,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // added by an older nixamp goes to an audio element for ever, and
           // the only cure is noticing and adding it again.
           engine.sawPicture(index);
-          pipeFfmpeg(request, response, file, options.ffmpeg ?? ["ffmpeg"], videoArgs(codecs, capKbps), "video/mp4");
+          pipeFfmpeg(
+            request, response, file, options.ffmpeg ?? ["ffmpeg"],
+            videoArgs(codecs, capKbps, { allowHevc }), "video/mp4",
+            transportInputArgs(file, codecs.container),
+          );
           return;
         }
       }
@@ -4266,6 +4319,12 @@ function pipeFfmpeg(
   ffmpeg: string[],
   outputArgs: string[],
   contentType: string,
+  /**
+   * What to say before the input is opened. A transport stream needs telling
+   * how far to read before it decides what is in it, and to make up the
+   * timestamps a recording cut mid-stream does not have.
+   */
+  inputArgs: string[] = [],
 ): void {
   const [command, ...prefix] = ffmpeg as [string, ...string[]];
   const child = spawn(
@@ -4278,6 +4337,7 @@ function pipeFfmpeg(
       // belong to the http protocol, and ffmpeg rejects the whole command
       // when they are handed to it for a file on disk.
       ...(isRemote(source) ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] : []),
+      ...inputArgs,
       "-i", source,
       ...outputArgs,
       "-",

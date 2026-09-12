@@ -3980,7 +3980,9 @@ export function start(): void {
           : `re-streamed from the web · ${restream.tracks} tracks`,
         onPlay: () => { void playAt(restream.at); },
         link: "",
-        direct: remote.media(restream.at),
+        // For VLC, mpv or another page, which decode H.265 whatever this
+        // browser does -- so this address asks for the film untouched.
+        direct: remote.media(restream.at, 0, true),
       }));
     }
 

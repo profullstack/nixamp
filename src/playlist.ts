@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { probe, probeAsync, type Tools, type Track } from "./audio.ts";
 import {
   type Entry,
+  isAmbiguousTransportName,
   isHls,
   isPlaylistFile,
   isRemote,
+  looksLikeTransportStream,
   nameOf,
   parseM3u,
   parsePls,
@@ -20,11 +22,31 @@ export const AUDIO_EXTENSIONS = new Set([
   // long track with a picture nobody asked for -- and a library of them was
   // invisible to nixamp for want of the extension being on this list.
   ".mkv", ".avi", ".mov", ".m4v", ".mpg", ".mpeg", ".wmv", ".flv",
+  // Transport streams, which is what a recorder, a capture card or a receiver
+  // writes: 1080p and 4K television as it came off the wire. These names mean
+  // nothing else, so they are taken on the name. `.ts` is deliberately absent
+  // -- see `playable` below, which opens it instead of guessing.
+  ".m2ts", ".mts", ".m2t", ".trp", ".tp",
 ]);
 
 export function isAudio(path: string): boolean {
   const dot = path.lastIndexOf(".");
   return dot > 0 && AUDIO_EXTENSIONS.has(path.slice(dot).toLowerCase());
+}
+
+/**
+ * Whether a file in a library is something to play.
+ *
+ * The name answers for everything except `.ts`, which is both a raw transport
+ * stream -- a 4K recording, an IPTV dump -- and every TypeScript file ever
+ * written, this program's own included. A library of recordings was invisible
+ * for want of the extension being listed, and listing it would have turned a
+ * checkout into a playlist. So a `.ts` is opened and asked: three sync bytes
+ * at one packet's spacing, which no source file has.
+ */
+export function playable(path: string): boolean {
+  if (isAudio(path)) return true;
+  return isAmbiguousTransportName(path) && looksLikeTransportStream(path);
 }
 
 /** Every audio file under `root`, depth first. A single file is a playlist of one. */
@@ -36,7 +58,7 @@ export function findAudio(root: string): string[] {
   } catch {
     return out;
   }
-  if (stats.isFile()) return isAudio(root) ? [root] : out;
+  if (stats.isFile()) return playable(root) ? [root] : out;
 
   const walk = (dir: string): void => {
     let entries: string[];
@@ -55,7 +77,7 @@ export function findAudio(root: string): string[] {
         continue;
       }
       if (s.isDirectory()) walk(full);
-      else if (isAudio(full)) out.push(full);
+      else if (playable(full)) out.push(full);
     }
   };
   walk(root);
@@ -174,7 +196,8 @@ export async function loadSource(tools: Tools, source: string, probeTags = true)
     // A URL that names no file is probably a folder, and a folder served over
     // http is a page of links. Asked only when it could be one: a stream URL
     // must not pay for a fetch that will tell us nothing.
-    if (!isAudio(new URL(source).pathname)) {
+    // A `.ts` address is a transport stream over http, never a folder listing.
+    if (!isAudio(new URL(source).pathname) && !isAmbiguousTransportName(source)) {
       const listed = await readRemoteIndex(source);
       if (listed.length > 0) return listed.map(bare);
     }
@@ -269,7 +292,7 @@ export async function findAudioAsync(root: string, every = 200): Promise<string[
   } catch {
     return out;
   }
-  if (stats.isFile()) return isAudio(root) ? [root] : out;
+  if (stats.isFile()) return playable(root) ? [root] : out;
 
   let since = 0;
   const breathe = async (): Promise<void> => {
@@ -296,7 +319,7 @@ export async function findAudioAsync(root: string, every = 200): Promise<string[
         continue;
       }
       if (stat.isDirectory()) await walk(full);
-      else if (isAudio(full)) out.push(full);
+      else if (playable(full)) out.push(full);
     }
   };
   await walk(root);

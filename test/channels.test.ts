@@ -4,7 +4,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  BACKLOG_VIDEO, Channels, REDIAL, cleanId, generatedId, rememberChannels, rememberedChannels,
+  BACKLOG_SECONDS, BACKLOG_VIDEO, BACKLOG_VIDEO_MAX, Channels, REDIAL, cleanId, generatedId,
+  rememberChannels, rememberedChannels,
 } from "../src/channels.ts";
 import { needsAdmin } from "../src/owner.ts";
 
@@ -443,6 +444,38 @@ test("the backlog is bounded, and never begins with an mdat", async () => {
   assert.ok(total <= BACKLOG_VIDEO, `backlog of ${total} is over the cap`);
   assert.ok(total > 0);
   set.stopAll();
+});
+
+test("a high-bitrate channel keeps seconds of backlog, not megabytes", async () => {
+  // 4K television copied straight through runs at tens of megabits, so the old
+  // fixed four megabytes was well under a second of it: a joiner landed on the
+  // live edge with no cushion and stalled on every hiccup, which is the exact
+  // thing a backlog is for. The cap follows the measured rate now.
+  const piece = 256 * 1024;
+  // Too big for a command line, so the pieces go through files, as the fixed
+  // backlog test above does.
+  const where = mkdtempSync(join(tmpdir(), "nixamp-rate-"));
+  const head = join(where, "head.mp4");
+  const fragment = join(where, "fragment.mp4");
+  writeFileSync(head, Buffer.concat([box("ftyp", "isom"), box("moov", "tracks")]));
+  writeFileSync(fragment, Buffer.concat([box("moof", "f"), box("mdat", "x".repeat(piece))]));
+  // A fragment every 20ms: about 12 MB/s, which is a 100 Mbit stream.
+  const fake = ["sh", "-c", `cat "${head}"; while :; do cat "${fragment}"; sleep 0.02; done`, "--"];
+  const set = new Channels({ ffmpeg: fake, rateWindowMs: 300 });
+  const channel = set.pull("uhd", "4K", "http://x.test/uhd", [], "video");
+  try {
+    await wait(1500);
+    const late = collector();
+    channel?.listen(late);
+    const total = Buffer.concat(late.chunks).byteLength;
+    assert.ok(total > BACKLOG_VIDEO, `only ${total} bytes of backlog for a fast channel`);
+    assert.ok(total <= BACKLOG_VIDEO_MAX, `${total} bytes is more than a channel may hold`);
+    // Seconds, not bytes: about six of them at the rate it is running.
+    const rate = piece / 0.02;
+    assert.ok(total <= rate * BACKLOG_SECONDS * 1.5, `${total} bytes is more than ${BACKLOG_SECONDS}s of this stream`);
+  } finally {
+    set.stopAll();
+  }
 });
 
 test("an on-demand channel stops itself a minute after its last viewer leaves", async () => {
