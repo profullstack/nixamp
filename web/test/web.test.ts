@@ -9,7 +9,7 @@ import { clamp, displayName, formatTime, isVideoFile, titleFromFilename } from "
 import { bandEdges, bands, decay, holdPeaks } from "../src/spectrum.ts";
 import {
   apiUrl, blockedAsMixedContent, canPlayHevc, mediaUrl, needsAName, normalizeBase, parseSnapshot,
-  probeServer, refusesUs, splitShareLink,
+  probeServer, refusesUs, sentToPlay, splitShareLink,
 } from "../src/remote.ts";
 import { byName, isPlayable, isTransportFile, needsVideoElement } from "../src/player.ts";
 import { isTelevision, pageSize, pageWindow } from "../src/tv.ts";
@@ -1084,4 +1084,40 @@ test("a link can be sent along in the address, into the box where Go live is", (
   assert.match(app, /params\.get\("link"\)/);
   assert.match(app, /dom\.linkUrl\.value = link;/);
   assert.match(app, /askedToPlay = `link:\$\{link\}`/);
+});
+
+test("Share hands out nixamp.com/?play=<the stream's own address>, and nixamp.com opens it as a viewer", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // With the transport, after Next; hidden until there is something safe to hand out.
+  const share = html.indexOf('id="share-now"');
+  assert.ok(share > html.indexOf('id="next"') && share < html.indexOf('id="volume"'));
+  assert.match(app, /dom\.shareNow\.hidden = shareLinkNow\(\) === ""/);
+  assert.match(app, /`https:\/\/nixamp\.com\/\?play=\$\{encodeURIComponent\(playable\)\}`/);
+  // The address inside is the stream itself, with the viewing key, never the driving one.
+  const body = app.slice(app.indexOf("function playableNow"), app.indexOf("function shareLinkNow"));
+  assert.match(body, /splitShareLink\(shareableLink\(\)\)/);
+  assert.match(body, /apiUrl\(base, `\/api\/channels\/\$\{encodeURIComponent\(channelOn\.id\)\}`, key\)/);
+  assert.match(body, /apiUrl\(base, "\/api\/live", key\)/);
+  // The device's share sheet where there is one; the clipboard otherwise.
+  assert.match(app, /sharing\.share\(\{ title: `\$\{currentName\(\)\} on nixamp`, url: link \}\)/);
+  assert.match(app, /copyText\(link, dom\.shareNow, "Copied"\)/);
+  // Arriving: a nixamp stream address becomes a viewer connection to that server.
+  assert.match(app, /const sent = sentToPlay\(play\)/);
+  assert.match(app, /if \(sharedLink !== ""\) void playLink\(sharedLink\)/);
+
+  assert.deepEqual(sentToPlay("https://server1.chovy.nixamp.com:4321/api/channels/url-aa873c1336f9?k=JV5m"), {
+    view: "https://server1.chovy.nixamp.com:4321/view/JV5m", what: "channel:url-aa873c1336f9",
+  });
+  assert.deepEqual(sentToPlay("https://box:4321/api/live?k=K"), { view: "https://box:4321/view/K", what: "live" });
+  // A library track, by its number; the page plays that track once connected.
+  assert.deepEqual(sentToPlay("http://127.0.0.1:4555/api/media/0?k=K"), { view: "http://127.0.0.1:4555/view/K", what: "track:0" });
+  assert.match(app, /asked\.startsWith\("track:"\)/);
+  // No key is a server with no key: the origin is the way in.
+  assert.deepEqual(sentToPlay("http://box:4321/api/channels/cat-1"), { view: "http://box:4321", what: "channel:cat-1" });
+  // Anything else is a link to play as one pasted.
+  assert.equal(sentToPlay("https://www.youtube.com/watch?v=abc"), null);
+  assert.equal(sentToPlay("http://23.152.40.104/tipoffsport/abc/906"), null);
+  assert.equal(sentToPlay("javascript:alert(1)"), null);
+  assert.equal(sentToPlay("nope"), null);
 });
