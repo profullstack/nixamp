@@ -247,8 +247,13 @@ export function start(): void {
     button.innerHTML = ICONS[name];
   };
 
-  /** What the tab is called with nothing playing: whatever the shell said. */
-  const baseTitle = document.title || "nixamp";
+  /**
+   * What the tab is called with nothing playing: whatever the shell said.
+   * A join page arrives already titled for its channel, and says what the
+   * shell was called underneath, so the tab does not read "CNN · CNN".
+   */
+  const baseTitle = document.querySelector<HTMLMetaElement>('meta[name="nixamp-shell-title"]')?.content
+    || document.title || "nixamp";
   let mode: Mode = "local";
   /** What the server we are connected to calls itself, once it has said. */
   let serverName = "";
