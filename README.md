@@ -136,6 +136,64 @@ DATABASE_URL=postgres://user:pass@host/nixamp NIXAMP_JWT_SECRET=… nixamp serve
 Accounts live where the directory lives and nowhere else: a nixamp on a laptop
 has nobody to be an account of.
 
+## Watch parties, and signing in with nixamp
+
+A watch party lives on the site that has the film. bittorrented.com has them:
+a six-character code, a host, and everybody at the same second. nixamp has
+rooms, chat, invitations, a directory, and five clients that can already open
+one. A bridged party is both.
+
+The identity link is **OAuth 2.1**, with nixamp.com as the authorization
+server. The site sends somebody here, they approve it once, and the site holds
+a token that acts on their nixamp account. It is 2.1 and not 2.0, so:
+
+- authorization code only, with PKCE (S256) required of every client, public
+  or confidential. No implicit grant, no password grant.
+- redirect URIs match the registered string exactly; only a loopback port may
+  vary, because a CLI cannot know its port before it listens.
+- a code is spent once; presenting it twice withdraws everything it produced.
+- refresh tokens rotate, and a retired one presented again withdraws the whole
+  family.
+
+The endpoints are where RFC 8414 says to look for them:
+
+```
+GET  /.well-known/oauth-authorization-server
+GET  /api/v1/oauth/authorize      the consent page
+POST /api/v1/oauth/token          authorization_code, refresh_token
+POST /api/v1/oauth/revoke
+GET  /api/v1/oauth/userinfo
+```
+
+Scopes are `profile`, `email`, `parties` and `offline_access`. The Account
+panel on nixamp.com lists what is connected and takes it away again.
+
+bittorrented.com is registered out of the box. Another client is added with
+`NIXAMP_OAUTH_CLIENTS`, a JSON list:
+
+```
+NIXAMP_OAUTH_CLIENTS='[{"id":"example","name":"Example","redirectUris":["https://example.com/cb"]}]'
+```
+
+Once a party is bridged it is an ordinary live event with a room, so every
+surface already knows what to do with it:
+
+```
+nixamp party list                    the ones you could join right now
+nixamp party join ABC123 --open      the room here, the film where it lives
+nixamp party host ABC123 --url URL   put one on the air as a nixamp room
+nixamp party sync ABC123 --at 930    where playback is (hosts only)
+```
+
+and an agent reaches the same five actions over the Model Context Protocol:
+
+```
+nixamp mcp     a stdio MCP server: list, get, host, sync, end
+```
+
+It acts as whoever the machine is signed in as, so `nixamp login` comes first.
+The film never crosses over: what nixamp carries is the room.
+
 ## BackToSchool.help
 
 BackToSchool.help is a branded, mobile-first client for NixAmp live events. It

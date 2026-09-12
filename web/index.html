@@ -220,6 +220,17 @@
           <ul id="favorites-list" class="directory-list"></ul>
         </section>
 
+        <section class="panel col-b" data-title="Watch parties" id="parties-panel" hidden>
+          <p class="hint" id="parties-note">Parties on now. Open one to watch it where the film is; the room is here.</p>
+          <ul id="parties-list" class="directory-list"></ul>
+          <form id="party-form" class="picker">
+            <input id="party-code" type="text" inputmode="latin" autocomplete="off"
+                   autocapitalize="characters" spellcheck="false"
+                   placeholder="Have a code? ABC123" aria-label="Watch party code" />
+            <button type="submit" class="button">Join</button>
+          </form>
+        </section>
+
         <section class="panel player-only col-a" data-title="Account" id="account-panel">
           <p class="hint" id="account-note">Listening needs no account. Sign in to keep favourites, follow people, and publish.</p>
           <div id="account-providers" class="picker" hidden></div>
@@ -234,6 +245,11 @@
           <!-- Outside the form, because signing out is the one thing you can do
                once the form is gone. -->
           <button id="account-signout" type="button" class="ghost" hidden>Sign out</button>
+          <!-- The sites that hold a token for this account. Nothing is shown
+               until there is something connected, so an account with none
+               never sees an empty list asking to be understood. -->
+          <p class="hint" id="connections-note" hidden>Connected apps:</p>
+          <ul id="connections-list" class="directory-list" hidden></ul>
         </section>
 
         <p class="hint player-only col-a" id="account-elsewhere" hidden>

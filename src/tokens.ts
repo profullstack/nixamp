@@ -28,8 +28,13 @@ export const TOKEN_PREFIX = "nxa_";
 /** How long a sign-in lasts. Long, because signing in on a television is work. */
 export const SESSION_DAYS = 90;
 
-/** A session ends; a token a person made for a script does not, unless asked. */
-export type TokenKind = "session" | "cli";
+/**
+ * A session ends; a token a person made for a script does not, unless asked;
+ * and one another site holds on your behalf is an `oauth` token, which is the
+ * same thing with a client's name on it so it can be listed and withdrawn as
+ * "bittorrented.com" rather than as an anonymous string.
+ */
+export type TokenKind = "session" | "cli" | "oauth";
 
 export interface TokenRecord {
   id: string;
@@ -113,7 +118,7 @@ function toRecord(row: Record<string, unknown>): TokenRecord {
   return {
     id: String(row["id"] ?? ""),
     name: String(row["name"] ?? ""),
-    kind: row["kind"] === "cli" ? "cli" : "session",
+    kind: row["kind"] === "cli" || row["kind"] === "oauth" ? (row["kind"] as TokenKind) : "session",
     createdAt: asTime(row["created_at"]) ?? 0,
     expiresAt: asTime(row["expires_at"]),
     lastUsedAt: asTime(row["last_used_at"]),
@@ -231,6 +236,48 @@ export class Tokens {
       id,
     ]);
     return rows.length > 0;
+  }
+
+  /**
+   * One token, by its id, whatever kind it is.
+   *
+   * `revoke` is scoped to the owner because it answers a person deleting
+   * their own token. This one is for the server withdrawing a token it
+   * issued -- an access token whose refresh token was just rotated, or the
+   * whole family behind a code somebody replayed -- where there is no owner
+   * doing the asking.
+   */
+  async revokeById(id: string): Promise<boolean> {
+    await this.ensure();
+    const { rows } = await this.db.query(`DELETE FROM ${TABLE} WHERE id = $1 RETURNING id`, [id]);
+    return rows.length > 0;
+  }
+
+  /**
+   * The record behind a token, without counting it as a use.
+   *
+   * `verify` is the hot path and stamps last_used_at; this answers the same
+   * question for a caller that needs the row itself -- which client holds
+   * this, and what it was granted -- and leaves the timestamp alone.
+   */
+  async inspect(value: string): Promise<(TokenRecord & { account: Account }) | null> {
+    const parts = splitToken(value);
+    if (parts === null) return null;
+    await this.ensure();
+    const { rows } = await this.db.query(
+      `SELECT id, user_id, email, kind, name, secret_hash, created_at, expires_at, last_used_at
+         FROM ${TABLE} WHERE id = $1`,
+      [parts.id],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    if (!sameHash(String(row["secret_hash"] ?? ""), hashSecret(parts.secret))) return null;
+    const expiresAt = asTime(row["expires_at"]);
+    if (expiresAt !== null && expiresAt <= this.now()) return null;
+    return {
+      ...toRecord(row),
+      account: { id: String(row["user_id"] ?? ""), email: String(row["email"] ?? "") },
+    };
   }
 
   /** Signing out of one place should not sign you out of the build server. */

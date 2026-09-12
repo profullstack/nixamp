@@ -177,6 +177,13 @@ export function start(): void {
     favoritesNote: need<HTMLParagraphElement>("favorites-note"),
     favoritesList: need<HTMLUListElement>("favorites-list"),
     favHere: need<HTMLButtonElement>("fav-here"),
+    partiesPanel: need<HTMLElement>("parties-panel"),
+    partiesNote: need<HTMLParagraphElement>("parties-note"),
+    partiesList: need<HTMLUListElement>("parties-list"),
+    partyForm: need<HTMLFormElement>("party-form"),
+    partyCode: need<HTMLInputElement>("party-code"),
+    connectionsNote: need<HTMLParagraphElement>("connections-note"),
+    connectionsList: need<HTMLUListElement>("connections-list"),
     catalogsPanel: need<HTMLElement>("catalogs-panel"),
     catalogsNote: need<HTMLParagraphElement>("catalogs-note"),
     catalogsForm: need<HTMLFormElement>("catalogs-form"),
@@ -2486,6 +2493,176 @@ export function start(): void {
    * the link opens straight into the player; where it was not, the address is
    * still the thing you needed.
    */
+  // ---- watch parties: a film on another site, a room here -------------------
+  //
+  // A watch party lives where the film does -- bittorrented.com, say -- and is
+  // bridged into nixamp as a live event with a room. So this panel is not a
+  // player: it is the list of rooms you could be in, each with the link that
+  // opens the picture on the site that has it. The room, the chat and the
+  // second everybody is at are nixamp's; the bytes never are.
+
+  interface PartyRow {
+    party: {
+      roomId: string;
+      slug: string;
+      origin: string;
+      partyCode: string;
+      partyUrl: string;
+      mediaTitle: string;
+      positionNow: number;
+      playing: boolean;
+    };
+    event: { id: string; title: string; status: string };
+    links: { nixampUrl: string; roomUrl: string; partyUrl: string };
+    host: boolean;
+  }
+
+  const partyClock = (seconds: number): string => {
+    const whole = Math.max(0, Math.floor(seconds));
+    const s = String(whole % 60).padStart(2, "0");
+    const m = Math.floor(whole / 60) % 60;
+    const h = Math.floor(whole / 3600);
+    return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+  };
+
+  function partyItem(row: PartyRow): HTMLLIElement {
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    label.className = "server-label";
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = row.event.title || row.party.partyCode;
+    const detail = document.createElement("span");
+    detail.className = row.party.playing ? "detail live" : "detail";
+    detail.textContent = [
+      row.party.playing ? `▶ ${partyClock(row.party.positionNow)}` : `❚❚ ${partyClock(row.party.positionNow)}`,
+      row.party.mediaTitle,
+      row.party.origin,
+      row.host ? "yours" : "",
+    ].filter(Boolean).join(" · ");
+    label.append(name, detail);
+
+    // Two links on purpose. The picture is on the other site and only it can
+    // serve it; the room is here and is what makes it a party rather than
+    // everybody watching the same thing alone.
+    const watch = document.createElement("a");
+    watch.className = "button";
+    watch.href = row.links.partyUrl || row.links.nixampUrl;
+    watch.rel = "noopener";
+    watch.target = "_blank";
+    watch.textContent = "Watch";
+    const room = document.createElement("a");
+    room.className = "ghost";
+    room.href = row.links.nixampUrl;
+    room.textContent = "Room";
+    item.append(label, watch, room);
+    return item;
+  }
+
+  async function loadParties(): Promise<void> {
+    // Reachable only with an account: a party list is "rooms you could join",
+    // which is a question about somebody.
+    if (!meId) {
+      dom.partiesPanel.hidden = true;
+      return;
+    }
+    try {
+      const answer = await fetch("/api/v1/watch-parties");
+      if (!answer.ok) {
+        dom.partiesPanel.hidden = true;
+        return;
+      }
+      const body = (await answer.json()) as { parties?: PartyRow[] };
+      const rows = body.parties ?? [];
+      dom.partiesPanel.hidden = false;
+      dom.partiesNote.textContent = rows.length === 0
+        ? "No parties on right now. Have a code from a site? Put it in."
+        : "Parties on now. Watch opens the film where it lives; Room is here.";
+      dom.partiesList.replaceChildren(...rows.map(partyItem));
+    } catch {
+      dom.partiesPanel.hidden = true;
+    }
+  }
+
+  dom.partyForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const code = dom.partyCode.value.trim();
+    if (code === "") return;
+    void (async () => {
+      try {
+        const answer = await fetch(`/api/v1/watch-parties/${encodeURIComponent(code)}`);
+        const body = (await answer.json().catch(() => ({}))) as PartyRow & { error?: string };
+        if (!answer.ok) {
+          note = body.error ?? "no party with that code";
+          draw();
+          return;
+        }
+        dom.partyCode.value = "";
+        // Straight to the room rather than a list of one: somebody typing a
+        // code has already chosen.
+        window.location.href = body.links.nixampUrl;
+      } catch {
+        note = "could not ask about that party";
+        draw();
+      }
+    })();
+  });
+
+  // ---- connected apps: what holds a token for this account ------------------
+
+  async function loadConnections(): Promise<void> {
+    if (!meId) {
+      dom.connectionsNote.hidden = true;
+      dom.connectionsList.hidden = true;
+      return;
+    }
+    try {
+      const answer = await fetch("/api/v1/oauth/connections");
+      if (!answer.ok) {
+        dom.connectionsNote.hidden = true;
+        dom.connectionsList.hidden = true;
+        return;
+      }
+      const body = (await answer.json()) as {
+        connections?: { id: string; clientId: string; clientName: string; scope: string }[];
+      };
+      const rows = body.connections ?? [];
+      dom.connectionsNote.hidden = rows.length === 0;
+      dom.connectionsList.hidden = rows.length === 0;
+      dom.connectionsList.replaceChildren(...rows.map((row) => {
+        const item = document.createElement("li");
+        const label = document.createElement("span");
+        label.className = "server-label";
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = row.clientName;
+        const detail = document.createElement("span");
+        detail.className = "detail";
+        detail.textContent = row.scope.split(" ").filter(Boolean).join(", ");
+        label.append(name, detail);
+        const off = document.createElement("button");
+        off.type = "button";
+        off.className = "ghost";
+        off.textContent = "Disconnect";
+        off.addEventListener("click", () => {
+          void (async () => {
+            try {
+              await fetch(`/api/v1/oauth/connections/${encodeURIComponent(row.clientId)}`, { method: "DELETE" });
+            } catch {
+              // Still connected, and the list will say so on the next load.
+            }
+            await loadConnections();
+          })();
+        });
+        item.append(label, off);
+        return item;
+      }));
+    } catch {
+      dom.connectionsNote.hidden = true;
+      dom.connectionsList.hidden = true;
+    }
+  }
+
   // ---- favourites: the servers you hearted ----------------------------------
   //
   // Kept against the nixamp.com account, so they are the same on every device.
@@ -3562,6 +3739,8 @@ export function start(): void {
     }
     // Signed in or not decides whether there is anybody to keep favourites for.
     void loadFavorites();
+    void loadParties();
+    void loadConnections();
     openInvitedStream();
   };
 
