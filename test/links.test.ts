@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   contentTypeFor, directLink, downloadArgs, fileNameFor, inputArgsFor, isDirectMedia, isPlaylistLink, linkChannelId,
-  mergeDownloadArgs, parseResolved, playableLink, playlistFrom, reasonFrom, resolveArgs, resolveLink, resolvePlaylist,
+  mergeDownloadArgs, parseResolved, playableLink, playlistFrom, playlistNameOf, playlistTitleIn, reasonFrom, resolveArgs, resolveLink, resolvePlaylist,
 } from "../src/links.ts";
 
 /** What yt-dlp said about a SoundCloud track on 2026-09-10, trimmed. */
@@ -296,7 +296,18 @@ test("a pasted playlist resolves to a station: the first entry probed, every ent
     fetcher: served(200, "#EXTM3U\nhttps://cdn.example/ep1.mp3\nhttps://cdn.example/ep2.mp3\n"),
   });
   assert.ok(!("error" in list));
-  assert.equal(list.title, "off-protocol");
+  assert.equal(list.title, "off protocol");
+  // A list that names itself is called that; one called "playlist" is
+  // called for the folder it sits in, which is the show.
+  const named = await resolvePlaylist("https://p0dcasters.com/podcast/off-protocol/playlist.m3u", {
+    fetcher: served(200, "#EXTM3U\n#PLAYLIST:Off Protocol\n#EXTINF:10,One\nhttps://cdn.example/ep1.mp3\n"),
+  });
+  assert.ok(!("error" in named) && named.title === "Off Protocol");
+  assert.equal(playlistNameOf("https://p0dcasters.com/podcast/off-protocol/playlist.m3u"), "off protocol");
+  assert.equal(playlistNameOf("https://x.example/mixes/late_night-sets.m3u"), "late night sets");
+  assert.equal(playlistNameOf("https://x.example/playlist.m3u"), "x.example");
+  assert.equal(playlistTitleIn("#EXTM3U\n#PLAYLIST:  Late\u0001 Show \n"), "Late  Show");
+  assert.equal(playlistTitleIn("#EXTM3U\n"), "");
   assert.equal(list.media, "https://cdn.example/ep1.mp3");
   assert.deepEqual(list.playlist, ["https://cdn.example/ep1.mp3", "https://cdn.example/ep2.mp3"]);
   assert.equal(list.live, true);
