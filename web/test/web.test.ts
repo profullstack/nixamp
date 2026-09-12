@@ -270,7 +270,7 @@ test("the shell says what nixamp is, and asks a stranger to sign up", () => {
   const html = readFileSync(join(webDir, "index.html"), "utf8");
   // The title is what a search result and a link preview show. It has to say
   // what the thing is, and it must not dare anybody to send a takedown.
-  assert.match(html, /<title>nixamp: open source live streaming from your own machine<\/title>/);
+  assert.match(html, /<title>nixamp: broadcast live radio, TV and film from your own machine<\/title>/);
   assert.doesNotMatch(html, /DMCA/);
   // The pitch is in the shell itself, hidden until app.ts decides, so a
   // crawler reads it without running anything.

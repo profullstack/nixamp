@@ -195,3 +195,44 @@ export function labelFor(name: string, hostname: string): string {
   }
   return "server";
 }
+
+/** File endings that name a playlist rather than a folder, dropped from a title. */
+const PLAYLIST_ENDING = /\.(m3u8?|pls|xspf|txt|json)$/i;
+
+/**
+ * What to call a stream that was started on a path, for people.
+ *
+ * `nixamp serve ~/Music/live-sets_2024` used to be listed as the machine's
+ * hostname, which tells a stranger nothing. The last segment of the path is
+ * what the person who made the folder called it, so that is the title: the
+ * separators that a filesystem forces become spaces, a playlist loses its
+ * ending, and each lowercase word gets a capital. Words with a capital in
+ * them already are left alone, so "DJ" and "LoFi" stay as written, and a
+ * dash or dot between two digits stays too, so a date is still a date.
+ * Empty when the path has no segment worth saying, and the caller falls
+ * back to whatever it used before.
+ */
+export function humanizeSource(source: string): string {
+  const remote = /^[a-z][a-z0-9+.-]*:\/\//i.test(source);
+  let last = "";
+  try {
+    const path = remote ? new URL(source).pathname : source;
+    last = path.split("/").filter(Boolean).pop() ?? "";
+    if (remote) last = decodeURIComponent(last);
+  } catch {
+    return "";
+  }
+  if (last === "" || last === "~" || last === ".") return "";
+  const words = last
+    .replace(PLAYLIST_ENDING, "")
+    .replace(/(?<!\d)[-_.+]+|[-_.+]+(?!\d)/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (words === "") return "";
+  return words
+    .split(" ")
+    .map((word) => (word === word.toLowerCase() ? word.charAt(0).toUpperCase() + word.slice(1) : word))
+    .join(" ")
+    .slice(0, 60)
+    .trim();
+}

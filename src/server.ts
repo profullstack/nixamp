@@ -72,7 +72,7 @@ import { Catalogs, shownCatalog, shownEntry } from "./catalogs.ts";
 import { Porkbun, isIPv4, isIPv6, type DnsZone } from "./dns.ts";
 import { NameError, Names } from "./names.ts";
 import { AcmeIssuer, Certs } from "./certs.ts";
-import { claimName, fetchCert, labelFor, readCertFiles, writeCertFiles } from "./naming.ts";
+import { claimName, fetchCert, humanizeSource, labelFor, readCertFiles, writeCertFiles } from "./naming.ts";
 import { forbiddenLibrary, readLibrary } from "./library.ts";
 import { createThrottle, presentedCredential, type Throttle } from "@profullstack/throttle";
 import { Durable } from "./durable.ts";
@@ -1304,13 +1304,14 @@ function htmlText(value: string): string {
  *
  * Read from the page rather than hard-coded, because one NixAmp serves several
  * branded clients and each brings its own head. og:site_name first, then the
- * part of the title before the dash, then the hostname.
+ * part of the title before the dash or the colon ("nixamp: broadcast live
+ * radio..." is nixamp), then the hostname.
  */
 export function brandOf(shell: string, site: string): string {
   const named = /<meta\s+property="og:site_name"\s+content="([^"]+)"/i.exec(shell);
   if (named?.[1]) return named[1];
   const titled = /<title>([^<]*)<\/title>/i.exec(shell);
-  const head = titled?.[1]?.split(/\s[—-]\s/)[0]?.trim();
+  const head = titled?.[1]?.split(/\s[—-]\s|:\s/)[0]?.trim();
   if (head) return head;
   try {
     return new URL(site).hostname.replace(/^www\./, "");
@@ -1333,6 +1334,65 @@ function eventDocument(shell: string, event: Awaited<ReturnType<LiveEvents["get"
     .replace(/<meta property="og:title" content="[^"]*"\s*\/>/, `<meta property="og:title" content="${htmlText(event.title)}" />`)
     .replace(/<meta property="og:description" content="[^"]*"\s*\/>/, `<meta property="og:description" content="${htmlText(description)}" />`)
     .replace("</head>", `${event.visibility === "public" ? "" : '<meta name="robots" content="noindex,nofollow" />'}\n    <meta property="og:url" content="${htmlText(canonical)}" />\n    <link rel="canonical" href="${htmlText(canonical)}" />\n    <script type="application/ld+json">${structured}</script>\n  </head>`);
+}
+
+/**
+ * What a join link is for, named by something this server actually knows.
+ *
+ * A link preview reads the page before any script runs, so the shell has to
+ * say what is on the air. On the directory that is the listing the link
+ * points at, and the channel on it if one is asked for; on a server it is
+ * the server itself, or one of its channels. A name that only appears in the
+ * query is not used: a page that titled itself with whatever the address said
+ * would be a preview anyone could put words in.
+ */
+export function joinSubject(
+  url: URL,
+  options: Pick<HandlerOptions, "directory" | "channels" | "serverName">,
+): { title: string; where: string } | null {
+  const play = url.searchParams.get("play") ?? "";
+  const wanted = play.startsWith("channel:") ? play.slice("channel:".length) : "";
+  const link = url.searchParams.get("url") ?? "";
+  if (options.directory) {
+    if (link === "") return null;
+    const listings = options.directory.list();
+    const listing = listings.find((one) => one.url === link) ?? listings.find((one) => {
+      try {
+        return new URL(one.url).origin === new URL(link).origin;
+      } catch {
+        return false;
+      }
+    });
+    if (!listing) return null;
+    if (wanted !== "" && listing.channels.includes(wanted)) return { title: wanted, where: listing.name };
+    return { title: listing.name, where: "" };
+  }
+  // A link to somewhere else is that server's to name.
+  if (link !== "") return null;
+  const name = options.serverName ?? "";
+  if (wanted !== "") {
+    const channel = options.channels?.list().find((one) => one.id === wanted || one.name === wanted);
+    return channel ? { title: channel.name, where: name } : null;
+  }
+  return name === "" ? null : { title: name, where: "" };
+}
+
+/** The shell, titled for what a join link opens. */
+export function joinDocument(shell: string, subject: { title: string; where: string }, site: string): string {
+  const brand = brandOf(shell, site);
+  const shellTitle = /<title>([^<]*)<\/title>/i.exec(shell)?.[1] ?? "";
+  const title = `${subject.title} — ${brand}`;
+  const description = subject.where === ""
+    ? `${subject.title} is live on ${brand}. Tune in free, no account needed.`
+    : `${subject.title} is live on ${subject.where}. Tune in free on ${brand}, no account needed.`;
+  return shell
+    .replace(/<title>.*?<\/title>/s, `<title>${htmlText(title)}</title>`)
+    .replace(/<meta name="description" content="[^"]*"\s*\/>/, `<meta name="description" content="${htmlText(description)}" />`)
+    .replace(/<meta property="og:title" content="[^"]*"\s*\/>/, `<meta property="og:title" content="${htmlText(subject.title)}" />`)
+    .replace(/<meta property="og:description" content="[^"]*"\s*\/>/, `<meta property="og:description" content="${htmlText(description)}" />`)
+    // What the tab is called once the page takes over, so it does not stack
+    // the channel on a title that already names the channel.
+    .replace("</head>", `<meta name="nixamp-shell-title" content="${htmlText(shellTitle)}" />\n  </head>`);
 }
 
 function json(response: ServerResponse, code: number, body: unknown): void {
@@ -4276,6 +4336,14 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
             }
           } catch {}
         }
+        if (file.endsWith("index.html") && path === "/") {
+          const subject = joinSubject(url, options);
+          const shell = subject ? readIfPossible(file) : null;
+          if (subject && shell !== null) {
+            html(response, 200, joinDocument(shell, subject, options.invites?.site ?? "https://nixamp.com"));
+            return;
+          }
+        }
         sendFile(request, response, file);
         return;
       }
@@ -4675,6 +4743,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     );
   }
   const root = isRemote(chosen) ? chosen : resolve(chosen);
+  // What the stream is called where people see it: the name given, else the
+  // folder or playlist it was started on, in words, else this machine.
+  const streamName = options.name || humanizeSource(root) || hostname();
   const why = isRemote(root) ? "" : forbiddenLibrary(root);
   if (why) {
     throw new Error(`nixamp will not serve ${why}. Pick a folder with your media in it: nixamp library ~/Music`);
@@ -5161,14 +5232,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     rememberChannels: remembering,
     catalogs,
     publishUrls: () => publishUrls,
-    serverName: options.name || hostname(),
+    serverName: streamName,
     homeSource: root,
     live: {
       status: () => ({
         live: publisher !== null,
         code: listing?.code ?? "",
         channelCodes: listing?.channelCodes ?? {},
-        name: listing?.name ?? (options.name || hostname()),
+        name: listing?.name ?? streamName,
         url: listing?.url ?? (publishable_ ? shareLink(publishable_.url, listenKey, false) : ""),
         // Whether going live is even possible here. A laptop behind a router
         // with no address the world can reach cannot be listed, and a button
@@ -5549,7 +5620,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     const audio = audioLink(publishable_.url, listenKey);
     return new Publisher({
         directory: DEFAULT_DIRECTORY,
-        name: options.name || hostname(),
+        name: streamName,
         url: listen,
         audio,
         // The control link, for the owner to open this machine as its
