@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>nixamp - it really kicks the DMCA's ass...</title>
-    <meta name="description" content="nixamp — it really whips the terminal's ass. A Winamp-shaped player for your files and for the nixamp running on your other machine." />
+    <title>nixamp: open source live streaming from your own machine</title>
+    <meta name="description" content="An open source player that turns a folder on your machine into a live stream anyone can tune in to. Terminal, web and desktop on one engine. Listen free, publish with one command, charge with x402." />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#080c09" />
     <link rel="icon" href="/icons/icon-192.png" type="image/png" />
@@ -13,8 +13,8 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="nixamp" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta property="og:title" content="nixamp - it really kicks the DMCA's ass..." />
-    <meta property="og:description" content="It really whips the terminal's ass." />
+    <meta property="og:title" content="nixamp: open source live streaming from your own machine" />
+    <meta property="og:description" content="Your library, live, from your own machine. Listen free, publish with one command, charge with x402." />
     <meta property="og:type" content="website" />
   </head>
   <body>
@@ -30,6 +30,43 @@
                 title="Add this server to your favourites" aria-label="Favourite this server">♡</button>
         <button id="install" type="button" class="ghost" hidden>Install</button>
       </header>
+
+      <!-- The pitch, for somebody who has never seen this before. In the shell
+           so a crawler and a link preview read it; shown by app.ts only where
+           accounts live (nixamp.com), only signed out, and only until hidden.
+           On your own server you already know what this is. -->
+      <section class="panel welcome player-only" data-title="What this is" id="welcome" hidden>
+        <h1 class="welcome-title">Your library, live, from your own machine.</h1>
+        <p class="welcome-lead">
+          nixamp is an open source player that turns a folder on your computer into a
+          stream anyone can tune in to. A terminal player, a web app and a desktop app
+          on one engine. The streaming service you would run yourself: nothing uploaded,
+          no platform in the middle, and the command line is a first class citizen.
+        </p>
+        <div class="welcome-grid">
+          <div>
+            <h2>Listen</h2>
+            <p>See what is on the air right now and press play. No account needed. Every
+               live stream has a room code you can dial from any phone.</p>
+          </div>
+          <div>
+            <h2>Publish</h2>
+            <p><code>nixamp serve ~/Music</code> and you are live with a link, a room code
+               and a phone number. Your recordings, a lecture, a podcast, or a link you paste.</p>
+          </div>
+          <div>
+            <h2>Get paid</h2>
+            <p>Past five listeners a stream can charge a dollar a day, paid to you through
+               x402. Only the audio is gated, so the page stays open to everyone.</p>
+          </div>
+        </div>
+        <div class="picker welcome-actions">
+          <button id="welcome-create" type="button" class="button primary">Create a free account</button>
+          <button id="welcome-browse" type="button" class="button">See what is live</button>
+          <code class="welcome-install">curl -fsSL https://nixamp.com/install.sh | sh</code>
+          <button id="welcome-hide" type="button" class="ghost" title="Hide this, on this device">Hide this</button>
+        </div>
+      </section>
 
       <section class="panel player-only" data-title="Now Playing">
         <video id="video" playsinline hidden></video>
