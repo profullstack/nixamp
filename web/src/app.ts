@@ -27,6 +27,8 @@ import { isMatchupName } from "../../src/matchup.ts";
 
 export const BAND_COUNT = 24;
 const REMOTE_KEY = "nixamp.remote";
+/** The server a signed-in person lands on, by origin; unset means the first of theirs that answers. */
+const DEFAULT_SERVER_KEY = "nixamp.defaultServer";
 const VOLUME_KEY = "nixamp.volume";
 /**
  * Whether a connected server plays here or plays over there.
@@ -440,6 +442,8 @@ export function start(): void {
    * called, what is in it that this browser plays, and which one is on.
    */
   let localList: { url: string; title: string; entries: ListEntry[]; at: number } | null = null;
+  /** When a list playing here was handed to the server instead: the load's own complaint, a moment later, is not news. */
+  let listRefusedAt = 0;
 
   /** The site's player, gone: the picture is the page's own again. */
   function clearEmbed(): void {
@@ -734,6 +738,25 @@ export function start(): void {
     onError: (message) => {
       // A live channel that broke is a live channel to come back to.
       if (rejoinChannel()) return;
+      // A list playing here whose file the site will not hand to a page --
+      // no CORS header, which the browser reports as a format it cannot
+      // play -- is a list for the server, which has no such limit.
+      if (listRefusedAt !== 0 && Date.now() - listRefusedAt < 2000) return;
+      if (localList && message === "this browser cannot play that format") {
+        const url = localList.url;
+        localList = null;
+        listRefusedAt = Date.now();
+        if (canGoLive()) {
+          note = `That site will not let a page play it directly; going live with it on ${serverName || "the server"} instead.`;
+          draw();
+          dom.linkUrl.value = url;
+          void goLiveFromBox();
+          return;
+        }
+        note = "That site will not let a page play it directly. Pick a server beside the link and press Go live: the server carries it.";
+        draw();
+        return;
+      }
       note = message;
       draw();
       // A stream that refused to play may be a stream asking to be paid for,
@@ -1788,6 +1811,10 @@ export function start(): void {
     await whileLoading(() => player.load({
       title: entry.title, artist: list.title, album: "", duration: 0, url: entry.url, video, objectUrl: false,
     }, true));
+    // The load may have said no -- a site that will not let a page play it
+    // -- in which case the list was dropped and the words about that are
+    // already up; "Playing here" over them was a lie.
+    if (localList === null) return;
     showVideo(video);
     localLink = { url: list.url, label: list.title, kind: "direct" };
     localList = list;
@@ -1877,7 +1904,7 @@ export function start(): void {
    *
    * The one connected, by default; or any in the directory, so a member
    * on nixamp.com with a feed to share picks a machine to carry it rather
-   * than first finding the Remote panel. Picking one connects to it as a
+   * than first finding the Server panel. Picking one connects to it as a
    * viewer -- the session says member -- and the link stays in the box
    * for Play link.
    */
@@ -1959,7 +1986,7 @@ export function start(): void {
     if (mode !== "remote") {
       note = directoryServers.length > 0
         ? "Pick a server to go live on, beside the link."
-        : "Connect to a server first: Browse the directory, or paste its address in the Remote panel.";
+        : "Connect to a server first: Browse the directory, or paste a server's link in the Server panel.";
       draw();
       // The thing that is missing, put under the cursor.
       if (directoryServers.length > 0) dom.linkServer.focus();
@@ -3828,7 +3855,7 @@ export function start(): void {
       dom.serversPanel.hidden = false;
       dom.serversNote.textContent = list.length === 0
         ? "No servers yet. `nixamp server add --here` remembers the one you are running."
-        : "The machines on your account. View one, administer it, or forget it.";
+        : "The machines on your account. Arriving signed in, this page connects to your default one, or the first that answers; a link you arrive with goes live there.";
 
       for (const entry of list) {
         const item = document.createElement("li");
@@ -3869,6 +3896,21 @@ export function start(): void {
           open.title = admin.title = "That machine is not answering. Start nixamp on it.";
         });
 
+        // Which of these the page lands on when you arrive signed in. The
+        // first that answers unless one is chosen; chosen is shown as such.
+        const isDefault = defaultServer() === originOf(entry.url);
+        const makeDefault = document.createElement("button");
+        makeDefault.type = "button";
+        makeDefault.className = "ghost";
+        makeDefault.textContent = isDefault ? "✓ Default" : "Make default";
+        makeDefault.title = isDefault
+          ? "The server this page connects to when you arrive signed in. Press to go back to the first that answers."
+          : "Connect to this server whenever you arrive signed in";
+        makeDefault.addEventListener("click", () => {
+          setDefaultServer(isDefault ? "" : originOf(entry.url));
+          void loadServers();
+        });
+
         const forget = document.createElement("button");
         forget.type = "button";
         forget.className = "ghost";
@@ -3885,7 +3927,7 @@ export function start(): void {
           })();
         });
 
-        item.append(label, open, admin, forget);
+        item.append(label, open, admin, makeDefault, forget);
         dom.serversList.append(item);
       }
     } catch {
@@ -4295,7 +4337,69 @@ export function start(): void {
     void loadParties();
     void loadConnections();
     openInvitedStream();
+    // A signed-in person lands on their default server, and a link they
+    // arrived with goes live there. With nobody signed in, or no server of
+    // theirs answering, the link is played here where the browser can.
+    const landed = await connectDefaultServer();
+    if (sharedLink !== "") {
+      const link = sharedLink;
+      sharedLink = "";
+      if (landed) askedToPlay = `golive:${link}`;
+      else void playLink(link);
+    }
   };
+
+  /**
+   * The server a signed-in person lands on: the one they marked as their
+   * default, else the first on their account that answers, driven with
+   * the account's own key. Only when nothing else was asked of the page;
+   * an invite, a shared stream, or an address already connecting wins.
+   */
+  async function connectDefaultServer(): Promise<boolean> {
+    if (meId === "" || mode === "remote" || invited !== "") return false;
+    let list: { name: string; url: string; key: string }[] = [];
+    try {
+      const answer = await fetch("/api/v1/servers");
+      if (!answer.ok) return false;
+      list = ((await answer.json()) as { servers?: typeof list }).servers ?? [];
+    } catch {
+      return false;
+    }
+    if (list.length === 0) return false;
+    const preferred = defaultServer();
+    const ordered = [...list].sort((a, b) => Number(originOf(b.url) === preferred) - Number(originOf(a.url) === preferred));
+    for (const entry of ordered) {
+      // Asked before trying: a machine that is off looks exactly like one
+      // that is on until you connect and nothing happens.
+      if ((await probeServer(entry.url, undefined, entry.key)) === null) continue;
+      // Something else connected while the probe was out: theirs wins.
+      // (Read through a cast: the narrowing above does not know about awaits.)
+      if ((mode as string) === "remote") return false;
+      viewerOnly = false;
+      askedToPlay = "";
+      dom.remoteUrl.value = entry.key ? `${entry.url}/admin/${entry.key}` : entry.url;
+      note = `Connecting to ${entry.name}, your server…`;
+      draw();
+      dom.remoteForm.requestSubmit();
+      return true;
+    }
+    return false;
+  }
+
+  /** The origin of the server a person chose to land on, or "" for the first that answers. */
+  function defaultServer(): string {
+    try {
+      return localStorage.getItem(DEFAULT_SERVER_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  }
+  function setDefaultServer(origin: string): void {
+    try {
+      if (origin === "") localStorage.removeItem(DEFAULT_SERVER_KEY);
+      else localStorage.setItem(DEFAULT_SERVER_KEY, origin);
+    } catch { /* private mode */ }
+  }
 
   /**
    * Open the stream this page was linked to, once there is somebody to open it.
@@ -4471,7 +4575,9 @@ export function start(): void {
   } catch { /* a URL we cannot read is a URL with no invite in it */ }
   // A shared link that is not a nixamp stream: played here where the
   // browser can, once the page is up; otherwise it waits in the box.
-  if (sharedLink !== "") void playLink(sharedLink);
+  // A shared link that is not a nixamp stream waits for the answer to "who
+  // is signed in": with a default server it goes live there; without one
+  // it is played here, where the browser can. See askWhoIsSignedIn.
 
   // ---- panels: shown, shaded, closed, and in what order ---------------------
   //
@@ -5314,6 +5420,13 @@ export function start(): void {
     if (asked.startsWith("link:")) {
       askedToPlay = "";
       void playLink(asked.slice("link:".length));
+      return;
+    }
+    // A link to go live with here, once the server has said who we are.
+    if (asked.startsWith("golive:")) {
+      askedToPlay = "";
+      dom.linkUrl.value = asked.slice("golive:".length);
+      void checkAdmin().then(() => goLiveFromBox());
       return;
     }
     // A track in this server's library, shared by its number.
