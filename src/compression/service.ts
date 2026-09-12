@@ -8,16 +8,17 @@
  * translates flags into the routes. There is no second copy of the rules.
  */
 import { statSync } from "node:fs";
-import { codecsOf } from "../audio.ts";
-import { type Channel, type Channels, GIVE_UP, REDIAL } from "../channels.ts";
+import { codecsOf, videoArgs } from "../audio.ts";
+import { type Channel, type ChannelInfo, type Channels, GIVE_UP, type PullThrough, REDIAL } from "../channels.ts";
 import { type Analysis, analyzeSample, SAMPLE_MAX_BYTES, SAMPLE_MAX_SECONDS } from "./analyze.ts";
 import { Pool } from "./codec.ts";
-import { type Mode, RelayError } from "./envelope.ts";
+import { type Boundary, type Mode, RelayError } from "./envelope.ts";
 import { AnalysisJobs, type Job } from "./jobs.ts";
 import { ChannelMetrics, type ChannelMetricsSnapshot } from "./metrics.ts";
 import { type ChannelPolicy, type LosslessPolicy, variantOf } from "./policy.ts";
-import { receiveRelay, RelayRefused } from "./receiver.ts";
+import { type Accepted, probeRelay, receiveRelay, RelayRefused } from "./receiver.ts";
 import { RelayEncoder, type RelayListener, type RelaySession } from "./relay.ts";
+import { relayThrough, sourceThrough, unreadable } from "./source.ts";
 import { type GlobalSettings, PolicyStore } from "./store.ts";
 import { type Prepared, StaticCache } from "./static.ts";
 
@@ -101,7 +102,16 @@ export interface ChannelStatus {
 }
 
 export type RelayAnswer =
-  | { ok: true; session: RelaySession; codecs: Mode[]; generation: number; kind: "audio" | "video" | "" }
+  | {
+      ok: true;
+      session: RelaySession;
+      codecs: Mode[];
+      generation: number;
+      kind: "audio" | "video" | "";
+      /** Which bytes the stream carries, and what is inside them. */
+      boundary: Boundary;
+      media: ChannelInfo["codecs"] | null;
+    }
   | { ok: false; status: 404 | 406 | 409 | 503; code: string; error: string };
 
 interface Running {
@@ -110,7 +120,17 @@ interface Running {
   variant: string;
 }
 
-/** An incoming relay: this server as the receiver, dialling again when it drops. */
+/**
+ * An incoming relay: this server as the receiver.
+ *
+ * Two shapes, decided by what the sender says it carries. A channel-boundary
+ * relay is the sender's finished output, so it is fed straight into a
+ * channel here and dialled again by this class when it drops. A
+ * source-boundary relay is the original transport stream, so it is handed
+ * to a channel's own ffmpeg as a source read through us -- which plays it
+ * exactly as the sender would have, lets it be relayed on again, and puts
+ * the redialling in the channel where it already lives.
+ */
 class Incoming {
   generation = 0;
   reconnects = 0;
@@ -223,7 +243,23 @@ export class CompressionService {
     this.statics = options.cacheDir
       ? new StaticCache(options.cacheDir, { pool: this.pool, ...(options.maxCacheBytes !== undefined ? { maxBytes: options.maxCacheBytes } : {}) })
       : null;
+    // Whether a pulled source is read here rather than by ffmpeg, decided at
+    // every dial: only when the channel's policy asks for the source boundary
+    // and the source is one we can read exactly (a plain transport stream).
+    // A channel we brought in from another nixamp's source-boundary relay is
+    // itself read through us, so it can be relayed on.
+    this.channels.setThrough((info, from, input, audio) => {
+      const relayed = this.relaySource.get(info.id);
+      if (relayed) return relayThrough(relayed.from, relayed.key);
+      const policy = this.store.get(info.id).losslessCompression;
+      if (policy.mode === "off" || policy.boundary !== "source") return null;
+      if (unreadable(info, from, input, audio) !== null) return null;
+      return sourceThrough(info.source ?? "");
+    });
   }
+
+  /** Incoming source-boundary relays, so their channel is read through us. */
+  private readonly relaySource = new Map<string, { from: string; key: string | null }>();
 
   private get channels(): Channels {
     return this.options.channels;
@@ -239,8 +275,15 @@ export class CompressionService {
       lossless.mode = "off";
       reason = "compression is off for the whole server";
     } else if (lossless.mode !== "off" && lossless.boundary === "source") {
-      lossless.mode = "off";
-      reason = "original source bytes are unavailable: this server's sources are read by ffmpeg, and only the channel boundary can be relayed";
+      // The source boundary is available only for a source we can read here.
+      // A live channel that is not read through us cannot offer it; a channel
+      // that is not on yet is given the benefit of the doubt until it is.
+      const info = this.channels.info(id);
+      const why = info ? unreadable(info, 0, [], "") : null;
+      if (why !== null) {
+        lossless.mode = "off";
+        reason = `original source bytes are unavailable: ${why}`;
+      }
     }
     return {
       losslessCompression: lossless,
@@ -333,7 +376,9 @@ export class CompressionService {
     }
     // A receiver that cannot undo the transform gets a variant without it.
     const variantPolicy: LosslessPolicy = { ...policy, tsAware: policy.tsAware && codecs.includes("ts-zstd") };
-    const variant = variantOf(variantPolicy);
+    // The boundary is part of the variant: a source relay and a channel
+    // relay are two different streams, and two different compressors.
+    const variant = `${policy.boundary}:${variantOf(variantPolicy)}`;
     let running = this.running.get(id);
     if (running && running.variant !== variant) {
       // One compressor per channel. A second variant would be a second
@@ -341,17 +386,32 @@ export class CompressionService {
       return { ok: false, status: 409, code: "VARIANT_IN_USE", error: "this channel is already being relayed under a different codec set; try again when that relay ends" };
     }
     if (!running) {
-      const started = this.startEncoder(id, variantPolicy, variant);
-      if (!started) return { ok: false, status: 503, code: "CHANNEL_GONE", error: "the channel ended before the relay could start" };
+      const started = this.startEncoder(id, variantPolicy, variant, policy.boundary);
+      if (!started) {
+        return started === null
+          ? { ok: false, status: 503, code: "CHANNEL_GONE", error: "the channel ended before the relay could start" }
+          : { ok: false, status: 409, code: "SOURCE_BOUNDARY_UNAVAILABLE", error: "the source is not being read through this server, so its original bytes are not available to relay" };
+      }
       running = started;
     }
-    // The opening bytes and the join point, in the same tick.
-    const preface = this.channels.opening(id);
+    // For the channel boundary, the opening bytes are the preface. The source
+    // boundary has none: a joining demuxer re-syncs on the next PAT and
+    // keyframe, exactly as it does when a live source is joined.
+    const preface = policy.boundary === "source" ? [] : this.channels.opening(id);
     const session = running.encoder.join(listener, preface);
-    return { ok: true, session, codecs, generation: running.encoder.generation, kind: this.channels.kindOf(id) ?? "" };
+    return {
+      ok: true,
+      session,
+      codecs,
+      generation: running.encoder.generation,
+      kind: this.channels.kindOf(id) ?? "",
+      boundary: policy.boundary,
+      media: this.channels.info(id)?.codecs ?? null,
+    };
   }
 
-  private startEncoder(id: string, policy: LosslessPolicy, variant: string): Running | null {
+  /** Null: the channel ended. False: the source boundary was asked for but is not being read through us. */
+  private startEncoder(id: string, policy: LosslessPolicy, variant: string, boundary: Boundary): Running | null | false {
     this.generation = (this.generation + 1) % 0xffff_ffff;
     const metrics = this.metrics.get(id) ?? new ChannelMetrics();
     this.metrics.set(id, metrics);
@@ -361,7 +421,7 @@ export class CompressionService {
       policy,
       pool: this.pool,
       metrics,
-      boundary: "channel",
+      boundary,
       onAbort: () => {
         if (record && this.running.get(id) === record) {
           this.running.delete(id);
@@ -378,22 +438,58 @@ export class CompressionService {
         }
       },
     });
-    const detach = this.channels.listen(id, {
-      write: (chunk) => encoder.write(chunk),
-      end: () => encoder.end(),
-      pending: () => metrics.queueBytes,
-    });
-    if (detach === null) return null;
+    const face = {
+      write: (chunk: Buffer): boolean => encoder.write(chunk),
+      end: (): void => encoder.end(),
+      pending: (): number => metrics.queueBytes,
+    };
+    // The source boundary taps the source's own bytes; the channel boundary
+    // is one more ordinary listener on the channel's output.
+    const detach = boundary === "source" ? this.channels.tapSource(id, face) : this.channels.listen(id, face);
+    if (detach === null) return boundary === "source" ? false : null;
     encoder.attach();
     record = { encoder, detach, variant };
     this.running.set(id, record);
     return record;
   }
 
-  /** Start listening to another nixamp's channel as one of ours. */
-  pull(id: string, from: string, key: string | null, name: string): { ok: true } | { ok: false; status: 409 | 400; error: string } {
+  /**
+   * Start listening to another nixamp's channel as one of ours. Probes the
+   * relay first to learn its boundary: a channel-boundary relay is decoded
+   * and its bytes are the channel's output directly; a source-boundary relay
+   * is the original transport stream, so it is read through ffmpeg here
+   * exactly as a pulled source would be, and can be relayed on again.
+   */
+  async pull(id: string, from: string, key: string | null, name: string): Promise<{ ok: true } | { ok: false; status: 409 | 400 | 502; error: string }> {
     if (!/^https?:\/\//i.test(from)) return { ok: false, status: 400, error: "the relay address must be http or https" };
     if (this.channels.has(id) || this.incoming.has(id)) return { ok: false, status: 409, error: `channel "${id}" is already on` };
+    let accepted: Accepted;
+    try {
+      accepted = await probeRelay(from, key);
+    } catch (error) {
+      const message = error instanceof RelayRefused ? `the relay refused: ${error.message}` : (error as Error).message;
+      return { ok: false, status: 502, error: message };
+    }
+    if (accepted.boundary === "source") {
+      // The upstream sends the original transport stream. Read it through
+      // ffmpeg here: the through-provider sees this registration and hands
+      // ffmpeg the decoded bytes. It can then be relayed on at either
+      // boundary, since its source now passes through this process.
+      const media = accepted.media;
+      const kind: "audio" | "video" = accepted.kind === "audio" ? "audio" : "video";
+      const encode = kind === "video"
+        ? videoArgs(media ?? { video: "h264", audio: "aac", container: "mpegts" })
+        : ["-vn", "-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"];
+      this.relaySource.set(id, { from, key });
+      // A placeholder source string: the through-provider supplies the bytes,
+      // so this is only what a listener would never see and a restart reads.
+      const channel = this.channels.pull(id, name, from, encode, kind, true, undefined, [], "", { live: true, position: 0 }, media ?? undefined);
+      if (!channel) {
+        this.relaySource.delete(id);
+        return { ok: false, status: 409, error: `channel "${id}" is already on` };
+      }
+      return { ok: true };
+    }
     const inbound = new Incoming(id, from, key, name, this.channels, this.options.onEvent ?? (() => undefined), (gone) => this.incoming.delete(gone));
     this.incoming.set(id, inbound);
     inbound.start();
@@ -402,6 +498,7 @@ export class CompressionService {
 
   /** Stop an incoming relay, and the channel it feeds. */
   stopPull(id: string): boolean {
+    if (this.relaySource.delete(id)) return this.channels.stop(id);
     const inbound = this.incoming.get(id);
     if (!inbound) return false;
     inbound.stop();
