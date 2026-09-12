@@ -28,7 +28,7 @@ import {
 import { Ingest, normaliseFormat } from "./ingest.ts";
 import {
   Channels, cleanId, generatedId, rememberChannels, rememberedChannels, rememberedNow,
-  type Channel, type RememberedChannel,
+  type Channel, type ChannelInfo, type RememberedChannel,
 } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
@@ -1170,18 +1170,25 @@ export function cookiesFile(): string {
   }
 }
 
-/** What the page is told about a link it asked to play. */
-function shownLink(channelId: string, link: ResolvedLink) {
+/**
+ * What the page is told about a link it asked to play.
+ *
+ * Whether it is live is the channel's answer where there is one: yt-dlp
+ * says nothing about an IPTV feed's liveness, and a feed told to the page
+ * as a film got a Download button and a seek bar for a stream with no end.
+ */
+function shownLink(channelId: string, link: ResolvedLink, channel?: ChannelInfo) {
+  const live = channel?.live ?? link.live;
   return {
     kind: "live",
     channel: channelId,
-    name: link.title,
-    live: link.live,
+    name: channel?.name ?? link.title,
+    live,
     video: link.video,
     duration: link.duration,
     extractor: link.extractor,
     // A live has no whole to keep; a bare file can be fetched by the browser itself.
-    download: !link.live && link.extractor !== "direct",
+    download: !live && link.extractor !== "direct",
   };
 }
 
@@ -3165,8 +3172,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    /*
+     * A link, fetched by this server and carried as a channel.
+     *
+     * Played: started on demand, stopped a minute after the last viewer
+     * leaves. Live (`{ live: true }`, and always for a member): kept,
+     * remembered across a restart, listed in the directory with a room
+     * code, and -- for a member -- marked theirs and counted against what
+     * they may have on at once, exactly like a file from the library.
+     */
     if (path === "/api/links/play" && request.method === "POST") {
-      let body: { url?: unknown } = {};
+      let body: { url?: unknown; live?: unknown } = {};
       try {
         body = JSON.parse(await readBody(request)) as typeof body;
       } catch {
@@ -3184,11 +3200,51 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
       const channelId = linkChannelId(link);
       const known = links.get(link);
+      // A member's is always a live: a decoder started on somebody else's
+      // machine is theirs to own, not a thing left running anonymously.
+      const goLive = body.live === true || liveBy !== "";
+      /**
+       * On the air and kept, as going live means; for a member, theirs.
+       * Answers "" or a refusal. `fresh` is a channel this very request
+       * started, which is nobody's yet and was counted before it was.
+       */
+      const putOnTheAir = (fresh: boolean): string => {
+        const channels = options.channels as Channels;
+        const info = channels.info(channelId);
+        if (!info) return "";
+        if (liveBy && !info.startedBy) {
+          // Somebody's already, and not started on demand: the owner's.
+          if (!fresh && !channels.isEphemeral(channelId)) return "that stream is the owner's";
+          if (!fresh) {
+            const refusal = memberLiveRefusal(channels, liveBy);
+            if (refusal) return refusal;
+          }
+          info.startedBy = liveBy;
+        }
+        channels.keep(channelId);
+        options.rememberChannels?.(rememberedNow(channels));
+        return "";
+      };
       if (options.channels.has(channelId) && known) {
-        json(response, 200, shownLink(channelId, known));
+        if (goLive) {
+          const refusal = putOnTheAir(false);
+          if (refusal) {
+            json(response, refusal.endsWith("owner's") ? 403 : 429, { error: refusal });
+            return;
+          }
+          void options.live?.announce?.();
+        }
+        json(response, 200, shownLink(channelId, known, options.channels.info(channelId)));
         return;
       }
-      if (!options.channels.has(channelId) && options.channels.ephemeralCount >= MAX_ON_DEMAND) {
+      if (!options.channels.has(channelId) && liveBy) {
+        const refusal = memberLiveRefusal(options.channels, liveBy);
+        if (refusal) {
+          json(response, 429, { error: refusal });
+          return;
+        }
+      }
+      if (!options.channels.has(channelId) && !goLive && options.channels.ephemeralCount >= MAX_ON_DEMAND) {
         json(response, 429, { error: `this server is already carrying ${MAX_ON_DEMAND} channels on demand; try again in a minute` });
         return;
       }
@@ -3222,12 +3278,20 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           json(response, 409, { error: "that link is already starting" });
           return;
         }
-        options.channels.ephemeral(channelId);
+        if (goLive) putOnTheAir(true);
+        else options.channels.ephemeral(channelId);
         // Told to the directory now, so the room code arrives with the
         // channel rather than at the next heartbeat, ninety seconds on.
         void options.live?.announce?.();
+      } else if (goLive) {
+        const refusal = putOnTheAir(false);
+        if (refusal) {
+          json(response, refusal.endsWith("owner's") ? 403 : 429, { error: refusal });
+          return;
+        }
+        void options.live?.announce?.();
       }
-      json(response, 200, shownLink(channelId, resolved));
+      json(response, 200, shownLink(channelId, resolved, options.channels.info(channelId)));
       return;
     }
 
@@ -3495,6 +3559,41 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         const leave = (): void => detach();
         request.on("close", leave);
         response.on("close", leave);
+        return;
+      }
+
+      /*
+       * Rename what is on the air. A link goes on as "906" or whatever the
+       * file was called, and the directory lists that; the person who put it
+       * on knows what it is. The owner renames anything; a member, their own.
+       */
+      if (action === undefined && request.method === "PATCH") {
+        const info = channels.info(id);
+        if (!info) {
+          json(response, 404, { error: "nothing is playing on that channel" });
+          return;
+        }
+        if (liveBy && info.startedBy !== liveBy) {
+          json(response, 403, { error: "that stream is not yours to rename" });
+          return;
+        }
+        let body: { name?: unknown } = {};
+        try {
+          body = JSON.parse(await readBody(request)) as typeof body;
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+        const name = typeof body.name === "string" ? body.name.replace(/[\r\n\t]+/g, " ").trim().slice(0, 120) : "";
+        if (name === "") {
+          json(response, 400, { error: "a name is needed" });
+          return;
+        }
+        info.name = name;
+        options.rememberChannels?.(rememberedNow(channels));
+        // Listed under the new name now, not at the next heartbeat.
+        void options.live?.announce?.();
+        json(response, 200, { ok: true, channel: id, name });
         return;
       }
 

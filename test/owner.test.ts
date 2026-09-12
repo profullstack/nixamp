@@ -118,19 +118,23 @@ test("a member may go live, and take off what they put on, and nothing else that
   assert.equal(needsMember("/api/tracks/3/live", "POST"), true);
   assert.equal(needsMember("/api/catalogs/k/entries/e/live", "POST"), true);
   assert.equal(needsMember("/api/channels/cat-e/keep", "POST"), true);
-  // Taking off: the handler checks whose; the gate lets a member ask.
+  // A link -- YouTube, an IPTV feed -- going on the air; the handler marks and counts it.
+  assert.equal(needsMember("/api/links/play", "POST"), true);
+  // Taking off, renaming: the handler checks whose; the gate lets a member ask.
   assert.equal(needsMember("/api/channels/cat-e", "DELETE"), true);
-  // Not a member's: the source, the connections, the catalogs, the links,
-  // restarting somebody else's channel, publishing.
+  assert.equal(needsMember("/api/channels/cat-e", "PATCH"), true);
+  // Not a member's: the source, the connections, the catalogs, fetching a
+  // link to keep, restarting somebody else's channel, publishing.
   assert.equal(needsMember("/api/source", "POST"), false);
   assert.equal(needsMember("/api/connections", "GET"), false);
   assert.equal(needsMember("/api/catalogs", "POST"), false);
-  assert.equal(needsMember("/api/links/play", "POST"), false);
+  assert.equal(needsMember("/api/links/download", "GET"), false);
+  assert.equal(needsMember("/api/links/play", "GET"), false);
   assert.equal(needsMember("/api/channels/cat-e/restart", "POST"), false);
   assert.equal(needsMember("/api/channels/cat-e", "POST"), false);
   assert.equal(needsMember("/api/live/start", "POST"), false);
   // Everything a member may do is something that needs administering at all.
-  for (const [path, method] of [["/api/tracks/3/live", "POST"], ["/api/catalogs/k/entries/e/live", "POST"], ["/api/channels/x/keep", "POST"], ["/api/channels/x", "DELETE"]] as const) {
+  for (const [path, method] of [["/api/tracks/3/live", "POST"], ["/api/catalogs/k/entries/e/live", "POST"], ["/api/channels/x/keep", "POST"], ["/api/channels/x", "DELETE"], ["/api/channels/x", "PATCH"], ["/api/links/play", "POST"]] as const) {
     assert.equal(needsAdmin(path, method), true, `${method} ${path}`);
   }
 });

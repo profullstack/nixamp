@@ -1492,3 +1492,81 @@ test("a member may put a file on the air, up to a point, and take only their own
     engine.stop();
   }
 });
+
+test("a member may go live with a link, an IPTV feed with no extension included, and rename what they put on", { timeout: 30_000 }, async () => {
+  // Tokens of their own: the throttle is per member and per process, and the
+  // members above have spent their minute.
+  const members: Record<string, string> = { "feed-token": "member-7", "peer-token": "member-6" };
+  const site = (async (_url: string | URL, init?: RequestInit) => {
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const token = /^Bearer (.+)$/.exec(headers["authorization"] ?? "")?.[1] ?? "";
+    const id = members[token];
+    return { ok: Boolean(id), json: async () => (id ? { account: { id } } : { error: "no" }) } as unknown as Response;
+  }) as unknown as typeof fetch;
+  const say = (json: string): string[] => ["sh", "-c", `printf '%s' '${json}'`];
+  // What the feed is: a transport stream with no end, as ffprobe reads a live one.
+  const told = say('{"streams":[{"codec_type":"video","codec_name":"h264","width":1280,"height":720},{"codec_type":"audio","codec_name":"aac"}],"format":{"format_name":"mpegts"}}');
+  const engine = new PlayerEngine([track("/m/a.mp4")], "/m", { ffmpeg: ["true"], ffprobe: told, play: null });
+  const channels = new Channels({ ffmpeg: ["true"] });
+  const server = createServer(engine, {
+    web: null, media: false, version: "test",
+    key: "ctrl-key", listenKey: "listen-key",
+    owner: new Owner({ ownerId: "owner-1", site: "https://nixamp.com", fetcher: site }),
+    // No yt-dlp: the feed is taken as it is and ffprobe decides.
+    channels, ffprobe: told, ytdlp: null,
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+  const feed = "http://23.152.40.104/tipoffsport/abc/906";
+  const play = (body: Record<string, unknown>, key: string, session = ""): Promise<Response> =>
+    fetch(`${base}/api/links/play?k=${key}${session ? `&session=${session}` : ""}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+  const rename = (id: string, name: string, key: string, session = ""): Promise<Response> =>
+    fetch(`${base}/api/channels/${id}?k=${key}${session ? `&session=${session}` : ""}`, {
+      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }),
+    });
+
+  try {
+    // A stranger with the listen link may not have the server fetch anything.
+    assert.equal((await play({ url: feed }, "listen-key")).status, 403);
+    // A member may, and it is a live: kept, theirs, and told as live.
+    const first = await play({ url: feed }, "listen-key", "feed-token");
+    assert.equal(first.status, 200, await first.clone().text());
+    const shown = (await first.json()) as { channel: string; name: string; live: boolean; download: boolean };
+    assert.match(shown.channel, /^url-[0-9a-f]{12}$/);
+    assert.equal(shown.name, "906");
+    assert.equal(shown.live, true, "a transport stream with no end is live, whatever yt-dlp did not say");
+    assert.equal(shown.download, false);
+    assert.equal(channels.info(shown.channel)?.startedBy, "member-7");
+    assert.equal(channels.isEphemeral(shown.channel), false, "kept, not on demand");
+    // Dialled as pasted, so a panel's per-request token is minted on every redial.
+    assert.equal(channels.info(shown.channel)?.source, feed);
+
+    // Renaming: the one who put it on may; another member may not; the owner may.
+    assert.equal((await rename(shown.channel, "Tipoff Sport 906", "listen-key", "peer-token")).status, 403);
+    assert.equal((await rename(shown.channel, "Tipoff Sport 906", "listen-key", "feed-token")).status, 200);
+    assert.equal(channels.info(shown.channel)?.name, "Tipoff Sport 906");
+    assert.equal((await rename(shown.channel, "  ", "ctrl-key")).status, 400);
+    assert.equal((await rename(shown.channel, "906 again", "ctrl-key")).status, 200);
+    // Asked again by its member, it is the same channel under its new name.
+    const again = (await (await play({ url: feed }, "listen-key", "feed-token")).json()) as { channel: string; name: string };
+    assert.deepEqual([again.channel, again.name], [shown.channel, "906 again"]);
+
+    // The owner's plain play is on demand, as it was; asked to go live, it is kept.
+    const other = "http://23.152.40.104/tipoffsport/abc/907";
+    const onDemand = (await (await play({ url: other }, "ctrl-key")).json()) as { channel: string };
+    assert.equal(channels.isEphemeral(onDemand.channel), true);
+    assert.equal(channels.info(onDemand.channel)?.startedBy, undefined);
+    assert.equal((await play({ url: other, live: true }, "ctrl-key")).status, 200);
+    assert.equal(channels.isEphemeral(onDemand.channel), false);
+    // Somebody else's, kept: not a member's to adopt by asking for the same link.
+    const theirs = await play({ url: other }, "listen-key", "peer-token");
+    assert.equal(theirs.status, 403);
+  } finally {
+    channels.stopAll();
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});

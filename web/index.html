@@ -103,19 +103,24 @@
                   title="Full screen" aria-label="Full screen">⛶</button>
           <button id="download-now" type="button" class="ghost" hidden
                   title="Download now: the server fetches the whole thing with yt-dlp and hands it to this device">⤓ Download</button>
-          <!-- For whoever administers the connected server: have it fetch the
-               link that is playing here and put it on the air for everybody,
-               listed, with a phone code. -->
+          <!-- For the owner or any member on the connected server: have it
+               fetch the link that is playing here and put it on the air for
+               everybody, listed in the directory with Join live and a phone
+               code. -->
           <button id="make-public" type="button" class="golive" hidden
-                  title="Make public: the server fetches this link and puts it on the air for everyone, listed in the directory">● MAKE PUBLIC</button>
+                  title="Go live: the server fetches this link and puts it on the air for everyone, listed in the directory">● GO LIVE</button>
         </div>
         <!-- Any link, played here: YouTube, Vimeo and SoundCloud by their own
-             players in a frame, a file by the page's own. Whoever administers
-             the connected server can then make it public: the server fetches
-             it (yt-dlp) and carries it as a channel of its own. -->
+             players in a frame, a file by the page's own. Anything else -- an
+             IPTV feed, a stream with no extension -- the connected server
+             fetches (yt-dlp, ffmpeg) and carries as a channel of its own, on
+             the air for everyone; the owner or any signed-in member may ask.
+             The picker says which server: the one connected, or another from
+             the directory. -->
         <form id="link-form" class="picker link-form">
-          <input id="link-url" type="url" inputmode="url" placeholder="Paste a link: YouTube, Vimeo, SoundCloud, a file…"
+          <input id="link-url" type="url" inputmode="url" placeholder="Paste a link: YouTube, an IPTV feed, a file…"
                  aria-label="A link to play" />
+          <select id="link-server" aria-label="Which server goes live with it" title="Which server goes live with it" hidden></select>
           <button type="submit" class="button">Play link</button>
         </form>
       </section>
