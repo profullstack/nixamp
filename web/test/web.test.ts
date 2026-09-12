@@ -11,7 +11,7 @@ import {
   apiUrl, blockedAsMixedContent, canPlayHevc, mediaUrl, needsAName, normalizeBase, parseSnapshot,
   probeServer, refusesUs, sentToPlay, splitShareLink,
 } from "../src/remote.ts";
-import { byName, isPlayable, isTransportFile, needsVideoElement } from "../src/player.ts";
+import { byName, isPlayable, isSameOrigin, isTransportFile, needsVideoElement } from "../src/player.ts";
 import { isTelevision, pageSize, pageWindow } from "../src/tv.ts";
 import { fixtureState, kickoff, scoreLine } from "../src/score.ts";
 import { isMatchupName } from "../../src/matchup.ts";
@@ -1292,4 +1292,20 @@ test("what just happened is said under the link box and kept in the Log, in word
   assert.doesNotMatch(body, /innerHTML/);
   // Go live with nowhere to go puts the cursor on the thing that is missing.
   assert.match(app, /if \(directoryServers\.length > 0\) dom\.linkServer\.focus\(\);/);
+});
+
+test("a cross-origin file plays without the analyser, so a podcast is not silenced", () => {
+  // A blob and a data URL are the page's own; a foreign http address is not,
+  // and asking to read it (crossOrigin) is what made a podcast fail to load.
+  assert.equal(isSameOrigin("blob:https://nixamp.com/abc"), true);
+  assert.equal(isSameOrigin("data:audio/mpeg;base64,AAAA"), true);
+  assert.equal(isSameOrigin("https://media.atproto.com/off-protocol/ep.mp3"), false);
+  assert.equal(isSameOrigin("not a url"), false);
+
+  const player = readFileSync(join(webDir, "src/player.ts"), "utf8");
+  // The attribute is decided per source, not set once for good in the constructor.
+  assert.doesNotMatch(player, /element\.crossOrigin = "anonymous";/);
+  assert.match(player, /wanted\.crossOrigin = cors \? "anonymous" : null;/);
+  // The analyser is wired only when the source may be read.
+  assert.match(player, /if \(this\.analysable\) this\.ensureGraph\(this\.active\);/);
 });

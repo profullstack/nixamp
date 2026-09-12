@@ -119,6 +119,21 @@ export interface PlayerHandlers {
 /** How many analyser bins we ask for. 2048 samples, as in the terminal app. */
 export const FFT_SIZE = 2048;
 
+/**
+ * Whether an address is the page's own origin, and so may be read by the
+ * analyser without the site's leave. A blob is the page's own; anything that
+ * does not parse is treated as not, which errs on the side of just playing it.
+ */
+export function isSameOrigin(url: string): boolean {
+  if (url.startsWith("blob:") || url.startsWith("data:")) return true;
+  try {
+    const origin = globalThis.location?.origin;
+    return origin ? new URL(url, origin).origin === origin : false;
+  } catch {
+    return false;
+  }
+}
+
 /** Audio, or something with a picture. */
 /**
  * Whether a track has to go into the <video> element rather than the <audio>.
@@ -150,6 +165,16 @@ export class BrowserPlayer {
   private readonly wired = new WeakSet<HTMLMediaElement>();
   private active: HTMLMediaElement;
   private frequencies = new Uint8Array(0);
+  /**
+   * Whether the thing now loaded may go through the analyser. A file served
+   * from somewhere that does not allow cross-origin reads cannot: asking to
+   * read it (crossOrigin) makes it fail to load at all, and routing it through
+   * a MediaElementSource without that permission plays silence. So its sound
+   * goes straight to the speakers, and the spectrum sits still for it. A
+   * podcast on a plain CDN is exactly this; a nixamp stream is a same-origin
+   * blob and is fine.
+   */
+  private analysable = true;
 
   constructor(
     private readonly elements: PlayerElements,
@@ -157,8 +182,6 @@ export class BrowserPlayer {
   ) {
     this.active = elements.audio;
     for (const element of [elements.audio, elements.video]) {
-      // The analyser only sees cross-origin media that says we may look.
-      element.crossOrigin = "anonymous";
       element.addEventListener("timeupdate", () => {
         if (element === this.active) {
           this.handlers.onTime(element.currentTime, Number.isFinite(element.duration) ? element.duration : 0);
@@ -274,7 +297,13 @@ export class BrowserPlayer {
     // What it is, said by whoever knew: the list, for a picked file whose
     // name has already been read; the address, for anything with one.
     const kind = track.kind ?? (track.objectUrl ? (track.video ? "mp4" : "audio") : detectKind({ src: track.url }));
+    // Ask to read it only when reading it can work: a blob or a same-origin
+    // file. A cross-origin file with crossOrigin set fails to load, so for
+    // that one the attribute is cleared and it plays without the analyser.
+    // Set before the source is assigned, since the attribute is read then.
     const wanted = needsVideoElement(track.video, kind) ? this.elements.video : this.elements.audio;
+    const cors = track.objectUrl || isSameOrigin(track.url);
+    wanted.crossOrigin = cors ? "anonymous" : null;
     if (wanted !== this.active) {
       this.active.pause();
       this.active.removeAttribute("src");
@@ -300,11 +329,19 @@ export class BrowserPlayer {
       this.handlers.onError(error instanceof Error ? error.message : "that would not play");
       return;
     }
+    // A stream is a same-origin blob whatever its address, so it is analysable
+    // however far away it came from; a direct file is analysable only when it
+    // is the page's own or was let be read.
+    const loaded = this.active.currentSrc || this.active.src || track.url;
+    this.analysable = cors || loaded.startsWith("blob:") || isSameOrigin(loaded);
     if (autoplay) await this.play();
   }
 
   async play(): Promise<void> {
-    this.ensureGraph(this.active);
+    // The analyser captures the element's sound, so wiring it to media that
+    // cannot be read leaves the speakers silent. Such a source plays straight
+    // through instead, with no spectrum. Everything else gets the bars.
+    if (this.analysable) this.ensureGraph(this.active);
     try {
       await this.active.play();
     } catch (error) {
