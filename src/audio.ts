@@ -439,7 +439,7 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
         ...rest,
         "-v", "quiet",
         "-print_format", "json",
-        "-show_entries", "format=format_name,duration:stream=codec_type,codec_name,width,height",
+        "-show_entries", "format=format_name,duration:stream=codec_type,codec_name,width,height:stream_disposition=attached_pic",
         // A transport stream needs looking further into than a file with an
         // index does: there is no header listing the tracks, only packets, and
         // a 4K recording can carry a second of null padding and a long gap to
@@ -461,14 +461,20 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
     child.on("close", () => {
       try {
         const parsed = JSON.parse(out) as {
-          streams?: { codec_type?: string; codec_name?: string; width?: number; height?: number }[];
+          streams?: {
+            codec_type?: string; codec_name?: string; width?: number; height?: number;
+            disposition?: { attached_pic?: number };
+          }[];
           format?: { format_name?: string; duration?: string };
         };
         const streams = parsed.streams ?? [];
         // ffprobe prints seconds as a string, and "N/A" for a stream with no
         // end; both of those read as 0.
         const seconds = Number(parsed.format?.duration ?? 0);
-        const picture = streams.find((s) => s.codec_type === "video");
+        // A cover in an MP3 is a video stream to ffprobe, one picture long.
+        // Read as a film, a podcast is asked for pictures that never come
+        // and writes nothing at all; so an attached picture is not a picture.
+        const picture = streams.find((s) => s.codec_type === "video" && s.disposition?.attached_pic !== 1);
         return done({
           video: picture?.codec_name ?? "",
           audio: streams.find((s) => s.codec_type === "audio")?.codec_name ?? "",

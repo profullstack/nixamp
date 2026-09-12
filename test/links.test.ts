@@ -4,7 +4,8 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  contentTypeFor, directLink, downloadArgs, fileNameFor, inputArgsFor, isDirectMedia, linkChannelId,
+  contentTypeFor, directLink, downloadArgs, fetchPlaylist, fileNameFor, inputArgsFor, isDirectMedia, isPlaylistLink, linkChannelId,
+  parsePlaylist, playlistNameOf,
   mergeDownloadArgs, parseResolved, playableLink, reasonFrom, resolveArgs, resolveLink,
 } from "../src/links.ts";
 
@@ -255,4 +256,66 @@ test("a picture and a sound kept apart come back as a pair, and are put together
   assert.equal(fileNameFor(webm, false), "Never Gonna Give You Up.mkv");
   // Sound alone is still yt-dlp's own pipe, named for the sound.
   assert.equal(fileNameFor(pair, true), "Never Gonna Give You Up.m4a");
+});
+
+test("a playlist by address is a list of files, not a page and not one stream", async () => {
+  // An .m3u is a bare link: ffmpeg cannot read it, but nixamp can, entry by
+  // entry, and asking yt-dlp about it only earns a "generic" shrug.
+  assert.equal(isDirectMedia("https://p0dcasters.com/podcast/off-protocol/playlist.m3u"), true);
+  assert.equal(isDirectMedia("https://radio.example/station.pls"), true);
+  assert.equal(isPlaylistLink("https://p0dcasters.com/podcast/off-protocol/playlist.m3u"), true);
+  assert.equal(isPlaylistLink("https://x.example/live/index.m3u8"), false, "an .m3u8 is one stream in segments");
+  assert.equal(isPlaylistLink("not a url"), false);
+
+  // Named by its address when it does not name itself: the show, not "playlist".
+  assert.equal(playlistNameOf("https://p0dcasters.com/podcast/off-protocol/playlist.m3u"), "off protocol");
+  assert.equal(playlistNameOf("https://x.example/mixes/late_night-sets.m3u"), "late night sets");
+  assert.equal(playlistNameOf("https://x.example/playlist.m3u"), "x.example");
+
+  const direct = directLink("https://p0dcasters.com/podcast/off-protocol/playlist.m3u");
+  assert.equal(direct.extractor, "playlist");
+  assert.equal(direct.live, false);
+  assert.equal(direct.video, false, "no picture is claimed of a list; the first entry is probed");
+  assert.equal(direct.title, "off protocol");
+
+  // The text: its own title wins, entries keep theirs, and relative ones are
+  // taken against the list's address -- a root-relative one included, since
+  // on the web that is what a leading slash means.
+  const text = [
+    "#EXTM3U",
+    "#PLAYLIST:Off Protocol",
+    "#EXTINF:3525,A Thousand PRs in Two Weeks",
+    "https://media.example/off-protocol/one.mp3",
+    "#EXTINF:-1,Second",
+    "two.mp3",
+    "/home/somebody/private.mp3",
+    "#EXTINF:10,Third",
+    "https://media.example/three.mp3",
+  ].join("\n");
+  const list = parsePlaylist(text, "https://p0dcasters.com/podcast/off-protocol/playlist.m3u");
+  assert.equal(list.title, "Off Protocol");
+  assert.deepEqual(list.entries, [
+    { source: "https://media.example/off-protocol/one.mp3", title: "A Thousand PRs in Two Weeks" },
+    { source: "https://p0dcasters.com/podcast/off-protocol/two.mp3", title: "Second" },
+    { source: "https://p0dcasters.com/home/somebody/private.mp3", title: "private.mp3" },
+    { source: "https://media.example/three.mp3", title: "Third" },
+  ]);
+  const pls = parsePlaylist("[playlist]\nFile1=https://radio.example/a\nTitle1=A\nFile2=https://radio.example/b\n", "https://radio.example/station.pls");
+  assert.equal(pls.title, "station");
+  assert.equal(pls.entries.length, 2);
+  assert.equal(pls.entries[0]?.title, "A");
+
+  // Fetched: a good answer is the list, and every kind of bad answer is a sentence.
+  const fetcher = (async (url: string | URL | Request) => {
+    const at = String(url);
+    if (at.endsWith("/good.m3u")) return new Response(text, { status: 200 });
+    if (at.endsWith("/empty.m3u")) return new Response("#EXTM3U\n", { status: 200 });
+    return new Response("nope", { status: 404 });
+  }) as typeof fetch;
+  const good = await fetchPlaylist("https://x.example/good.m3u", fetcher);
+  assert.ok(!("error" in good) && good.entries.length === 4);
+  const empty = await fetchPlaylist("https://x.example/empty.m3u", fetcher);
+  assert.ok("error" in empty && /nothing in it/.test(empty.error));
+  const missing = await fetchPlaylist("https://x.example/missing.m3u", fetcher);
+  assert.ok("error" in missing && /404/.test(missing.error));
 });

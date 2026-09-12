@@ -358,3 +358,24 @@ test("an H.265 channel packages into fMP4 segments a phone can play", { skip: !h
     channels.stopAll();
   }
 });
+
+test("a cover in an MP3 is not a picture", { skip: !ffmpegHere || !ffprobeHere, timeout: 120_000 }, async () => {
+  // A podcast with its artwork attached probes as an audio stream and a
+  // one-frame PNG "video". Read as a film it was asked for pictures that
+  // never came, wrote nothing, and a whole playlist of episodes died.
+  const [cmd, ...rest] = TOOLS.ffmpeg as [string, ...string[]];
+  const out = join(dir, "cover.mp3");
+  const made = spawnSync(cmd, [
+    ...rest, "-hide_banner", "-loglevel", "error", "-y",
+    "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+    "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=1",
+    "-map", "0:a", "-map", "1:v", "-frames:v", "1",
+    "-c:a", "libmp3lame", "-c:v", "png", "-disposition:v", "attached_pic", "-id3v2_version", "3",
+    out,
+  ], { encoding: "utf8", timeout: 60_000 });
+  assert.equal(made.status, 0, made.stderr);
+  const codecs = await codecsOf(TOOLS, out);
+  assert.equal(codecs.audio, "mp3");
+  assert.equal(codecs.video, "", "the attached picture is not a picture");
+  assert.ok((codecs.duration ?? 0) > 0);
+});

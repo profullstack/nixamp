@@ -21,6 +21,8 @@
  */
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { parseM3u, parsePls, type Entry } from "./sources.ts";
+import type { PlaylistEntry } from "./channels.ts";
 
 export interface ResolvedLink {
   /** What to call it: the page's title, or the file's name for a bare file. */
@@ -59,7 +61,7 @@ export interface ResolvedLink {
  * reads it as it is, and asking yt-dlp about it only adds a second and a
  * "generic" extractor's guess.
  */
-const DIRECT = /\.(mp3|m4a|aac|ogg|oga|opus|flac|wav|mp4|m4v|mkv|webm|mov|avi|wmv|flv|mpg|mpeg|m2ts|3gp|ts|m3u8|mpd)(\?.*)?$/i;
+const DIRECT = /\.(mp3|m4a|aac|ogg|oga|opus|flac|wav|mp4|m4v|mkv|webm|mov|avi|wmv|flv|mpg|mpeg|m2ts|3gp|ts|m3u8|mpd|m3u|pls)(\?.*)?$/i;
 
 export function isDirectMedia(url: string): boolean {
   if (/^rtmps?:\/\//i.test(url)) return true;
@@ -201,8 +203,111 @@ export function parseResolved(json: unknown, page: string): ResolvedLink | null 
   };
 }
 
+/**
+ * A list of things to play one after another, by address: an .m3u or a
+ * .pls somebody put on the web. Not an .m3u8, which is one stream cut into
+ * segments and is ffmpeg's to read.
+ */
+export function isPlaylistLink(url: string): boolean {
+  try {
+    return /\.(m3u|pls)$/i.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What to call a list that does not name itself: its file, or, when the
+ * file is only called "playlist", the folder it sits in -- a show's page
+ * hands out /podcast/off-protocol/playlist.m3u, and "off protocol" is the
+ * name in that.
+ */
+export function playlistNameOf(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split("/").filter(Boolean).map((one) => {
+      try {
+        return decodeURIComponent(one);
+      } catch {
+        return one;
+      }
+    });
+    const file = (parts.pop() ?? "").replace(/\.(m3u|pls)$/i, "");
+    const named = /^(playlist|index|list|all|episodes|feed)?$/i.test(file) ? (parts.pop() ?? "") : file;
+    return named.replace(/[-_]+/g, " ").trim() || parsed.hostname;
+  } catch {
+    return url;
+  }
+}
+
+export interface Playlist {
+  /** What the list calls itself on a #PLAYLIST line, else what its address says. */
+  title: string;
+  entries: PlaylistEntry[];
+}
+
+/** A list is read whole, and a very long one is enough of one. */
+export const MAX_PLAYLIST_ENTRIES = 1000;
+export const MAX_PLAYLIST_BYTES = 2_000_000;
+
+/**
+ * A list's text, read: every entry on the web, in order, with the name it
+ * was given. Relative entries are taken against the list's own address.
+ */
+export function parsePlaylist(text: string, url: string): Playlist {
+  const named = /^#PLAYLIST:\s*(.+)$/im.exec(text)?.[1]?.trim() ?? "";
+  let pls = false;
+  try {
+    pls = /\.pls$/i.test(new URL(url).pathname);
+  } catch {
+    pls = false;
+  }
+  const parsed: Entry[] = pls ? parsePls(text, url) : parseM3u(text, url);
+  const entries = parsed
+    .filter((one) => /^https?:\/\//i.test(one.source))
+    .slice(0, MAX_PLAYLIST_ENTRIES)
+    .map((one) => ({ source: one.source, title: one.title }));
+  return { title: named || playlistNameOf(url), entries };
+}
+
+/** A list fetched by address. An error is a sentence for the person who pasted it. */
+export async function fetchPlaylist(
+  url: string,
+  fetcher: typeof fetch = fetch,
+  timeoutMs = 20_000,
+): Promise<Playlist | { error: string }> {
+  try {
+    const answer = await fetcher(url, {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { "user-agent": "nixamp", accept: "audio/x-mpegurl, audio/mpegurl, audio/x-scpls, text/plain;q=0.9, */*;q=0.5" },
+    });
+    if (!answer.ok) return { error: `that playlist answered ${answer.status}` };
+    const list = parsePlaylist((await answer.text()).slice(0, MAX_PLAYLIST_BYTES), url);
+    if (list.entries.length === 0) return { error: "that playlist has nothing in it this can play" };
+    return list;
+  } catch (error) {
+    return { error: `that playlist could not be read: ${(error as Error).message}` };
+  }
+}
+
 /** A bare file link, described without asking anybody. */
 export function directLink(url: string): ResolvedLink {
+  if (isPlaylistLink(url)) {
+    // A list of files: not live, and whether there is a picture is for
+    // ffprobe to say of the first entry, so no picture is claimed here.
+    return {
+      title: playlistNameOf(url),
+      media: url,
+      audio: "",
+      live: false,
+      duration: 0,
+      video: false,
+      headers: {},
+      extractor: "playlist",
+      ext: (url.match(/\.(m3u|pls)$/i)?.[1] ?? "").toLowerCase(),
+      page: url,
+    };
+  }
   return {
     title: fileNameOf(url),
     media: url,

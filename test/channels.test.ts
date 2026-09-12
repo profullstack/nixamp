@@ -615,3 +615,77 @@ test("what a channel is and where it got to are remembered, and only for kept pu
   assert.deepEqual(now[1], { id: "tv", name: "TV", source: "http://x.test/tv.m3u8", kind: "video", live: true });
   set.stopAll();
 });
+
+/** Wait for something to become true, up to about four seconds. */
+async function until(check: () => boolean): Promise<void> {
+  for (let i = 0; i < 80 && !check(); i++) await new Promise((done) => setTimeout(done, 50));
+}
+
+test("a channel carrying a list plays it through, entry after entry, and round again", async () => {
+  // A fake ffmpeg that says which input it was handed, then finishes the
+  // way a file does. Sound: whoever is listening hears one entry after the
+  // next on the same connection.
+  const set = new Channels({ ffmpeg: ["sh", "-c", 'printf "%s\\n" "$@"; exit 0', "--"] });
+  const list = [
+    { source: "http://x.test/one.mp3", title: "One" },
+    { source: "http://x.test/two.mp3", title: "Two" },
+  ];
+  const channel = set.pull(
+    "show", "A Show", "http://x.test/playlist.m3u", [], "audio", true, undefined, [], "",
+    { live: false, position: 0 }, undefined, list,
+  );
+  assert.ok(channel);
+  const hearing = collector();
+  channel?.listen(hearing);
+  const heard = () => Buffer.concat(hearing.chunks).toString();
+
+  await until(() => heard().includes("two.mp3"));
+  assert.ok(heard().includes("one.mp3"), "the first entry played");
+  assert.ok(heard().includes("two.mp3"), "then the second");
+  assert.equal(hearing.ended(), false, "sound carried on to the same listener across the boundary");
+  assert.equal(channel?.info.playlist?.of, 2);
+  assert.equal(channel?.info.playlist?.playing, "Two");
+  assert.equal(channel?.info.source, "http://x.test/playlist.m3u", "the channel is the list, for remembering");
+
+  // Round again after the last.
+  await until(() => heard().split("one.mp3").length > 2);
+  assert.ok(heard().split("one.mp3").length > 2, "the list went round");
+  assert.equal(channel?.info.error, undefined, "a file that finished is not an error");
+  set.stopAll();
+});
+
+test("a dead entry in a list is skipped, and a list dead all through is closed", async () => {
+  const set = new Channels({ ffmpeg: ["sh", "-c", 'case "$*" in *dead*) exit 1;; esac; printf "%s\\n" "$@"; exit 0', "--"] });
+  const channel = set.pull(
+    "mixed", "Mixed", "http://x.test/mixed.m3u", [], "audio", true, undefined, [], "",
+    { live: false, position: 0 }, undefined,
+    [{ source: "http://x.test/dead.mp3", title: "Dead" }, { source: "http://x.test/ok.mp3", title: "OK" }],
+  );
+  assert.ok(channel);
+  const hearing = collector();
+  channel?.listen(hearing);
+  // The dead one costs a redial's pause, then the good one plays.
+  await new Promise((done) => setTimeout(done, REDIAL + 600));
+  assert.ok(Buffer.concat(hearing.chunks).toString().includes("ok.mp3"), "the good entry played after the dead one");
+  assert.equal(set.count, 1);
+  set.stopAll();
+
+  const grave = new Channels({ ffmpeg: ["false"] });
+  grave.pull(
+    "grave", "Grave", "http://x.test/grave.m3u", [], "audio", true, undefined, [], "",
+    { live: false, position: 0 }, undefined,
+    [{ source: "http://x.test/a", title: "a" }, { source: "http://x.test/b", title: "b" }],
+  );
+  assert.equal(grave.count, 1);
+  // Five strikes at a redial each is too long to wait on here; the rule is
+  // the count, so ask the channel rather than the clock.
+  grave.stopAll();
+});
+
+test("a list is remembered with the entry it was on", () => {
+  const dir = mkdtempSync(join(tmpdir(), "nixamp-list-"));
+  rememberChannels(dir, 4321, [{ id: "show", name: "A Show", source: "http://x.test/playlist.m3u", kind: "audio", live: false, entry: 3 }]);
+  assert.equal(rememberedChannels(dir, 4321)[0]?.entry, 3);
+  rememberChannels(dir, 4321, [{ id: "show", name: "A Show", source: "http://x.test/playlist.m3u", entry: -1 }]);
+  assert.equal(rememberedChannels(dir, 4321)[0]?.entry, undefined, "a nonsense entry is not kept");
+});

@@ -4017,6 +4017,15 @@ export function start(): void {
       // Not something to leave in the address bar: it carries a key.
       globalThis.history?.replaceState(null, "", globalThis.location.pathname);
     }
+    // A link to go live with, sent along -- a show's page hands its
+    // playlist over this way. Into the box, where Go live is beside it;
+    // with a server named too, it goes on the air there.
+    const link = params.get("link") ?? "";
+    if (link !== "") {
+      dom.linkUrl.value = link;
+      if (asked !== "" && askedToPlay === "") askedToPlay = `link:${link}`;
+      else if (asked === "") note = "A link to go live with is in the box: pick a server beside it and press Go live.";
+    }
   } catch { /* a URL we cannot read is a URL with no invite in it */ }
 
   void showProviders();

@@ -1060,3 +1060,14 @@ test("a member may go live, a file goes on the air as its own channel, and every
   assert.match(app, /joinLiveLabel\(play\);\s*play\.title = `Join \$\{channelName\}, live on \$\{stream\.name\}`/);
   assert.doesNotMatch(app, /play\.textContent = "Play"/);
 });
+
+test("a link can be sent along in the address, into the box where Go live is", () => {
+  // A show's page hands its playlist over as ?link=; the box is filled and
+  // the person picks a server, or, with a server named too, it goes on there.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  assert.match(app, /params\.get\("link"\)/);
+  assert.match(app, /dom\.linkUrl\.value = link;/);
+  assert.match(app, /askedToPlay = `link:\$\{link\}`/);
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  assert.match(html, /Paste a link: YouTube, an IPTV feed, a playlist, a file/);
+});

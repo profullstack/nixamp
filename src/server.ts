@@ -28,7 +28,7 @@ import {
 import { Ingest, normaliseFormat } from "./ingest.ts";
 import {
   Channels, cleanId, generatedId, rememberChannels, rememberedChannels, rememberedNow,
-  type Channel, type ChannelInfo, type RememberedChannel,
+  type Channel, type ChannelInfo, type PlaylistEntry, type RememberedChannel,
 } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
@@ -60,9 +60,7 @@ import { CompressionService } from "./compression/service.ts";
 import { handleChannelCompression, handleCompressionApi, handleStaticRelay, type RouteContext } from "./compression/routes.ts";
 import { DEFAULT_SITE as NICHEDB, Enricher, type EnrichKind, FIXTURE_TTL_MS } from "./enrich.ts";
 import {
-  contentTypeFor, downloadArgs, fileNameFor, inputArgsFor, linkChannelId, mergeDownloadArgs, playableLink, resolveLink,
-  saveFormat,
-  type ResolvedLink,
+  contentTypeFor, downloadArgs, fetchPlaylist, fileNameFor, inputArgsFor, isPlaylistLink, linkChannelId, mergeDownloadArgs, playableLink, resolveLink, saveFormat, type ResolvedLink,
 } from "./links.ts";
 import { CALL_IN_NUMBER, OPT_IN_PATH, optInPage } from "./optin.ts";
 import pg from "pg";
@@ -1052,6 +1050,9 @@ export interface KnownSource {
   codecs?: Codecs;
   position?: number;
   live?: boolean;
+  /** For a list: its entries, when the caller has them, and which one to start on. */
+  sequence?: PlaylistEntry[];
+  entry?: number;
 }
 
 /** How many times a source that answers nothing is asked, and how far apart. */
@@ -1086,12 +1087,26 @@ export async function pullChannel(
 ): Promise<Channel | null> {
   const tools = { ffmpeg: [], ffprobe, play: null };
   const empty = (c: Codecs): boolean => c.video === "" && c.audio === "";
+  // A list is played through entry by entry. Fetched here when it was not
+  // handed over -- a restart puts a remembered list back on -- and what is
+  // probed is the entry about to play, since the list itself is text.
+  let sequence = known.sequence ?? [];
+  if (sequence.length === 0 && isPlaylistLink(source)) {
+    const list = await fetchPlaylist(source);
+    if ("error" in list) {
+      console.log(`  "${id}": ${list.error}`);
+      return null;
+    }
+    sequence = list.entries;
+  }
+  const startAt = sequence.length > 0 ? Math.min(Math.max(0, known.entry ?? 0), sequence.length - 1) : 0;
+  const probed = sequence[startAt]?.source ?? source;
   // A pair is probed as a pair: the picture's file has no sound in it, and
   // asked alone it would read as a silent film. The sound's codec comes from
   // the sound's file; the picture's, and the container, from the picture's.
   const probe = async (): Promise<Codecs> => {
     const [picture, sound] = await Promise.all([
-      codecsOf(tools, source, input),
+      codecsOf(tools, probed, input),
       audio ? codecsOf(tools, audio, input) : Promise.resolve(null),
     ]);
     return sound ? { ...picture, audio: sound.audio } : picture;
@@ -1128,17 +1143,21 @@ export async function pullChannel(
       ]
     // No picture in it, so none is invented: MP3 is the thing every browser
     // plays and the thing a listener can join halfway through.
-    : ["-vn", "-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"];
+    // A list's entries come at whatever rate each file was made at, and a
+    // listener hearing them end to end wants one rate throughout.
+    : ["-vn", "-c:a", "libmp3lame", "-b:a", "192k", ...(sequence.length > 0 ? ["-ar", "44100", "-ac", "2"] : []), "-f", "mp3"];
   // A transport stream is read further into before it is decoded, and given
   // the timestamps a recording cut mid-stream does not carry. Ahead of the
   // caller's own input arguments, which are headers for the address itself.
-  const opening = [...transportInputArgs(source, codecs.container), ...input];
+  const opening = [...transportInputArgs(probed, codecs.container), ...input];
   const channel = channels.pull(
     id, name, source, encode, kind, true, undefined, opening, kind === "video" ? audio : "",
     { live, position: known.position ?? 0 },
     // Known before the first dial: whether the source is a transport stream
     // decides whether it can be read here for a source-boundary relay.
     assumed ? undefined : codecs,
+    sequence,
+    startAt,
   );
   if (channel && !assumed) channel.info.codecs = codecs;
   // What comes out, as opposed to what went in. An H.265 source copied
@@ -1184,7 +1203,9 @@ function shownLink(channelId: string, link: ResolvedLink, channel?: ChannelInfo)
     channel: channelId,
     name: channel?.name ?? link.title,
     live,
-    video: link.video,
+    // What it turned out to hold, once probed; what the link claimed before.
+    video: channel?.kind ? channel.kind !== "audio" : link.video,
+    ...(channel?.playlist ? { playlist: channel.playlist } : {}),
     duration: link.duration,
     extractor: link.extractor,
     // A live has no whole to keep; a bare file can be fetched by the browser itself.
@@ -3315,13 +3336,28 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
       links.set(link, resolved);
       if (!options.channels.has(channelId)) {
+        // A list is fetched once here, so an empty or unreadable one is an
+        // answer now rather than a channel that never starts, and it is
+        // probed by its first entry: the list itself is text. Its name is
+        // the list's own, when it has one.
+        let sequence: PlaylistEntry[] = [];
+        if (isPlaylistLink(resolved.media)) {
+          const list = await fetchPlaylist(resolved.media);
+          if ("error" in list) {
+            links.delete(link);
+            json(response, 422, { error: list.error });
+            return;
+          }
+          sequence = list.entries;
+          resolved.title = list.title;
+        }
         // Asked of the site first, once, with the headers yt-dlp said to
         // send. A media address that answers nothing is a site refusing
         // this server -- YouTube does, for many videos, to a datacenter --
         // and the honest answer is that, now, rather than a channel that
         // starts, gets 403 five times, and quietly stops.
         const reachable = await codecsOf(
-          { ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, resolved.media, inputArgsFor(resolved.headers),
+          { ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, sequence[0]?.source ?? resolved.media, inputArgsFor(resolved.headers),
         );
         if (reachable.video === "" && reachable.audio === "") {
           links.delete(link);
@@ -3332,7 +3368,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         }
         const started = await pullChannel(
           options.channels, options.ffprobe ?? ["ffprobe"], channelId, resolved.title, resolved.media,
-          inputArgsFor(resolved.headers), resolved.audio,
+          inputArgsFor(resolved.headers), resolved.audio, sequence.length > 0 ? { sequence } : {},
         );
         if (!started) {
           json(response, 409, { error: "that link is already starting" });
@@ -4848,6 +4884,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       ...(one.codecs ? { codecs: one.codecs } : {}),
       ...(one.position !== undefined ? { position: one.position } : {}),
       ...(one.live !== undefined ? { live: one.live } : {}),
+      ...(one.entry !== undefined ? { entry: one.entry } : {}),
     }).then((channel) => {
       if (!channel) console.log(`  "${one.id}" is already on.`);
     });

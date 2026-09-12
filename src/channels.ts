@@ -21,6 +21,12 @@ import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { Fragments, isOpening } from "./fragments.ts";
 
+/** One thing in a list a channel plays through: where it is, and what it is called. */
+export interface PlaylistEntry {
+  source: string;
+  title: string;
+}
+
 /** Somewhere for a channel's audio to go. A response, in practice. */
 export interface Listener {
   write(chunk: Buffer): boolean;
@@ -56,6 +62,11 @@ export interface ChannelInfo {
   error?: string;
   /** How many times the source has been dialled again since it started. */
   redials?: number;
+  /**
+   * For a channel carrying a list: which entry is on, how many there are,
+   * and what the entry calls itself. Absent for a channel with one source.
+   */
+  playlist?: { at: number; of: number; playing: string };
   /**
    * For a pulled film: how far into it we are, in seconds, read off ffmpeg
    * as it goes. This is what a restart and a redial go back to. A live
@@ -125,6 +136,8 @@ export const REWIND = 3;
 
 /** How long to wait before dialling a dropped source again. */
 export const REDIAL = 2000;
+/** The pause between one entry of a list finishing and the next starting. */
+export const NEXT_GAP = 250;
 /** How many times in a row a source may fail without ever sending anything. */
 export const GIVE_UP = 5;
 /**
@@ -246,6 +259,9 @@ export class Channel {
   private fragments: Fragments | null = null;
   /** For a pulled channel: what to run, and how many times it has failed. */
   private redial: (() => void) | null = null;
+  /** The list this channel plays through, when it is one, and where it is in it. */
+  private entries: PlaylistEntry[] = [];
+  private at = 0;
   private failures = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** Fires when a pulled source has said nothing for STALL. */
@@ -345,8 +361,12 @@ export class Channel {
     input: string[] = [],
     audio = "",
     resume: PullResume = { live: true, position: 0 },
+    sequence: PlaylistEntry[] = [],
+    startAt = 0,
   ): void {
     this.stall = stall;
+    this.entries = sequence;
+    this.at = sequence.length > 0 ? Math.min(Math.max(0, Math.floor(startAt)), sequence.length - 1) : 0;
     if (this.info.kind === "video") this.fragments = new Fragments();
     const [command, ...prefix] = this.options.ffmpeg as [string, ...string[]];
     const remote = /^https?:\/\//i.test(source);
@@ -368,6 +388,11 @@ export class Channel {
       // and a film that has barely started is started.
       const from = resume.live ? 0 : Math.max(0, Math.floor((this.info.position ?? 0) - REWIND));
       const seek = from > 0 ? ["-ss", String(from)] : [];
+      // The entry of the list that is on, when this is a list; said on the
+      // channel so a page can name it. The address given is the list itself.
+      const entry = this.entries[this.at];
+      const dialled = entry?.source ?? source;
+      if (entry) this.info.playlist = { at: this.at, of: this.entries.length, playing: entry.title };
       // Read the source here rather than in ffmpeg, when a policy wants the
       // original bytes and the source is the kind that can be. ffmpeg then
       // reads a pipe, and every byte that goes down it is also handed to
@@ -375,7 +400,9 @@ export class Channel {
       // policy set after the channel started applies at its next restart.
       this.throughAbort?.abort();
       this.throughAbort = null;
-      const through = this.options.through?.(this.info, from, input, audio) ?? null;
+      // A list is never read through us: its address is text, and each
+      // entry is ffmpeg's to fetch.
+      const through = entry ? null : (this.options.through?.(this.info, from, input, audio) ?? null);
       this.info.teed = through !== null;
       const child = spawn(
         command,
@@ -421,7 +448,7 @@ export class Channel {
                 // and a CDN that got them from yt-dlp and not from us answers 403.
                 ...input,
                 ...seek,
-                "-i", source,
+                "-i", dialled,
                 // The sound, when the site keeps it apart from the picture: a
                 // second input, dialled the same way, that the encode maps in.
                 ...(audio ? [...remoteArgs, ...(paced ? ["-re"] : []), ...input, ...seek, "-i", audio] : []),
@@ -464,8 +491,9 @@ export class Channel {
       drain(child.stderr, (tail) => { this.stderr = tail; });
       // Only the ffmpeg we are currently running gets to say the source
       // dropped. One that was killed to make way for a restart is not news.
-      child.on("error", () => { if (this.child === child) this.dropped(sent); });
-      child.on("close", () => { if (this.child === child) this.dropped(sent); });
+      child.on("error", () => { if (this.child === child) this.dropped(sent, false); });
+      // Exit 0 is a file read to its end, which for a list means the next.
+      child.on("close", (code) => { if (this.child === child) this.dropped(sent, code === 0); });
     };
 
     this.redial = dial;
@@ -572,11 +600,17 @@ export class Channel {
    * worth dialling again, and a URL that has never once produced a byte is a
    * mistake somebody made, and retrying it for ever helps nobody.
    */
-  private dropped(sent: boolean): void {
+  private dropped(sent: boolean, finished = false): void {
     if (this.closing || !this.redial) return;
     this.child = null;
     if (this.watchdog) clearTimeout(this.watchdog);
     this.watchdog = null;
+    // A list moves on: a finished entry is done with, a dead one is skipped.
+    // One that dropped part way is dialled again from where it was, below.
+    if (this.entries.length > 0 && (finished || !sent)) {
+      this.next(sent, finished);
+      return;
+    }
     const said = lastLine(this.stderr);
     if (said) this.info.error = said;
     this.failures = sent ? 0 : this.failures + 1;
@@ -592,6 +626,36 @@ export class Channel {
       dial();
     }, REDIAL);
     // A redial is not a reason to keep the process alive at exit.
+    this.timer.unref?.();
+  }
+
+  /**
+   * On to the next entry of the list.
+   *
+   * A finished entry is done with; one that never gave a byte is skipped,
+   * and a list that is dead all the way through is closed rather than gone
+   * round for ever. Sound carries on to whoever is listening -- one MP3
+   * frame follows another whatever file it came from -- but a picture
+   * starts over, since a new file is new tracks and a new opening. The list
+   * goes round: a show played through starts again, the way a station does.
+   */
+  private next(sent: boolean, finished: boolean): void {
+    const said = lastLine(this.stderr);
+    this.failures = sent ? 0 : this.failures + 1;
+    if (!sent && said) this.info.error = said;
+    if (!sent && this.failures >= Math.max(GIVE_UP, this.entries.length)) {
+      this.close();
+      return;
+    }
+    if (finished) this.info.error = undefined;
+    this.at = (this.at + 1) % this.entries.length;
+    this.info.position = 0;
+    if (this.info.kind === "video") this.startOver();
+    const dial = this.redial as () => void;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      dial();
+    }, finished ? NEXT_GAP : REDIAL);
     this.timer.unref?.();
   }
 
@@ -979,6 +1043,8 @@ export class Channels {
     audio = "",
     resume: PullResume = { live: true, position: 0 },
     codecs?: ChannelInfo["codecs"],
+    sequence: PlaylistEntry[] = [],
+    startAt = 0,
   ): Channel | null {
     if (this.open.has(id)) return null;
     const channel = new Channel(
@@ -1000,7 +1066,7 @@ export class Channels {
       (gone) => this.open.delete(gone),
     );
     this.open.set(id, channel);
-    channel.pull(source, encode, paced, stall, input, audio, resume);
+    channel.pull(source, encode, paced, stall, input, audio, resume, sequence, startAt);
     return channel;
   }
 
@@ -1171,6 +1237,8 @@ export interface RememberedChannel {
   live?: boolean;
   /** The member who put it on, so it is still theirs after a restart. */
   startedBy?: string;
+  /** For a list: which entry was on, so it picks up there rather than at the top. */
+  entry?: number;
 }
 
 const REMEMBERED = "channels.json";
@@ -1207,6 +1275,7 @@ export function rememberedChannels(dir: string, port: number): RememberedChannel
         if (typeof one["position"] === "number" && Number.isFinite(one["position"]) && one["position"] > 0) kept.position = one["position"];
         if (typeof one["live"] === "boolean") kept.live = one["live"];
         if (typeof one["startedBy"] === "string" && one["startedBy"] !== "") kept.startedBy = one["startedBy"];
+        if (typeof one["entry"] === "number" && Number.isInteger(one["entry"]) && one["entry"] >= 0) kept.entry = one["entry"];
         return kept;
       });
   } catch {
@@ -1230,6 +1299,7 @@ export function rememberedNow(channels: Channels): RememberedChannel[] {
       if (typeof one.live === "boolean") kept.live = one.live;
       if (!one.live && typeof one.position === "number" && one.position > 0) kept.position = Math.floor(one.position);
       if (one.startedBy) kept.startedBy = one.startedBy;
+      if (one.playlist) kept.entry = one.playlist.at;
       return kept;
     });
 }
