@@ -132,6 +132,8 @@ export function start(): void {
     filter: need<HTMLInputElement>("filter"),
     playlistTitle: need<HTMLElement>("playlist-panel"),
     note: need<HTMLElement>("note"),
+    linkNote: need<HTMLParagraphElement>("link-note"),
+    logList: need<HTMLUListElement>("log-list"),
     files: need<HTMLInputElement>("files"),
     folder: need<HTMLInputElement>("folder"),
     remoteUrl: need<HTMLInputElement>("remote-url"),
@@ -522,6 +524,9 @@ export function start(): void {
   let invited = "";
   /** A link somebody shared that is not a nixamp stream: played as one pasted, once the page is up. */
   let sharedLink = "";
+  /** The Log: how many messages it keeps, and the last one it was given. Declared up here: draw() runs before the Log's own block does. */
+  const LOG_KEEP = 100;
+  let lastLogged = "";
 
   let bars: number[] = new Array<number>(BAND_COUNT).fill(0);
   let peaks: number[] = new Array<number>(BAND_COUNT).fill(0);
@@ -1190,6 +1195,11 @@ export function start(): void {
     const message = mode === "remote" && snapshot.note !== "" ? snapshot.note : note;
     dom.note.textContent = message;
     dom.note.hidden = message === "";
+    // The same words under the link box, where the person is looking, and
+    // in the Log with the time, for whoever missed them going by.
+    dom.linkNote.textContent = message;
+    dom.linkNote.hidden = message === "";
+    logMessage(message);
 
     renderPlaylist();
     dom.glyphs.textContent = bars.map(glyph).join("");
@@ -1880,8 +1890,10 @@ export function start(): void {
     if (mode !== "remote") {
       note = directoryServers.length > 0
         ? "Pick a server to go live on, beside the link."
-        : "Connect to a server first: Browse the directory, or paste its address below.";
+        : "Connect to a server first: Browse the directory, or paste its address in the Remote panel.";
       draw();
+      // The thing that is missing, put under the cursor.
+      if (directoryServers.length > 0) dom.linkServer.focus();
       return;
     }
     if (!serverCarries) {
@@ -3021,6 +3033,28 @@ export function start(): void {
   dom.copyNow.addEventListener("click", () => {
     void copyText(player.source, dom.copyNow, "✓");
   });
+
+  // ---- the log: every message the page has shown, with the time ------------
+  //
+  // The Status line shows one message and the next one replaces it. Here
+  // they stay, newest first, so "what went wrong a minute ago" has an
+  // answer. The same words as the Status line: a person's message, never a
+  // stack trace.
+  function logMessage(message: string): void {
+    if (message === "" || message === lastLogged) return;
+    lastLogged = message;
+    const item = document.createElement("li");
+    const when = document.createElement("time");
+    const now = new Date();
+    when.dateTime = now.toISOString();
+    when.textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const text = document.createElement("span");
+    // textContent: a message can quote a server's name, or a link somebody typed.
+    text.textContent = message;
+    item.append(when, text);
+    dom.logList.prepend(item);
+    while (dom.logList.children.length > LOG_KEEP) dom.logList.lastElementChild?.remove();
+  }
 
   // ---- the trollbox: the chat for the live you have joined -----------------
   //
