@@ -628,6 +628,7 @@ export async function handleLiveApi(
       json(response, error.status, { error: error.message });
       return true;
     }
+    console.error(`live api ${request.method} ${path}:`, error instanceof Error ? error.message : error);
     json(response, 500, { error: "the live event service failed" });
     return true;
   }

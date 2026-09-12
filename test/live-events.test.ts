@@ -232,3 +232,26 @@ test("an artist invitation is a role the store accepts", async () => {
   });
   assert.equal(invitation.role, "artist");
 });
+
+test("the schema adds every new column before it indexes one, and a failed run is retried", async () => {
+  const seen: string[] = [];
+  let failures = 1;
+  const database: Queryable = {
+    async query(text) {
+      seen.push(text);
+      if (text.includes("CREATE TABLE") && failures-- > 0) throw new Error("column \"kind\" does not exist");
+      return { rows: [] };
+    },
+  };
+  const events = new LiveEvents(database);
+  await assert.rejects(events.list(), /kind/);
+  await events.list();
+  assert.equal(seen.filter((text) => text.includes("CREATE TABLE")).length, 2, "the schema runs again after a failure");
+  const schema = seen[0]!;
+  for (const column of ["kind", "doors_open_at", "ticket_price_cents", "ticket_currency", "ticket_minutes", "pay_to"]) {
+    const added = schema.indexOf(`ADD COLUMN IF NOT EXISTS ${column}`);
+    assert.ok(added > 0, `${column} is brought forward`);
+    const indexed = schema.indexOf(`CREATE INDEX IF NOT EXISTS live_events_kind`);
+    assert.ok(indexed > added, `${column} exists before the kind index is built`);
+  }
+});
