@@ -16,11 +16,14 @@
  * `nixamp admin` finds its target. JSON goes to stdout and only JSON;
  * progress and complaints go to stderr; a failure is a nonzero exit.
  */
-import { createWriteStream } from "node:fs";
+import { createWriteStream, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { resolveTarget } from "../admin.ts";
 import { detectTools } from "../audio.ts";
+import { version as nixampVersion } from "../meta.ts";
 import { KEY_HEADER } from "../share.ts";
 import type { Analysis } from "./analyze.ts";
+import { exactnessFailures, fileCorpus, reportMarkdown, reportPasses, runBenchmark, type Sample, syntheticCorpus } from "./benchmark.ts";
 import { RelayError } from "./envelope.ts";
 import type { Job } from "./jobs.ts";
 import { receiveRelay, RelayRefused } from "./receiver.ts";
@@ -36,6 +39,8 @@ const USAGE = `nixamp compression — lossless relay compression: measure it, se
   nixamp compression off | on          the whole server's switch
   nixamp compression pull --channel ID --from URL [--from-key KEY] [--name NAME]
   nixamp compression fetch URL --out FILE [--key KEY]
+  nixamp compression benchmark [--corpus DIR] [--out DIR] [--levels 1,3,9]
+                   prove the envelope on a corpus and write a report; no server or ffmpeg needed
 
   --url U --key K  a server other than the local daemon, as for \`nixamp admin\`
   --format json    JSON on stdout (the default when stdout is not a terminal)
@@ -309,6 +314,53 @@ async function fetchRelay(flags: Flags): Promise<number> {
   }
 }
 
+/**
+ * Run the OpenStream benchmark and write a report. Anyone can run it: the
+ * default corpus is bytes we generate, no server and no ffmpeg. `--corpus DIR`
+ * benchmarks a directory of real files instead; `--out DIR` writes
+ * `openstream-report.json` and `.md` there for publishing.
+ */
+async function bench(flags: Flags): Promise<number> {
+  const dir = flags.named.get("corpus");
+  let corpus: Sample[];
+  try {
+    corpus = dir ? fileCorpus(dir) : syntheticCorpus();
+  } catch (error) {
+    console.error(`nixamp: cannot read corpus ${dir}: ${(error as Error).message}`);
+    return 1;
+  }
+  if (corpus.length === 0) {
+    console.error(`nixamp: no samples${dir ? ` in ${dir}` : ""}`);
+    return 1;
+  }
+  console.error(`  Benchmarking ${corpus.length} sample${corpus.length === 1 ? "" : "s"}${dir ? ` from ${dir}` : " (synthetic)"}…`);
+  const levels = flags.named.get("levels");
+  const report = await runBenchmark(corpus, {
+    implementationVersion: nixampVersion(),
+    ...(levels ? { zstdLevels: levels.split(",").map((n) => Number(n)).filter((n) => Number.isInteger(n)) } : {}),
+  });
+  const out = flags.named.get("out");
+  if (out) {
+    try {
+      mkdirSync(out, { recursive: true });
+      writeFileSync(join(out, "openstream-report.json"), JSON.stringify(report, null, 2));
+      writeFileSync(join(out, "openstream-report.md"), reportMarkdown(report));
+      console.error(`  Wrote openstream-report.json and .md to ${out}`);
+    } catch (error) {
+      console.error(`nixamp: cannot write to ${out}: ${(error as Error).message}`);
+      return 1;
+    }
+  }
+  if (wantsJson(flags)) console.log(JSON.stringify(report, null, 2));
+  else console.log(reportMarkdown(report));
+  if (!reportPasses(report)) {
+    const bad = exactnessFailures(report).map((f) => `${f.sample}/${f.mode}${f.level ? `L${f.level}` : ""}`).join(", ");
+    console.error(`nixamp: these did not restore byte-for-byte, this build must not ship: ${bad}`);
+    return 1;
+  }
+  return 0;
+}
+
 export async function compression(argv: string[]): Promise<number> {
   const flags = parse(argv);
   const verb = flags.positional[0];
@@ -329,6 +381,9 @@ export async function compression(argv: string[]): Promise<number> {
         return await pull(flags);
       case "fetch":
         return await fetchRelay(flags);
+      case "benchmark":
+      case "bench":
+        return await bench(flags);
       default:
         console.error(USAGE);
         return verb === undefined || verb === "help" || flags.named.has("help") ? 0 : 2;

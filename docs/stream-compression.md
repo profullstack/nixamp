@@ -361,6 +361,39 @@ nothing beat stored. The runtime and library versions are in `tools`.
 `nixamp compression analyze FILE` runs the same on a file, here, with no
 server, at the source boundary.
 
+## Benchmark
+
+```
+nixamp compression benchmark [--corpus DIR] [--out DIR] [--levels 1,3,9] [--format json]
+```
+
+runs every codec over a corpus and writes a report that proves the honest
+things: that decompression restores every byte, that an incompressible
+sample costs only the envelope overhead and never more, that a compressible
+one saves what it says against the complete wire size, and how long each
+takes. It needs no server and no ffmpeg. The default corpus is bytes we
+generate deterministically (a SHA-256 keystream that is reproducible and
+genuinely incompressible, zeros, repetitive text, padded and unpadded
+transport-stream packets, tiny and empty inputs); `--corpus DIR` benchmarks
+a directory of authorized real files instead, which is the only way to get
+numbers that predict production. `--out DIR` writes `openstream-report.json`
+and `openstream-report.md`.
+
+The report records the runtime and codec versions, the CPU, OS and memory,
+the policy thresholds, a SHA-256 per sample, per-codec complete wire bytes
+with a checked round trip, and the honest caveats: a synthetic padded
+transport stream saves about its padding share and says more about the
+padding than the codec, an efficient real feed saves little, and any
+`roundTrip: false` on a codec that applied is an exactness failure that
+blocks a release (the command exits non-zero). A mode that does not apply to
+a sample, such as the transport transform on non-transport bytes, is
+recorded as not-applicable, not as a failure.
+
+The report schema is versioned and shared with LogicSRC: a report is
+published with every NixAmp release at
+<https://logicsrc.com/docs/openstream/reports>, so the standard's claims are
+always backed by a reproducible measurement rather than an assertion.
+
 ## Metrics
 
 Per channel and generation: `inputBytes` (from the channel),
