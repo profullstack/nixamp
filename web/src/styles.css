@@ -157,44 +157,63 @@ body {
 
 /* ---- panels ------------------------------------------------------------ */
 
+/*
+ * A panel's frame is drawn nine pixels below the top of its box (::after),
+ * so the title chip and the title-bar buttons, which straddle the frame's
+ * top line, stay inside the box. Anything outside the box is clipped at
+ * the start of a column, which is how the second column's first panel lost
+ * its title and its buttons. The background starts at the frame too.
+ */
 .panel {
   position: relative;
+  padding: 22px 12px 12px;
+  min-width: 0;
+  background: linear-gradient(var(--panel), var(--panel)) 0 9px / 100% calc(100% - 9px) no-repeat;
+}
+.panel::after {
+  content: "";
+  position: absolute;
+  inset: 9px 0 0 0;
   border: 1px solid var(--edge);
   border-radius: 6px;
-  background: var(--panel);
-  padding: 14px 12px 12px;
-  min-width: 0;
+  pointer-events: none;
 }
 
 .panel::before {
   content: attr(data-title);
   position: absolute;
-  top: -0.72em;
+  top: 0;
   left: 10px;
   padding: 0 6px;
+  line-height: 18px;
   background: var(--panel);
   color: var(--green-dim);
   font-size: 12px;
   letter-spacing: 0.06em;
+  z-index: 1;
 }
 
-/* The grip, the shade and the close on every panel: Winamp's title-bar
-   buttons, sitting in the title line at the right. The same background as
-   the title chip, so they cut the border the way the title does. */
+/* The grip, the shade and the hide on every panel: Winamp's title-bar
+   buttons, on the title line at the right. The same background as the
+   title chip, so they cut the frame the way the title does. */
 .panel-tools {
   position: absolute;
-  top: -0.85em;
+  top: 0;
   right: 8px;
   display: flex;
+  align-items: center;
   gap: 2px;
+  height: 18px;
   background: var(--panel);
   padding: 0 4px;
+  z-index: 1;
 }
 .panel-tools button {
   font: inherit;
   font-size: 11px;
   line-height: 1;
-  padding: 2px 5px;
+  height: 16px;
+  padding: 0 5px;
   border: 1px solid var(--edge);
   border-radius: 3px;
   background: #121a15;
@@ -203,51 +222,59 @@ body {
 }
 .panel-tools button:hover { color: var(--fg); border-color: var(--green-dim); }
 .panel-tools .grip { cursor: grab; }
-/* Shaded: the title line and nothing under it, like a Winamp window rolled up. */
-.panel[data-collapsed] { padding: 6px 12px 4px; }
+/* Shaded: the title bar and nothing under it, like a Winamp window rolled up. */
+.panel[data-collapsed] { padding: 18px 12px 0; }
 .panel[data-collapsed] > :not(.panel-tools) { display: none !important; }
 /* Closed by the person, whatever the page would show: it comes back from the Panels list. */
 .panel[data-closed] { display: none !important; }
 .panel.dragging { opacity: 0.45; }
 .panel.drop-before { box-shadow: 0 -4px 0 0 var(--accent); }
 .panel.drop-after { box-shadow: 0 4px 0 0 var(--accent); }
-.panels-list li { display: flex; align-items: center; gap: 8px; }
+/* The Panels list: one switch per panel, on or off, and what state it is in. */
+.panels-list li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.panels-list li label { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; cursor: pointer; }
 .panels-list li .name { flex: 1 1 auto; }
-.panels-list li.closed .name { color: var(--muted); }
-.panels-list li .icon-btn { font-size: 11px; padding: 2px 6px; }
+.panels-list li.off .name { color: var(--muted); }
+.panels-list li .detail { color: var(--muted); font-size: 12px; white-space: nowrap; }
 
+/*
+ * Panels stacked in two columns, each as tall as it is: the Pinterest
+ * layout. A grid put every row as tall as its tallest panel, so the
+ * analyser sat over a well of empty space beside a long playlist.
+ *
+ * The standard for this is `display: grid-lanes` (the CSS Working Group's
+ * name, November 2025), shipped so far in Safari 26.4 and behind flags in
+ * Chrome and Firefox. Where it is not there, CSS columns do the same
+ * stacking in every browser: panels flow into the first column and then the
+ * second, in the order they are on the page, which is the order the grips
+ * set. Nothing is a grid row any more, so nothing stretches.
+ */
 .split {
-  display: grid;
-  grid-template-columns: 1.3fr 1fr;
-  gap: 10px;
-  /* Every panel keeps its column, whatever else is on screen.
-   *
-   * Auto-placement fills left to right in document order, so a panel that
-   * appears or disappears -- and half of these do, on connecting, signing in,
-   * or turning out to be an admin -- pushed every panel after it across to the
-   * other side. Panels arriving and leaving is expected; the ones that stayed
-   * jumping columns underneath you is not. Fixed here, so they only ever move
-   * up and down within their own column.
-   *
-   * Counted including hidden panels, which is what makes the assignment stable
-   * rather than a function of what happens to be visible. */
+  columns: 2;
+  column-gap: 10px;
+}
+.split > * {
+  /* A panel is never cut in two between the columns. */
+  break-inside: avoid;
+  display: block;
+  width: 100%;
+  margin-bottom: 14px;
+}
+@supports (display: grid-lanes) {
+  .split {
+    display: grid-lanes;
+    grid-template-columns: 1.3fr 1fr;
+    gap: 14px 10px;
+    columns: auto;
+  }
+  .split > * { margin-bottom: 0; }
+  /* Where the markup put a panel, a lane is kept: Files and Account on the
+     left, the directory and the share panel on the right, until a grip says
+     otherwise. */
+  .split > .col-a { grid-column: 1; }
+  .split > .col-b { grid-column: 2; }
 }
 
-/* Named rather than counted. Most of these panels are hidden most of the
-   time, so odd-and-even would have put every panel that is visible by default
-   in the same column and left the other one empty. */
-.split > .col-a { grid-column: 1; }
-.split > .col-b { grid-column: 2; }
-
-/* One column's worth of panels, stacked: the files and, under them, what is
-   live. A grid rather than a flex column so the panels' floating titles have
-   room between them. */
-.stack {
-  display: grid;
-  gap: 14px;
-  align-content: start;
-  min-width: 0;
-}
 
 /* One live thing, on two lines: what it is, then what you can do to it. */
 .directory-list li.onair {
@@ -336,11 +363,13 @@ body {
 .directory-list li > .server-label .live { color: var(--green); }
 
 @media (max-width: 720px) {
-  .split { grid-template-columns: 1fr; }
-  /* One column, so document order is the only order and a panel assigned to
-     column 2 would be assigned to a column that does not exist. */
-  .split > .col-a,
-  .split > .col-b { grid-column: auto; }
+  /* One column, so document order is the only order. */
+  .split { columns: 1; }
+  @supports (display: grid-lanes) {
+    .split { grid-template-columns: 1fr; }
+    .split > .col-a,
+    .split > .col-b { grid-column: auto; }
+  }
 }
 
 /* ---- now playing ------------------------------------------------------- */

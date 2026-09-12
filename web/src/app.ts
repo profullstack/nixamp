@@ -4196,10 +4196,10 @@ export function start(): void {
   // Winamp's windows were dragged about and snapped into place, shaded to a
   // title bar with a click, closed and brought back from a menu. The same
   // for the panels: the ≡ grip drags one into a new slot, ▁ shades it, ✕
-  // closes it, and the Panels list does all three without a mouse. Kept on
-  // this device. Now Playing and the transport stay where they are: they
-  // are the player, not a window around it.
-  const ZONES = ["zone-top", "zone-stack", "zone-main"];
+  // hides it, and the Panels list turns any of them on or off. Nothing is
+  // ever deleted. Kept on this device. Now Playing and the transport stay
+  // where they are: they are the player, not a window around it.
+  const ZONES = ["zone-top", "zone-main"];
   const isPanel = (node: Element | null): node is HTMLElement =>
     node instanceof HTMLElement && node.matches("section.panel") && node.id !== "";
   const zoneOf = (panel: HTMLElement): HTMLElement | null =>
@@ -4288,21 +4288,6 @@ export function start(): void {
     saveLayout();
     drawPanelsList();
   }
-  /** A panel one step up or down among its zone's panels. */
-  function nudge(panel: HTMLElement, delta: number): void {
-    const zone = zoneOf(panel);
-    if (!zone) return;
-    // Among the panels it shares a column with: a step past one in the
-    // other column would move it in the markup and nowhere on screen.
-    const siblings = [...zone.children].filter(isPanel).filter((one) => colOf(one) === colOf(panel));
-    const at = siblings.indexOf(panel);
-    const other = siblings[at + delta];
-    if (!other) return;
-    if (delta < 0) other.before(panel);
-    else other.after(panel);
-    saveLayout();
-    drawPanelsList();
-  }
   let dragging: HTMLElement | null = null;
   const clearDropMarks = (): void => {
     for (const panel of movablePanels()) panel.classList.remove("drop-before", "drop-after");
@@ -4341,7 +4326,7 @@ export function start(): void {
         clearDropMarks();
       });
       const shade = smallButton("▁", `Shade ${panelTitle(panel)} to its title`, () => setCollapsed(panel, !panel.hasAttribute("data-collapsed")));
-      const close = smallButton("✕", `Close ${panelTitle(panel)}; the Panels list brings it back`, () => setClosed(panel, true));
+      const close = smallButton("✕", `Hide ${panelTitle(panel)}; the Panels list turns it back on`, () => setClosed(panel, true));
       tools.append(grip, shade, close);
       panel.prepend(tools);
       // A drop target: above or below the middle decides before or after.
@@ -4363,30 +4348,33 @@ export function start(): void {
       });
     }
   }
-  /** The Panels list: every panel, shown or not, with the same three things the grip offers. */
+  /**
+   * The Panels list: every panel with one switch, on or off. Off is hidden,
+   * never deleted, and this is where it comes back on. Moving and shading
+   * are the panel's own buttons; a list of arrows beside every name was a
+   * puzzle, and the answer to "where did it go" is one checkbox.
+   */
   function drawPanelsList(): void {
     if (dom.panelsPanel.hidden) return;
     const rows = movablePanels().filter((one) => one !== dom.panelsPanel).map((panel) => {
       const item = document.createElement("li");
-      const closed = panel.hasAttribute("data-closed");
-      const shaded = panel.hasAttribute("data-collapsed");
-      item.classList.toggle("closed", closed);
+      const off = panel.hasAttribute("data-closed");
+      item.classList.toggle("off", off);
+      const label = document.createElement("label");
       const check = document.createElement("input");
       check.type = "checkbox";
-      check.checked = !closed;
-      check.title = closed ? `Show ${panelTitle(panel)}` : `Close ${panelTitle(panel)}`;
-      check.setAttribute("aria-label", check.title);
+      check.checked = !off;
+      check.setAttribute("aria-label", `${panelTitle(panel)} on`);
       check.addEventListener("change", () => setClosed(panel, !check.checked));
       const name = document.createElement("span");
       name.className = "name";
       // textContent: a title can carry a server's name, which is somebody's text.
-      name.textContent = panelTitle(panel) + (panel.hidden && !closed ? " · nothing to show right now" : "");
-      item.append(
-        check, name,
-        smallButton("▲", `Move ${panelTitle(panel)} up`, () => nudge(panel, -1)),
-        smallButton("▼", `Move ${panelTitle(panel)} down`, () => nudge(panel, 1)),
-        smallButton(shaded ? "▔" : "▁", shaded ? `Unshade ${panelTitle(panel)}` : `Shade ${panelTitle(panel)}`, () => setCollapsed(panel, !shaded)),
-      );
+      name.textContent = panelTitle(panel);
+      label.append(check, name);
+      const detail = document.createElement("span");
+      detail.className = "detail";
+      detail.textContent = off ? "off" : panel.hasAttribute("data-collapsed") ? "shaded" : panel.hidden ? "nothing to show right now" : "";
+      item.append(label, detail);
       return item;
     });
     dom.panelsList.replaceChildren(...rows);
