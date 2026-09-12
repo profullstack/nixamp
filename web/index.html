@@ -122,7 +122,11 @@
           <input id="link-url" type="url" inputmode="url" placeholder="Paste a link: YouTube, an IPTV feed, a file…"
                  aria-label="A link to play" />
           <select id="link-server" aria-label="Which server goes live with it" title="Which server goes live with it" hidden></select>
-          <button type="submit" class="button">Play link</button>
+          <button type="submit" class="button" title="Play it here, in this browser, where the browser can">Play link</button>
+          <!-- The plain verb: the server fetches the link and puts it on the
+               air for everyone, listed with Join live. -->
+          <button id="link-go-live" type="button" class="button golive"
+                  title="Go live: the server fetches this link and puts it on the air for everyone, listed in the directory">● Go live</button>
         </form>
       </section>
 
