@@ -1136,6 +1136,9 @@ export async function pullChannel(
   const channel = channels.pull(
     id, name, source, encode, kind, true, undefined, opening, kind === "video" ? audio : "",
     { live, position: known.position ?? 0 },
+    // Known before the first dial: whether the source is a transport stream
+    // decides whether it can be read here for a source-boundary relay.
+    assumed ? undefined : codecs,
   );
   if (channel && !assumed) channel.info.codecs = codecs;
   // What comes out, as opposed to what went in. An H.265 source copied

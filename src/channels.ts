@@ -80,6 +80,13 @@ export interface ChannelInfo {
    * a member may have on at once.
    */
   startedBy?: string;
+  /**
+   * Set when nixamp reads the source itself and hands ffmpeg the bytes down
+   * a pipe, so the original bytes pass through this process and can be
+   * relayed exactly as they came. Only a transport stream from a file or a
+   * plain URL is read this way, and only when a policy asks for it.
+   */
+  teed?: boolean;
 }
 
 /** Where a pulled source is picked up from, and whether it can be at all. */
@@ -89,6 +96,24 @@ export interface PullResume {
   /** Seconds into a film to start from. */
   position: number;
 }
+
+/**
+ * A source read by us rather than by ffmpeg: what to tell ffmpeg it is,
+ * and how to open it. Opened once per dial; the signal is pulled when that
+ * dial is over.
+ */
+export interface PullThrough {
+  /** ffmpeg's name for the container, e.g. `mpegts`. */
+  format: string;
+  open(signal: AbortSignal): Promise<AsyncIterable<Uint8Array>>;
+}
+
+/**
+ * Asked at every dial whether this source should be read through us. Null
+ * means ffmpeg dials it as it always has. `from` is where a film is being
+ * picked up from; a source read through us cannot be joined mid-way.
+ */
+export type ThroughProvider = (info: ChannelInfo, from: number, input: string[], audio: string) => PullThrough | null;
 
 /**
  * How far back of the saved place a film is picked up from, in seconds. The
@@ -203,6 +228,8 @@ export interface ChannelOptions {
   maxListenerQueueBytes?: number;
   /** How long a rate is measured over before the backlog is sized off it. Tests shorten it. */
   rateWindowMs?: number;
+  /** Whether a pulled source is read here and piped to ffmpeg. See `Channels.setThrough`. */
+  through?: ThroughProvider;
 }
 
 /**
@@ -249,6 +276,10 @@ export class Channel {
    */
   ephemeral = false;
   private idle: ReturnType<typeof setTimeout> | null = null;
+  /** Whoever wants the source's own bytes, when the source is read through us. */
+  private readonly sourceTaps = new Set<Listener>();
+  /** Pulls the plug on the current read-through, when there is one. */
+  private throughAbort: AbortController | null = null;
 
   constructor(
     readonly info: ChannelInfo,
@@ -337,6 +368,15 @@ export class Channel {
       // and a film that has barely started is started.
       const from = resume.live ? 0 : Math.max(0, Math.floor((this.info.position ?? 0) - REWIND));
       const seek = from > 0 ? ["-ss", String(from)] : [];
+      // Read the source here rather than in ffmpeg, when a policy wants the
+      // original bytes and the source is the kind that can be. ffmpeg then
+      // reads a pipe, and every byte that goes down it is also handed to
+      // whoever has tapped the source. Asked again at every dial, so a
+      // policy set after the channel started applies at its next restart.
+      this.throughAbort?.abort();
+      this.throughAbort = null;
+      const through = this.options.through?.(this.info, from, input, audio) ?? null;
+      this.info.teed = through !== null;
       const child = spawn(
         command,
         [
@@ -348,36 +388,54 @@ export class Channel {
           // to. Not stderr, which is for what went wrong.
           "-progress", "pipe:3",
           "-stats_period", "1",
-          // A dropped source is normal over hours, and a channel that dies
-          // the first time a CDN hiccups is not a channel anybody can rely
-          // on. ffmpeg redials on its own before we have to.
-          // A connection that stops answering is an error after this long,
-          // and an error is a thing the reconnect knows what to do with.
-          // Without it a silent socket is waited on for ever. In
-          // microseconds, as ffmpeg wants it.
-          ...remoteArgs,
-          // Real time, always. A file read as fast as the disk allows is an
-          // hour of film in ninety seconds and a room that cannot be in it
-          // together; a live source is already paced and loses nothing.
-          ...(paced ? ["-re"] : []),
-          // What the source's site expects on the request: a user agent, a
-          // referer, a cookie. A link resolved by yt-dlp comes with these,
-          // and a CDN that got them from yt-dlp and not from us answers 403.
-          ...input,
-          ...seek,
-          "-i", source,
-          // The sound, when the site keeps it apart from the picture: a
-          // second input, dialled the same way, that the encode maps in.
-          ...(audio ? [...remoteArgs, ...(paced ? ["-re"] : []), ...input, ...seek, "-i", audio] : []),
+          ...(through
+            ? [
+                // Stated, as for a publisher: ffmpeg mis-probes a pipe. Paced
+                // the same way, since a pipe is read as fast as it is written.
+                // The source's own input tuning still applies -- a transport
+                // stream read from a pipe needs the same probe depth and
+                // generated timestamps it would off a socket -- but request
+                // headers, which only a source read through us leaves out,
+                // are no use to a pipe and are not here (a source that needs
+                // them is not read through us in the first place).
+                ...input,
+                "-f", through.format,
+                ...(paced ? ["-re"] : []),
+                "-i", "pipe:0",
+              ]
+            : [
+                // A dropped source is normal over hours, and a channel that dies
+                // the first time a CDN hiccups is not a channel anybody can rely
+                // on. ffmpeg redials on its own before we have to.
+                // A connection that stops answering is an error after this long,
+                // and an error is a thing the reconnect knows what to do with.
+                // Without it a silent socket is waited on for ever. In
+                // microseconds, as ffmpeg wants it.
+                ...remoteArgs,
+                // Real time, always. A file read as fast as the disk allows is an
+                // hour of film in ninety seconds and a room that cannot be in it
+                // together; a live source is already paced and loses nothing.
+                ...(paced ? ["-re"] : []),
+                // What the source's site expects on the request: a user agent, a
+                // referer, a cookie. A link resolved by yt-dlp comes with these,
+                // and a CDN that got them from yt-dlp and not from us answers 403.
+                ...input,
+                ...seek,
+                "-i", source,
+                // The sound, when the site keeps it apart from the picture: a
+                // second input, dialled the same way, that the encode maps in.
+                ...(audio ? [...remoteArgs, ...(paced ? ["-re"] : []), ...input, ...seek, "-i", audio] : []),
+              ]),
           ...encode,
           "pipe:1",
         ],
-        { stdio: ["ignore", "pipe", "pipe", "pipe"] },
+        { stdio: [through ? "pipe" : "ignore", "pipe", "pipe", "pipe"] },
       );
 
       let sent = false;
       this.child = child;
       this.rearm(child);
+      if (through) void this.feedThrough(child, through);
       // ffmpeg's progress: key=value lines, out_time_us being how much it
       // has written, from where it was told to start. Read whole lines,
       // since a chunk can end mid-number. Drained whatever it says, for
@@ -463,6 +521,22 @@ export class Channel {
     this.rateBytes = 0;
     this.rate = 0;
     this.hangUp();
+    // The source's own bytes start over too: a new dial is a new stream
+    // from its beginning, and whoever was tapping it must not be handed the
+    // new beginning after the old middle.
+    this.endTaps();
+  }
+
+  /** Everybody tapping the source is told it ended. */
+  private endTaps(): void {
+    for (const tap of this.sourceTaps) {
+      try {
+        tap.end();
+      } catch {
+        // Gone already.
+      }
+    }
+    this.sourceTaps.clear();
   }
 
   /** Expect output within STALL, or treat the source as gone and dial again. */
@@ -671,6 +745,69 @@ export class Channel {
     this.startOver();
   }
 
+  /**
+   * Hear the source's own bytes, as they go down the pipe to ffmpeg. Only
+   * a channel read through us has any; for the rest this attaches nothing
+   * and returns null. Ended, like a listener, when the source starts over.
+   */
+  tapSource(tap: Listener): (() => void) | null {
+    if (!this.info.teed || this.closing) return null;
+    this.sourceTaps.add(tap);
+    return () => {
+      this.sourceTaps.delete(tap);
+    };
+  }
+
+  private tap(chunk: Buffer): void {
+    for (const tap of this.sourceTaps) {
+      try {
+        tap.write(chunk);
+      } catch {
+        this.sourceTaps.delete(tap);
+      }
+    }
+  }
+
+  /**
+   * Read the source and write it to this ffmpeg's stdin, at the rate ffmpeg
+   * takes it. Every chunk is handed to the taps first, so a tap sees exactly
+   * the bytes ffmpeg does. When the source ends, stdin is ended, ffmpeg
+   * finishes, and its close handler dials again -- the same path a source
+   * that ffmpeg read itself takes when it drops.
+   */
+  private async feedThrough(child: ChildProcess, through: PullThrough): Promise<void> {
+    const controller = new AbortController();
+    this.throughAbort = controller;
+    const stdin = child.stdin;
+    if (!stdin) return;
+    stdin.on("error", () => undefined);
+    try {
+      const body = await through.open(controller.signal);
+      for await (const raw of body) {
+        if (this.child !== child || this.closing || controller.signal.aborted) break;
+        const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+        this.tap(chunk);
+        if (!stdin.write(chunk)) {
+          // Wait for ffmpeg to take it, or for the pipe to go: a pipe that
+          // closed never drains, and waiting on it would hold the read open.
+          await new Promise<void>((done) => {
+            stdin.once("drain", done);
+            stdin.once("close", done);
+          });
+        }
+      }
+    } catch (error) {
+      if (this.child === child && !controller.signal.aborted) this.info.error = (error as Error).message;
+    } finally {
+      try {
+        stdin.end();
+      } catch {
+        // Already gone.
+      }
+      if (this.throughAbort === controller) this.throughAbort = null;
+    }
+  }
+
   listen(listener: Listener): () => void {
     // What the stream is, before any of what it is currently saying. Without
     // this a listener who arrives after the first second gets fragments that
@@ -735,6 +872,9 @@ export class Channel {
     if (said && !this.info.error) this.info.error = said;
     const child = this.child;
     this.child = null;
+    this.throughAbort?.abort();
+    this.throughAbort = null;
+    this.endTaps();
     try {
       child?.stdin?.end();
     } catch {
@@ -838,6 +978,7 @@ export class Channels {
     input: string[] = [],
     audio = "",
     resume: PullResume = { live: true, position: 0 },
+    codecs?: ChannelInfo["codecs"],
   ): Channel | null {
     if (this.open.has(id)) return null;
     const channel = new Channel(
@@ -851,6 +992,9 @@ export class Channels {
         listeners: 0,
         kind,
         source,
+        // Known before the first dial, so whether to read the source here
+        // can be decided from what it holds.
+        ...(codecs ? { codecs } : {}),
       },
       this.options,
       (gone) => this.open.delete(gone),
@@ -963,6 +1107,20 @@ export class Channels {
   /** What a new listener would be written first, for a relay's preface. */
   opening(id: string): Buffer[] {
     return this.open.get(id)?.opening() ?? [];
+  }
+
+  /** Hear a channel's source bytes, when it is read through us. Null otherwise. */
+  tapSource(id: string, tap: Listener): (() => void) | null {
+    return this.open.get(id)?.tapSource(tap) ?? null;
+  }
+
+  /**
+   * Who decides whether a pulled source is read here and piped to ffmpeg.
+   * Set once by whoever owns the policies; asked at every dial.
+   */
+  setThrough(provider: ThroughProvider | null): void {
+    if (provider) this.options.through = provider;
+    else delete this.options.through;
   }
 
   /** The kind of a channel, for a relay to say what it is carrying. */

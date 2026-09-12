@@ -10,12 +10,77 @@
  * which is surfaced as an error naming the reason, never as a stream of
  * something else.
  */
-import { MEDIA_TYPE, type Mode, RelayError, type StreamHeader } from "./envelope.ts";
+import { type Boundary, MEDIA_TYPE, type Mode, RelayError, type StreamHeader } from "./envelope.ts";
 import { RelayDecoder } from "./relay.ts";
 
 export const CODECS_HEADER = "x-nixamp-stream-codecs";
 export const KIND_HEADER = "x-nixamp-kind";
+export const BOUNDARY_HEADER = "x-nixamp-boundary";
+/** What the media inside is, as JSON: video, audio, container, duration. */
+export const MEDIA_HEADER = "x-nixamp-codecs";
 export const KEY_HEADER = "x-nixamp-key";
+
+export interface Media {
+  video: string;
+  audio: string;
+  container: string;
+  duration?: number;
+}
+
+/** What a server said it would send, read off its response headers. */
+export interface Accepted {
+  codecs: string;
+  kind: "audio" | "video" | "";
+  boundary: Boundary | "";
+  media: Media | null;
+}
+
+function acceptedFrom(headers: Headers): Accepted {
+  const kindSaid = headers.get(KIND_HEADER);
+  const boundarySaid = headers.get(BOUNDARY_HEADER);
+  let media: Media | null = null;
+  try {
+    const raw = JSON.parse(headers.get(MEDIA_HEADER) ?? "null") as Partial<Media> | null;
+    if (raw && typeof raw.video === "string" && typeof raw.audio === "string" && typeof raw.container === "string") {
+      media = { video: raw.video, audio: raw.audio, container: raw.container };
+      if (typeof raw.duration === "number") media.duration = raw.duration;
+    }
+  } catch {
+    // Not JSON: no media description, which the receiver copes with.
+  }
+  return {
+    codecs: headers.get(CODECS_HEADER) ?? "",
+    kind: kindSaid === "audio" || kindSaid === "video" ? kindSaid : "",
+    boundary: boundarySaid === "source" || boundarySaid === "channel" ? boundarySaid : "",
+    media,
+  };
+}
+
+/**
+ * Ask a relay what it would send, without taking it: the negotiation
+ * headers come back on the response and the body is cancelled at once.
+ * Costs one short connection; a receiver needs to know the boundary and
+ * the media before it can decide how to carry the stream.
+ */
+export async function probeRelay(url: string, key: string | null, fetchImpl?: typeof fetch): Promise<Accepted> {
+  const headers: Record<string, string> = { accept: MEDIA_TYPE, [CODECS_HEADER]: "stored,zstd,ts-zstd" };
+  if (key) headers[KEY_HEADER] = key;
+  const response = await (fetchImpl ?? fetch)(url, { headers });
+  const type = response.headers.get("content-type") ?? "";
+  if (response.status !== 200 || !type.startsWith(MEDIA_TYPE)) {
+    let reason = `${response.status}`;
+    try {
+      const body = (await response.json()) as { error?: string };
+      if (typeof body.error === "string") reason = body.error;
+    } catch {
+      // Not JSON; the status is the message.
+    }
+    throw new RelayRefused(response.status, reason);
+  }
+  const accepted = acceptedFrom(response.headers);
+  await response.body?.cancel().catch(() => undefined);
+  return accepted;
+}
 
 export interface ReceiveOptions {
   url: string;
@@ -24,7 +89,7 @@ export interface ReceiveOptions {
   modes?: Mode[];
   maxFrameBytes?: number;
   /** The server said yes: what it will compress with, and what the channel carries. Before any byte. */
-  onStart?: (accepted: { codecs: string; kind: "audio" | "video" | "" }) => void;
+  onStart?: (accepted: Accepted) => void;
   /** The stream header arrived: the generation this is. */
   onHeader?: (header: StreamHeader) => void;
   onBytes: (bytes: Buffer) => void | Promise<void>;
@@ -74,11 +139,7 @@ export async function receiveRelay(options: ReceiveOptions): Promise<ReceiveResu
     throw new RelayRefused(response.status, reason);
   }
   if (!response.body) throw new RelayRefused(response.status, "no body");
-  const kindSaid = response.headers.get(KIND_HEADER);
-  options.onStart?.({
-    codecs: response.headers.get(CODECS_HEADER) ?? "",
-    kind: kindSaid === "audio" || kindSaid === "video" ? kindSaid : "",
-  });
+  options.onStart?.(acceptedFrom(response.headers));
   const decoder = new RelayDecoder({
     modes,
     ...(options.maxFrameBytes !== undefined ? { maxFrameBytes: options.maxFrameBytes } : {}),
