@@ -4548,10 +4548,20 @@ async function liveAudio(
       if (child !== spawned) return;
       child = null;
       if (closed) return;
-      // Follow the player if it has already moved on. If it has not, look
-      // again shortly -- which is also what makes a single-track library
-      // repeat rather than fall silent.
-      later(engine.snapshot().index === playing ? LIVE_GAP_MS : 0, next);
+      const now = engine.snapshot();
+      // Follow the player if it has already moved on.
+      if (now.index !== playing) {
+        later(0, next);
+        return;
+      }
+      // It has not. Served like this the engine decodes nothing itself, so
+      // nothing ever ends a track on its side and the index never moves on
+      // its own: a podcast playlist streamed to a room played its first
+      // episode to the end and then played it again, for ever. This stream
+      // is the playback, so it is the one that moves the player on. One
+      // track alone still repeats rather than falls silent, as before.
+      if (now.trackCount > 1) engine.command({ type: "next" });
+      later(LIVE_GAP_MS, next);
     });
   };
 

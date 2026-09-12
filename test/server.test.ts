@@ -1570,3 +1570,35 @@ test("a member may go live with a link, an IPTV feed with no extension included,
     engine.stop();
   }
 });
+
+test("a live stream of a playlist moves on to the next track when a track ends", async () => {
+  // A podcast playlist streamed live played its first episode to the end and
+  // then played it again, for ever: served this way the engine decodes nothing
+  // itself, so nothing on its side ever ended a track, and /api/live only
+  // mirrored an index that never moved. The stream is the playback, so when a
+  // track ends and the engine has not moved, the stream moves it.
+  const fakeFfmpeg = ["sh", "-c", 'while [ $# -gt 0 ]; do if [ "$1" = "-i" ]; then printf "PLAY:%s\\n" "$2"; fi; shift; done', "--"];
+  const engine = new PlayerEngine([track("first.mp3"), track("second.mp3")], "/m", { ffmpeg: fakeFfmpeg, ffprobe: ["ffprobe"], play: null });
+  const server = createServer(engine, { web: null, media: true, version: "test", ffmpeg: fakeFfmpeg });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const { port } = server.address() as AddressInfo;
+  const controller = new AbortController();
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/live`, { signal: controller.signal });
+    assert.equal(response.status, 200);
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    let seen = "";
+    const deadline = Date.now() + 8000;
+    while (seen.split("PLAY:").length < 3 && Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += Buffer.from(value).toString();
+    }
+    const plays = seen.split("\n").filter((line) => line.startsWith("PLAY:"));
+    assert.deepEqual(plays.slice(0, 2), ["PLAY:first.mp3", "PLAY:second.mp3"]);
+  } finally {
+    controller.abort();
+    await new Promise<void>((done) => server.close(() => done()));
+    engine.stop();
+  }
+});
