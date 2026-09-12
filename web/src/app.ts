@@ -213,6 +213,11 @@ export function start(): void {
     onairNote: need<HTMLParagraphElement>("onair-note"),
     onairList: need<HTMLUListElement>("onair-list"),
     sharePanel: need<HTMLElement>("share-panel"),
+    trollboxPanel: need<HTMLElement>("trollbox-panel"),
+    trollboxNote: need<HTMLParagraphElement>("trollbox-note"),
+    trollboxList: need<HTMLUListElement>("trollbox-list"),
+    trollboxForm: need<HTMLFormElement>("trollbox-form"),
+    trollboxInput: need<HTMLInputElement>("trollbox-input"),
     shareNote: need<HTMLParagraphElement>("share-note"),
     shareLink: need<HTMLInputElement>("share-link"),
     shareCopy: need<HTMLButtonElement>("share-copy"),
@@ -1147,6 +1152,8 @@ export function start(): void {
     dom.copyNow.hidden = player.source === "";
     // Share sits with the transport, for anything with an address safe to hand out.
     dom.shareNow.hidden = shareLinkNow() === "";
+    // The trollbox follows whatever live is joined.
+    drawTrollbox();
     // Keeping it is for a pasted link that is a whole file somewhere: the
     // server fetches it and this device ends up with it. A live has no whole.
     dom.downloadNow.hidden = !(channelOn && nowMeta?.link?.download);
@@ -3013,6 +3020,178 @@ export function start(): void {
   drawIcon(dom.copyNow, "copy");
   dom.copyNow.addEventListener("click", () => {
     void copyText(player.source, dom.copyNow, "✓");
+  });
+
+  // ---- the trollbox: the chat for the live you have joined -----------------
+  //
+  // One box per room, kept at nixamp.com and keyed by the server and the
+  // channel, so everybody watching one stream is in the same box whichever
+  // page they came from. Read by anybody, polled while the panel is on
+  // screen; a line needs a nixamp.com sign-in, which only nixamp.com's own
+  // page holds -- a server's copy of this page reads along and says so.
+  const TROLLBOX_EVERY_MS = 3000;
+  const TROLLBOX_KEEP = 200;
+  /** nixamp.com's API: relative on nixamp.com itself, so the sign-in cookie goes with it. */
+  const trollboxSite = /(^|\.)nixamp\.com$/.test(globalThis.location.hostname) ? "" : "https://nixamp.com";
+  let trollboxKey = "";
+  let trollboxAfter = "";
+  let trollboxTimer: ReturnType<typeof setTimeout> | null = null;
+  let trollboxBusy = false;
+  const trollboxSeen = new Set<string>();
+  /** Which room the page is in: the server's origin and the channel joined, or null. */
+  function trollboxRoom(): { server: string; channel: string } | null {
+    if (mode !== "remote") return null;
+    const { base } = splitShareLink(shareableLink());
+    if (base === "") return null;
+    let server = "";
+    try {
+      server = new URL(base).origin;
+    } catch {
+      return null;
+    }
+    const channel = channelOn ? channelOn.id : nowMeta?.kind === "live" ? "live" : "";
+    return channel === "" ? null : { server, channel };
+  }
+  function trollboxUrl(room: { server: string; channel: string }, after = ""): string {
+    const query = new URLSearchParams({ server: room.server, channel: room.channel });
+    if (after) query.set("after", after);
+    return `${trollboxSite}/api/v1/trollbox?${query.toString()}`;
+  }
+  /** The panel shown for a room and polling, or hidden and quiet. Called from draw(). */
+  function drawTrollbox(): void {
+    const room = trollboxRoom();
+    const key = room ? `${room.server}|${room.channel}` : "";
+    if (key === trollboxKey) return;
+    trollboxKey = key;
+    trollboxAfter = "";
+    trollboxSeen.clear();
+    dom.trollboxList.replaceChildren();
+    if (trollboxTimer) clearTimeout(trollboxTimer);
+    trollboxTimer = null;
+    dom.trollboxPanel.hidden = room === null;
+    dom.trollboxForm.hidden = true;
+    if (!room) return;
+    dom.trollboxNote.textContent = `The room for ${currentName() || room.channel}. Loading…`;
+    void pollTrollbox();
+  }
+  function trollboxLine(message: { id: string; handle: string; body: string; createdAt: string; mine?: boolean }): HTMLElement {
+    const item = document.createElement("li");
+    item.dataset["id"] = message.id;
+    const when = document.createElement("time");
+    when.className = "when";
+    when.dateTime = message.createdAt;
+    const at = new Date(message.createdAt);
+    when.textContent = Number.isNaN(at.getTime()) ? "" : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const who = document.createElement("span");
+    who.className = "who";
+    // textContent, always: a handle and a line are somebody's text.
+    who.textContent = message.handle;
+    const body = document.createElement("span");
+    body.className = "line";
+    body.textContent = message.body;
+    item.append(when, who, body);
+    if (message.mine === true || isAdmin()) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "icon-btn";
+      remove.textContent = "✕";
+      remove.title = message.mine === true ? "Take your line down" : "Take this line down";
+      remove.setAttribute("aria-label", remove.title);
+      remove.addEventListener("click", () => { void removeTrollboxLine(message.id, item); });
+      item.append(remove);
+    }
+    return item;
+  }
+  async function pollTrollbox(): Promise<void> {
+    const room = trollboxRoom();
+    const key = room ? `${room.server}|${room.channel}` : "";
+    if (!room || key !== trollboxKey) return;
+    if (trollboxBusy) return;
+    trollboxBusy = true;
+    try {
+      const answer = await fetch(trollboxUrl(room, trollboxAfter));
+      const body = (await answer.json().catch(() => ({}))) as {
+        you?: string; error?: string;
+        messages?: { id: string; handle: string; body: string; createdAt: string; mine?: boolean }[];
+      };
+      if (key !== trollboxKey) return;
+      if (!answer.ok) {
+        dom.trollboxNote.textContent = body.error ?? "The trollbox is not answering.";
+        return;
+      }
+      const fresh = (body.messages ?? []).filter((one) => !trollboxSeen.has(one.id));
+      for (const one of fresh) {
+        trollboxSeen.add(one.id);
+        dom.trollboxList.append(trollboxLine(one));
+        trollboxAfter = one.createdAt;
+      }
+      while (dom.trollboxList.children.length > TROLLBOX_KEEP) dom.trollboxList.firstElementChild?.remove();
+      if (fresh.length > 0) dom.trollboxList.lastElementChild?.scrollIntoView({ block: "nearest" });
+      // Signed in on nixamp.com: a line of your own. Elsewhere: read along.
+      const you = body.you ?? "";
+      dom.trollboxForm.hidden = you === "";
+      dom.trollboxNote.textContent = you !== ""
+        ? `You are ${you} in the room for ${currentName() || room.channel}.`
+        : trollboxSite === ""
+          ? `The room for ${currentName() || room.channel}. Sign in to say something.`
+          : `The room for ${currentName() || room.channel}. To say something, open this stream on nixamp.com and sign in.`;
+    } catch {
+      if (key === trollboxKey) dom.trollboxNote.textContent = "The trollbox is not answering.";
+    } finally {
+      trollboxBusy = false;
+      if (key === trollboxKey) {
+        trollboxTimer = setTimeout(() => {
+          if (document.visibilityState === "visible") void pollTrollbox();
+          else trollboxTimer = setTimeout(() => void pollTrollbox(), TROLLBOX_EVERY_MS);
+        }, TROLLBOX_EVERY_MS);
+      }
+    }
+  }
+  async function removeTrollboxLine(id: string, item: HTMLElement): Promise<void> {
+    const room = trollboxRoom();
+    if (!room) return;
+    try {
+      const answer = await fetch(`${trollboxSite}/api/v1/trollbox/${encodeURIComponent(id)}?${new URLSearchParams(room).toString()}`, { method: "DELETE" });
+      if (answer.ok) item.remove();
+      else dom.trollboxNote.textContent = ((await answer.json().catch(() => ({}))) as { error?: string }).error ?? "that did not work";
+    } catch {
+      dom.trollboxNote.textContent = "The trollbox is not answering.";
+    }
+  }
+  dom.trollboxForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const room = trollboxRoom();
+    const line = dom.trollboxInput.value.trim();
+    if (!room || line === "") return;
+    dom.trollboxInput.disabled = true;
+    void (async () => {
+      try {
+        const answer = await fetch(`${trollboxSite}/api/v1/trollbox`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ server: room.server, channel: room.channel, body: line }),
+        });
+        const body = (await answer.json().catch(() => ({}))) as {
+          error?: string; message?: { id: string; handle: string; body: string; createdAt: string; mine?: boolean };
+        };
+        if (!answer.ok || !body.message) {
+          dom.trollboxNote.textContent = body.error ?? "that did not send";
+          return;
+        }
+        dom.trollboxInput.value = "";
+        if (!trollboxSeen.has(body.message.id)) {
+          trollboxSeen.add(body.message.id);
+          dom.trollboxList.append(trollboxLine(body.message));
+          trollboxAfter = body.message.createdAt;
+          dom.trollboxList.lastElementChild?.scrollIntoView({ block: "nearest" });
+        }
+      } catch {
+        dom.trollboxNote.textContent = "The trollbox is not answering.";
+      } finally {
+        dom.trollboxInput.disabled = false;
+        dom.trollboxInput.focus();
+      }
+    })();
   });
 
   /**

@@ -299,6 +299,20 @@
           <ul id="servers-list" class="directory-list"></ul>
         </section>
 
+        <!-- The trollbox: the chat for whatever live you have joined. One box
+             per room, kept at nixamp.com, so everybody watching the same
+             channel is in it whichever page they came from. Reading needs
+             nobody; a line needs a nixamp.com sign-in, on nixamp.com. -->
+        <section class="panel col-b" data-title="Trollbox" id="trollbox-panel" hidden>
+          <p class="hint" id="trollbox-note">Join a live and the room's chat is here.</p>
+          <ul id="trollbox-list" class="trollbox-list" aria-live="polite" aria-label="The room's chat"></ul>
+          <form id="trollbox-form" class="picker" hidden>
+            <input id="trollbox-input" type="text" maxlength="500" autocomplete="off"
+                   placeholder="Say something to the room…" aria-label="A line for the trollbox" />
+            <button type="submit" class="button">Send</button>
+          </form>
+        </section>
+
         <!-- What to send somebody who is not technical: one link, one number,
              one code. Everything else about this page assumes you know what a
              server is; this part must not. -->
