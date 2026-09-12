@@ -745,15 +745,31 @@ test("a pasted link is played by the server you are on, and a whole one can be k
   assert.ok(html.includes('id="download-now"'));
   const body = app.slice(app.indexOf("async function playLink"), app.indexOf("dom.linkForm.addEventListener"));
   // A link plays here first -- a site's player in a frame, or a file in the
-  // page's own -- and only Make public asks the server, which is for whoever
-  // administers it. Not connected, and not allowed, are said, not silently nothing.
+  // page's own -- and anything else is the server going live with it, which
+  // the owner or any member may ask: an IPTV feed with no extension used to
+  // be refused on this page before the server was even asked. Not connected,
+  // and not allowed, are said, not silently nothing.
   assert.match(body, /localPlayback\(url, wantsHls\(\)\)/);
   assert.match(body, /dom\.embedFrame\.src = local\.src/);
-  assert.match(body, /if \(!isAdmin\(\)\) \{/);
-  assert.match(body, /Connect to a server you administer/);
+  assert.match(body, /if \(!canGoLive\(\)\) \{/);
+  assert.doesNotMatch(body, /if \(!isAdmin\(\)\) \{/);
+  assert.match(body, /Pick a server to go live on, or connect to one/);
   assert.match(body, /\/api\/links\/play/);
+  // Asked to go live -- kept, listed, a member's marked theirs -- by the
+  // server itself; the keep after is for a server from before the word.
+  assert.match(body, /JSON\.stringify\(\{ url, live: true \}\)/);
   assert.match(body, /\/keep`\)/);
   assert.ok(html.includes('id="make-public"') && html.includes('id="embed-frame"'));
+  // Go live is offered to whoever may go live, not only the owner.
+  assert.match(app, /dom\.makePublic\.hidden = !\(localLink && canGoLive\(\)\)/);
+  assert.ok(html.includes("● GO LIVE") && !html.includes("MAKE PUBLIC"));
+  // Which server goes live with it: the connected one, or any in the directory.
+  assert.ok(html.includes('id="link-server"'));
+  assert.match(app, /directoryServers = streams\.map\(/);
+  assert.match(app, /dom\.linkServer\.addEventListener\("change"/);
+  // What is on the air can be renamed, by the owner or by whoever put it on.
+  assert.match(app, /method: "PATCH"/);
+  assert.match(app, /onRename: canDrive \|\| \(memberHere && meId !== "" && channel\.startedBy === meId\)/);
   // The answer is watched as a channel, remembering where it came from.
   assert.match(body, /watchChannel\(/);
   assert.match(body, /download: body\.download === true/);

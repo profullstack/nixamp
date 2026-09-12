@@ -108,9 +108,12 @@ test("the listen key may hear but not drive", () => {
   assert.equal(allowedForListening("/api/media/0"), true);
   assert.equal(allowedForListening("/api/events"), true);
   assert.equal(allowedForListening("/api/command"), false);
-  // A listen link may not have the server fetch links: that is the control link's.
-  assert.equal(allowedForListening("/api/links/play"), false);
+  // A listen link may not have the server fetch a link to keep: that is the
+  // control link's. Putting one on the air reaches the administering gate,
+  // which lets a member's session through and refuses a bare listen key.
+  assert.equal(allowedForListening("/api/links/play"), true);
   assert.equal(allowedForListening("/api/links/download"), false);
+  assert.equal(allowedForListening("/api/links"), false);
   assert.equal(allowedForListening("/api/channels/url-abc"), true, "watching what is on the air is listening");
   assert.equal(allowedForListening("/api/source"), false);
   // Everything under it too: removing an album from somebody else's playlist

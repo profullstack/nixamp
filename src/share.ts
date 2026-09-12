@@ -361,6 +361,11 @@ export function allowedForListening(path: string): boolean {
   // Having the server fetch a link is a decoder and a download on somebody
   // else's machine: the control link's to ask for, not the listen link's. A
   // viewer's link plays in their own browser.
+  // Putting a link on the air is the exception: a member reaches a server
+  // from nixamp.com with its listen link and their session, and the
+  // administering gate behind this one decides whether that session is a
+  // member's. A listen key alone still gets a 403 there.
+  if (path === "/api/links/play") return true;
   if (path === "/api/links" || path.startsWith("/api/links/")) return false;
   return true;
 }

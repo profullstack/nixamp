@@ -752,6 +752,11 @@ button.golive:disabled { opacity: 0.5; cursor: progress; }
 /* The paste-a-link box under the player: the field takes the width. */
 .link-form { margin-top: 8px; }
 .link-form input { flex: 1 1 240px; min-width: 0; }
+/* Which server goes live with it: drawn like the field beside it. */
+.link-form select {
+  flex: 0 1 180px; min-width: 0; font: inherit; color: inherit;
+  background: #0b120e; border: 1px solid #2a3a30; border-radius: 4px; padding: 6px 8px;
+}
 
 .button {
   display: inline-block;

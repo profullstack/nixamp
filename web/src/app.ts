@@ -115,6 +115,7 @@ export function start(): void {
     embedFrame: need<HTMLIFrameElement>("embed-frame"),
     linkForm: need<HTMLFormElement>("link-form"),
     linkUrl: need<HTMLInputElement>("link-url"),
+    linkServer: need<HTMLSelectElement>("link-server"),
     goLiveNow: need<HTMLButtonElement>("go-live-now"),
     elapsed: need<HTMLElement>("elapsed"),
     total: need<HTMLElement>("total"),
@@ -230,7 +231,8 @@ export function start(): void {
    * is an empty box in most monospace faces, which is what the icons were
    * on a machine without an emoji font. These are drawn, not typed.
    */
-  const ICONS: Record<"link" | "copy" | "restart" | "remove" | "check" | "live" | "eye" | "gear", string> = {
+  const ICONS: Record<"link" | "copy" | "restart" | "remove" | "rename" | "check" | "live" | "eye" | "gear", string> = {
+    rename: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
     // An eye is a viewer; a gear is an administrator. Both a size up from the
     // row icons, because each is a way in rather than a thing to do to a row.
     eye: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
@@ -252,6 +254,9 @@ export function start(): void {
   let mode: Mode = "local";
   /** What the server we are connected to calls itself, once it has said. */
   let serverName = "";
+  /** The directory's servers, for the picker that says which one goes live with a link. */
+  let directoryServers: { name: string; url: string }[] = [];
+  let drawnLinkServers = "";
   /**
    * Connected on purpose as a viewer: the page hides everything that
    * administers, even when the server would obey. Chosen in the directory,
@@ -1083,8 +1088,9 @@ export function start(): void {
     // Keeping it is for a pasted link that is a whole file somewhere: the
     // server fetches it and this device ends up with it. A live has no whole.
     dom.downloadNow.hidden = !(channelOn && nowMeta?.link?.download);
-    // Offered over a link playing here, to whoever administers the server.
-    dom.makePublic.hidden = !(localLink && isAdmin());
+    // Offered over a link playing here, to whoever may go live on the server.
+    dom.makePublic.hidden = !(localLink && canGoLive());
+    drawLinkServers();
     dom.album.textContent = currentAlbum();
 
     const at2 = position();
@@ -1604,17 +1610,23 @@ export function start(): void {
    * YouTube, Vimeo and SoundCloud have players made to be put in a page, and
    * this browser is the viewer's own, which those sites serve where they
    * refuse a server's datacenter address with "sign in to confirm you're not
-   * a bot". A link straight to a file plays in the page's own player. The
-   * server is asked only to make a link public, which is administering it.
+   * a bot". A link straight to a file plays in the page's own player.
+   * Anything else -- an IPTV feed at /channel/906, a stream with no
+   * extension to say what it is -- the server fetches and carries as a
+   * channel, on the air for everyone: going live, which the owner or any
+   * signed-in member may do.
    */
   async function playLink(url: string): Promise<void> {
     const local = localPlayback(url, wantsHls());
     if (!local) {
       // Nothing this browser plays on its own: the server would have to
-      // fetch it, and that is for whoever administers it to ask.
-      if (!isAdmin()) {
-        note = "That link would need a server to fetch it, which only whoever administers the server may ask. "
-          + "YouTube, Vimeo, SoundCloud and links straight to a file play here.";
+      // fetch it, which is going live with it.
+      if (!canGoLive()) {
+        note = mode === "remote"
+          ? "That link would need this server to fetch it, which is going live with it: sign in to nixamp.com, or use the server's control link. "
+            + "YouTube, Vimeo, SoundCloud and links straight to a file play here."
+          : "That link would need a server to fetch it: pick one to go live on, or connect to one. "
+            + "YouTube, Vimeo, SoundCloud and links straight to a file play here.";
         draw();
         return;
       }
@@ -1649,13 +1661,14 @@ export function start(): void {
   /**
    * A link, on the air for everybody: the server fetches it and carries it
    * as a channel, kept -- up with nobody watching, remembered across a
-   * restart, listed with a phone code. Administering, so only offered to
-   * whoever may; and asked of the server once here, so a site that refuses
-   * the server is an answer on this page rather than a channel that dies.
+   * restart, listed in the directory with Join live and a phone code. Going
+   * live, so offered to the owner and to any member; and asked of the
+   * server once here, so a site that refuses the server is an answer on
+   * this page rather than a channel that dies.
    */
   async function makePublic(url: string): Promise<void> {
     if (mode !== "remote") {
-      note = "Connect to a server you administer to put a link on the air.";
+      note = "Pick a server to go live on, or connect to one, to put a link on the air.";
       draw();
       return;
     }
@@ -1668,10 +1681,13 @@ export function start(): void {
         extractor?: string; error?: string;
       } = {};
       try {
+        // live: kept and listed by the server itself, for a member
+        // marked theirs. The keep below is for a server from before it
+        // knew the word.
         answer = await fetch(remote.url("/api/links/play"), {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ url }),
+          body: JSON.stringify({ url, live: true }),
         });
         body = (await answer.json().catch(() => ({}))) as typeof body;
       } catch {
@@ -1706,6 +1722,64 @@ export function start(): void {
     const url = dom.linkUrl.value.trim();
     if (url === "") return;
     void playLink(url);
+  });
+
+  /**
+   * Which server goes live with a pasted link.
+   *
+   * The one connected, by default; or any in the directory, so a member
+   * on nixamp.com with a feed to share picks a machine to carry it rather
+   * than first finding the Remote panel. Picking one connects to it as a
+   * viewer -- the session says member -- and the link stays in the box
+   * for Play link.
+   */
+  function drawLinkServers(): void {
+    const here = mode === "remote" ? remote.address : "";
+    const origin = (url: string): string => {
+      try {
+        return new URL(url).origin;
+      } catch {
+        return url;
+      }
+    };
+    const others = directoryServers.filter((one) => origin(one.url) !== origin(here));
+    const signature = JSON.stringify({ here, name: serverName, others });
+    if (signature === drawnLinkServers) return;
+    drawnLinkServers = signature;
+    const options: HTMLOptionElement[] = [];
+    if (here !== "") {
+      const current = document.createElement("option");
+      current.value = "";
+      current.textContent = `on ${serverName || here}`;
+      options.push(current);
+    } else {
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = "go live on…";
+      options.push(none);
+    }
+    for (const one of others) {
+      const option = document.createElement("option");
+      option.value = one.url;
+      option.textContent = one.name;
+      options.push(option);
+    }
+    dom.linkServer.replaceChildren(...options);
+    dom.linkServer.value = "";
+    dom.linkServer.hidden = others.length === 0;
+  }
+  dom.linkServer.addEventListener("change", () => {
+    const chosen = dom.linkServer.value;
+    if (chosen === "") return;
+    const url = dom.linkUrl.value.trim();
+    viewerOnly = true;
+    askedToPlay = "";
+    dom.remoteUrl.value = chosen;
+    dom.remoteForm.requestSubmit();
+    // The link outlives the connection: what was pasted is still there to play.
+    dom.linkUrl.value = url;
+    note = url === "" ? "Connecting… then paste a link and press Play link to go live with it there." : "Connecting… then press Play link to go live with it there.";
+    draw();
   });
 
   dom.makePublic.addEventListener("click", () => {
@@ -1898,6 +1972,8 @@ export function start(): void {
         recent?: RecentStream[];
       };
       streams = body.streams ?? [];
+      directoryServers = streams.map((one) => ({ name: one.name, url: one.url }));
+      drawLinkServers();
       // The same news is not news. Without the clock fields, which every
       // heartbeat moves and which nobody sees; with the buttons under a
       // pointer, which a redraw would take away for nothing.
@@ -4199,9 +4275,12 @@ export function start(): void {
         onRestart: canDrive && channel.via === "pull"
           ? () => { void restartChannel(channel.id, channel.name); }
           : undefined,
-        // A member takes off what they put on, and nothing else.
+        // A member takes off, or renames, what they put on, and nothing else.
         onStop: canDrive || (memberHere && meId !== "" && channel.startedBy === meId)
           ? () => { void removeChannel(channel.id, channel.name); }
+          : undefined,
+        onRename: canDrive || (memberHere && meId !== "" && channel.startedBy === meId)
+          ? () => { void renameChannel(channel.id, channel.name); }
           : undefined,
       }));
     }
@@ -4376,6 +4455,34 @@ export function start(): void {
     void loadOnAir();
   }
 
+  /**
+   * Call what is on the air something better. A link goes on as "906" or
+   * whatever the file was called, and that is what the directory lists;
+   * the person who put it on knows what it is.
+   */
+  async function renameChannel(id: string, name: string): Promise<void> {
+    const typed = globalThis.prompt(`Call ${name}…`, name);
+    if (typed === null) return;
+    const renamed = typed.trim();
+    if (renamed === "" || renamed === name) return;
+    tellOnAir(`Renaming ${name}…`);
+    try {
+      const answer = await fetch(remote.url(`/api/channels/${encodeURIComponent(id)}`), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: renamed }),
+      });
+      const body = (await answer.json().catch(() => ({}))) as { error?: string };
+      tellOnAir(answer.ok ? `${name} is now ${renamed}.` : (body.error ?? "that did not work"));
+    } catch {
+      tellOnAir("could not reach the server");
+    }
+    if (channelOn?.id === id) channelOn = { ...channelOn, name: renamed };
+    drawnOnAir = "";
+    void loadOnAir();
+    draw();
+  }
+
   async function removeChannel(id: string, name: string): Promise<void> {
     tellOnAir(`Taking ${name} off the air…`);
     try {
@@ -4485,6 +4592,7 @@ export function start(): void {
     /** The stream's own address, for VLC, mpv, or a <video> somewhere else. */
     direct?: string;
     onRestart?: () => void;
+    onRename?: () => void;
     onStop?: () => void;
   }): HTMLElement {
     const item = document.createElement("li");
@@ -4545,6 +4653,9 @@ export function start(): void {
     }
     if (row.onRestart) {
       actions.append(icon("restart", "Restart: dial the source again", () => row.onRestart?.()));
+    }
+    if (row.onRename) {
+      actions.append(icon("rename", "Rename: call it something better in the directory", () => row.onRename?.()));
     }
     if (row.onStop) {
       actions.append(icon("remove", "Remove: take it off the air", () => row.onStop?.()));

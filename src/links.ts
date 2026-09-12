@@ -177,6 +177,13 @@ export function parseResolved(json: unknown, page: string): ResolvedLink | null 
     }
   }
   if (media === "") return null;
+  // A link that was the media all along -- an IPTV feed at /channel/906,
+  // with no extension to say so -- is answered by yt-dlp's generic
+  // extractor with wherever the feed redirected to, which for a panel is a
+  // second host and a token minted for that one request. ffmpeg follows a
+  // redirect itself, so the link is kept as pasted and every redial gets a
+  // fresh token instead of a 403 an hour in.
+  if (record["direct"] === true && parts.length === 0 && /^https?:\/\//i.test(page)) media = page;
   const title = typeof record["title"] === "string" && record["title"].trim() !== ""
     ? record["title"].trim().slice(0, 200)
     : fileNameOf(page);
@@ -306,9 +313,11 @@ export async function resolveLink(
   options: { cookies?: string; timeoutMs?: number; format?: string } = {},
 ): Promise<ResolvedLink | { error: string }> {
   if (isDirectMedia(url)) return directLink(url);
-  if (!ytdlp || ytdlp.length === 0) {
-    return { error: "this server has no yt-dlp, so it can only play a direct link to a file or a stream" };
-  }
+  // Without yt-dlp, a link is taken as the media it may well be: an IPTV
+  // feed has no extension and no page behind it, and ffprobe -- asked next,
+  // before anything goes on the air -- tells a stream from a web page in a
+  // second. A page it cannot read is refused there, by name.
+  if (!ytdlp || ytdlp.length === 0) return directLink(url);
   const [command, ...prefix] = ytdlp as [string, ...string[]];
   return new Promise((done) => {
     let out = "";

@@ -160,10 +160,31 @@ test("a page is resolved through yt-dlp; a file is not", async () => {
   assert.ok(!("error" in file));
   assert.equal(file.title, "song.mp3");
 
-  // And a page on a server without yt-dlp is a sentence, not a crash.
-  const none = await resolveLink(null, "https://soundcloud.com/forss/flickermood");
-  assert.ok("error" in none);
-  assert.match(none.error, /no yt-dlp/);
+  // And a link with no extension on a server without yt-dlp is taken as the
+  // media it may be -- an IPTV feed at /channel/906 -- and left to ffprobe,
+  // which is asked before anything goes on the air. Not an error here.
+  const feed = await resolveLink(null, "http://23.152.40.104/tipoffsport/abc/906");
+  assert.ok(!("error" in feed));
+  assert.equal(feed.media, "http://23.152.40.104/tipoffsport/abc/906");
+  assert.equal(feed.extractor, "direct");
+  assert.equal(feed.title, "906");
+});
+
+test("a feed that was the media all along keeps the pasted address, not the redirect's token", () => {
+  // yt-dlp's generic extractor follows an IPTV panel's redirect to a second
+  // host with a token minted for that one request. The channel dials the
+  // link as pasted, so every redial gets a fresh token.
+  const feed = parseResolved(
+    { url: "http://23.152.40.73/auth/906.ts?token=once", direct: true, ext: "ts", title: "906", extractor: "generic" },
+    "http://23.152.40.104/tipoffsport/abc/906",
+  );
+  assert.ok(feed);
+  assert.equal(feed.media, "http://23.152.40.104/tipoffsport/abc/906");
+  assert.equal(feed.title, "906");
+  // A page yt-dlp scraped a player off is not the media, and is left alone.
+  const scraped = parseResolved({ url: "https://cdn.example/clip.mp4", ext: "mp4", extractor: "generic" }, "https://blog.example/post");
+  assert.ok(scraped);
+  assert.equal(scraped.media, "https://cdn.example/clip.mp4");
 });
 
 test("a link yt-dlp cannot read is answered with its reason", async () => {
