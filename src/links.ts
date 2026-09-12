@@ -94,6 +94,35 @@ export function isPlaylistLink(url: string): boolean {
   }
 }
 
+/**
+ * What to call a list that does not name itself: its file, or, when the
+ * file is only called "playlist", the folder it sits in. A show's page hands
+ * out /podcast/off-protocol/playlist.m3u, and "off protocol" is the name in
+ * that; "playlist" is not a name.
+ */
+export function playlistNameOf(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split("/").filter(Boolean).map((one) => {
+      try {
+        return decodeURIComponent(one);
+      } catch {
+        return one;
+      }
+    });
+    const file = (parts.pop() ?? "").replace(/\.m3u$/i, "");
+    const named = /^(playlist|index|list|all|episodes|feed)?$/i.test(file) ? (parts.pop() ?? "") : file;
+    return named.replace(/[-_]+/g, " ").trim() || parsed.hostname;
+  } catch {
+    return "Playlist";
+  }
+}
+
+/** The name a list gives itself on a #PLAYLIST line, if it does. */
+export function playlistTitleIn(text: string): string {
+  return /^#PLAYLIST:\s*(.+)$/im.exec(text)?.[1]?.replace(/[\u0000-\u001F]/g, " ").trim().slice(0, 200) ?? "";
+}
+
 /** How much of a playlist is worth reading: a list, not a library dump. */
 export const PLAYLIST_MAX_BYTES = 2_000_000;
 export const PLAYLIST_MAX_ENTRIES = 1000;
@@ -142,7 +171,8 @@ export async function resolvePlaylist(
   const [first] = list.sources;
   if (!first) return { error: "that playlist has nothing in it this can play" };
   return {
-    title: fileNameOf(url).replace(/\.m3u$/i, "") || "Playlist",
+    // Named as the list names itself, else by where it lives.
+    title: playlistTitleIn(text) || playlistNameOf(url),
     media: first,
     audio: "",
     // A station: joined where it is, never seeked, and with no end to save.
