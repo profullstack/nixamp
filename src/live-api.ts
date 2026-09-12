@@ -2,9 +2,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { tokenFrom, type Account, type Accounts } from "./accounts.ts";
 import {
   INVITATION_STATES,
+  LIVE_EVENT_KINDS,
   LIVE_EVENT_STATUSES,
   LiveEventError,
+  isTicketed,
   type LiveEvent,
+  type LiveEventKind,
   type LiveEventStatus,
   type LiveEvents,
 } from "./live-events.ts";
@@ -12,10 +15,13 @@ import {
   LAYOUT_SCOPES,
   LayoutError,
   PANEL_REGISTRY,
+  layoutNameFor,
   type Layout,
   type Layouts,
   presetLayout,
 } from "./layouts.ts";
+import { needsTicket, ticketFrom, type Tickets } from "./tickets.ts";
+import { toRequest } from "./paywall.ts";
 import { HAND_RAISE_STATES, RoomError, type Rooms } from "./rooms.ts";
 
 export interface LiveApiOptions {
@@ -23,6 +29,8 @@ export interface LiveApiOptions {
   accounts?: Accounts;
   layouts?: Layouts;
   rooms?: Rooms;
+  /** Ticket sales for paid events. Absent means every event is a free one. */
+  tickets?: Tickets;
   site?: string;
   email?: (to: string, note: { title: string; body: string; url: string }) => Promise<boolean>;
 }
@@ -82,14 +90,16 @@ function accountName(account: Account): string {
   return account.email.split("@")[0]?.replace(/[._-]+/g, " ").trim() || "Someone";
 }
 
-function permissionsFor(event: LiveEvent, account: Account | null): string[] {
-  if (account?.id === event.ownerId || event.moderatorIds.includes(account?.id ?? "")) {
+function permissionsFor(event: LiveEvent, account: Account | null, hasTicket = false): string[] {
+  const id = account?.id ?? "";
+  if (account?.id === event.ownerId || event.moderatorIds.includes(id)) {
     return [
       "event.update",
       "event.start",
       "event.end",
       "event.invite",
       "event.moderate",
+      "event.perform",
       "room.listen",
       "room.chat",
       "room.raise_hand",
@@ -104,22 +114,72 @@ function permissionsFor(event: LiveEvent, account: Account | null): string[] {
       "panel.remove",
     ];
   }
+  // An artist performs without presiding: on stage, and on the controls that
+  // put them there, but never on the guest list or the moderation queue.
+  if (event.artistIds.includes(id)) {
+    return [
+      "event.start",
+      "event.end",
+      "event.perform",
+      "room.listen",
+      "room.chat",
+      "room.raise_hand",
+      "room.speak",
+      "recording.start",
+      "recording.stop",
+      "layout.read",
+    ];
+  }
+  // A paid room admits nobody who has not paid, so even listening is withheld
+  // until there is a ticket. A free room is what it always was.
+  const listening = isTicketed(event) && !hasTicket ? [] : ["room.listen"];
   return account
-    ? ["room.listen", "room.chat", "room.raise_hand", "layout.read"]
-    : ["room.listen", "layout.read"];
+    ? [...listening, "room.chat", "room.raise_hand", "layout.read"]
+    : [...listening, "layout.read"];
 }
 
-function layoutFor(event: LiveEvent, account: Account | null): Layout {
-  const name = event.ownerId === account?.id || event.moderatorIds.includes(account?.id ?? "")
-    ? "backtoschool-host"
-    : account
-      ? "backtoschool-member"
-      : "backtoschool-viewer";
+function roleOf(event: LiveEvent, account: Account | null, hasTicket: boolean): "viewer" | "member" | "host" {
+  const id = account?.id ?? "";
+  if (event.ownerId === id || event.moderatorIds.includes(id) || event.artistIds.includes(id)) return "host";
+  if (isTicketed(event)) return hasTicket ? "member" : "viewer";
+  return account ? "member" : "viewer";
+}
+
+function layoutFor(event: LiveEvent, account: Account | null, hasTicket = false): Layout {
+  const name = layoutNameFor(event.kind, roleOf(event, account, hasTicket));
   return presetLayout(event.layoutId ?? name) ?? presetLayout(name)!;
 }
 
-function view(event: LiveEvent, account: Account | null): { event: LiveEvent; permissions: string[]; layout: Layout } {
-  return { event, permissions: permissionsFor(event, account), layout: layoutFor(event, account) };
+export interface EventView {
+  event: LiveEvent;
+  permissions: string[];
+  layout: Layout;
+  ticket: { required: boolean; held: boolean; priceCents: number; currency: string };
+}
+
+function view(event: LiveEvent, account: Account | null, hasTicket = false): EventView {
+  return {
+    event,
+    permissions: permissionsFor(event, account, hasTicket),
+    layout: layoutFor(event, account, hasTicket),
+    ticket: {
+      required: needsTicket(event, account?.id, hasTicket),
+      held: hasTicket,
+      priceCents: event.ticketPriceCents,
+      currency: event.ticketCurrency,
+    },
+  };
+}
+
+/** Whether this request carries a ticket to this event. */
+async function ticketHeld(
+  request: IncomingMessage,
+  url: URL,
+  options: LiveApiOptions,
+  event: LiveEvent,
+): Promise<boolean> {
+  if (!options.tickets || !isTicketed(event)) return false;
+  return options.tickets.holds(event, ticketFrom(request.headers, url));
 }
 
 async function signedIn(request: IncomingMessage, accounts: Accounts | undefined): Promise<Account | null> {
@@ -167,6 +227,22 @@ async function manage(
   return account;
 }
 
+/** Everyone on the stage: the host, a moderator, and an invited artist. */
+async function perform(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: LiveApiOptions,
+  event: LiveEvent,
+): Promise<Account | null> {
+  const account = await requiredAccount(request, response, options);
+  if (!account) return null;
+  if (!options.events.canPerform(event, account.id)) {
+    json(response, 403, { error: "only the people on this stage can do that" });
+    return null;
+  }
+  return account;
+}
+
 export async function handleLiveApi(
   request: IncomingMessage,
   response: ServerResponse,
@@ -187,6 +263,10 @@ export async function handleLiveApi(
         if (statusValue && !LIVE_EVENT_STATUSES.includes(statusValue as LiveEventStatus)) {
           throw new LiveEventError(`status must be one of ${LIVE_EVENT_STATUSES.join(", ")}`, 422);
         }
+        const kindValue = url.searchParams.get("kind") ?? undefined;
+        if (kindValue && !LIVE_EVENT_KINDS.includes(kindValue as LiveEventKind)) {
+          throw new LiveEventError(`kind must be one of ${LIVE_EVENT_KINDS.join(", ")}`, 422);
+        }
         const mine = url.searchParams.get("mine") === "true";
         if (mine && !account) {
           json(response, 401, { error: "sign in to see your events" });
@@ -199,6 +279,7 @@ export async function handleLiveApi(
         const events = await options.events.list({
           ...(mine && account ? { ownerId: account.id } : {}),
           ...(statusValue ? { status: statusValue as LiveEventStatus } : {}),
+          ...(kindValue ? { kind: kindValue as LiveEventKind } : {}),
           ...(url.searchParams.get("topic") ? { topic: url.searchParams.get("topic")! } : {}),
           ...(url.searchParams.get("from") ? { from: url.searchParams.get("from")! } : {}),
           limit: requestedLimit,
@@ -314,7 +395,7 @@ export async function handleLiveApi(
       return true;
     }
 
-    const eventMatch = /^\/api\/v1\/events\/([^/]+)(?:\/(invitations|chat|hand-raises)(?:\/([^/]+))?|\/(start|end|cancel|archive))?$/.exec(path);
+    const eventMatch = /^\/api\/v1\/events\/([^/]+)(?:\/(invitations|chat|hand-raises|tickets)(?:\/([^/]+))?|\/(doors|start|encore|end|cancel|archive))?$/.exec(path);
     if (!eventMatch) {
       json(response, 404, { error: "no such endpoint" });
       return true;
@@ -329,7 +410,7 @@ export async function handleLiveApi(
       if (request.method === "GET") {
         const account = await eventAccess(request, response, url, options, event);
         if (account === false || !event) return true;
-        json(response, 200, view(event, account));
+        json(response, 200, view(event, account, await ticketHeld(request, url, options, event)));
         return true;
       }
       const account = await requiredAccount(request, response, options);
@@ -340,7 +421,7 @@ export async function handleLiveApi(
           ...input,
           version: requestedVersion(request, input),
         });
-        json(response, 200, view(updated, account));
+        json(response, 200, view(updated, account, await ticketHeld(request, url, options, updated)));
         return true;
       }
       if (request.method === "DELETE") {
@@ -362,17 +443,23 @@ export async function handleLiveApi(
         json(response, 405, { error: "POST only" });
         return true;
       }
-      const account = await manage(request, response, options, event);
+      // Cancelling and archiving a show are the host's business; opening the
+      // doors, playing and coming back on are the band's.
+      const account = action === "cancel" || action === "archive"
+        ? await manage(request, response, options, event)
+        : await perform(request, response, options, event);
       if (!account) return true;
       const input = await body(request);
       const target: Record<string, LiveEventStatus> = {
+        doors: "starting",
         start: "live",
+        encore: "encore",
         end: "ended",
         cancel: "cancelled",
         archive: "archived",
       };
       const updated = await options.events.transition(event.id, event.ownerId, target[action]!, requestedVersion(request, input));
-      json(response, 200, view(updated, account));
+      json(response, 200, view(updated, account, await ticketHeld(request, url, options, updated)));
       return true;
     }
 
@@ -407,6 +494,70 @@ export async function handleLiveApi(
       return true;
     }
 
+    if (collection === "tickets") {
+      // Reading the price is open: a stranger deciding whether to come has to
+      // be told what it costs before they are asked for anything.
+      if (request.method === "GET" && !child) {
+        const account = await signedIn(request, options.accounts);
+        const held = await ticketHeld(request, url, options, event);
+        if (!options.tickets) {
+          json(response, 200, {
+            ticket: { ticketed: isTicketed(event), held: false, sales: false },
+          });
+          return true;
+        }
+        json(response, 200, {
+          ticket: {
+            ...options.tickets.offer(event),
+            held,
+            sales: options.tickets.enabled,
+            required: needsTicket(event, account?.id, held),
+          },
+        });
+        return true;
+      }
+      // The guest list. A host hands out a ticket nobody paid for, which is
+      // the only way a venue can comp the press or make a refund good.
+      if (request.method === "POST" && child === "comp") {
+        if (!options.tickets) {
+          json(response, 503, { error: "this deployment does not issue tickets" });
+          return true;
+        }
+        const host = await manage(request, response, options, event);
+        if (!host) return true;
+        if (!isTicketed(event)) {
+          json(response, 409, { error: "this event is free; no ticket is needed" });
+          return true;
+        }
+        const input = await body(request);
+        const minutes = Number(input["minutes"] ?? event.ticketMinutes);
+        if (!Number.isInteger(minutes) || minutes < 1 || minutes > 525_600) {
+          throw new LiveEventError("minutes must be between 1 and 525600", 422);
+        }
+        json(response, 201, { ticket: await options.tickets.mint(event, minutes), header: "x-nixamp-ticket" });
+        return true;
+      }
+      if (request.method === "POST" && !child) {
+        if (!options.tickets) {
+          json(response, 503, { error: "this deployment does not sell tickets" });
+          return true;
+        }
+        const site = (options.site ?? "https://nixamp.com").replace(/\/$/, "");
+        const answer = await options.tickets.sell(event, toRequest(request, site));
+        const buffer = Buffer.from(await answer.arrayBuffer());
+        response.writeHead(answer.status, {
+          ...CORS,
+          ...Object.fromEntries(answer.headers),
+          "content-length": String(buffer.byteLength),
+          "cache-control": "no-store",
+        });
+        response.end(buffer);
+        return true;
+      }
+      json(response, 405, { error: "GET or POST" });
+      return true;
+    }
+
     if (collection === "chat" && options.rooms) {
       const account = await eventAccess(request, response, url, options, event);
       if (account === false) return true;
@@ -418,6 +569,10 @@ export async function handleLiveApi(
         if (!event.chatEnabled) throw new RoomError("chat is off for this event", 409);
         if (!account) {
           json(response, 401, { error: "sign in to chat" });
+          return true;
+        }
+        if (needsTicket(event, account.id, await ticketHeld(request, url, options, event))) {
+          json(response, 402, { error: "the chat for this show is for ticket holders" });
           return true;
         }
         const input = await body(request);

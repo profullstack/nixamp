@@ -74,7 +74,8 @@ import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
 import { inviteSubject, inviteText, isEmail, isPhone, watchLink } from "./invite.ts";
 import { handleLiveApi } from "./live-api.ts";
-import { LiveEvents, type LiveEvent } from "./live-events.ts";
+import { LiveEvents, eventStructuredData, isTicketed, type LiveEvent } from "./live-events.ts";
+import { Tickets, needsTicket, ticketFrom, ticketsFromEnv } from "./tickets.ts";
 import { Layouts } from "./layouts.ts";
 import { Rooms } from "./rooms.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
@@ -1242,29 +1243,34 @@ function htmlText(value: string): string {
     .replaceAll("'", "&#039;");
 }
 
+/**
+ * Whose site this shell belongs to.
+ *
+ * Read from the page rather than hard-coded, because one NixAmp serves several
+ * branded clients and each brings its own head. og:site_name first, then the
+ * part of the title before the dash, then the hostname.
+ */
+export function brandOf(shell: string, site: string): string {
+  const named = /<meta\s+property="og:site_name"\s+content="([^"]+)"/i.exec(shell);
+  if (named?.[1]) return named[1];
+  const titled = /<title>([^<]*)<\/title>/i.exec(shell);
+  const head = titled?.[1]?.split(/\s[—-]\s/)[0]?.trim();
+  if (head) return head;
+  try {
+    return new URL(site).hostname.replace(/^www\./, "");
+  } catch {
+    return "NixAmp";
+  }
+}
+
 function eventDocument(shell: string, event: Awaited<ReturnType<LiveEvents["get"]>>, site: string): string {
   if (!event) return shell;
-  const title = `${event.title} — BackToSchool.help`;
-  const description = event.description || `Listen to ${event.title} live on BackToSchool.help.`;
+  const brand = brandOf(shell, site);
+  const title = `${event.title} — ${brand}`;
+  const kindWord = event.kind === "concert" ? "Watch" : "Listen to";
+  const description = event.description || `${kindWord} ${event.title} live on ${brand}.`;
   const canonical = `${site.replace(/\/$/, "")}/live/${encodeURIComponent(event.slug)}`;
-  const structured = JSON.stringify({
-    "@context": "https://schema.org",
-    "@type": "Event",
-    name: event.title,
-    description,
-    eventStatus: event.status === "cancelled"
-      ? "https://schema.org/EventCancelled"
-      : event.status === "live"
-        ? "https://schema.org/EventInProgress"
-        : event.status === "ended"
-          ? "https://schema.org/EventCompleted"
-          : "https://schema.org/EventScheduled",
-    eventAttendanceMode: "https://schema.org/OnlineEventAttendanceMode",
-    ...(event.startsAt ? { startDate: event.startsAt } : {}),
-    ...(event.endsAt ? { endDate: event.endsAt } : {}),
-    url: canonical,
-    location: { "@type": "VirtualLocation", url: canonical },
-  }).replaceAll("<", "\\u003c");
+  const structured = JSON.stringify(eventStructuredData(event, canonical)).replaceAll("<", "\\u003c");
   return shell
     .replace(/<title>.*?<\/title>/s, `<title>${htmlText(title)}</title>`)
     .replace(/<meta name="description" content="[^"]*"\s*\/>/, `<meta name="description" content="${htmlText(description)}" />`)
@@ -1440,6 +1446,8 @@ export interface HandlerOptions {
   layouts?: Layouts;
   /** Persistent participation state that must not be coupled to live audio. */
   rooms?: Rooms;
+  /** Tickets: a paid pass to one event's room. Absent means every show is free. */
+  tickets?: Tickets;
   /**
    * How an invite is sent: by email, by text, and the site the watch link is
    * built on. nixamp.com only; a personal nixamp has no mail to send from.
@@ -1560,6 +1568,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       ...(options.accounts ? { accounts: options.accounts } : {}),
       ...(options.layouts ? { layouts: options.layouts } : {}),
       ...(options.rooms ? { rooms: options.rooms } : {}),
+      ...(options.tickets ? { tickets: options.tickets } : {}),
       ...(options.invites?.site ? { site: options.invites.site } : {}),
       ...(options.invites?.email ? { email: options.invites.email } : {}),
     })) return;
@@ -3273,12 +3282,29 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
             json(response, 404, { error: "nothing is playing on that channel" });
             return;
           }
-        } else if (!options.events!.canManage(event, account?.id)) {
-          json(response, account ? 403 : 401, { error: account ? "only the event host can publish here" : "sign in to host this event" });
+          // A ticketed room is the one place a 402 belongs on the media
+          // itself: there is a thing to buy, it is this, and the answer says
+          // what it costs rather than pretending the room is not there.
+          if (isTicketed(event)) {
+            const held = await options.tickets?.holds(event, ticketFrom(request.headers, url)) ?? false;
+            if (needsTicket(event, account?.id, held)) {
+              json(response, 402, {
+                error: `${event.title} is a ticketed show.`,
+                ticket: options.tickets?.offer(event) ?? {
+                  ticketed: true,
+                  priceCents: event.ticketPriceCents,
+                  currency: event.ticketCurrency,
+                },
+              });
+              return;
+            }
+          }
+        } else if (!options.events!.canPerform(event, account?.id)) {
+          json(response, account ? 403 : 401, { error: account ? "only the people on this stage can publish here" : "sign in to host this event" });
           return;
         } else if (request.method === "POST" &&
                    (action === undefined || action === "chunk") &&
-                   event.status !== "live") {
+                   event.status !== "live" && event.status !== "encore") {
           json(response, 409, { error: "start the event before publishing audio" });
           return;
         }
@@ -3380,7 +3406,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // Off the air is news too: told now, so the directory drops it
           // rather than listing it until the next heartbeat.
           void options.live?.announce?.();
-          if (event && event.status === "live") {
+          if (event && (event.status === "live" || event.status === "encore")) {
             await options.events?.transition(event.id, event.ownerId, "ended", event.version).catch(() => undefined);
           }
         }
@@ -4539,6 +4565,12 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const events = pool ? new LiveEvents(pool) : undefined;
   const layouts = pool ? new Layouts(pool) : undefined;
   const rooms = pool ? new Rooms(pool) : undefined;
+  // Tickets need somewhere for the money to go and a key to settle it with.
+  // Without a CoinPay key every event is simply a free one.
+  const ticketConfig = events
+    ? ticketsFromEnv(process.env["NIXAMP_SITE"] ?? DEFAULT_DIRECTORY)
+    : null;
+  const tickets = ticketConfig ? new Tickets(ticketConfig) : undefined;
 
   // Names and certificates for signed-in servers, and the rate limit over
   // everything. All of it is nixamp.com's business: the DNS keys live only
@@ -4881,6 +4913,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(events ? { events } : {}),
     ...(layouts ? { layouts } : {}),
     ...(rooms ? { rooms } : {}),
+    ...(tickets ? { tickets } : {}),
     // Invites go out the same way follow notifications do, and only from a
     // site that has somebody to send them for.
     ...(pool
