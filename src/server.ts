@@ -3186,7 +3186,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         options.channels.keep(channelId);
         options.rememberChannels?.(rememberedNow(options.channels));
         void options.live?.announce?.();
-        json(response, 200, { channel: channelId, name: entry.title, kind: entry.live ? "live" : "vod" });
+        // Whether there is a picture, so the page can join it in the right
+        // element straight away rather than guessing.
+        json(response, 200, {
+          channel: channelId, name: entry.title, kind: entry.live ? "live" : "vod",
+          video: options.channels.kindOf(channelId) !== "audio",
+        });
         return;
       }
 
@@ -3494,7 +3499,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       options.channels.keep(channelId);
       options.rememberChannels?.(rememberedNow(options.channels));
       void options.live?.announce?.();
-      json(response, 200, { channel: channelId, name });
+      json(response, 200, { channel: channelId, name, video: options.channels.kindOf(channelId) !== "audio" });
       return;
     }
 

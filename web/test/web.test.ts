@@ -717,8 +717,14 @@ test("go live sits beside play, for whoever may, and puts it on the air for ever
   assert.match(body, /\/live`/);
   assert.match(body, /\/keep`/);
   assert.match(body, /`\/api\/tracks\/\$\{what\.index\}\/live`/);
-  assert.match(body, /if \(!listed\) await setLive\(true\)/);
+  // Listing the server is the owner's; a member's channel is announced by
+  // the server itself, and asking would only be a 403.
+  assert.match(body, /if \(isAdmin\(\)\) \{\s*if \(!listed\) await setLive\(true\)/);
   assert.match(body, /copyText\(page, button/);
+  // And joined: whoever pressed Go live is watching the same feed as
+  // everyone else from the first second, in the right element for it.
+  assert.match(body, /await watchChannel\(\{ id: channelId, name, video \}, true, from\)/);
+  assert.match(body, /video = body\.video !== false/);
 });
 
 test("on a live stream the page says whose it is, what is on, and how to call in", () => {
