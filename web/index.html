@@ -128,6 +128,11 @@
           <button id="link-go-live" type="button" class="button golive"
                   title="Go live with this link: the server fetches it and puts it on the air for everyone, listed in the directory">● Go live</button>
         </form>
+        <!-- What just happened, where it happened: the same message as the
+             Status line at the foot of the page, but under the box the
+             person was using. "Connect to a server first" at the bottom of
+             the page went unread. -->
+        <p id="link-note" class="hint link-note" hidden></p>
       </section>
 
       <div class="split" id="zone-top">
@@ -303,6 +308,14 @@
              per room, kept at nixamp.com, so everybody watching the same
              channel is in it whichever page they came from. Reading needs
              nobody; a line needs a nixamp.com sign-in, on nixamp.com. -->
+        <!-- Every message the page has shown, newest first, with the time:
+             what went wrong and when, in words, for whoever missed it as it
+             went by. Hide it from the Panels list if it is noise. -->
+        <section class="panel col-b" data-title="Log" id="log-panel">
+          <p class="hint">What this page has said, newest first.</p>
+          <ul id="log-list" class="log-list" aria-live="off"></ul>
+        </section>
+
         <section class="panel col-b" data-title="Trollbox" id="trollbox-panel" hidden>
           <p class="hint" id="trollbox-note">Join a live and the room's chat is here.</p>
           <ul id="trollbox-list" class="trollbox-list" aria-live="polite" aria-label="The room's chat"></ul>

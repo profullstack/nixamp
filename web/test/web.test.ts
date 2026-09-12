@@ -1272,3 +1272,24 @@ test("a playlist by address plays here, entry after entry, without a server", ()
   assert.match(app, /list\.at = \(list\.at \+ 1\) % list\.entries\.length;/);
   assert.match(app, /if \(local\.kind === "list"\) \{\s*await playList\(url, local\.label\);/);
 });
+
+test("what just happened is said under the link box and kept in the Log, in words", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // Under the form the person was using, not only at the foot of the page.
+  assert.ok(html.indexOf('id="link-note"') > html.indexOf('id="link-go-live"'));
+  assert.match(app, /dom\.linkNote\.textContent = message;\s*dom\.linkNote\.hidden = message === "";\s*logMessage\(message\);/);
+  // The Log panel keeps every message with the time, newest first, capped, textContent only.
+  assert.ok(html.includes('id="log-panel"') && html.includes('id="log-list"'));
+  const body = app.slice(app.indexOf("---- the log: every message the page has shown"), app.indexOf("---- the trollbox"));
+  // Its state is declared with the page's other state, above draw(): draw()
+  // runs before the Log's own block does, and a `let` read early is a crash.
+  assert.match(app, /const LOG_KEEP = 100;\s*let lastLogged = "";/);
+  assert.ok(app.indexOf("const LOG_KEEP = 100") < app.indexOf("function draw()"));
+  assert.match(body, /if \(message === "" \|\| message === lastLogged\) return;/);
+  assert.match(body, /dom\.logList\.prepend\(item\)/);
+  assert.match(body, /text\.textContent = message/);
+  assert.doesNotMatch(body, /innerHTML/);
+  // Go live with nowhere to go puts the cursor on the thing that is missing.
+  assert.match(app, /if \(directoryServers\.length > 0\) dom\.linkServer\.focus\(\);/);
+});
