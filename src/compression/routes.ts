@@ -12,7 +12,7 @@
 import { createReadStream } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { MEDIA_TYPE, parseModes } from "./envelope.ts";
-import { CODECS_HEADER, KIND_HEADER } from "./receiver.ts";
+import { BOUNDARY_HEADER, CODECS_HEADER, KIND_HEADER, MEDIA_HEADER } from "./receiver.ts";
 import type { CompressionService } from "./service.ts";
 
 export interface RouteContext {
@@ -140,6 +140,11 @@ export async function handleChannelCompression(
         "content-encoding": "identity",
         [CODECS_HEADER]: answer.codecs.join(","),
         [KIND_HEADER]: answer.kind,
+        // Which bytes these are, and what is inside them: a receiver of the
+        // source boundary hands them to its own ffmpeg and needs to know
+        // what ffmpeg will find, without a probe of its own.
+        [BOUNDARY_HEADER]: answer.boundary,
+        ...(answer.media ? { [MEDIA_HEADER]: JSON.stringify(answer.media) } : {}),
         "x-nixamp-generation": String(answer.generation),
       });
       const leave = (): void => answer.session.leave();
@@ -160,7 +165,7 @@ export async function handleChannelCompression(
       }
       const key = typeof body?.["key"] === "string" ? body["key"] : null;
       const name = typeof body?.["name"] === "string" ? body["name"] : id;
-      const started = service.pull(id, from, key, name);
+      const started = await service.pull(id, from, key, name);
       if (!started.ok) {
         json(response, started.status, { error: started.error });
         return true;

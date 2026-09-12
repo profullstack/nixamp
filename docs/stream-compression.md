@@ -30,9 +30,21 @@ Every envelope names where its bytes were captured.
   `/api/channels/<id>` receives, and it is what every relay today carries.
 - `source`: the bytes as they arrived, before ffmpeg. A library file's
   representation (`/api/media/<n>/relay`) is at this boundary. A live channel
-  cannot be relayed at it yet: ffmpeg reads the source itself and the original
-  bytes never pass through the server. Asking for it answers
-  `SOURCE_BOUNDARY_UNAVAILABLE`, not a remux labelled as the original.
+  can also be relayed at it, but only when the source is one nixamp can read
+  itself and pipe to ffmpeg: a transport stream from a plain http(s) URL or a
+  local file, joined from its start, with no per-request headers and no
+  separate audio file. For such a channel nixamp reads the source, hands
+  ffmpeg the bytes down a pipe, and taps that pipe, so a relay carries the
+  exact original bytes, padding and all. For anything else, ffmpeg owns the
+  source and the original bytes never pass through the server, so asking for
+  the source boundary answers `SOURCE_BOUNDARY_UNAVAILABLE` with the reason,
+  never a remux labelled as the original.
+
+  A source-boundary relay is a live join: a receiver gets the stream from the
+  moment it connects, not from the beginning, and its demuxer re-syncs on the
+  next program table and keyframe. It carries no preface. A channel brought in
+  from another nixamp's source-boundary relay is itself read through this
+  server, so it plays here and can be relayed on again at either boundary.
 
 ## Wire layout
 
@@ -213,7 +225,12 @@ POST /api/channels/<id>/relay          (control key)
 
 starts a receiver on this server that dials the address, decodes the
 envelope and feeds a channel here named `<id>`, which listeners hear at
-`/api/channels/<id>` exactly as if it were decoded here. It dials again
+`/api/channels/<id>` exactly as if it were decoded here. It probes the
+relay first: a channel-boundary relay's decoded bytes are the channel's
+output directly, while a source-boundary relay's decoded bytes are the
+original transport stream, so they are handed to a channel's own ffmpeg
+(read through this server) and the channel can be relayed on again. It
+dials again
 after a clean end (the upstream started over: listeners here are ended and
 rejoin, as they would for a redial) and after a broken one (reported in
 `status.incoming.error`), and gives up after five dials without a byte.
@@ -384,8 +401,9 @@ demand.
 
 ## What is not here yet
 
-- A live source relayed at the `source` boundary: needs a tee in front of
-  ffmpeg for direct HTTP(S) transport-stream sources.
+- A source-boundary tee for sources ffmpeg alone can reach: sources behind
+  per-request headers (a yt-dlp-resolved link), a separate audio track, or a
+  container other than transport stream stay channel-boundary only.
 - The PWA and desktop controls, and MCP tools: the API is the contract they
   will call.
 - A lower-bitrate quality profile: a separate setting, explicitly labelled,
