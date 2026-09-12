@@ -76,7 +76,8 @@ import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
 import { inviteSubject, inviteText, isEmail, isPhone, watchLink } from "./invite.ts";
 import { handleLiveApi } from "./live-api.ts";
-import { LiveEvents, type LiveEvent } from "./live-events.ts";
+import { LiveEvents, eventStructuredData, isTicketed, type LiveEvent } from "./live-events.ts";
+import { Tickets, needsTicket, ticketFrom, ticketsFromEnv } from "./tickets.ts";
 import { Layouts } from "./layouts.ts";
 import { Rooms } from "./rooms.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
@@ -87,8 +88,8 @@ import {
   type PaywallConfig,
   paywallFromEnv,
 } from "./paywall.ts";
-import { isRemote, playsInBrowser, sourceLabel } from "./sources.ts";
-import { codecsOf, probeAsync, videoArgs, type Codecs } from "./audio.ts";
+import { isRemote, isTransportStream, playsInBrowser, sourceLabel } from "./sources.ts";
+import { codecsOf, probeAsync, transportInputArgs, videoArgs, type Codecs } from "./audio.ts";
 import {
   allowedForListening,
   elevate,
@@ -552,11 +553,21 @@ export function toRemoteTracks(tracks: Loaded[]): RemoteTrack[] {
 }
 
 /** Video containers, as opposed to the songs that are most of a library. */
-const PICTURE = new Set([".mp4", ".mkv", ".avi", ".mov", ".m4v", ".webm", ".mpg", ".mpeg", ".wmv", ".flv"]);
+const PICTURE = new Set([
+  ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".webm", ".mpg", ".mpeg", ".wmv", ".flv",
+  // Raw transport streams: a recording off a card, a receiver or an IPTV
+  // dump, which is 1080p or 4K television and was arriving as its own
+  // soundtrack because none of these names were on this list.
+  ".m2ts", ".mts", ".m2t", ".trp", ".tp",
+]);
 
 export function hasPicture(path: string): boolean {
   const dot = path.lastIndexOf(".");
-  return dot > 0 && PICTURE.has(path.slice(dot).toLowerCase());
+  if (dot > 0 && PICTURE.has(path.slice(dot).toLowerCase())) return true;
+  // A `.ts` is a transport stream or a TypeScript file, and only its first
+  // bytes know which. Asked of the file rather than of the name, and the
+  // answer is remembered, because this is asked once per track per listing.
+  return isTransportStream(path);
 }
 
 /**
@@ -1044,6 +1055,22 @@ export interface KnownSource {
 export const PROBE_TRIES = 3;
 export const PROBE_RETRY_MS = 1500;
 
+/**
+ * Whether a channel may carry H.265 as it is.
+ *
+ * A channel has one encode and many viewers, so it has to be something they
+ * can all play, and H.265 is not that: Safari and televisions decode it,
+ * Chrome on a desktop mostly does not and shows nothing rather than saying
+ * so. So an HEVC source is re-encoded by default -- to 1080p H.264, because a
+ * 4K re-encode does not keep up with playback -- and an operator whose
+ * audience is phones and televisions can say `NIXAMP_HEVC_CHANNELS=1` and
+ * have the 4K copied through untouched. A single viewer asking for a file
+ * over /api/media is a different matter: there the browser says for itself.
+ */
+export function hevcChannelsAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env["NIXAMP_HEVC_CHANNELS"] === "1";
+}
+
 export async function pullChannel(
   channels: Channels,
   ffprobe: string[],
@@ -1094,16 +1121,27 @@ export async function pullChannel(
         // from the first, the sound from the second. With one input ffmpeg
         // picks for itself, as it always did.
         ...(audio ? ["-map", "0:v:0", "-map", "1:a:0"] : []),
-        ...videoArgs(codecs),
+        ...videoArgs(codecs, 0, { allowHevc: hevcChannelsAllowed() }),
       ]
     // No picture in it, so none is invented: MP3 is the thing every browser
     // plays and the thing a listener can join halfway through.
     : ["-vn", "-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"];
+  // A transport stream is read further into before it is decoded, and given
+  // the timestamps a recording cut mid-stream does not carry. Ahead of the
+  // caller's own input arguments, which are headers for the address itself.
+  const opening = [...transportInputArgs(source, codecs.container), ...input];
   const channel = channels.pull(
-    id, name, source, encode, kind, true, undefined, input, kind === "video" ? audio : "",
+    id, name, source, encode, kind, true, undefined, opening, kind === "video" ? audio : "",
     { live, position: known.position ?? 0 },
   );
   if (channel && !assumed) channel.info.codecs = codecs;
+  // What comes out, as opposed to what went in. An H.265 source copied
+  // through stays H.265; one re-encoded arrives as H.264, and a packager
+  // told otherwise would cut fMP4 segments for a stream that did not need
+  // them.
+  if (channel && kind === "video") {
+    channel.info.emits = encode.includes("libx264") ? "h264" : codecs.video || "h264";
+  }
   return channel;
 }
 
@@ -1244,29 +1282,34 @@ function htmlText(value: string): string {
     .replaceAll("'", "&#039;");
 }
 
+/**
+ * Whose site this shell belongs to.
+ *
+ * Read from the page rather than hard-coded, because one NixAmp serves several
+ * branded clients and each brings its own head. og:site_name first, then the
+ * part of the title before the dash, then the hostname.
+ */
+export function brandOf(shell: string, site: string): string {
+  const named = /<meta\s+property="og:site_name"\s+content="([^"]+)"/i.exec(shell);
+  if (named?.[1]) return named[1];
+  const titled = /<title>([^<]*)<\/title>/i.exec(shell);
+  const head = titled?.[1]?.split(/\s[—-]\s/)[0]?.trim();
+  if (head) return head;
+  try {
+    return new URL(site).hostname.replace(/^www\./, "");
+  } catch {
+    return "NixAmp";
+  }
+}
+
 function eventDocument(shell: string, event: Awaited<ReturnType<LiveEvents["get"]>>, site: string): string {
   if (!event) return shell;
-  const title = `${event.title} — BackToSchool.help`;
-  const description = event.description || `Listen to ${event.title} live on BackToSchool.help.`;
+  const brand = brandOf(shell, site);
+  const title = `${event.title} — ${brand}`;
+  const kindWord = event.kind === "concert" ? "Watch" : "Listen to";
+  const description = event.description || `${kindWord} ${event.title} live on ${brand}.`;
   const canonical = `${site.replace(/\/$/, "")}/live/${encodeURIComponent(event.slug)}`;
-  const structured = JSON.stringify({
-    "@context": "https://schema.org",
-    "@type": "Event",
-    name: event.title,
-    description,
-    eventStatus: event.status === "cancelled"
-      ? "https://schema.org/EventCancelled"
-      : event.status === "live"
-        ? "https://schema.org/EventInProgress"
-        : event.status === "ended"
-          ? "https://schema.org/EventCompleted"
-          : "https://schema.org/EventScheduled",
-    eventAttendanceMode: "https://schema.org/OnlineEventAttendanceMode",
-    ...(event.startsAt ? { startDate: event.startsAt } : {}),
-    ...(event.endsAt ? { endDate: event.endsAt } : {}),
-    url: canonical,
-    location: { "@type": "VirtualLocation", url: canonical },
-  }).replaceAll("<", "\\u003c");
+  const structured = JSON.stringify(eventStructuredData(event, canonical)).replaceAll("<", "\\u003c");
   return shell
     .replace(/<title>.*?<\/title>/s, `<title>${htmlText(title)}</title>`)
     .replace(/<meta name="description" content="[^"]*"\s*\/>/, `<meta name="description" content="${htmlText(description)}" />`)
@@ -1444,6 +1487,8 @@ export interface HandlerOptions {
   layouts?: Layouts;
   /** Persistent participation state that must not be coupled to live audio. */
   rooms?: Rooms;
+  /** Tickets: a paid pass to one event's room. Absent means every show is free. */
+  tickets?: Tickets;
   /**
    * How an invite is sent: by email, by text, and the site the watch link is
    * built on. nixamp.com only; a personal nixamp has no mail to send from.
@@ -1582,6 +1627,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       ...(options.accounts ? { accounts: options.accounts } : {}),
       ...(options.layouts ? { layouts: options.layouts } : {}),
       ...(options.rooms ? { rooms: options.rooms } : {}),
+      ...(options.tickets ? { tickets: options.tickets } : {}),
       ...(options.invites?.site ? { site: options.invites.site } : {}),
       ...(options.invites?.email ? { email: options.invites.email } : {}),
     })) return;
@@ -3033,7 +3079,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         watch(request, response, "stream", entry.title);
         const codecs = await codecsOf({ ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, entry.source);
         if (codecs.video !== "") {
-          pipeFfmpeg(request, response, entry.source, options.ffmpeg ?? ["ffmpeg"], videoArgs(codecs), "video/mp4");
+          pipeFfmpeg(
+            request, response, entry.source, options.ffmpeg ?? ["ffmpeg"],
+            videoArgs(codecs, 0, { allowHevc: url.searchParams.get("hevc") === "1" }), "video/mp4",
+            transportInputArgs(entry.source, codecs.container),
+          );
         } else {
           transcode(request, response, entry.source, options.ffmpeg ?? ["ffmpeg"]);
         }
@@ -3301,12 +3351,29 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
             json(response, 404, { error: "nothing is playing on that channel" });
             return;
           }
-        } else if (!options.events!.canManage(event, account?.id)) {
-          json(response, account ? 403 : 401, { error: account ? "only the event host can publish here" : "sign in to host this event" });
+          // A ticketed room is the one place a 402 belongs on the media
+          // itself: there is a thing to buy, it is this, and the answer says
+          // what it costs rather than pretending the room is not there.
+          if (isTicketed(event)) {
+            const held = await options.tickets?.holds(event, ticketFrom(request.headers, url)) ?? false;
+            if (needsTicket(event, account?.id, held)) {
+              json(response, 402, {
+                error: `${event.title} is a ticketed show.`,
+                ticket: options.tickets?.offer(event) ?? {
+                  ticketed: true,
+                  priceCents: event.ticketPriceCents,
+                  currency: event.ticketCurrency,
+                },
+              });
+              return;
+            }
+          }
+        } else if (!options.events!.canPerform(event, account?.id)) {
+          json(response, account ? 403 : 401, { error: account ? "only the people on this stage can publish here" : "sign in to host this event" });
           return;
         } else if (request.method === "POST" &&
                    (action === undefined || action === "chunk") &&
-                   event.status !== "live") {
+                   event.status !== "live" && event.status !== "encore") {
           json(response, 409, { error: "start the event before publishing audio" });
           return;
         }
@@ -3332,7 +3399,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           return;
         }
         if (file === "index.m3u8") {
-          const playlist = await options.hls.playlist(id);
+          // A channel carrying H.265 is cut into fMP4 rather than transport
+          // segments: HLS in TS is defined for H.264 only, and Safari plays
+          // an HEVC channel packaged as TS as sound over a black screen.
+          const playlist = await options.hls.playlist(id, channels.info(id)?.emits === "hevc");
           if (playlist === null) {
             json(response, 503, { error: "that channel could not be packaged as HLS yet; try again in a moment" });
             return;
@@ -3418,7 +3488,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // Off the air is news too: told now, so the directory drops it
           // rather than listing it until the next heartbeat.
           void options.live?.announce?.();
-          if (event && event.status === "live") {
+          if (event && (event.status === "live" || event.status === "encore")) {
             await options.events?.transition(event.id, event.ownerId, "ended", event.version).catch(() => undefined);
           }
         }
@@ -3966,6 +4036,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // and above 20 megabits the original was always the better answer.
       const asked = Number(url.searchParams.get("kbps") ?? "");
       const capKbps = Number.isFinite(asked) && asked > 0 ? Math.min(20_000, Math.max(200, asked)) : 0;
+      // Whether this browser decodes H.265, which only it can know: Safari and
+      // televisions do, Chrome on a desktop does not and says nothing when
+      // handed it. Copying a 4K HEVC film is free; re-encoding one does not
+      // keep up with playing it, so the answer is worth carrying in the URL.
+      const allowHevc = url.searchParams.get("hevc") === "1";
 
       if (playsInBrowser(file) && capKbps === 0) {
         sendFile(request, response, file);
@@ -3984,7 +4059,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // added by an older nixamp goes to an audio element for ever, and
           // the only cure is noticing and adding it again.
           engine.sawPicture(index);
-          pipeFfmpeg(request, response, file, options.ffmpeg ?? ["ffmpeg"], videoArgs(codecs, capKbps), "video/mp4");
+          pipeFfmpeg(
+            request, response, file, options.ffmpeg ?? ["ffmpeg"],
+            videoArgs(codecs, capKbps, { allowHevc }), "video/mp4",
+            transportInputArgs(file, codecs.container),
+          );
           return;
         }
       }
@@ -4302,6 +4381,12 @@ function pipeFfmpeg(
   ffmpeg: string[],
   outputArgs: string[],
   contentType: string,
+  /**
+   * What to say before the input is opened. A transport stream needs telling
+   * how far to read before it decides what is in it, and to make up the
+   * timestamps a recording cut mid-stream does not have.
+   */
+  inputArgs: string[] = [],
 ): void {
   const [command, ...prefix] = ffmpeg as [string, ...string[]];
   const child = spawn(
@@ -4314,6 +4399,7 @@ function pipeFfmpeg(
       // belong to the http protocol, and ffmpeg rejects the whole command
       // when they are handed to it for a file on disk.
       ...(isRemote(source) ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] : []),
+      ...inputArgs,
       "-i", source,
       ...outputArgs,
       "-",
@@ -4613,6 +4699,12 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const events = pool ? new LiveEvents(pool) : undefined;
   const layouts = pool ? new Layouts(pool) : undefined;
   const rooms = pool ? new Rooms(pool) : undefined;
+  // Tickets need somewhere for the money to go and a key to settle it with.
+  // Without a CoinPay key every event is simply a free one.
+  const ticketConfig = events
+    ? ticketsFromEnv(process.env["NIXAMP_SITE"] ?? DEFAULT_DIRECTORY)
+    : null;
+  const tickets = ticketConfig ? new Tickets(ticketConfig) : undefined;
 
   // Names and certificates for signed-in servers, and the rate limit over
   // everything. All of it is nixamp.com's business: the DNS keys live only
@@ -4956,6 +5048,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(events ? { events } : {}),
     ...(layouts ? { layouts } : {}),
     ...(rooms ? { rooms } : {}),
+    ...(tickets ? { tickets } : {}),
     // Invites go out the same way follow notifications do, and only from a
     // site that has somebody to send them for.
     ...(pool

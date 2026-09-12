@@ -8,10 +8,10 @@ import { fileURLToPath } from "node:url";
 import { clamp, displayName, formatTime, isVideoFile, titleFromFilename } from "../src/format.ts";
 import { bandEdges, bands, decay, holdPeaks } from "../src/spectrum.ts";
 import {
-  apiUrl, blockedAsMixedContent, mediaUrl, needsAName, normalizeBase, parseSnapshot, probeServer,
-  refusesUs, splitShareLink,
+  apiUrl, blockedAsMixedContent, canPlayHevc, mediaUrl, needsAName, normalizeBase, parseSnapshot,
+  probeServer, refusesUs, splitShareLink,
 } from "../src/remote.ts";
-import { byName, isPlayable, needsVideoElement } from "../src/player.ts";
+import { byName, isPlayable, isTransportFile, needsVideoElement } from "../src/player.ts";
 import { isTelevision, pageSize, pageWindow } from "../src/tv.ts";
 import { fixtureState, kickoff, scoreLine } from "../src/score.ts";
 import { isMatchupName } from "../../src/matchup.ts";
@@ -99,6 +99,36 @@ test("an address a person types becomes an address a browser can use", () => {
   assert.equal(apiUrl("192.168.1.7:4321", "/api/state"), "http://192.168.1.7:4321/api/state");
   assert.equal(apiUrl("", "/api/state"), "/api/state");
   assert.equal(mediaUrl("http://box:4321", 3), "http://box:4321/api/media/3");
+});
+
+test("a raw transport stream is media, and it needs its own engine", () => {
+  // A `.ts` recording dragged into the page: 1080p or 4K television as it came
+  // off the wire. It was filtered out of the list as if it were not media, and
+  // a browser handed one as though it were an MP4 plays nothing at all --
+  // mpegts.js is what opens it.
+  for (const name of ["match.ts", "capture.m2ts", "recording.MTS", "dump.trp"]) {
+    assert.equal(isPlayable(name), true, name);
+    assert.equal(isVideoFile(name), true, `${name} belongs in the video element`);
+    assert.equal(isTransportFile(name), true, name);
+    assert.equal(needsVideoElement(true, "mpegts"), true);
+  }
+  assert.equal(isTransportFile("song.mp3"), false);
+  assert.equal(isTransportFile("film.mp4"), false);
+});
+
+test("the server is told whether this browser decodes H.265", () => {
+  // The one thing about a 4K film the server cannot work out for itself, and
+  // the difference between copying it through untouched and re-encoding it.
+  assert.equal(canPlayHevc({ canPlayType: () => "probably" }), true);
+  assert.equal(canPlayHevc({ canPlayType: () => "maybe" }), true);
+  assert.equal(canPlayHevc({ canPlayType: () => "" }), false);
+  assert.equal(canPlayHevc({ canPlayType: () => { throw new Error("no"); } }), false);
+
+  assert.equal(mediaUrl("http://box:4321", 3, 0, "", true), "http://box:4321/api/media/3?hevc=1");
+  assert.equal(mediaUrl("http://box:4321", 3, 1500, "K", true), "http://box:4321/api/media/3?kbps=1500&hevc=1&k=K");
+  // Said only when true, so the URL a browser without it asks for is the one
+  // it always asked for.
+  assert.equal(mediaUrl("http://box:4321", 3, 0, "", false), "http://box:4321/api/media/3");
 });
 
 test("a snapshot off the wire is checked, not trusted", () => {
@@ -235,6 +265,24 @@ test("the shell links the manifest, the icons and the theme colour", () => {
   }
 });
 
+
+test("the shell says what nixamp is, and asks a stranger to sign up", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  // The title is what a search result and a link preview show. It has to say
+  // what the thing is, and it must not dare anybody to send a takedown.
+  assert.match(html, /<title>nixamp: open source live streaming from your own machine<\/title>/);
+  assert.doesNotMatch(html, /DMCA/);
+  // The pitch is in the shell itself, hidden until app.ts decides, so a
+  // crawler reads it without running anything.
+  assert.match(html, /id="welcome"[^>]*hidden/);
+  assert.match(html, /id="welcome-create"/);
+  assert.match(html, /id="welcome-browse"/);
+  assert.match(html, /id="welcome-hide"/);
+  assert.match(html, /curl -fsSL https:\/\/nixamp\.com\/install\.sh \| sh/);
+  // And app.ts only ever shows it where accounts live.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  assert.match(app, /dom\.welcome\.hidden = !keepsAccounts \|\| meId !== ""/);
+});
 
 test("the service worker can receive a push and act on a click", () => {
   const source = serviceWorkerSource(["/assets/app-abc123.js"], "build-9");

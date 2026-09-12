@@ -49,7 +49,7 @@ export function segmentName(requested: string): string {
   return SEGMENT.test(requested) || INIT.test(requested) ? requested : "";
 }
 
-/** What to call a segment file in a response. */
+/** What to call a segment file in a response: a transport stream, a piece of MP4, or the init. */
 export function segmentType(name: string): string {
   if (name.endsWith(".m4s")) return "video/iso.segment";
   if (name.endsWith(".mp4")) return "video/mp4";
@@ -161,6 +161,8 @@ class Packager implements Packaged {
     readonly packaging: Packaging,
     private readonly onStop: (id: string) => void,
     private readonly onEvent: (message: string) => void,
+    /** Whether this channel has to be cut into fMP4 rather than TS: H.265. */
+    private readonly fmp4 = false,
   ) {
     this.dir = mkdtempSync(join(tmpdir(), `nixamp-hls-${id}-`));
   }
@@ -299,10 +301,14 @@ export class HlsPackagers {
    * and waiting for the first segments to exist. Null when the channel is not
    * there or nothing could be packaged.
    */
-  async playlist(id: string): Promise<string | null> {
+  async playlist(id: string, fmp4 = false): Promise<string | null> {
     let packager = this.running.get(id);
     if (!packager) {
-      const packaging = this.options.packaging?.(id) ?? "mpegts";
+      // Two reasons for fragmented MP4, from two directions: the relay
+      // compression asks for it by channel, and a channel carrying H.265
+      // must have it, since HLS in transport-stream segments is defined for
+      // H.264 alone and Safari plays an HEVC TS as a black screen with sound.
+      const packaging: Packaging = fmp4 ? "fmp4" : (this.options.packaging?.(id) ?? "mpegts");
       packager = new Packager(id, this.options.ffmpeg, packaging, (gone) => this.running.delete(gone), this.options.onEvent ?? (() => undefined));
       this.running.set(id, packager);
       if (!packager.start((listener) => this.options.listen(id, listener))) return null;

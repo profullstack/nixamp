@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { LayoutError, panelFrom, presetLayout, resolveLayout, type Layout } from "../src/layouts.ts";
+import { LayoutError, layoutNameFor, panelFrom, presetLayout, resolveLayout, type Layout } from "../src/layouts.ts";
 
 test("BackToSchool presets expose progressively richer NixAmp panels", () => {
   const viewer = presetLayout("backtoschool-viewer")!;
@@ -58,4 +58,41 @@ test("malformed panel configuration is rejected at the boundary", () => {
     (error: unknown) => error instanceof LayoutError && error.status === 422,
   );
   assert.throws(() => panelFrom({ id: "chat", type: "chat", region: "primary", order: -1 }), /non-negative/);
+});
+
+test("a concert has a stage, a setlist, and the two panels that pay for the night", () => {
+  const viewer = presetLayout("concert-viewer")!;
+  const holder = presetLayout("concert-ticketholder")!;
+  const artist = presetLayout("concert-artist")!;
+
+  assert.equal(viewer.scopeId, "concert");
+  assert.ok(viewer.panels.some((panel) => panel.type === "tickets"), "a viewer is shown the till");
+  assert.equal(viewer.panels.some((panel) => panel.type === "tip-jar"), false);
+
+  assert.ok(holder.panels.some((panel) => panel.type === "stage-video"));
+  assert.ok(holder.panels.some((panel) => panel.type === "setlist"));
+  assert.ok(holder.panels.some((panel) => panel.type === "tip-jar"));
+  assert.ok(holder.panels.some((panel) => panel.type === "merch"));
+
+  assert.ok(artist.panels.some((panel) => panel.type === "soundcheck"));
+  assert.ok(artist.panels.some((panel) => panel.type === "event-controls"));
+});
+
+test("the soundcheck is only for the people who perform", () => {
+  const artist = presetLayout("concert-artist")!;
+  const audience = resolveLayout([artist], new Set(["room.listen", "layout.read"]));
+  assert.equal(audience.some((panel) => panel.type === "soundcheck"), false);
+  assert.equal(audience.some((panel) => panel.type === "stage-video"), true);
+
+  const performing = resolveLayout([artist], new Set(["event.perform", "event.start", "layout.read"]));
+  assert.equal(performing.some((panel) => panel.type === "soundcheck"), true);
+});
+
+test("a kind and a role name one preset, and an unknown kind still names one", () => {
+  assert.equal(layoutNameFor("concert", "viewer"), "concert-viewer");
+  assert.equal(layoutNameFor("concert", "member"), "concert-ticketholder");
+  assert.equal(layoutNameFor("concert", "host"), "concert-artist");
+  assert.equal(layoutNameFor("class", "host"), "backtoschool-host");
+  assert.equal(layoutNameFor("talk", "viewer"), "backtoschool-viewer");
+  assert.ok(presetLayout(layoutNameFor("talk", "member")));
 });

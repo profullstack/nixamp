@@ -24,7 +24,14 @@ export function titleFromFilename(name: string): string {
   return dot > 0 ? base.slice(0, dot) : base;
 }
 
-const VIDEO = new Set(["mp4", "webm", "mkv", "mov", "m4v", "ogv", "avi"]);
+const VIDEO = new Set([
+  "mp4", "webm", "mkv", "mov", "m4v", "ogv", "avi",
+  // Raw transport streams: what a recorder, a receiver or a capture card
+  // writes, and what 1080p and 4K television arrives as. A `.ts` among picked
+  // files is one of these -- a TypeScript file is not something a person
+  // drags into a player.
+  "ts", "m2ts", "mts", "m2t", "trp", "tp",
+]);
 
 /** Video needs a <video> element and a picture; audio does not. */
 export function isVideoFile(name: string, type = ""): boolean {

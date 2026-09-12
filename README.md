@@ -172,6 +172,41 @@ on first use in the configured PostgreSQL database. `RESEND_API_KEY` and
 `NIXAMP_MAIL_FROM` are optional if invitation email should be sent rather than
 only returning a shareable link.
 
+## Live shows, and tickets
+
+A live event carries a **kind**: `talk`, `class`, or `concert`. The kind is
+what a branded client reads to pick a layout, and what `/api/v1/events?kind=`
+filters the directory by, so one NixAmp serves a school and a venue without
+either knowing about the other. `concert` brings its own presets
+(`concert-viewer`, `concert-ticketholder`, `concert-artist`) with a stage,
+a setlist, a tip jar, a merch shelf and a till.
+
+A concert also has doors and an encore. `POST /api/v1/events/:id/doors` opens
+the room before the music, `.../start` begins it, `.../encore` says the band
+came back, and `.../end` closes it. Opening, playing and coming back on are
+allowed to everyone on the stage; cancelling and archiving stay with the host.
+An **artist** is an invitation role beside moderator: they perform without
+being handed the guest list.
+
+**A ticket is a paid pass to one room**, over x402 and settled by CoinPay,
+exactly like the crawler paywall but scoped to a single event:
+
+```
+POST /api/v1/events/:id/tickets          # X-PAYMENT proof in, ticket out
+GET  /api/v1/events/:id/tickets          # what it costs and whether you hold one
+POST /api/v1/events/:id/tickets/comp     # the guest list, hosts only
+```
+
+Set `ticketPriceCents` and a `payTo` address on the event and the room answers
+402 to anyone without a ticket, quoting the price; the money goes to the
+event's own address, never to the platform. The ticket rides in
+`x-nixamp-ticket`, or in `?ticket=` for an `<audio>` or `<video>` element that
+cannot set a header. `COINPAY_X402_KEY` switches sales on; without it every
+event is simply a free one. `NIXAMP_TICKET_SECRET` signs the passes (it
+defaults to the CoinPay key), and each event's tickets are signed with a
+secret derived from it and the event id, so a ticket to Friday is not a ticket
+to Saturday.
+
 ## The directory
 
 [nixamp.com/directory](https://nixamp.com/directory) lists nixamps that agreed
@@ -544,6 +579,19 @@ A bare `ffmpeg` on `PATH` is used when there is one; `mise` shims are detected a
 ## Formats
 
 Whatever your ffmpeg was built with: mp3, flac, ogg, opus, m4a, aac, wav, wma, aiff, alac, and the audio track of mp4 and webm.
+
+Video too, including raw transport streams — a `.ts`, `.m2ts` or `.mts` off a
+capture card, a receiver or an IPTV recorder, at 1080p or 4K. H.264 is copied
+into the fragmented MP4 a browser is sent, at whatever size it already is, so
+a 4K recording costs no encoding to watch or to put on the air. H.265 is
+copied too when the browser asking for it says it can decode one, and
+otherwise re-encoded down to 1080p, because a 4K encode does not keep up with
+playing it. A channel, which has one encode and a whole audience, re-encodes
+H.265 by default; `NIXAMP_HEVC_CHANNELS=1` copies it through instead, for an
+audience of phones and televisions.
+
+A `.ts` is opened rather than taken on its name: it is as often a TypeScript
+file as a transport stream, and a checkout is not a playlist.
 
 ## Status
 

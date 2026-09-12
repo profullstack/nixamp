@@ -6,6 +6,7 @@
  * list; what needs care is telling the four apart, and telling an .m3u that
  * lists tracks from an HLS playlist that *is* one track.
  */
+import { closeSync, openSync, readSync } from "node:fs";
 
 /** http and https only. ffmpeg speaks more, but these are what a link is. */
 export function isRemote(source: string): boolean {
@@ -154,4 +155,103 @@ export function playsInBrowser(source: string): boolean {
   const path = source.toLowerCase();
   const dot = path.lastIndexOf(".");
   return dot > 0 && WEB_READY.has(path.slice(dot));
+}
+
+/**
+ * Transport streams, which is what a raw `.ts` file off a capture card, a
+ * satellite receiver or an IPTV recorder is.
+ *
+ * `.m2ts`, `.mts` and the rest name nothing else, so the extension is answer
+ * enough. `.ts` is the awkward one: it is also every TypeScript file in every
+ * repository on the machine, and this program is written in them. So a `.ts`
+ * is never taken on its name -- it is opened and asked, which costs one read
+ * of two kilobytes and is the only honest way to tell 4K television from a
+ * module.
+ */
+const TRANSPORT_NAMES = new Set([".m2ts", ".mts", ".m2t", ".trp", ".tp", ".mpegts"]);
+
+/** A `.ts`, which may be a transport stream and may be a TypeScript file. */
+export function isAmbiguousTransportName(path: string): boolean {
+  return /\.ts$/i.test(isRemote(path) ? new URL(path).pathname : path);
+}
+
+/** An extension that means a transport stream and nothing else. */
+export function isTransportName(path: string): boolean {
+  const file = isRemote(path) ? new URL(path).pathname : path;
+  const dot = file.lastIndexOf(".");
+  return dot > 0 && TRANSPORT_NAMES.has(file.slice(dot).toLowerCase());
+}
+
+/** How many bytes are read to decide. Three packets at the widest spacing, and room to find the first. */
+const SNIFF = 2048;
+/**
+ * Packet sizes in the wild: 188 is MPEG-TS, 192 is what Blu-ray and a lot of
+ * recorders write (a four-byte arrival timestamp in front of each packet), 204
+ * is 188 with Reed-Solomon parity from a DVB card.
+ */
+const STRIDES = [188, 192, 204];
+
+/**
+ * Whether these bytes are a transport stream: a 0x47 sync byte at the start of
+ * every packet.
+ *
+ * Three in a row at the same spacing, because one 0x47 in a file is the letter
+ * G. The first packet may not be at byte zero -- a recording cut mid-stream
+ * starts mid-packet -- so every offset within one packet is tried.
+ */
+export function sniffTransportStream(head: Buffer): boolean {
+  for (const stride of STRIDES) {
+    for (let start = 0; start < stride; start++) {
+      if (start + stride * 2 >= head.length) break;
+      if (head[start] !== 0x47) continue;
+      if (head[start + stride] === 0x47 && head[start + stride * 2] === 0x47) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether the file at this path is a transport stream.
+ *
+ * Remembered, because the answer is asked once per snapshot per track and a
+ * library listing must not turn into a read per file per frame. A file that
+ * changes under us is a file being written, and a stale answer about it is a
+ * track that plays rather than a listing that stalls.
+ */
+const sniffed = new Map<string, boolean>();
+const SNIFF_REMEMBERED = 5000;
+
+export function looksLikeTransportStream(path: string): boolean {
+  if (isRemote(path)) return false;
+  const remembered = sniffed.get(path);
+  if (remembered !== undefined) return remembered;
+  let answer = false;
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, "r");
+    const head = Buffer.alloc(SNIFF);
+    const read = readSync(fd, head, 0, SNIFF, 0);
+    answer = sniffTransportStream(head.subarray(0, read));
+  } catch {
+    answer = false;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Closing a file that could not be opened is not a failure.
+      }
+    }
+  }
+  // A cap rather than a cache with eviction: a library of a million files
+  // must not be a million remembered answers, and forgetting costs one read.
+  if (sniffed.size >= SNIFF_REMEMBERED) sniffed.clear();
+  sniffed.set(path, answer);
+  return answer;
+}
+
+/** Whether this path is a transport stream, by name where the name is certain and by its bytes where it is not. */
+export function isTransportStream(path: string): boolean {
+  if (isTransportName(path)) return true;
+  return isAmbiguousTransportName(path) && looksLikeTransportStream(path);
 }

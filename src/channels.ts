@@ -64,7 +64,16 @@ export interface ChannelInfo {
   position?: number;
   live?: boolean;
   /** What the source turned out to hold, so a restart need not ask again. */
-  codecs?: { video: string; audio: string; container: string; duration?: number };
+  codecs?: { video: string; audio: string; container: string; duration?: number; width?: number; height?: number };
+  /**
+   * What the channel itself is producing, which is not always what its source
+   * holds: an H.265 source is usually re-encoded to H.264 on the way out,
+   * because a channel has one encode and an audience that does not all
+   * decode the same things. Anything downstream -- the HLS packager above
+   * all, which has to choose between transport and fMP4 segments -- has to
+   * ask this rather than the source's codecs.
+   */
+  emits?: string;
   /**
    * The nixamp.com account that put it on the air, when a member did rather
    * than the owner. Theirs to take off again, and counted against how many
@@ -121,6 +130,31 @@ export const BACKLOG_AUDIO = 64 * 1024;
  */
 export const LISTENER_QUEUE = 16 * 1024 * 1024;
 
+/**
+ * The backlog is really a number of seconds, and four megabytes was that
+ * number for the stream we happened to have.
+ *
+ * Six seconds of 720p is about 4 MB. Six seconds of a 1080p transport stream
+ * copied straight through is nearer 12, and of 4K nearer 30 -- so a fixed
+ * 4 MB hands a 4K joiner under a second of video, which is the live edge with
+ * no cushion, which is the play-wait-play loop the backlog exists to prevent.
+ * So the cap follows the stream: seconds times the rate it is actually
+ * running at, between the old floor and a ceiling that keeps a channel's
+ * memory bounded whatever it is carrying.
+ */
+export const BACKLOG_SECONDS = 6;
+export const BACKLOG_VIDEO_MAX = 48 * 1024 * 1024;
+/**
+ * How long a rate is measured over before it is believed.
+ *
+ * The first seconds of a pull are not a bitrate: ffmpeg opens the source,
+ * reads ahead, and empties what it has as fast as the pipe takes it. Sizing a
+ * buffer off that burst would reserve tens of megabytes for a stream that
+ * turns out to be a podcast. A window is measured, and until one has closed
+ * the floor stands.
+ */
+export const RATE_WINDOW_MS = 5000;
+
 /** The four-letter name in a box header, or "" for something too short. */
 function boxType(box: Buffer): string {
   return box.length >= 8 ? box.toString("latin1", 4, 8) : "";
@@ -167,6 +201,8 @@ export interface ChannelOptions {
   idleMs?: number;
   /** Unsent bytes a listener may hold before it is dropped. Tests shrink it. */
   maxListenerQueueBytes?: number;
+  /** How long a rate is measured over before the backlog is sized off it. Tests shorten it. */
+  rateWindowMs?: number;
 }
 
 /**
@@ -202,6 +238,10 @@ export class Channel {
    */
   private recent: Buffer[] = [];
   private recentBytes = 0;
+  /** The rate window: when it opened, what has arrived in it, and what the last closed one measured. */
+  private rateStart = 0;
+  private rateBytes = 0;
+  private rate = 0;
   /**
    * Started for whoever asked and stopped when nobody is left. A catalog
    * channel is one of thousands; keeping every one that was ever clicked
@@ -417,6 +457,11 @@ export class Channel {
     if (this.info.kind === "video") this.fragments = new Fragments();
     this.recent = [];
     this.recentBytes = 0;
+    // A new source may be a different size of stream, and the rate measured
+    // off the old one is not evidence about this one.
+    this.rateStart = 0;
+    this.rateBytes = 0;
+    this.rate = 0;
     this.hangUp();
   }
 
@@ -484,15 +529,41 @@ export class Channel {
    * make sense.
    */
   private emit(chunk: Buffer): void {
+    this.measure(chunk.byteLength);
     if (!this.fragments) {
       this.remember(chunk, BACKLOG_AUDIO, false);
       this.send(chunk);
       return;
     }
+    const cap = this.backlogCap();
     for (const box of this.fragments.push(chunk)) {
-      if (!isOpening(boxType(box))) this.remember(box, BACKLOG_VIDEO, true);
+      if (!isOpening(boxType(box))) this.remember(box, cap, true);
       this.send(box);
     }
+  }
+
+  /** Watch how fast this channel is actually running, a window at a time. */
+  private measure(bytes: number): void {
+    const now = Date.now();
+    if (this.rateStart === 0) this.rateStart = now;
+    this.rateBytes += bytes;
+    const elapsed = now - this.rateStart;
+    if (elapsed < (this.options.rateWindowMs ?? RATE_WINDOW_MS)) return;
+    this.rate = (this.rateBytes * 1000) / elapsed;
+    this.rateStart = now;
+    this.rateBytes = 0;
+  }
+
+  /**
+   * Six seconds of whatever this channel turned out to be, within bounds.
+   *
+   * Unmeasured -- the first window of a pull, or a channel that has only just
+   * started -- means the floor, which is what every channel had before.
+   */
+  private backlogCap(): number {
+    if (this.rate <= 0) return BACKLOG_VIDEO;
+    const wanted = this.rate * BACKLOG_SECONDS;
+    return Math.min(BACKLOG_VIDEO_MAX, Math.max(BACKLOG_VIDEO, Math.round(wanted)));
   }
 
   /** Keep this for the next arrival, and let the oldest go once it is too much. */
@@ -935,7 +1006,7 @@ export interface RememberedChannel {
    * air as sound alone.
    */
   kind?: "audio" | "video";
-  codecs?: { video: string; audio: string; container: string; duration?: number };
+  codecs?: { video: string; audio: string; container: string; duration?: number; width?: number; height?: number };
   /** Where a film had got to, in seconds, so it picks up there. */
   position?: number;
   /** A live source has nowhere to pick up from. */
@@ -968,6 +1039,11 @@ export function rememberedChannels(dir: string, port: number): RememberedChannel
           if (typeof c["video"] === "string" && typeof c["audio"] === "string" && typeof c["container"] === "string") {
             kept.codecs = { video: c["video"], audio: c["audio"], container: c["container"] };
             if (typeof c["duration"] === "number" && Number.isFinite(c["duration"])) kept.codecs.duration = c["duration"];
+            // The size of the picture decides whether a re-encode has to come
+            // down to 1080p; forgetting it across a restart is how a 4K
+            // channel comes back at a size that cannot keep up.
+            if (typeof c["width"] === "number" && Number.isFinite(c["width"])) kept.codecs.width = c["width"];
+            if (typeof c["height"] === "number" && Number.isFinite(c["height"])) kept.codecs.height = c["height"];
           }
         }
         if (typeof one["position"] === "number" && Number.isFinite(one["position"]) && one["position"] > 0) kept.position = one["position"];
