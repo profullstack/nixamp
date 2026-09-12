@@ -41,6 +41,40 @@ export function apiUrl(base: string, path: string, key = ""): string {
 }
 
 /**
+ * What a `?play=<address>` on nixamp.com is asking for, when the address is
+ * a nixamp server's own stream: which server to connect to, as a viewer,
+ * and which thing on it. A channel's address is `/api/channels/<id>`, a
+ * library track's is `/api/media/<n>`, the server's own stream is
+ * `/api/live`; the listen key rides on `k`. Null for any other address,
+ * which is a link to play as one pasted.
+ */
+export function sentToPlay(address: string): { view: string; what: string } | null {
+  let url: URL;
+  try {
+    url = new URL(address);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const channel = /^\/api\/channels\/([^/]+)\/?$/.exec(url.pathname);
+  const track = /^\/api\/media\/(\d+)\/?$/.exec(url.pathname);
+  const live = /^\/api\/live\/?$/.test(url.pathname);
+  if (!channel && !track && !live) return null;
+  const key = url.searchParams.get("k") ?? "";
+  const view = key ? `${url.origin}/view/${key}` : url.origin;
+  let what = "live";
+  if (track) what = `track:${track[1]}`;
+  if (channel) {
+    try {
+      what = `channel:${decodeURIComponent(channel[1] ?? "")}`;
+    } catch {
+      what = `channel:${channel[1] ?? ""}`;
+    }
+  }
+  return { view, what };
+}
+
+/**
  * A share link split into the two things it is.
  *
  * People paste the link they were given, which is an address with a key on the

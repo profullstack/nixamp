@@ -13,7 +13,7 @@ import {
 } from "./player.ts";
 import {
   blockedAsMixedContent,
-  RemoteClient, fetchSnapshot, needsAName, probeServer, refusesUs, splitShareLink,
+  RemoteClient, apiUrl, fetchSnapshot, needsAName, probeServer, refusesUs, sentToPlay, splitShareLink,
   rungName, stepDown,
   type Status,
 } from "./remote.ts";
@@ -224,6 +224,7 @@ export function start(): void {
     playPause: need<HTMLButtonElement>("play-pause"),
     stop: need<HTMLButtonElement>("stop"),
     next: need<HTMLButtonElement>("next"),
+    shareNow: need<HTMLButtonElement>("share-now"),
   };
 
   /**
@@ -509,6 +510,8 @@ export function start(): void {
    * across the sign-in rather than lost by it.
    */
   let invited = "";
+  /** A link somebody shared that is not a nixamp stream: played as one pasted, once the page is up. */
+  let sharedLink = "";
 
   let bars: number[] = new Array<number>(BAND_COUNT).fill(0);
   let peaks: number[] = new Array<number>(BAND_COUNT).fill(0);
@@ -1137,6 +1140,8 @@ export function start(): void {
     // The address of what is playing, for another player. A picked file has
     // none, and nothing loaded has nothing to copy.
     dom.copyNow.hidden = player.source === "";
+    // Share sits with the transport, for anything with an address safe to hand out.
+    dom.shareNow.hidden = shareLinkNow() === "";
     // Keeping it is for a pasted link that is a whole file somewhere: the
     // server fetches it and this device ends up with it. A live has no whole.
     dom.downloadNow.hidden = !(channelOn && nowMeta?.link?.download);
@@ -3002,6 +3007,56 @@ export function start(): void {
     void copyText(player.source, dom.copyNow, "✓");
   });
 
+  /**
+   * The address of what is playing, playable as it is: in VLC, in a video
+   * element, in another nixamp. With the viewing key on it and never the
+   * driving one, so it is safe to hand to anybody. "" when there is nothing
+   * of the kind: a file picked on this device has no address.
+   */
+  function playableNow(): string {
+    if (localLink) return localLink.url;
+    if (mode !== "remote") return "";
+    const { base, key } = splitShareLink(shareableLink());
+    if (base === "") return "";
+    if (channelOn) return apiUrl(base, `/api/channels/${encodeURIComponent(channelOn.id)}`, key);
+    if (nowMeta?.kind === "live") return apiUrl(base, "/api/live", key);
+    // A track from the library: its address, with the viewing key in place
+    // of whichever one this page connected with.
+    if (player.source === "") return "";
+    try {
+      const source = new URL(player.source);
+      if (source.origin !== new URL(base).origin) return "";
+      if (key) source.searchParams.set("k", key);
+      else source.searchParams.delete("k");
+      return source.toString();
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * The link to share: nixamp.com, told what to play. The address inside is
+   * the stream itself, so the link works in a player that never heard of
+   * nixamp, and nixamp.com opens it as a viewer with the page around it.
+   */
+  function shareLinkNow(): string {
+    const playable = playableNow();
+    return playable === "" ? "" : `https://nixamp.com/?play=${encodeURIComponent(playable)}`;
+  }
+
+  dom.shareNow.addEventListener("click", () => {
+    const link = shareLinkNow();
+    if (link === "") return;
+    // The device's own share sheet where there is one (a phone); the
+    // clipboard where there is not. A sheet dismissed is not a failure.
+    const sharing = navigator as Navigator & { share?: (data: { title?: string; url?: string }) => Promise<void> };
+    if (typeof sharing.share === "function") {
+      sharing.share({ title: `${currentName()} on nixamp`, url: link }).catch(() => undefined);
+      return;
+    }
+    void copyText(link, dom.shareNow, "Copied");
+  });
+
   dom.favHere.addEventListener("click", () => {
     // Kept as the view link, so opening a favourite later is watching it;
     // administering is what the directory's Admin button is for.
@@ -4104,7 +4159,29 @@ export function start(): void {
       if (asked !== "" && askedToPlay === "") askedToPlay = `link:${link}`;
       else if (asked === "") note = "A link to go live with is in the box: pick a server beside it and press Go live.";
     }
+    // Share hands out nixamp.com/?play=<the stream's own address>: a
+    // nixamp server's channel or live stream is opened as a viewer of that
+    // server; anything else is a link, played as one pasted.
+    const play = params.get("play") ?? "";
+    if (asked === "" && /^https?:\/\//i.test(play)) {
+      const sent = sentToPlay(play);
+      if (sent) {
+        invited = sent.view;
+        askedToPlay = sent.what;
+        askedTime = Math.max(0, Number(params.get("t") ?? "0") || 0);
+        dom.remoteUrl.value = sent.view;
+        note = "Opening the stream you were sent…";
+      } else {
+        dom.linkUrl.value = play;
+        sharedLink = play;
+      }
+      // Not something to leave in the address bar: it carries a key.
+      globalThis.history?.replaceState(null, "", globalThis.location.pathname);
+    }
   } catch { /* a URL we cannot read is a URL with no invite in it */ }
+  // A shared link that is not a nixamp stream: played here where the
+  // browser can, once the page is up; otherwise it waits in the box.
+  if (sharedLink !== "") void playLink(sharedLink);
 
   void showProviders();
   void askWhoIsSignedIn();
@@ -4709,6 +4786,13 @@ export function start(): void {
     if (asked.startsWith("link:")) {
       askedToPlay = "";
       void playLink(asked.slice("link:".length));
+      return;
+    }
+    // A track in this server's library, shared by its number.
+    if (asked.startsWith("track:")) {
+      askedToPlay = "";
+      const index = Number(asked.slice("track:".length));
+      if (Number.isInteger(index) && index >= 0) void playAt(index);
       return;
     }
     const wanted = asked.startsWith("channel:") ? asked.slice("channel:".length) : "";

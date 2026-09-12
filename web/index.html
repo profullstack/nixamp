@@ -192,6 +192,13 @@
                 title="Go live: put this on the air for everyone, list it in the directory with a phone code, and copy the link to share">● GO LIVE</button>
         <button id="stop" type="button" aria-label="Stop">■</button>
         <button id="next" type="button" aria-label="Next">▶▶|</button>
+        <!-- A link to what is playing, for anybody: nixamp.com/?play=<the
+             stream's own address>, which plays in VLC as it is and which
+             nixamp.com opens as a viewer. The device's share sheet where
+             there is one; copied otherwise. Only when there is something
+             safe to hand out: a viewing address, never the driving one. -->
+        <button id="share-now" type="button" class="share" hidden
+                title="Share: a nixamp.com link that plays this" aria-label="Share what is playing">Share</button>
         <label class="volume">
           <span aria-hidden="true" class="vol">VOL</span>
           <input id="volume" type="range" min="0" max="100" value="100" aria-label="Volume" />

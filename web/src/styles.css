@@ -704,6 +704,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 
 button.primary { color: var(--green); border-color: var(--green-dim); min-width: 64px; }
 button.ghost { background: transparent; color: var(--muted); }
+/* Share, with the transport: the one button there that is for somebody else. */
+button.share { color: var(--accent); border-color: var(--edge); letter-spacing: 0.04em; }
+button.share:hover { background: #16241c; }
 /* Go live: red, because that is what "on the air" has looked like since radio. */
 button.golive { color: #ff5c5c; border-color: #7a2b2b; letter-spacing: 0.06em; }
 button.golive:hover { color: #fff; background: #7a2b2b; border-color: #ff5c5c; }
