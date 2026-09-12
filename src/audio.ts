@@ -31,6 +31,12 @@ export interface Tools {
   play: string[] | null;
   /** yt-dlp, which turns a pasted page into a media address; null when there is none. */
   ytdlp?: string[] | null;
+  /**
+   * Whether an ffmpeg was actually found, as opposed to guessed at. A server
+   * without one cannot carry a channel, and should say so before a link is
+   * resolved and probed and blamed for it.
+   */
+  carries?: boolean;
 }
 
 function works(argv: string[], flag = "-version"): boolean {
@@ -112,6 +118,7 @@ export function detectTools(): Tools {
     ffprobe: ffprobe ?? ["ffprobe"],
     play,
     ytdlp,
+    carries: ffmpeg !== null,
   };
 }
 
@@ -439,7 +446,10 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
         ...rest,
         "-v", "quiet",
         "-print_format", "json",
-        "-show_entries", "format=format_name,duration:stream=codec_type,codec_name,width,height",
+        // The disposition too: an MP3 with its cover art in it carries that
+        // art as a video stream of one JPEG, and a probe that took it for a
+        // picture put a podcast on the air as a film with no frames.
+        "-show_entries", "format=format_name,duration:stream=codec_type,codec_name,width,height:stream_disposition=attached_pic",
         // A transport stream needs looking further into than a file with an
         // index does: there is no header listing the tracks, only packets, and
         // a 4K recording can carry a second of null padding and a long gap to
@@ -461,14 +471,17 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
     child.on("close", () => {
       try {
         const parsed = JSON.parse(out) as {
-          streams?: { codec_type?: string; codec_name?: string; width?: number; height?: number }[];
+          streams?: {
+            codec_type?: string; codec_name?: string; width?: number; height?: number;
+            disposition?: { attached_pic?: number };
+          }[];
           format?: { format_name?: string; duration?: string };
         };
         const streams = parsed.streams ?? [];
         // ffprobe prints seconds as a string, and "N/A" for a stream with no
         // end; both of those read as 0.
         const seconds = Number(parsed.format?.duration ?? 0);
-        const picture = streams.find((s) => s.codec_type === "video");
+        const picture = streams.find((s) => s.codec_type === "video" && !isCoverArt(s));
         return done({
           video: picture?.codec_name ?? "",
           audio: streams.find((s) => s.codec_type === "audio")?.codec_name ?? "",
@@ -482,6 +495,22 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
       }
     });
   });
+}
+
+/**
+ * Cover art is not a picture.
+ *
+ * An MP3, FLAC or M4A with its sleeve embedded shows ffprobe a video stream:
+ * one JPEG or PNG, flagged as an attached picture. Carried as video it is a
+ * channel whose picture never gets a second frame -- ffmpeg writes nothing
+ * and the source is dialled again and again -- so a sleeve counts for
+ * nothing and the sound decides. A still-image codec with no such flag is
+ * the same thing from a container that does not flag it.
+ */
+const STILL_IMAGE = new Set(["png", "bmp", "gif", "tiff", "webp"]);
+export function isCoverArt(stream: { codec_name?: string; disposition?: { attached_pic?: number } }): boolean {
+  if (stream.disposition?.attached_pic === 1) return true;
+  return STILL_IMAGE.has((stream.codec_name ?? "").toLowerCase());
 }
 
 /** How much of a transport stream is read before deciding what is in it. */

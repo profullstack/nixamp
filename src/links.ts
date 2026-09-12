@@ -21,6 +21,7 @@
  */
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { parseCatalog } from "./catalogs.ts";
 
 export interface ResolvedLink {
   /** What to call it: the page's title, or the file's name for a bare file. */
@@ -50,6 +51,12 @@ export interface ResolvedLink {
   ext: string;
   /** The page it came from. */
   page: string;
+  /**
+   * For a pasted .m3u: every entry in it, in order. The channel plays them
+   * one after another and starts over at the end, a station rather than a
+   * file; `media` is the first, for the probe that decides what it holds.
+   */
+  playlist?: string[];
 }
 
 /**
@@ -69,6 +76,86 @@ export function isDirectMedia(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * A plain m3u: a list of things to play, one per line, which is not a thing
+ * ffmpeg reads. The .m3u8 of HLS is a list of segments of one thing, which
+ * it does, and stays in DIRECT above.
+ */
+const PLAYLIST = /\.m3u(\?.*)?$/i;
+
+export function isPlaylistLink(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return PLAYLIST.test(parsed.pathname + parsed.search);
+  } catch {
+    return false;
+  }
+}
+
+/** How much of a playlist is worth reading: a list, not a library dump. */
+export const PLAYLIST_MAX_BYTES = 2_000_000;
+export const PLAYLIST_MAX_ENTRIES = 1000;
+export const PLAYLIST_FETCH_TIMEOUT_MS = 15_000;
+
+/**
+ * What a playlist's text holds: the entries, in order, resolved against
+ * where the list was fetched from. Some things called .m3u are HLS after
+ * all -- a segment list with #EXT-X- tags -- and those are one stream for
+ * ffmpeg to read as it is, not a list of streams.
+ */
+export function playlistFrom(text: string, base: string): { hls: boolean; sources: string[] } {
+  if (/^#EXT-X-/m.test(text)) return { hls: true, sources: [] };
+  const sources = parseCatalog(text, base)
+    .map((entry) => entry.source)
+    .filter((source) => /^(https?|rtmps?):\/\//i.test(source))
+    .slice(0, PLAYLIST_MAX_ENTRIES);
+  return { hls: false, sources };
+}
+
+/**
+ * A pasted .m3u, read and turned into a channel's worth of entries. Fetched
+ * here rather than by yt-dlp, which would take the first entry and stop, or
+ * by ffmpeg, which does not read a plain list at all.
+ */
+export async function resolvePlaylist(
+  url: string,
+  options: { timeoutMs?: number; fetcher?: typeof fetch } = {},
+): Promise<ResolvedLink | { error: string }> {
+  const get = options.fetcher ?? fetch;
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), options.timeoutMs ?? PLAYLIST_FETCH_TIMEOUT_MS);
+  let text = "";
+  try {
+    const answer = await get(url, { signal: abort.signal, headers: { "user-agent": "nixamp" }, redirect: "follow" });
+    if (!answer.ok) return { error: `that playlist could not be fetched (HTTP ${answer.status})` };
+    text = (await answer.text()).slice(0, PLAYLIST_MAX_BYTES);
+  } catch (error) {
+    const why = abort.signal.aborted ? "took too long to answer" : ((error as Error).message || "could not be fetched");
+    return { error: `that playlist ${why}` };
+  } finally {
+    clearTimeout(timer);
+  }
+  const list = playlistFrom(text, url);
+  if (list.hls) return directLink(url);
+  const [first] = list.sources;
+  if (!first) return { error: "that playlist has nothing in it this can play" };
+  return {
+    title: fileNameOf(url).replace(/\.m3u$/i, "") || "Playlist",
+    media: first,
+    audio: "",
+    // A station: joined where it is, never seeked, and with no end to save.
+    live: true,
+    duration: 0,
+    // Whether there is a picture is the first entry's to say; ffprobe settles it.
+    video: true,
+    headers: {},
+    extractor: "playlist",
+    ext: "",
+    page: url,
+    playlist: list.sources,
+  };
 }
 
 /** A link somebody pasted, or "" when it is not one this can play. */
@@ -313,6 +400,7 @@ export async function resolveLink(
   options: { cookies?: string; timeoutMs?: number; format?: string } = {},
 ): Promise<ResolvedLink | { error: string }> {
   if (isDirectMedia(url)) return directLink(url);
+  if (isPlaylistLink(url)) return resolvePlaylist(url, { timeoutMs: options.timeoutMs });
   // Without yt-dlp, a link is taken as the media it may well be: an IPTV
   // feed has no extension and no page behind it, and ffprobe -- asked next,
   // before anything goes on the air -- tells a stream from a web page in a

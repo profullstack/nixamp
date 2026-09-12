@@ -1052,6 +1052,9 @@ export interface KnownSource {
   codecs?: Codecs;
   position?: number;
   live?: boolean;
+  /** A list of entries to play in turn, and which one was on. */
+  playlist?: string[];
+  playlistAt?: number;
 }
 
 /** How many times a source that answers nothing is asked, and how far apart. */
@@ -1117,7 +1120,9 @@ export async function pullChannel(
   const kind = codecs.video !== "" ? "video" : codecs.audio !== "" ? "audio" : (known.kind ?? "video");
   if (assumed) console.log(`  "${id}": the source would not say what it holds; carrying it as ${kind}.`);
   // A film has a length and a place to go back to; a live source has neither.
-  const live = known.live ?? !((codecs.duration ?? 0) > 0);
+  // A list is a station: joined where it is, and never seeked.
+  const playlist = known.playlist && known.playlist.length > 0 ? known.playlist : null;
+  const live = playlist ? true : (known.live ?? !((codecs.duration ?? 0) > 0));
   const encode = kind === "video"
     ? [
         // Which streams from which input, when there are two: the picture
@@ -1135,12 +1140,13 @@ export async function pullChannel(
   const opening = [...transportInputArgs(source, codecs.container), ...input];
   const channel = channels.pull(
     id, name, source, encode, kind, true, undefined, opening, kind === "video" ? audio : "",
-    { live, position: known.position ?? 0 },
+    { live, position: known.position ?? 0, ...(playlist ? { playlist } : {}) },
     // Known before the first dial: whether the source is a transport stream
     // decides whether it can be read here for a source-boundary relay.
     assumed ? undefined : codecs,
   );
   if (channel && !assumed) channel.info.codecs = codecs;
+  if (channel && playlist && known.playlistAt !== undefined) channel.info.playlistAt = known.playlistAt;
   // What comes out, as opposed to what went in. An H.265 source copied
   // through stays H.265; one re-encoded arrives as H.264, and a packager
   // told otherwise would cut fMP4 segments for a stream that did not need
@@ -1184,11 +1190,16 @@ function shownLink(channelId: string, link: ResolvedLink, channel?: ChannelInfo)
     channel: channelId,
     name: channel?.name ?? link.title,
     live,
-    video: link.video,
+    // Whether there is a picture is the channel's answer where there is one:
+    // a list is guessed at as video until its first entry has been probed,
+    // and a station of podcasts opened a video element for nothing.
+    video: channel?.kind ? channel.kind !== "audio" : link.video,
     duration: link.duration,
     extractor: link.extractor,
     // A live has no whole to keep; a bare file can be fetched by the browser itself.
     download: !live && link.extractor !== "direct",
+    // How many things a list holds, for the page to say.
+    entries: link.playlist?.length ?? 0,
   };
 }
 
@@ -1434,6 +1445,12 @@ export interface HandlerOptions {
   ffmpeg?: string[];
   /** Where ffprobe is, for asking what is inside a file before re-encoding it. */
   ffprobe?: string[];
+  /**
+   * Whether this server can carry a channel at all: false where no ffmpeg
+   * was found, as on the hosted directory, which then says so instead of
+   * resolving a link, probing it, and blaming the site.
+   */
+  carries?: boolean;
   /** yt-dlp, which turns a pasted page into a media address. Null when there is none. */
   ytdlp?: string[] | null;
   /** Channels as HLS, for Safari on a phone, which plays a live stream no other way. */
@@ -2973,6 +2990,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // one nobody can dial is not worth showing.
           code: state?.code ?? "",
           url: state?.url ?? "",
+          // Whether a link can go live here at all. The hosted directory
+          // has no ffmpeg, and a page that offered to go live on it was
+          // offering something that always failed.
+          carries: options.carries !== false && Boolean(options.channels),
         },
         channels: (options.channels?.list() ?? []).map((one) => ({
           id: one.id,
@@ -2989,6 +3010,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // How it has been going, for whoever may do something about it.
           redials: one.redials ?? 0,
           error: one.error ?? "",
+          // For a list: how long it is, and which entry is on, from 0.
+          ...(one.playlist ? { entries: one.playlist.length, entry: one.playlistAt ?? 0 } : {}),
           // The member who put it on, when one did: theirs to take off.
           startedBy: one.startedBy ?? "",
         })),
@@ -3258,6 +3281,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 503, { error: "this server cannot carry channels" });
         return;
       }
+      if (options.carries === false) {
+        json(response, 503, {
+          error: `${options.serverName ?? "this server"} has no ffmpeg, so it cannot carry a link. Pick a server to go live on.`,
+        });
+        return;
+      }
       const channelId = linkChannelId(link);
       const known = links.get(link);
       // A member's is always a live: a decoder started on somebody else's
@@ -3333,6 +3362,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         const started = await pullChannel(
           options.channels, options.ffprobe ?? ["ffprobe"], channelId, resolved.title, resolved.media,
           inputArgsFor(resolved.headers), resolved.audio,
+          resolved.playlist ? { playlist: resolved.playlist } : {},
         );
         if (!started) {
           json(response, 409, { error: "that link is already starting" });
@@ -4848,6 +4878,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       ...(one.codecs ? { codecs: one.codecs } : {}),
       ...(one.position !== undefined ? { position: one.position } : {}),
       ...(one.live !== undefined ? { live: one.live } : {}),
+      ...(one.playlist ? { playlist: one.playlist, playlistAt: one.playlistAt ?? 0 } : {}),
     }).then((channel) => {
       if (!channel) console.log(`  "${one.id}" is already on.`);
     });
@@ -4859,7 +4890,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   let lastRemembered = "";
   setInterval(() => {
     const now = rememberedNow(channels);
-    if (!now.some((one) => one.position !== undefined)) return;
+    // A list moves on without a position: which entry is on is the thing to keep.
+    if (!now.some((one) => one.position !== undefined || one.playlist)) return;
     const text = JSON.stringify(now);
     if (text === lastRemembered) return;
     lastRemembered = text;
@@ -5290,6 +5322,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     // A cookie jar beside the state, when the operator has put one there,
     // for the sites that will not talk to a datacenter without one.
     ytdlp: tools.ytdlp ?? null,
+    carries: tools.carries !== false,
     cookies: cookiesFile(),
     hls,
     compression,
