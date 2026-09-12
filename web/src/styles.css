@@ -178,6 +178,44 @@ body {
   letter-spacing: 0.06em;
 }
 
+/* The grip, the shade and the close on every panel: Winamp's title-bar
+   buttons, sitting in the title line at the right. The same background as
+   the title chip, so they cut the border the way the title does. */
+.panel-tools {
+  position: absolute;
+  top: -0.85em;
+  right: 8px;
+  display: flex;
+  gap: 2px;
+  background: var(--panel);
+  padding: 0 4px;
+}
+.panel-tools button {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 5px;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  background: #121a15;
+  color: var(--muted);
+  cursor: pointer;
+}
+.panel-tools button:hover { color: var(--fg); border-color: var(--green-dim); }
+.panel-tools .grip { cursor: grab; }
+/* Shaded: the title line and nothing under it, like a Winamp window rolled up. */
+.panel[data-collapsed] { padding: 6px 12px 4px; }
+.panel[data-collapsed] > :not(.panel-tools) { display: none !important; }
+/* Closed by the person, whatever the page would show: it comes back from the Panels list. */
+.panel[data-closed] { display: none !important; }
+.panel.dragging { opacity: 0.45; }
+.panel.drop-before { box-shadow: 0 -4px 0 0 var(--accent); }
+.panel.drop-after { box-shadow: 0 4px 0 0 var(--accent); }
+.panels-list li { display: flex; align-items: center; gap: 8px; }
+.panels-list li .name { flex: 1 1 auto; }
+.panels-list li.closed .name { color: var(--muted); }
+.panels-list li .icon-btn { font-size: 11px; padding: 2px 6px; }
+
 .split {
   display: grid;
   grid-template-columns: 1.3fr 1fr;

@@ -21,6 +21,7 @@ import { bandEdges, bands, decay, drawSpectrum, holdPeaks } from "./spectrum.ts"
 import { fixtureState, scoreLine } from "./score.ts";
 import { isTelevision, pageSize, pageWindow, TV_KEY } from "./tv.ts";
 import { localPlayback } from "./links.ts";
+import { PANELS_KEY, type PanelLayout, emptyLayout, orderedIds, parseLayout, serializeLayout, toggled } from "./panels.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
 
@@ -138,6 +139,10 @@ export function start(): void {
     remoteState: need<HTMLElement>("remote-state"),
     disconnect: need<HTMLButtonElement>("disconnect"),
     browse: need<HTMLButtonElement>("browse"),
+    panelsToggle: need<HTMLButtonElement>("panels-toggle"),
+    panelsPanel: need<HTMLElement>("panels-panel"),
+    panelsList: need<HTMLUListElement>("panels-list"),
+    panelsReset: need<HTMLButtonElement>("panels-reset"),
     accountForm: need<HTMLFormElement>("account-form"),
     accountEmail: need<HTMLInputElement>("account-email"),
     accountPassword: need<HTMLInputElement>("account-password"),
@@ -2498,6 +2503,9 @@ export function start(): void {
     // the one thing a stranger and the owner-as-viewer both could not do.
     memberHere = known && !allowed;
     dom.adminPanel.hidden = !allowed;
+    // An administrator's page opens on the Admin panel: first in its column
+    // and unshaded, until they arrange the panels themselves.
+    promoteAdminPanel(allowed);
     // A link that was waiting on this connection goes live now that who we
     // are here is known -- or is told why it cannot.
     if (goLiveAfter !== "") {
@@ -4182,6 +4190,256 @@ export function start(): void {
   // A shared link that is not a nixamp stream: played here where the
   // browser can, once the page is up; otherwise it waits in the box.
   if (sharedLink !== "") void playLink(sharedLink);
+
+  // ---- panels: shown, shaded, closed, and in what order ---------------------
+  //
+  // Winamp's windows were dragged about and snapped into place, shaded to a
+  // title bar with a click, closed and brought back from a menu. The same
+  // for the panels: the ≡ grip drags one into a new slot, ▁ shades it, ✕
+  // closes it, and the Panels list does all three without a mouse. Kept on
+  // this device. Now Playing and the transport stay where they are: they
+  // are the player, not a window around it.
+  const ZONES = ["zone-top", "zone-stack", "zone-main"];
+  const isPanel = (node: Element | null): node is HTMLElement =>
+    node instanceof HTMLElement && node.matches("section.panel") && node.id !== "";
+  const zoneOf = (panel: HTMLElement): HTMLElement | null =>
+    panel.parentElement && ZONES.includes(panel.parentElement.id) ? panel.parentElement : null;
+  const colOf = (panel: HTMLElement): "a" | "b" | "" =>
+    panel.classList.contains("col-a") ? "a" : panel.classList.contains("col-b") ? "b" : "";
+  /** Every panel that can be moved: the ones inside a zone. */
+  const movablePanels = (): HTMLElement[] =>
+    [...document.querySelectorAll<HTMLElement>("section.panel")].filter((one) => isPanel(one) && zoneOf(one) !== null);
+  const panelTitle = (panel: HTMLElement): string => panel.dataset["title"] ?? panel.id;
+  /** Where the markup put each panel, for Reset. */
+  const panelHome = new Map<string, { zone: string; col: "a" | "b" | ""; index: number }>();
+  const documentOrder = movablePanels().map((panel, index) => {
+    panelHome.set(panel.id, { zone: zoneOf(panel)?.id ?? "", col: colOf(panel), index });
+    return panel.id;
+  });
+  let layout: PanelLayout = emptyLayout();
+  try {
+    layout = parseLayout(localStorage.getItem(PANELS_KEY));
+  } catch { /* private mode */ }
+  /** Whether the person has arranged anything, as opposed to the page's own order. */
+  const arranged = (): boolean => layout.order.length > 0 || Object.keys(layout.placement).length > 0;
+  function saveLayout(): void {
+    layout.order = movablePanels().map((one) => one.id);
+    try {
+      localStorage.setItem(PANELS_KEY, serializeLayout(layout));
+    } catch { /* private mode */ }
+  }
+  /** A panel into a zone and column, keeping the grid's column classes honest. */
+  function placeIn(panel: HTMLElement, zone: HTMLElement, col: "a" | "b" | ""): void {
+    panel.classList.remove("col-a", "col-b");
+    if (zone.classList.contains("split") && col !== "") panel.classList.add(`col-${col}`);
+    if (zone !== panel.parentElement) zone.append(panel);
+  }
+  /** The panels where the layout says: zone and column first, then the order within each zone. */
+  function applyLayout(): void {
+    for (const panel of movablePanels()) {
+      const where = layout.placement[panel.id];
+      if (!where) continue;
+      const [zoneId = "", col = ""] = where.split(":");
+      const zone = document.getElementById(zoneId);
+      if (!zone || !ZONES.includes(zone.id)) continue;
+      placeIn(panel, zone, col === "a" || col === "b" ? col : "");
+    }
+    const order = orderedIds(movablePanels().map((one) => one.id), layout.order);
+    for (const zoneId of ZONES) {
+      const zone = document.getElementById(zoneId);
+      if (!zone) continue;
+      // Reordered in place: each panel's slot is marked, the panels are
+      // sorted, and each slot takes its panel -- so the stack inside the top
+      // zone, which is not a panel, keeps its place.
+      const mine = [...zone.children].filter(isPanel);
+      const slots = mine.map((panel) => {
+        const slot = document.createComment("panel");
+        panel.before(slot);
+        return slot;
+      });
+      mine.sort((x, y) => order.indexOf(x.id) - order.indexOf(y.id));
+      mine.forEach((panel, at) => slots[at]?.replaceWith(panel));
+    }
+    for (const panel of movablePanels()) {
+      panel.toggleAttribute("data-collapsed", layout.collapsed.includes(panel.id));
+      panel.toggleAttribute("data-closed", layout.closed.includes(panel.id));
+    }
+  }
+  function setCollapsed(panel: HTMLElement, on: boolean): void {
+    panel.toggleAttribute("data-collapsed", on);
+    layout.collapsed = toggled(layout.collapsed, panel.id, on);
+    saveLayout();
+    drawPanelsList();
+  }
+  function setClosed(panel: HTMLElement, on: boolean): void {
+    panel.toggleAttribute("data-closed", on);
+    layout.closed = toggled(layout.closed, panel.id, on);
+    saveLayout();
+    drawPanelsList();
+  }
+  /** Snap a dragged panel in before or after another, into that one's zone and column. */
+  function snapTo(moved: HTMLElement, target: HTMLElement, after: boolean): void {
+    const zone = zoneOf(target);
+    if (!zone || moved === target) return;
+    placeIn(moved, zone, colOf(target));
+    if (after) target.after(moved);
+    else target.before(moved);
+    layout.placement[moved.id] = `${zone.id}:${colOf(target)}`;
+    saveLayout();
+    drawPanelsList();
+  }
+  /** A panel one step up or down among its zone's panels. */
+  function nudge(panel: HTMLElement, delta: number): void {
+    const zone = zoneOf(panel);
+    if (!zone) return;
+    // Among the panels it shares a column with: a step past one in the
+    // other column would move it in the markup and nowhere on screen.
+    const siblings = [...zone.children].filter(isPanel).filter((one) => colOf(one) === colOf(panel));
+    const at = siblings.indexOf(panel);
+    const other = siblings[at + delta];
+    if (!other) return;
+    if (delta < 0) other.before(panel);
+    else other.after(panel);
+    saveLayout();
+    drawPanelsList();
+  }
+  let dragging: HTMLElement | null = null;
+  const clearDropMarks = (): void => {
+    for (const panel of movablePanels()) panel.classList.remove("drop-before", "drop-after");
+  };
+  const smallButton = (text: string, tip: string, onClick: () => void): HTMLButtonElement => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "icon-btn";
+    button.textContent = text;
+    button.title = tip;
+    button.setAttribute("aria-label", tip);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onClick();
+    });
+    return button;
+  };
+  /** The grip, the shade and the close, on every panel, once. */
+  function decoratePanels(): void {
+    for (const panel of movablePanels()) {
+      if (panel.querySelector(":scope > .panel-tools")) continue;
+      const tools = document.createElement("span");
+      tools.className = "panel-tools";
+      const grip = smallButton("≡", `Move ${panelTitle(panel)}: drag it to where it should go`, () => undefined);
+      grip.classList.add("grip");
+      grip.draggable = true;
+      grip.addEventListener("dragstart", (event) => {
+        dragging = panel;
+        panel.classList.add("dragging");
+        event.dataTransfer?.setData("text/plain", panel.id);
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+      });
+      grip.addEventListener("dragend", () => {
+        dragging = null;
+        panel.classList.remove("dragging");
+        clearDropMarks();
+      });
+      const shade = smallButton("▁", `Shade ${panelTitle(panel)} to its title`, () => setCollapsed(panel, !panel.hasAttribute("data-collapsed")));
+      const close = smallButton("✕", `Close ${panelTitle(panel)}; the Panels list brings it back`, () => setClosed(panel, true));
+      tools.append(grip, shade, close);
+      panel.prepend(tools);
+      // A drop target: above or below the middle decides before or after.
+      panel.addEventListener("dragover", (event) => {
+        if (!dragging || dragging === panel) return;
+        event.preventDefault();
+        const box = panel.getBoundingClientRect();
+        const after = event.clientY > box.top + box.height / 2;
+        clearDropMarks();
+        panel.classList.add(after ? "drop-after" : "drop-before");
+      });
+      panel.addEventListener("dragleave", () => panel.classList.remove("drop-before", "drop-after"));
+      panel.addEventListener("drop", (event) => {
+        if (!dragging || dragging === panel) return;
+        event.preventDefault();
+        const after = panel.classList.contains("drop-after");
+        clearDropMarks();
+        snapTo(dragging, panel, after);
+      });
+    }
+  }
+  /** The Panels list: every panel, shown or not, with the same three things the grip offers. */
+  function drawPanelsList(): void {
+    if (dom.panelsPanel.hidden) return;
+    const rows = movablePanels().filter((one) => one !== dom.panelsPanel).map((panel) => {
+      const item = document.createElement("li");
+      const closed = panel.hasAttribute("data-closed");
+      const shaded = panel.hasAttribute("data-collapsed");
+      item.classList.toggle("closed", closed);
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = !closed;
+      check.title = closed ? `Show ${panelTitle(panel)}` : `Close ${panelTitle(panel)}`;
+      check.setAttribute("aria-label", check.title);
+      check.addEventListener("change", () => setClosed(panel, !check.checked));
+      const name = document.createElement("span");
+      name.className = "name";
+      // textContent: a title can carry a server's name, which is somebody's text.
+      name.textContent = panelTitle(panel) + (panel.hidden && !closed ? " · nothing to show right now" : "");
+      item.append(
+        check, name,
+        smallButton("▲", `Move ${panelTitle(panel)} up`, () => nudge(panel, -1)),
+        smallButton("▼", `Move ${panelTitle(panel)} down`, () => nudge(panel, 1)),
+        smallButton(shaded ? "▔" : "▁", shaded ? `Unshade ${panelTitle(panel)}` : `Shade ${panelTitle(panel)}`, () => setCollapsed(panel, !shaded)),
+      );
+      return item;
+    });
+    dom.panelsList.replaceChildren(...rows);
+  }
+  /** Every panel back where the markup put it, unshaded and open. */
+  function resetLayout(): void {
+    layout = emptyLayout();
+    for (const id of documentOrder) {
+      const panel = document.getElementById(id);
+      const was = panelHome.get(id);
+      const zone = was ? document.getElementById(was.zone) : null;
+      if (!panel || !was || !zone) continue;
+      placeIn(panel, zone, was.col);
+      panel.removeAttribute("data-collapsed");
+      panel.removeAttribute("data-closed");
+    }
+    layout.order = [...documentOrder];
+    applyLayout();
+    layout = emptyLayout();
+    try {
+      localStorage.removeItem(PANELS_KEY);
+    } catch { /* private mode */ }
+    drawPanelsList();
+  }
+  /**
+   * An administrator's page opens on the Admin panel: first in its column,
+   * unshaded and open -- until they arrange the panels themselves, after
+   * which the arrangement is theirs.
+   */
+  function promoteAdminPanel(allowed: boolean): void {
+    if (!allowed || arranged()) return;
+    const zone = zoneOf(dom.adminPanel);
+    if (!zone) return;
+    const first = [...zone.children].filter(isPanel).find((one) => colOf(one) === colOf(dom.adminPanel));
+    if (first && first !== dom.adminPanel) first.before(dom.adminPanel);
+    dom.adminPanel.removeAttribute("data-collapsed");
+    dom.adminPanel.removeAttribute("data-closed");
+  }
+  dom.panelsToggle.addEventListener("click", () => {
+    const open = dom.panelsPanel.hidden;
+    dom.panelsPanel.hidden = !open;
+    if (open) {
+      // Asked for by name: it is not closed, whatever the list said before.
+      if (dom.panelsPanel.hasAttribute("data-closed")) setClosed(dom.panelsPanel, false);
+      drawPanelsList();
+      dom.panelsPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  });
+  dom.panelsReset.addEventListener("click", resetLayout);
+  // A title that changes -- "Playlist (3)", "Files on dev" -- changes the list.
+  new MutationObserver(() => drawPanelsList()).observe(document.body, { attributes: true, attributeFilter: ["data-title", "hidden"], subtree: true });
+  decoratePanels();
+  applyLayout();
 
   void showProviders();
   void askWhoIsSignedIn();

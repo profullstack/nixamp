@@ -28,6 +28,10 @@
         <span id="way-in-here" class="way-in-here" hidden></span>
         <button id="fav-here" type="button" class="heart" hidden
                 title="Add this server to your favourites" aria-label="Favourite this server">♡</button>
+        <!-- The panels themselves: which are on screen and in what order.
+             Winamp's windows were dragged about and snapped into place; the
+             grip on each panel does that here, and this lists them all. -->
+        <button id="panels-toggle" type="button" class="ghost" title="Panels: show, hide, and reorder the panels on this page">Panels</button>
         <button id="install" type="button" class="ghost" hidden>Install</button>
       </header>
 
@@ -126,8 +130,8 @@
         </form>
       </section>
 
-      <div class="split">
-        <section class="panel player-only" data-title="Spectrum Analyser">
+      <div class="split" id="zone-top">
+        <section class="panel player-only" data-title="Spectrum Analyser" id="spectrum-panel">
           <canvas id="spectrum" aria-hidden="true"></canvas>
           <div class="meters">
             <span id="glyphs" class="glyphs"></span>
@@ -139,7 +143,7 @@
              and directly beneath them what is live on it. The two things a
              visitor came for, side by side with the player, before anything
              about accounts or sharing. -->
-        <div class="stack">
+        <div class="stack" id="zone-stack">
           <section class="panel" id="playlist-panel" data-title="Playlist (0)">
             <input id="filter" type="search" class="filter" placeholder="Filter these files"
                    aria-label="Filter the playlist" />
@@ -205,8 +209,8 @@
         </label>
       </section>
 
-      <div class="split">
-        <section class="panel player-only col-a" data-title="Files">
+      <div class="split" id="zone-main">
+        <section class="panel player-only col-a" data-title="Files" id="files-panel">
           <p class="hint">Nothing is uploaded. The browser decodes your files where they are.</p>
           <div class="picker">
             <label class="button">
@@ -345,7 +349,17 @@
           <ul id="publish-list" class="publish-list"></ul>
         </section>
 
-        <section class="panel player-only col-a" data-title="Remote">
+        <!-- The panels: shown, hidden, reordered, from a list, for a keyboard,
+             a phone, or putting everything back where it started. -->
+        <section class="panel col-b" data-title="Panels" id="panels-panel" hidden>
+          <p class="hint">Drag a panel by its ≡ grip and it snaps into place. ▁ shades a panel to its title; ✕ closes it. Anything closed comes back from here.</p>
+          <ul id="panels-list" class="directory-list panels-list"></ul>
+          <div class="picker">
+            <button id="panels-reset" type="button" class="ghost" title="Every panel back where the page puts it">Reset layout</button>
+          </div>
+        </section>
+
+        <section class="panel player-only col-a" data-title="Remote" id="remote-panel">
           <p class="hint">Run <code>nixamp serve ~/Music --host 0.0.0.0</code> and drive it from here.</p>
           <form id="remote-form" class="picker">
             <input id="remote-url" type="text" inputmode="url" placeholder="192.168.1.7:4321" aria-label="nixamp server address" />
