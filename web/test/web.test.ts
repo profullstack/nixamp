@@ -980,7 +980,7 @@ test("a page is a window that is pulled back into range", () => {
   assert.deepEqual(pageWindow(80, -2, 25), { page: 0, from: 0, to: 25, pages: 4 });
   assert.deepEqual(pageWindow(25, 1, 25), { page: 0, from: 0, to: 25, pages: 1 });
 });
-import { localPlayback } from "../src/links.ts";
+import { listNameOf, localPlayback, parseList } from "../src/links.ts";
 
 test("a pasted link plays here when it can: YouTube, Vimeo and SoundCloud in a frame, a file in the player", () => {
   const yt = localPlayback("https://www.youtube.com/watch?v=i5GTwBTCQJI&t=42");
@@ -1085,6 +1085,8 @@ test("a link can be sent along in the address, into the box where Go live is", (
   assert.match(app, /params\.get\("link"\)/);
   assert.match(app, /dom\.linkUrl\.value = link;/);
   assert.match(app, /askedToPlay = `link:\$\{link\}`/);
+  // Without a server it plays here on its own, the way a shared link does.
+  assert.match(app, /else if \(asked === ""\) sharedLink = link;/);
 });
 
 test("Share hands out nixamp.com/?play=<the stream's own address>, and nixamp.com opens it as a viewer", () => {
@@ -1230,4 +1232,43 @@ test("the trollbox follows the live you joined: one room per server and channel,
   // Follows the live from draw(), and is quiet when nothing is joined.
   assert.match(app, /drawTrollbox\(\);/);
   assert.match(body, /dom\.trollboxPanel\.hidden = room === null/);
+});
+
+test("a playlist by address plays here, entry after entry, without a server", () => {
+  // A show's playlist.m3u is a list of files: the page reads it and plays
+  // it through itself, so Play link works signed out and nowhere near a
+  // server. Named for the show, not for a file called "playlist".
+  const list = localPlayback("https://p0dcasters.com/podcast/off-protocol/playlist.m3u");
+  assert.deepEqual(list, { kind: "list", url: "https://p0dcasters.com/podcast/off-protocol/playlist.m3u", label: "off protocol" });
+  assert.equal(listNameOf("https://x.example/mixes/late_night-sets.m3u"), "late night sets");
+  assert.equal(localPlayback("https://x.example/live/index.m3u8")?.kind, undefined, "an .m3u8 is one stream, not a list");
+
+  const text = [
+    "#EXTM3U",
+    "#PLAYLIST:Off Protocol",
+    "#EXTINF:3525,A Thousand PRs in Two Weeks",
+    "https://media.example/off-protocol/one.mp3",
+    "#EXTINF:-1,Second",
+    "two.mp3",
+    "#EXTINF:10,A feed with no ending",
+    "http://iptv.example/channel/906",
+    "#EXTINF:10,Third",
+    "/films/three.mp4",
+  ].join("\n");
+  const read = parseList(text, "https://p0dcasters.com/podcast/off-protocol/playlist.m3u");
+  assert.equal(read.title, "Off Protocol");
+  assert.deepEqual(read.entries, [
+    { url: "https://media.example/off-protocol/one.mp3", title: "A Thousand PRs in Two Weeks" },
+    { url: "https://p0dcasters.com/podcast/off-protocol/two.mp3", title: "Second" },
+    { url: "https://p0dcasters.com/films/three.mp4", title: "Third" },
+  ]);
+  const pls = parseList("[playlist]\nFile1=https://r.example/a.mp3\nTitle1=A\nFile2=https://r.example/b\n", "https://r.example/station.pls");
+  assert.deepEqual(pls.entries, [{ url: "https://r.example/a.mp3", title: "A" }]);
+  assert.equal(pls.title, "station");
+
+  // The player moves on when an entry ends, and round again after the last.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  assert.match(app, /if \(stepList\(\)\) return;/);
+  assert.match(app, /list\.at = \(list\.at \+ 1\) % list\.entries\.length;/);
+  assert.match(app, /if \(local\.kind === "list"\) \{\s*await playList\(url, local\.label\);/);
 });

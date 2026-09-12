@@ -20,7 +20,7 @@ import {
 import { bandEdges, bands, decay, drawSpectrum, holdPeaks } from "./spectrum.ts";
 import { fixtureState, scoreLine } from "./score.ts";
 import { isTelevision, pageSize, pageWindow, TV_KEY } from "./tv.ts";
-import { localPlayback } from "./links.ts";
+import { isVideoFile, localPlayback, parseList, type ListEntry } from "./links.ts";
 import { PANELS_KEY, type PanelLayout, emptyLayout, orderedIds, parseLayout, serializeLayout, toggled } from "./panels.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
@@ -433,6 +433,11 @@ export function start(): void {
    * not a track -- and the thing Make public sends to the server.
    */
   let localLink: { url: string; label: string; kind: "embed" | "direct" } | null = null;
+  /**
+   * A list playing here, entry by entry: the list's address, what it is
+   * called, what is in it that this browser plays, and which one is on.
+   */
+  let localList: { url: string; title: string; entries: ListEntry[]; at: number } | null = null;
 
   /** The site's player, gone: the picture is the page's own again. */
   function clearEmbed(): void {
@@ -707,6 +712,8 @@ export function start(): void {
     },
     onEnded: () => {
       if (rejoinChannel()) return;
+      // A list playing here moves on to its next entry, round again after the last.
+      if (stepList()) return;
       // A channel that gave up is not a place in the playlist: stepping on
       // from it played the first file in somebody's library, which read as
       // the page picking something else to fail on.
@@ -944,6 +951,7 @@ export function start(): void {
     // A link playing here is stopped here, whatever the server is doing.
     clearEmbed();
     localLink = null;
+    localList = null;
     if (remoteDrives()) {
       await remote.send({ type: "stop" });
       return;
@@ -1594,6 +1602,7 @@ export function start(): void {
     // over. A link played here sets itself up after this call.
     clearEmbed();
     localLink = null;
+    localList = null;
   }
 
   function updateMediaSession(): void {
@@ -1715,6 +1724,10 @@ export function start(): void {
       draw();
       return;
     }
+    if (local.kind === "list") {
+      await playList(url, local.label);
+      return;
+    }
     nowMeta = { kind: "link", link: { url, extractor: "direct", download: false, live: false, video: local.video } };
     await whileLoading(() => player.load({
       title: local.label, artist: "", album: "", duration: 0, url: local.url, video: local.video, objectUrl: false,
@@ -1723,6 +1736,62 @@ export function start(): void {
     localLink = { url, label: local.label, kind: "direct" };
     note = `Playing ${local.label} here, in this browser.`;
     draw();
+  }
+
+  /**
+   * A playlist by address, played here: fetched, read, and its entries
+   * played one after another, round again after the last. The browser
+   * plays the files it can; a list of IPTV feeds is a server's to carry,
+   * and Go live beside the box is for that. The list's own address stays
+   * the link, so Go live hands the whole list to a server, not one entry.
+   */
+  async function playList(url: string, label: string): Promise<void> {
+    note = `Reading ${label}…`;
+    draw();
+    let text = "";
+    try {
+      const answer = await fetch(url, { mode: "cors" });
+      if (!answer.ok) throw new Error(`HTTP ${answer.status}`);
+      text = await answer.text();
+    } catch (error) {
+      note = `That playlist could not be read here (${(error as Error).message}). Go live with it instead: the server reads it.`;
+      draw();
+      return;
+    }
+    const list = parseList(text, url);
+    if (list.entries.length === 0) {
+      note = "Nothing in that playlist is a file this browser plays. Go live with it instead: the server reads it.";
+      draw();
+      return;
+    }
+    localList = { url, title: list.title || label, entries: list.entries, at: 0 };
+    await playListEntry();
+  }
+
+  /** The entry the list is on, into the player. */
+  async function playListEntry(): Promise<void> {
+    const list = localList;
+    const entry = list?.entries[list.at];
+    if (!list || !entry) return;
+    const video = isVideoFile(entry.url);
+    nowMeta = { kind: "link", link: { url: list.url, extractor: "playlist", download: false, live: false, video } };
+    await whileLoading(() => player.load({
+      title: entry.title, artist: list.title, album: "", duration: 0, url: entry.url, video, objectUrl: false,
+    }, true));
+    showVideo(video);
+    localLink = { url: list.url, label: list.title, kind: "direct" };
+    localList = list;
+    note = `Playing ${list.title} here: ${list.at + 1} of ${list.entries.length}, ${entry.title}.`;
+    draw();
+  }
+
+  /** On to the next entry of a list playing here; round again after the last. */
+  function stepList(): boolean {
+    const list = localList;
+    if (!list || list.entries.length === 0) return false;
+    list.at = (list.at + 1) % list.entries.length;
+    void playListEntry();
+    return true;
   }
 
   /**
@@ -4337,14 +4406,14 @@ export function start(): void {
       // Not something to leave in the address bar: it carries a key.
       globalThis.history?.replaceState(null, "", globalThis.location.pathname);
     }
-    // A link to go live with, sent along -- a show's page hands its
-    // playlist over this way. Into the box, where Go live is beside it;
-    // with a server named too, it goes on the air there.
+    // A link sent along -- a show's page hands its playlist over this way.
+    // Into the box, and played here where the browser can, the way a
+    // shared link is; with a server named too, it goes on the air there.
     const link = params.get("link") ?? "";
     if (link !== "") {
       dom.linkUrl.value = link;
       if (asked !== "" && askedToPlay === "") askedToPlay = `link:${link}`;
-      else if (asked === "") note = "A link to go live with is in the box: pick a server beside it and press Go live.";
+      else if (asked === "") sharedLink = link;
     }
     // Share hands out nixamp.com/?play=<the stream's own address>: a
     // nixamp server's channel or live stream is opened as a viewer of that
