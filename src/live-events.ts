@@ -173,19 +173,22 @@ const EVENT_SCHEMA = `
     ON live_events (visibility, status, starts_at, updated_at DESC);
   CREATE INDEX IF NOT EXISTS live_events_owner
     ON live_events (owner_id, updated_at DESC);
-  CREATE INDEX IF NOT EXISTS live_events_kind
-    ON live_events (kind, status, starts_at);
 
   -- The repo has no migration runner, so a table that already exists is
   -- brought forward here. Every statement is idempotent, and the CHECKs are
   -- replaced by name rather than added twice: the originals were unnamed, so
   -- the ones carrying the old status list are found by what they say.
+  -- The columns come before any index on them: nixamp.com had live_events
+  -- from before 0.17.0, and an index on kind ahead of ADD COLUMN kind failed
+  -- there while every fresh database (tests, CI) sailed through.
   ALTER TABLE live_events ADD COLUMN IF NOT EXISTS kind               TEXT    NOT NULL DEFAULT 'talk';
   ALTER TABLE live_events ADD COLUMN IF NOT EXISTS doors_open_at      TIMESTAMPTZ;
   ALTER TABLE live_events ADD COLUMN IF NOT EXISTS ticket_price_cents INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE live_events ADD COLUMN IF NOT EXISTS ticket_currency    TEXT    NOT NULL DEFAULT 'USD';
   ALTER TABLE live_events ADD COLUMN IF NOT EXISTS ticket_minutes     INTEGER NOT NULL DEFAULT 1440;
   ALTER TABLE live_events ADD COLUMN IF NOT EXISTS pay_to             TEXT;
+  CREATE INDEX IF NOT EXISTS live_events_kind
+    ON live_events (kind, status, starts_at);
 
   DO $$
   DECLARE stale record;
@@ -511,7 +514,15 @@ export class LiveEvents {
   constructor(private readonly db: Queryable) {}
 
   private async ensure(): Promise<void> {
-    this.ready ??= this.db.query(EVENT_SCHEMA).then(() => undefined);
+    // A failed schema run is not remembered: the next request tries again
+    // rather than answering 500 until the process restarts.
+    this.ready ??= this.db.query(EVENT_SCHEMA).then(
+      () => undefined,
+      (error: unknown) => {
+        this.ready = null;
+        throw error;
+      },
+    );
     await this.ready;
   }
 
