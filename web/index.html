@@ -139,11 +139,9 @@
           </div>
         </section>
 
-        <!-- The right-hand column, connected to a server: its files to browse,
-             and directly beneath them what is live on it. The two things a
-             visitor came for, side by side with the player, before anything
-             about accounts or sharing. -->
-        <div class="stack" id="zone-stack">
+        <!-- Connected to a server: its files to browse, and what is live on
+             it. The two things a visitor came for, beside the analyser,
+             before anything about accounts or sharing. -->
           <section class="panel" id="playlist-panel" data-title="Playlist (0)">
             <input id="filter" type="search" class="filter" placeholder="Filter these files"
                    aria-label="Filter the playlist" />
@@ -184,7 +182,6 @@
                    aria-label="Filter the entries" hidden />
             <ol id="catalogs-entries" class="playlist" hidden></ol>
           </section>
-        </div>
       </div>
 
       <section class="transport">
@@ -352,7 +349,7 @@
         <!-- The panels: shown, hidden, reordered, from a list, for a keyboard,
              a phone, or putting everything back where it started. -->
         <section class="panel col-b" data-title="Panels" id="panels-panel" hidden>
-          <p class="hint">Drag a panel by its ≡ grip and it snaps into place. ▁ shades a panel to its title; ✕ closes it. Anything closed comes back from here.</p>
+          <p class="hint">Every panel, on or off. Off hides it; nothing is ever deleted. On a panel: ≡ drags it into place, ▁ shades it to its title bar, ✕ hides it.</p>
           <ul id="panels-list" class="directory-list panels-list"></ul>
           <div class="picker">
             <button id="panels-reset" type="button" class="ghost" title="Every panel back where the page puts it">Reset layout</button>

@@ -1158,7 +1158,7 @@ test("every panel has a grip, a shade and a close, snaps where it is dropped, an
   const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
   const css = readFileSync(join(webDir, "src/styles.css"), "utf8");
   // Every movable panel has an id and lives in a zone; Now Playing stays put.
-  for (const id of ["zone-top", "zone-stack", "zone-main", "spectrum-panel", "files-panel", "remote-panel", "panels-panel", "panels-toggle", "panels-list", "panels-reset"]) {
+  for (const id of ["zone-top", "zone-main", "spectrum-panel", "files-panel", "remote-panel", "panels-panel", "panels-toggle", "panels-list", "panels-reset"]) {
     assert.ok(html.includes(`id="${id}"`), id);
   }
   assert.doesNotMatch(html, /<section class="panel[^>]*data-title="Now Playing"[^>]*id=/);
@@ -1170,16 +1170,31 @@ test("every panel has a grip, a shade and a close, snaps where it is dropped, an
   assert.doesNotMatch(body, /\.hidden = (true|false|on|!on)/);
   assert.match(css, /\.panel\[data-collapsed\] > :not\(\.panel-tools\) \{ display: none !important; \}/);
   assert.match(css, /\.panel\[data-closed\] \{ display: none !important; \}/);
+  // Stacked in columns, each panel as tall as it is: grid-lanes where a
+  // browser has it, CSS columns everywhere else, and never a grid row that
+  // stretches the analyser to the playlist's height.
+  assert.match(css, /\.split \{\s*columns: 2;/);
+  assert.match(css, /@supports \(display: grid-lanes\) \{\s*\.split \{\s*display: grid-lanes;/);
+  assert.match(css, /\.split > \* \{[^}]*break-inside: avoid;/);
+  assert.doesNotMatch(css, /\.split \{\s*display: grid;/);
+  assert.ok(!html.includes('class="stack"'), "no stack wrapper: the playlist and what is live are panels of the top zone");
   // Dragged by the grip, dropped before or after another panel, into its zone and column.
   assert.match(body, /grip\.draggable = true/);
   assert.match(body, /const after = event\.clientY > box\.top \+ box\.height \/ 2/);
   assert.match(body, /layout\.placement\[moved\.id\] = `\$\{zone\.id\}:\$\{colOf\(target\)\}`/);
   // Reordered in place with slots, so the stack inside the top zone keeps its place.
   assert.match(body, /document\.createComment\("panel"\)/);
-  // The list: a checkbox to show or close, up, down, shade; and Reset puts everything back.
+  // The list: one switch per panel, on or off, and Reset puts everything back.
+  // Off hides, never deletes: ✕ says Hide, and the list is where it comes back on.
   assert.match(body, /check\.addEventListener\("change", \(\) => setClosed\(panel, !check\.checked\)\)/);
-  assert.match(body, /nudge\(panel, -1\)/);
+  assert.doesNotMatch(body, /nudge\(/);
+  assert.match(body, /`Hide \$\{panelTitle\(panel\)\}; the Panels list turns it back on`/);
+  assert.ok(html.includes("nothing is ever deleted"));
   assert.match(body, /dom\.panelsReset\.addEventListener\("click", resetLayout\)/);
+  // The frame is drawn inside the box, so the title and the buttons are never
+  // clipped at the start of a column.
+  assert.match(css, /\.panel::after \{\s*content: "";\s*position: absolute;\s*inset: 9px 0 0 0;/);
+  assert.match(css, /\.panel-tools \{\s*position: absolute;\s*top: 0;/);
   // An administrator's page opens on the Admin panel, until they arrange things.
   assert.match(app, /promoteAdminPanel\(allowed\)/);
   assert.match(body, /if \(!allowed \|\| arranged\(\)\) return;/);
