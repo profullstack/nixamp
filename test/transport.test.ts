@@ -258,21 +258,23 @@ test("an H.265 channel is packaged as fMP4, because HLS in transport segments is
   assert.equal(ts[ts.indexOf("-hls_segment_type") + 1], "mpegts");
   assert.equal(ts[ts.length - 1], "/tmp/x/index.m3u8");
 
-  const fmp4 = packagerArgs("/tmp/x", true);
+  // The init segment carries the packager's run token in its name, so a
+  // client holding a previous run's init cannot pair it with this run's parts.
+  const fmp4 = packagerArgs("/tmp/x", "fmp4", "abcd1234");
   assert.equal(fmp4[fmp4.indexOf("-hls_segment_type") + 1], "fmp4");
-  assert.equal(fmp4[fmp4.indexOf("-hls_fmp4_init_filename") + 1], "init.mp4");
+  assert.equal(fmp4[fmp4.indexOf("-hls_fmp4_init_filename") + 1], "init-abcd1234.mp4");
   assert.equal(fmp4[fmp4.indexOf("-hls_segment_filename") + 1], "/tmp/x/seg%05d.m4s");
   // Copying either way: packaging is never an encode.
   assert.deepEqual(fmp4.slice(fmp4.indexOf("-c"), fmp4.indexOf("-c") + 2), ["-c", "copy"]);
 
   // The names those two produce are served, and nothing else is.
   assert.equal(segmentName("seg00003.m4s"), "seg00003.m4s");
-  assert.equal(segmentName("init.mp4"), "init.mp4");
+  assert.equal(segmentName("init-abcd1234.mp4"), "init-abcd1234.mp4");
   assert.equal(segmentName("../../etc/passwd"), "");
-  assert.equal(segmentName("init.mp4/../x"), "");
+  assert.equal(segmentName("init-abcd1234.mp4/../x"), "");
   assert.equal(segmentType("seg00003.ts"), "video/mp2t");
-  assert.equal(segmentType("seg00003.m4s"), "video/mp4");
-  assert.equal(segmentType("init.mp4"), "video/mp4");
+  assert.equal(segmentType("seg00003.m4s"), "video/iso.segment");
+  assert.equal(segmentType("init-abcd1234.mp4"), "video/mp4");
 });
 
 test("a 1080p recording goes live as a channel, copied rather than re-encoded", { skip: !ffmpegHere || !ffprobeHere, timeout: 300_000 }, async () => {
@@ -345,11 +347,12 @@ test("an H.265 channel packages into fMP4 segments a phone can play", { skip: !h
     assert.ok(channel);
     const playlist = await hls.playlist("hevc", true);
     assert.ok(playlist, "an H.265 channel could not be packaged");
-    assert.match(playlist ?? "", /#EXT-X-MAP:URI="init\.mp4"/, "no init segment, so nothing describes the track");
+    const init = /#EXT-X-MAP:URI="(init-[0-9a-f]{8}\.mp4)"/.exec(playlist ?? "")?.[1] ?? "";
+    assert.ok(init, "no init segment, so nothing describes the track");
     const part = (playlist ?? "").split("\n").find((line) => line.endsWith(".m4s")) ?? "";
     assert.match(part, /^seg\d{5}\.m4s$/);
     assert.notEqual(hls.segment("hevc", part), "", "the segment named in the playlist is not there");
-    assert.notEqual(hls.segment("hevc", "init.mp4"), "", "the init segment is not served");
+    assert.notEqual(hls.segment("hevc", init), "", "the init segment is not served");
   } finally {
     hls.stopAll();
     channels.stopAll();
