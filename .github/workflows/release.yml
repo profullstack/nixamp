@@ -40,6 +40,18 @@ jobs:
       - run: bun run web:build
       - run: bun run backtoschool:build
       - run: bun test test web/test
+      # Prove the OpenStream envelope on the build we are about to ship, and
+      # gate the release on it: the command exits non-zero if any codec that
+      # applied fails to restore byte-for-byte. The report is attached to the
+      # release below and published to logicsrc.com/docs/openstream/reports.
+      # Run through the built CLI (node, dist) so it is the shipped code.
+      - name: OpenStream benchmark report
+        run: |
+          set -eu
+          v=$(node -p "require('./package.json').version")
+          node bin/nixamp.mjs compression benchmark --out release
+          mv release/openstream-report.json "release/openstream-report-${v}.json"
+          mv release/openstream-report.md "release/openstream-report-${v}.md"
       - run: bun run pack:cli
       # Run what we are about to ship, somewhere else, with the Node a user
       # has rather than the bun that built it. 0.3.0 and 0.4.0 both published a
@@ -60,7 +72,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cli
-          path: release/*.tar.gz
+          path: |
+            release/*.tar.gz
+            release/openstream-report-*.json
+            release/openstream-report-*.md
 
   desktop:
     name: Desktop ${{ matrix.label }}
@@ -141,7 +156,8 @@ jobs:
           mkdir -p out
           find assets -type f \
             \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.AppImage' \
-               -o -name '*.deb' -o -name '*.dmg' -o -name '*.exe' \) \
+               -o -name '*.deb' -o -name '*.dmg' -o -name '*.exe' \
+               -o -name 'openstream-report-*.json' -o -name 'openstream-report-*.md' \) \
             -exec cp {} out/ \;
           ls -la out
       - uses: softprops/action-gh-release@v2
@@ -150,3 +166,53 @@ jobs:
           files: out/*
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+  publish-report:
+    name: Publish the benchmark report to LogicSRC
+    # Separate and non-blocking: opening the reports PR must never hold back or
+    # fail a release. Runs only if the CLI job (which produced the report)
+    # succeeded, and does nothing at all until a LogicSRC write token is set,
+    # so an unconfigured repo skips every step cleanly.
+    needs: [cli]
+    if: always() && needs.cli.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Is a LogicSRC write token configured
+        id: guard
+        env:
+          TOKEN: ${{ secrets.LOGICSRC_PUBLISH_TOKEN }}
+        run: echo "have=${TOKEN:+yes}" >> "$GITHUB_OUTPUT"
+      - if: steps.guard.outputs.have == 'yes'
+        uses: actions/download-artifact@v5
+        with:
+          name: cli
+          path: assets
+      - if: steps.guard.outputs.have == 'yes'
+        uses: actions/checkout@v5
+        with:
+          repository: profullstack/logicsrc
+          token: ${{ secrets.LOGICSRC_PUBLISH_TOKEN }}
+          path: logicsrc
+      - name: Open a reports PR on LogicSRC
+        if: steps.guard.outputs.have == 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.LOGICSRC_PUBLISH_TOKEN }}
+        run: |
+          set -eu
+          raw="${{ github.event.inputs.tag || github.ref_name }}"
+          v="${raw#v}"
+          id="$(date -u +%Y-%m-%d)-nixamp-${v}"
+          cd logicsrc
+          mkdir -p docs/openstream/reports
+          cp ../assets/openstream-report-*.json "docs/openstream/reports/${id}.json"
+          cp ../assets/openstream-report-*.md "docs/openstream/reports/${id}.md"
+          git config user.name "nixamp-release"
+          git config user.email "bot@profullstack.com"
+          branch="openstream-report-${id}"
+          git checkout -b "$branch"
+          git add docs/openstream/reports
+          git commit -m "docs: OpenStream benchmark report for nixamp ${v}"
+          git push origin "$branch"
+          gh pr create --repo profullstack/logicsrc --base master --head "$branch" \
+            --title "docs: OpenStream benchmark report for nixamp ${v}" \
+            --body "Automated from the nixamp ${v} release. The envelope over the built-in corpus on the release runner; round-trip exactness gated the release."
