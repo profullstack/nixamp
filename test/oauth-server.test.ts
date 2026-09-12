@@ -163,14 +163,18 @@ function fakeDb(): Queryable & { events: Map<string, Record<string, unknown>> } 
 
     // --- live_events --------------------------------------------------------
     if (sql.startsWith("INSERT INTO live_events")) {
-      const [id, slug, owner_id, title, description, topic, starts_at, ends_at, timezone, minutes, status, visibility, room_id, chat, hand, recording, layout] = values;
+      // Column order follows the INSERT in src/live-events.ts, which grew
+      // kind, doors and the ticket fields with the concert work (#125).
+      const [id, slug, owner_id, title, description, topic, kind, doors_open_at, ticket_price_cents, ticket_currency, ticket_minutes, pay_to, starts_at, ends_at, timezone, minutes, status, visibility, room_id, chat, hand, recording, layout] = values;
       const row = {
-        id, slug, owner_id, title, description, topic, starts_at, ends_at, timezone,
+        id, slug, owner_id, title, description, topic, kind, doors_open_at,
+        ticket_price_cents, ticket_currency, ticket_minutes, pay_to: pay_to || null,
+        starts_at, ends_at, timezone,
         expected_duration_minutes: minutes, status, visibility, room_id,
         chat_enabled: chat, hand_raise_enabled: hand, recording_enabled: recording,
         recording_id: null, layout_id: layout || null, version: 1,
         created_at: now(), updated_at: now(),
-        invitee_ids: [], speaker_ids: [], moderator_ids: [],
+        invitee_ids: [], speaker_ids: [], artist_ids: [], moderator_ids: [],
       };
       events.set(String(id), row);
       return { rows: [row] };
