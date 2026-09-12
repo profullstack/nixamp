@@ -177,6 +177,11 @@ test("the manifest has everything an install prompt asks for", () => {
   assert.equal(manifest.name, "nixamp — it really whips the terminal's ass");
   assert.equal(manifest.short_name, "nixamp");
   assert.equal(manifest.start_url, "/");
+  // Installed, the app takes nixamp.com links: a click on
+  // nixamp.com/?link=… navigates the app's own window to it, where the
+  // page reads the link the way it always has, rather than a browser tab.
+  assert.deepEqual(manifest.launch_handler, { client_mode: "navigate-existing" });
+  assert.equal(manifest.handle_links, "preferred");
   assert.equal(manifest.display, "standalone");
   assert.equal(manifest.theme_color, "#080c09");
   assert.equal(manifest.background_color, "#080c09");
@@ -1107,7 +1112,9 @@ test("Share hands out nixamp.com/?play=<the stream's own address>, and nixamp.co
   assert.match(app, /copyText\(link, dom\.shareNow, "Copied"\)/);
   // Arriving: a nixamp stream address becomes a viewer connection to that server.
   assert.match(app, /const sent = sentToPlay\(play\)/);
-  assert.match(app, /if \(sharedLink !== ""\) void playLink\(sharedLink\)/);
+  // A shared link that is not a nixamp stream waits for who is signed in:
+  // live on their default server, else played here.
+  assert.match(app, /if \(landed\) askedToPlay = `golive:\$\{link\}`;\s*else void playLink\(link\);/);
 
   assert.deepEqual(sentToPlay("https://server1.chovy.nixamp.com:4321/api/channels/url-aa873c1336f9?k=JV5m"), {
     view: "https://server1.chovy.nixamp.com:4321/view/JV5m", what: "channel:url-aa873c1336f9",
@@ -1292,6 +1299,43 @@ test("what just happened is said under the link box and kept in the Log, in word
   assert.doesNotMatch(body, /innerHTML/);
   // Go live with nowhere to go puts the cursor on the thing that is missing.
   assert.match(app, /if \(directoryServers\.length > 0\) dom\.linkServer\.focus\(\);/);
+});
+
+test("the Server panel says how servers work now: the directory, a link, or one command to run your own", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const panel = html.slice(html.indexOf('id="remote-panel"'), html.indexOf('id="remote-form"'));
+  assert.ok(html.includes('data-title="Server" id="remote-panel"'));
+  assert.match(panel, /curl -fsSL https:\/\/nixamp\.com\/install\.sh \| sh/);
+  assert.match(panel, /nixamp login/);
+  assert.match(panel, /lists itself in the directory and on your account/);
+  // The old way in, an IP and --host, is not what a page tells people any more.
+  assert.doesNotMatch(html, /--host 0\.0\.0\.0/);
+  assert.doesNotMatch(html, /placeholder="192\.168/);
+  assert.doesNotMatch(app, /Remote panel/);
+});
+
+test("arriving signed in lands on a default server, and a link arrived with goes live there", () => {
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  // The choice is remembered by origin; unset means the first of yours that answers.
+  assert.match(app, /const DEFAULT_SERVER_KEY = "nixamp\.defaultServer"/);
+  const connect = app.slice(app.indexOf("async function connectDefaultServer"), app.indexOf("function defaultServer()"));
+  // Only when nothing else was asked of the page, and only a server that answers.
+  assert.match(connect, /if \(meId === "" \|\| mode === "remote" \|\| invited !== ""\) return false;/);
+  assert.match(connect, /await probeServer\(entry\.url, undefined, entry\.key\)/);
+  assert.match(connect, /dom\.remoteUrl\.value = entry\.key \? `\$\{entry\.url\}\/admin\/\$\{entry\.key\}` : entry\.url;/);
+  // The link waits for the answer about who is signed in: live on the default
+  // server, else played here.
+  assert.match(app, /const landed = await connectDefaultServer\(\);/);
+  assert.match(app, /if \(landed\) askedToPlay = `golive:\$\{link\}`;\s*else void playLink\(link\);/);
+  assert.match(app, /if \(asked\.startsWith\("golive:"\)\) \{/);
+  assert.match(app, /void checkAdmin\(\)\.then\(\(\) => goLiveFromBox\(\)\);/);
+  assert.doesNotMatch(app, /if \(sharedLink !== ""\) void playLink\(sharedLink\);/);
+  // Your servers: one is marked as the default, or unmarked.
+  assert.match(app, /makeDefault\.textContent = isDefault \? "✓ Default" : "Make default"/);
+  // A list playing here whose site refuses the page falls back to the server.
+  assert.match(app, /if \(localList && message === "this browser cannot play that format"\) \{/);
+  assert.match(app, /going live with it on \$\{serverName \|\| "the server"\} instead/);
 });
 
 test("a cross-origin file plays without the analyser, so a podcast is not silenced", () => {

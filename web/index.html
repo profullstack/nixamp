@@ -383,10 +383,20 @@
           </div>
         </section>
 
-        <section class="panel player-only col-a" data-title="Remote" id="remote-panel">
-          <p class="hint">Run <code>nixamp serve ~/Music --host 0.0.0.0</code> and drive it from here.</p>
+        <!-- Which server this page is on. Most people arrive from the
+             directory or a link somebody sent, and never type here; the box
+             is for a link, and the words say how a server of your own gets
+             into the directory: one command, a sign-in, and it names and
+             lists itself. A host flag and an IP were how it worked before
+             nixamp.com knew about servers at all. -->
+        <section class="panel player-only col-a" data-title="Server" id="remote-panel">
+          <p class="hint">
+            Pick a server in the directory, or paste a server's link here. To run your own:
+            <code>curl -fsSL https://nixamp.com/install.sh | sh</code>, then <code>nixamp login</code>
+            and <code>nixamp serve ~/Music</code>. It lists itself in the directory and on your account.
+          </p>
           <form id="remote-form" class="picker">
-            <input id="remote-url" type="text" inputmode="url" placeholder="192.168.1.7:4321" aria-label="nixamp server address" />
+            <input id="remote-url" type="text" inputmode="url" placeholder="a server's link, https://…:4321/view/…" aria-label="A server's link" />
             <button type="submit" class="button">Connect</button>
             <button id="disconnect" type="button" class="ghost" hidden>Disconnect</button>
             <button id="browse" type="button" class="ghost">Browse the directory</button>
