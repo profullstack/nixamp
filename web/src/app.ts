@@ -542,7 +542,7 @@ export function start(): void {
    */
   type GoLiveWith =
     | { kind: "channel"; id: string; name: string }
-    | { kind: "entry"; catalog: { id: string; name: string }; entry: { id: string; title: string } }
+    | { kind: "entry"; catalog: { id: string; name: string }; entry: { id: string; title: string; group?: string; logo?: string; live?: boolean } }
     | { kind: "track"; index: number; name: string };
   function whatToGoLiveWith(): GoLiveWith | null {
     if (mode !== "remote") return null;
@@ -560,7 +560,9 @@ export function start(): void {
   /**
    * Go live with something. Play plays it for you; this plays it for
    * everybody: on the air on the server, listed in the directory with a
-   * phone code, and the link to it copied so it can be sent.
+   * phone code, the link to it copied so it can be sent -- and joined, so
+   * the person who pressed it is watching the same feed as everyone else
+   * from the first second, rather than still hearing what they had.
    */
   async function goLiveWith(what: GoLiveWith, button: HTMLButtonElement): Promise<void> {
     button.disabled = true;
@@ -569,6 +571,8 @@ export function start(): void {
     draw();
     try {
       let link = "";
+      let channelId = "";
+      let video = true;
       {
         // A file goes on the air as a channel of its own, like a catalog
         // entry: its own room, its own phone code, and the server's own
@@ -581,29 +585,51 @@ export function start(): void {
             ? `/api/catalogs/${encodeURIComponent(what.catalog.id)}/entries/${encodeURIComponent(what.entry.id)}/live`
             : `/api/channels/${encodeURIComponent(what.id)}/keep`;
         const answer = await fetch(remote.url(path), { method: "POST" });
-        const body = (await answer.json().catch(() => ({}))) as { error?: string; channel?: string };
+        const body = (await answer.json().catch(() => ({}))) as { error?: string; channel?: string; video?: boolean };
         if (!answer.ok) {
           note = body.error ?? `${name} would not go on the air.`;
           draw();
           return;
         }
-        link = `channel:${what.kind === "channel" ? what.id : (body.channel ?? "")}`;
+        channelId = what.kind === "channel" ? what.id : (body.channel ?? "");
+        video = body.video !== false;
+        link = `channel:${channelId}`;
       }
 
       // Listed, so it is in the directory and has a phone code. Already
       // listed is fine; the directory is told again so the channel shows.
-      if (!listed) await setLive(true);
-      else await fetch(remote.url("/api/live/start"), { method: "POST" }).catch(() => undefined);
+      // Listing the server is the owner's; a member's channel is announced
+      // by the server itself, and asking would only get them a 403.
+      if (isAdmin()) {
+        if (!listed) await setLive(true);
+        else await fetch(remote.url("/api/live/start"), { method: "POST" }).catch(() => undefined);
+      }
       await loadShare();
       void loadOnAir();
+
+      // Joined: the same feed everyone else gets, from the moment it is on.
+      // Where it came from travels with it, so the meta line can say so.
+      if (channelId !== "" && channelOn?.id !== channelId) {
+        const from = what.kind === "entry"
+          ? {
+              kind: "channel" as const,
+              catalog: what.catalog,
+              entry: {
+                id: what.entry.id, title: what.entry.title, group: what.entry.group ?? "", live: what.entry.live ?? true,
+                ...(what.entry.logo ? { logo: what.entry.logo } : {}),
+              },
+            }
+          : undefined;
+        await watchChannel({ id: channelId, name, video }, true, from);
+      }
 
       const page = pageLinkFor(link);
       const phone = phoneCode ? ` Call ${phoneNumber || "the line"} and key ${phoneCode} to talk about it.` : "";
       if (page !== "") {
         await copyText(page, button, "✓");
-        note = `${name} is on the air. Link copied.${phone}`;
+        note = `${name} is on the air and you are watching it. Link copied.${phone}`;
       } else {
-        note = `${name} is on the air.${phone}`;
+        note = `${name} is on the air and you are watching it.${phone}`;
       }
       draw();
     } catch {
