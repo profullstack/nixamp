@@ -1,6 +1,6 @@
 {
   "name": "@nixamp/web",
-  "version": "0.18.2",
+  "version": "0.19.1",
   "private": true,
   "description": "The nixamp PWA: a browser player, and a remote for nixamp serve.",
   "license": "MIT",

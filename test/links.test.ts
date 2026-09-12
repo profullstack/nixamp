@@ -4,8 +4,8 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  contentTypeFor, directLink, downloadArgs, fileNameFor, inputArgsFor, isDirectMedia, linkChannelId,
-  mergeDownloadArgs, parseResolved, playableLink, reasonFrom, resolveArgs, resolveLink,
+  contentTypeFor, directLink, downloadArgs, fileNameFor, inputArgsFor, isDirectMedia, isPlaylistLink, linkChannelId,
+  mergeDownloadArgs, parseResolved, playableLink, playlistFrom, reasonFrom, resolveArgs, resolveLink, resolvePlaylist,
 } from "../src/links.ts";
 
 /** What yt-dlp said about a SoundCloud track on 2026-09-10, trimmed. */
@@ -255,4 +255,62 @@ test("a picture and a sound kept apart come back as a pair, and are put together
   assert.equal(fileNameFor(webm, false), "Never Gonna Give You Up.mkv");
   // Sound alone is still yt-dlp's own pipe, named for the sound.
   assert.equal(fileNameFor(pair, true), "Never Gonna Give You Up.m4a");
+});
+
+test("a plain .m3u is a list of things to play, not a thing ffmpeg reads", () => {
+  assert.equal(isPlaylistLink("https://x.example/shows/playlist.m3u"), true);
+  assert.equal(isPlaylistLink("https://x.example/shows/playlist.M3U?v=2"), true);
+  // HLS stays direct: a segment list is one stream, and ffmpeg reads it.
+  assert.equal(isPlaylistLink("https://x.example/live/index.m3u8"), false);
+  assert.equal(isDirectMedia("https://x.example/shows/playlist.m3u"), false);
+  assert.equal(isPlaylistLink("https://x.example/song.mp3"), false);
+});
+
+test("a playlist's entries come back in order, resolved against where the list lives", () => {
+  const text = [
+    "#EXTM3U",
+    "#EXTINF:3600,Episode one",
+    "https://cdn.example/ep1.mp3",
+    "#EXTINF:-1,Episode two",
+    "ep2.mp3",
+    "",
+    "/other/ep3.mp3",
+    "#EXTINF:1,A dupe",
+    "https://cdn.example/ep1.mp3",
+  ].join("\n");
+  const list = playlistFrom(text, "https://x.example/shows/playlist.m3u");
+  assert.equal(list.hls, false);
+  assert.deepEqual(list.sources, [
+    "https://cdn.example/ep1.mp3",
+    "https://x.example/shows/ep2.mp3",
+    "https://x.example/other/ep3.mp3",
+  ]);
+  // A segment list wearing the wrong extension is HLS after all.
+  assert.deepEqual(playlistFrom("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\nseg0.ts\n", "https://x.example/a.m3u"), { hls: true, sources: [] });
+});
+
+test("a pasted playlist resolves to a station: the first entry probed, every entry kept, no end", async () => {
+  const served = (status: number, body: string): typeof fetch =>
+    (async () => new Response(body, { status })) as unknown as typeof fetch;
+  const list = await resolvePlaylist("https://x.example/shows/off-protocol.m3u", {
+    fetcher: served(200, "#EXTM3U\nhttps://cdn.example/ep1.mp3\nhttps://cdn.example/ep2.mp3\n"),
+  });
+  assert.ok(!("error" in list));
+  assert.equal(list.title, "off-protocol");
+  assert.equal(list.media, "https://cdn.example/ep1.mp3");
+  assert.deepEqual(list.playlist, ["https://cdn.example/ep1.mp3", "https://cdn.example/ep2.mp3"]);
+  assert.equal(list.live, true);
+  assert.equal(list.extractor, "playlist");
+  assert.equal(list.page, "https://x.example/shows/off-protocol.m3u");
+  // HLS in a .m3u is the stream itself.
+  const hls = await resolvePlaylist("https://x.example/live.m3u", { fetcher: served(200, "#EXTM3U\n#EXT-X-TARGETDURATION:2\nseg0.ts\n") });
+  assert.ok(!("error" in hls) && hls.extractor === "direct" && hls.media === "https://x.example/live.m3u");
+  // A list with nothing in it, or a list that is not there, is a sentence.
+  const empty = await resolvePlaylist("https://x.example/e.m3u", { fetcher: served(200, "#EXTM3U\n") });
+  assert.ok("error" in empty && /nothing in it/.test(empty.error));
+  const gone = await resolvePlaylist("https://x.example/g.m3u", { fetcher: served(404, "") });
+  assert.ok("error" in gone && /HTTP 404/.test(gone.error));
+  // resolveLink knows the shape without yt-dlp, and before asking it.
+  const viaResolve = await resolveLink(["false"], "https://x.example/shows/x.m3u", { timeoutMs: 500 });
+  assert.ok("error" in viaResolve, "a real fetch of x.example fails, and is an error rather than a yt-dlp run");
 });

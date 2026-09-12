@@ -109,7 +109,6 @@ export function start(): void {
     metaBlurb: need<HTMLParagraphElement>("meta-blurb"),
     liveLine: need<HTMLElement>("live-line"),
     downloadNow: need<HTMLButtonElement>("download-now"),
-    makePublic: need<HTMLButtonElement>("make-public"),
     wayInHere: need<HTMLElement>("way-in-here"),
     embed: need<HTMLElement>("embed"),
     embedFrame: need<HTMLIFrameElement>("embed-frame"),
@@ -263,6 +262,22 @@ export function start(): void {
   /** The directory's servers, for the picker that says which one goes live with a link. */
   let directoryServers: { name: string; url: string }[] = [];
   let drawnLinkServers = "";
+  /**
+   * Whether the connected server can carry a link at all. The hosted
+   * directory has no ffmpeg, and a page that offered to go live on it was
+   * offering something that always failed, with the site blamed.
+   */
+  let serverCarries = true;
+  /** A link to go live with as soon as a connection made for it is up. */
+  let goLiveAfter = "";
+  /** A server's address without its key, for telling two apart. */
+  function serverOrigin(url: string): string {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return url;
+    }
+  }
   /**
    * Connected on purpose as a viewer: the page hides everything that
    * administers, even when the server would obey. Chosen in the directory,
@@ -546,6 +561,11 @@ export function start(): void {
     | { kind: "track"; index: number; name: string };
   function whatToGoLiveWith(): GoLiveWith | null {
     if (mode !== "remote") return null;
+    // A link playing here is the link box's to put on the air, with the Go
+    // live beside it. This button would have gone live with the server's
+    // own track -- not what is playing -- from what looked like the same
+    // button twice.
+    if (localLink) return null;
     if (nowMeta?.catalog && nowMeta.entry) {
       return { kind: "entry", catalog: nowMeta.catalog, entry: nowMeta.entry };
     }
@@ -1120,8 +1140,6 @@ export function start(): void {
     // Keeping it is for a pasted link that is a whole file somewhere: the
     // server fetches it and this device ends up with it. A live has no whole.
     dom.downloadNow.hidden = !(channelOn && nowMeta?.link?.download);
-    // Offered over a link playing here, to whoever may go live on the server.
-    dom.makePublic.hidden = !(localLink && canGoLive());
     drawLinkServers();
     dom.album.textContent = currentAlbum();
 
@@ -1710,7 +1728,7 @@ export function start(): void {
       let answer: Response;
       let body: {
         channel?: string; name?: string; live?: boolean; video?: boolean; download?: boolean;
-        extractor?: string; error?: string;
+        extractor?: string; error?: string; entries?: number;
       } = {};
       try {
         // live: kept and listed by the server itself, for a member
@@ -1745,6 +1763,8 @@ export function start(): void {
           video: body.video !== false,
         },
       });
+      // A list is on the air as a station: say how long the line-up is.
+      if ((body.entries ?? 0) > 1) note = `${body.name || url} is on the air: ${body.entries} entries, played in turn.`;
     });
     draw();
   }
@@ -1767,19 +1787,16 @@ export function start(): void {
    */
   function drawLinkServers(): void {
     const here = mode === "remote" ? remote.address : "";
-    const origin = (url: string): string => {
-      try {
-        return new URL(url).origin;
-      } catch {
-        return url;
-      }
-    };
-    const others = directoryServers.filter((one) => origin(one.url) !== origin(here));
-    const signature = JSON.stringify({ here, name: serverName, others });
+    const others = directoryServers.filter((one) => serverOrigin(one.url) !== serverOrigin(here));
+    const signature = JSON.stringify({ here, name: serverName, carries: serverCarries, others });
     if (signature === drawnLinkServers) return;
     drawnLinkServers = signature;
     const options: HTMLOptionElement[] = [];
-    if (here !== "") {
+    // The connected server is where a link goes live, when it can carry
+    // one. One that cannot -- the hosted directory -- is not offered, and
+    // the first server that can is picked in its place, so a plain press
+    // of Go live goes somewhere it works.
+    if (here !== "" && serverCarries) {
       const current = document.createElement("option");
       current.value = "";
       current.textContent = `on ${serverName || here}`;
@@ -1797,7 +1814,7 @@ export function start(): void {
       options.push(option);
     }
     dom.linkServer.replaceChildren(...options);
-    dom.linkServer.value = "";
+    dom.linkServer.value = here !== "" && !serverCarries && others[0] ? others[0].url : "";
     dom.linkServer.hidden = others.length === 0;
   }
   /**
@@ -1822,16 +1839,37 @@ export function start(): void {
    * than doing nothing.
    */
   async function goLiveFromBox(): Promise<void> {
-    const url = dom.linkUrl.value.trim();
+    // The box, or failing that the link playing here: Play link and then Go
+    // live is the natural order, and the box may have been cleared between.
+    const url = dom.linkUrl.value.trim() || localLink?.url || "";
     if (url === "") {
-      note = "Paste a link first: an IPTV feed, a YouTube page, a file.";
+      note = "Paste a link first: a file, an .m3u playlist, an IPTV feed, a YouTube page.";
       draw();
+      return;
+    }
+    // Another server picked beside the link: connect to it, as a viewer,
+    // and go live there the moment it says who we are. One press, not
+    // pick-wait-press again.
+    const chosen = dom.linkServer.value;
+    const elsewhere = chosen !== "" && (mode !== "remote" || serverOrigin(chosen) !== serverOrigin(remote.address));
+    if (elsewhere) {
+      const name = directoryServers.find((one) => one.url === chosen)?.name ?? chosen;
+      goLiveAfter = url;
+      note = `Connecting to ${name} to go live with it…`;
+      draw();
+      connectForLink(chosen);
       return;
     }
     if (mode !== "remote") {
       note = directoryServers.length > 0
         ? "Pick a server to go live on, beside the link."
         : "Connect to a server first: Browse the directory, or paste its address below.";
+      draw();
+      return;
+    }
+    if (!serverCarries) {
+      note = `${serverName || "This server"} has no ffmpeg, so it cannot carry a link.` +
+        (directoryServers.length > 0 ? " Pick a server to go live on, beside the link." : "");
       draw();
       return;
     }
@@ -1842,11 +1880,9 @@ export function start(): void {
     }
     await makePublic(url);
   }
-  dom.linkGoLive.addEventListener("click", () => { void goLiveFromBox(); });
 
-  dom.linkServer.addEventListener("change", () => {
-    const chosen = dom.linkServer.value;
-    if (chosen === "") return;
+  /** Connect to a server picked for a link, as a viewer, with the link kept in its box. */
+  function connectForLink(chosen: string): void {
     const url = dom.linkUrl.value.trim();
     viewerOnly = true;
     askedToPlay = "";
@@ -1854,13 +1890,15 @@ export function start(): void {
     dom.remoteForm.requestSubmit();
     // The link outlives the connection: what was pasted is still there to play.
     dom.linkUrl.value = url;
-    note = url === "" ? "Connecting… then paste a link and press Play link to go live with it there." : "Connecting… then press Play link to go live with it there.";
-    draw();
+  }
+  dom.linkGoLive.addEventListener("click", () => { void goLiveFromBox(); });
+
+  dom.linkServer.addEventListener("change", () => {
+    const chosen = dom.linkServer.value;
+    if (chosen === "") return;
+    connectForLink(chosen);
   });
 
-  dom.makePublic.addEventListener("click", () => {
-    if (localLink) void makePublic(localLink.url);
-  });
 
   dom.downloadNow.addEventListener("click", () => {
     const link = nowMeta?.link;
@@ -1936,6 +1974,7 @@ export function start(): void {
         remoteStatus = "error";
         remoteDetail = blocked;
         note = blocked;
+        goLiveAfter = "";
         mode = "local";
         draw();
         return;
@@ -1956,6 +1995,7 @@ export function start(): void {
           ? nameless
           : `Nothing answered at ${base}. If that is your machine, it is off or ` +
             "nixamp is not running on it; otherwise check the address.";
+        goLiveAfter = "";
         mode = "local";
         draw();
         return;
@@ -1970,6 +2010,7 @@ export function start(): void {
         remoteStatus = "error";
         remoteDetail = refusal;
         note = refusal;
+        goLiveAfter = "";
         mode = "local";
         draw();
         return;
@@ -2452,6 +2493,17 @@ export function start(): void {
     // the one thing a stranger and the owner-as-viewer both could not do.
     memberHere = known && !allowed;
     dom.adminPanel.hidden = !allowed;
+    // A link that was waiting on this connection goes live now that who we
+    // are here is known -- or is told why it cannot.
+    if (goLiveAfter !== "") {
+      const waiting = goLiveAfter;
+      goLiveAfter = "";
+      if (canGoLive()) void makePublic(waiting);
+      else {
+        note = "Sign in to nixamp.com to go live here.";
+        draw();
+      }
+    }
     if (adminTimer) clearInterval(adminTimer);
     adminTimer = null;
     // The list of what is live carries Restart and Remove only for somebody
@@ -4184,6 +4236,8 @@ export function start(): void {
     server: {
       name: string; nowPlaying: string; tracks: number; playing: boolean;
       live: boolean; listed?: boolean; code: string; url: string;
+      /** Whether a link can go live here: false where there is no ffmpeg. */
+      carries?: boolean;
     };
     channels: {
       id: string; name: string; via: string; listeners: number; startedAt: number;
@@ -4234,6 +4288,7 @@ export function start(): void {
         return;
       }
       air = (await answer.json()) as OnAir;
+      serverCarries = air.server.carries !== false;
       // The server's own name for itself, which is what the panels are
       // titled with: "Files on ubuntu" says where you are, "Playlist" did not.
       if (air.server.name && air.server.name !== serverName) {

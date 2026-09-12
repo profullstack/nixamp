@@ -57,6 +57,14 @@ export interface ChannelInfo {
   /** How many times the source has been dialled again since it started. */
   redials?: number;
   /**
+   * For a channel that plays a list: the entries, in order, and which one is
+   * on. When one ends the next is dialled at once, and the last is followed
+   * by the first: a station, not a file. A restart picks up at the entry
+   * that was on.
+   */
+  playlist?: string[];
+  playlistAt?: number;
+  /**
    * For a pulled film: how far into it we are, in seconds, read off ffmpeg
    * as it goes. This is what a restart and a redial go back to. A live
    * source has no such place, and says so with `live`.
@@ -95,6 +103,8 @@ export interface PullResume {
   live: boolean;
   /** Seconds into a film to start from. */
   position: number;
+  /** For a list of things rather than one: every entry, in order. */
+  playlist?: string[];
 }
 
 /**
@@ -246,6 +256,8 @@ export class Channel {
   private fragments: Fragments | null = null;
   /** For a pulled channel: what to run, and how many times it has failed. */
   private redial: (() => void) | null = null;
+  /** For a channel playing a list: move to the next entry. Null when there is no list. */
+  private advance: (() => boolean) | null = null;
   private failures = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** Fires when a pulled source has said nothing for STALL. */
@@ -349,19 +361,37 @@ export class Channel {
     this.stall = stall;
     if (this.info.kind === "video") this.fragments = new Fragments();
     const [command, ...prefix] = this.options.ffmpeg as [string, ...string[]];
-    const remote = /^https?:\/\//i.test(source);
     this.info.live = resume.live;
     if (!resume.live) this.info.position = Math.max(0, resume.position);
-    // What every remote input is told: dial again when the CDN drops it, and
-    // give up on a socket that has gone quiet. Input options apply to the
-    // input that follows them, so a second input is told again.
-    const remoteArgs = remote
-      ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5", "-rw_timeout", String(stall * 1000)]
-      : [];
+    // A list plays entry by entry: the one that is on is what gets dialled,
+    // and an entry that ended is followed by the next, at once.
+    const list = resume.playlist && resume.playlist.length > 0 ? resume.playlist : null;
+    let at = 0;
+    if (list) {
+      this.info.playlist = list;
+      at = Math.min(Math.max(0, this.info.playlistAt ?? 0), list.length - 1);
+      this.info.playlistAt = at;
+    }
+    let current = list ? (list[at] as string) : source;
+    this.advance = list && list.length > 1
+      ? () => {
+          at = (at + 1) % list.length;
+          this.info.playlistAt = at;
+          current = list[at] as string;
+          return true;
+        }
+      : null;
 
     const dial = (): void => {
       if (this.closing) return;
       this.stderr = "";
+      const remote = /^https?:\/\//i.test(current);
+      // What every remote input is told: dial again when the CDN drops it, and
+      // give up on a socket that has gone quiet. Input options apply to the
+      // input that follows them, so a second input is told again.
+      const remoteArgs = remote
+        ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5", "-rw_timeout", String(stall * 1000)]
+        : [];
       // Where to pick a film up from: a little before where it was, since
       // the place was written down a moment ago and a moment of it twice is
       // better than a moment of it missing. A live source is joined as is,
@@ -421,7 +451,7 @@ export class Channel {
                 // and a CDN that got them from yt-dlp and not from us answers 403.
                 ...input,
                 ...seek,
-                "-i", source,
+                "-i", current,
                 // The sound, when the site keeps it apart from the picture: a
                 // second input, dialled the same way, that the encode maps in.
                 ...(audio ? [...remoteArgs, ...(paced ? ["-re"] : []), ...input, ...seek, "-i", audio] : []),
@@ -584,13 +614,20 @@ export class Channel {
       this.close();
       return;
     }
-    this.info.redials = (this.info.redials ?? 0) + 1;
+    // A list moves on. An entry that played to its end is not a source that
+    // dropped: the next is dialled now, and it is not a redial. One that
+    // gave nothing is skipped the same way, counted as the failure it was,
+    // so a list of dead links gives up rather than cycling for ever.
+    const moved = this.advance?.() ?? false;
+    const ended = moved && sent;
+    if (ended) this.info.error = undefined;
+    else this.info.redials = (this.info.redials ?? 0) + 1;
     this.startOver();
     const dial = this.redial;
     this.timer = setTimeout(() => {
       this.timer = null;
       dial();
-    }, REDIAL);
+    }, ended ? 0 : REDIAL);
     // A redial is not a reason to keep the process alive at exit.
     this.timer.unref?.();
   }
@@ -1171,6 +1208,9 @@ export interface RememberedChannel {
   live?: boolean;
   /** The member who put it on, so it is still theirs after a restart. */
   startedBy?: string;
+  /** For a list: every entry, and which was on, so it carries on from there. */
+  playlist?: string[];
+  playlistAt?: number;
 }
 
 const REMEMBERED = "channels.json";
@@ -1207,6 +1247,11 @@ export function rememberedChannels(dir: string, port: number): RememberedChannel
         if (typeof one["position"] === "number" && Number.isFinite(one["position"]) && one["position"] > 0) kept.position = one["position"];
         if (typeof one["live"] === "boolean") kept.live = one["live"];
         if (typeof one["startedBy"] === "string" && one["startedBy"] !== "") kept.startedBy = one["startedBy"];
+        if (Array.isArray(one["playlist"])) {
+          const entries = (one["playlist"] as unknown[]).filter((entry): entry is string => typeof entry === "string" && entry !== "");
+          if (entries.length > 0) kept.playlist = entries;
+          if (typeof one["playlistAt"] === "number" && Number.isInteger(one["playlistAt"]) && one["playlistAt"] >= 0) kept.playlistAt = one["playlistAt"];
+        }
         return kept;
       });
   } catch {
@@ -1230,6 +1275,10 @@ export function rememberedNow(channels: Channels): RememberedChannel[] {
       if (typeof one.live === "boolean") kept.live = one.live;
       if (!one.live && typeof one.position === "number" && one.position > 0) kept.position = Math.floor(one.position);
       if (one.startedBy) kept.startedBy = one.startedBy;
+      if (one.playlist && one.playlist.length > 0) {
+        kept.playlist = one.playlist;
+        kept.playlistAt = one.playlistAt ?? 0;
+      }
       return kept;
     });
 }
