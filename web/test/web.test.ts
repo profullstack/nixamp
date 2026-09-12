@@ -17,6 +17,7 @@ import { fixtureState, kickoff, scoreLine } from "../src/score.ts";
 import { isMatchupName } from "../../src/matchup.ts";
 import { NEVER_CACHE, serviceWorkerSource } from "../scripts/sw.ts";
 import { Bitmap, crc32, drawIcon, encodePng, ICONS } from "../scripts/icons.ts";
+import { PANELS_KEY, emptyLayout, orderedIds, parseLayout, serializeLayout, toggled } from "../src/panels.ts";
 
 const webDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -1120,4 +1121,69 @@ test("Share hands out nixamp.com/?play=<the stream's own address>, and nixamp.co
   assert.equal(sentToPlay("http://23.152.40.104/tipoffsport/abc/906"), null);
   assert.equal(sentToPlay("javascript:alert(1)"), null);
   assert.equal(sentToPlay("nope"), null);
+});
+
+test("the panels' layout is a value: read tolerantly, ordered sensibly, and each panel can be shaded or closed", () => {
+  // Nothing, nonsense and the wrong shape are all the empty layout.
+  assert.deepEqual(parseLayout(null), emptyLayout());
+  assert.deepEqual(parseLayout("not json"), emptyLayout());
+  assert.deepEqual(parseLayout("[1,2]"), emptyLayout());
+  // Ids are kept only when they look like ids, once each; placements only in zone:col form.
+  const read = parseLayout(JSON.stringify({
+    order: ["files-panel", "admin-panel", "files-panel", 3, "<b>"],
+    placement: { "admin-panel": "zone-main:b", "files-panel": "nowhere", evil: "zone-main:a;drop" },
+    collapsed: ["spectrum-panel"], closed: "no",
+  }));
+  assert.deepEqual(read, {
+    order: ["files-panel", "admin-panel"], placement: { "admin-panel": "zone-main:b" }, collapsed: ["spectrum-panel"], closed: [],
+  });
+  assert.deepEqual(parseLayout(serializeLayout(read)), read);
+
+  // The saved order first; a panel the saved order never heard of lands
+  // after its nearest earlier neighbour from the markup -- or first, when
+  // the markup put it first -- not at the end of everything.
+  assert.deepEqual(orderedIds(["a", "b", "c", "d"], ["d", "b"]), ["a", "d", "b", "c"]);
+  assert.deepEqual(orderedIds(["a", "b", "c"], ["c", "gone", "a"]), ["c", "a", "b"]);
+  assert.deepEqual(orderedIds(["a", "b", "c"], []), ["a", "b", "c"]);
+  assert.deepEqual(orderedIds(["new", "a", "b"], ["b", "a"]), ["new", "b", "a"]);
+
+  assert.deepEqual(toggled(["a"], "b", true), ["a", "b"]);
+  assert.deepEqual(toggled(["a", "b"], "a", false), ["b"]);
+  assert.deepEqual(toggled(["a"], "a", true), ["a"]);
+  assert.equal(PANELS_KEY, "nixamp.panels");
+});
+
+test("every panel has a grip, a shade and a close, snaps where it is dropped, and the Panels list does the same", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const css = readFileSync(join(webDir, "src/styles.css"), "utf8");
+  // Every movable panel has an id and lives in a zone; Now Playing stays put.
+  for (const id of ["zone-top", "zone-stack", "zone-main", "spectrum-panel", "files-panel", "remote-panel", "panels-panel", "panels-toggle", "panels-list", "panels-reset"]) {
+    assert.ok(html.includes(`id="${id}"`), id);
+  }
+  assert.doesNotMatch(html, /<section class="panel[^>]*data-title="Now Playing"[^>]*id=/);
+  const body = app.slice(app.indexOf("---- panels: shown, shaded, closed"), app.indexOf("void showProviders();"));
+  // Shaded and closed are attributes of their own, never `hidden`: hidden is
+  // the page's own state, and the Admin panel's hidden is the permission bit.
+  assert.match(body, /panel\.toggleAttribute\("data-collapsed", on\)/);
+  assert.match(body, /panel\.toggleAttribute\("data-closed", on\)/);
+  assert.doesNotMatch(body, /\.hidden = (true|false|on|!on)/);
+  assert.match(css, /\.panel\[data-collapsed\] > :not\(\.panel-tools\) \{ display: none !important; \}/);
+  assert.match(css, /\.panel\[data-closed\] \{ display: none !important; \}/);
+  // Dragged by the grip, dropped before or after another panel, into its zone and column.
+  assert.match(body, /grip\.draggable = true/);
+  assert.match(body, /const after = event\.clientY > box\.top \+ box\.height \/ 2/);
+  assert.match(body, /layout\.placement\[moved\.id\] = `\$\{zone\.id\}:\$\{colOf\(target\)\}`/);
+  // Reordered in place with slots, so the stack inside the top zone keeps its place.
+  assert.match(body, /document\.createComment\("panel"\)/);
+  // The list: a checkbox to show or close, up, down, shade; and Reset puts everything back.
+  assert.match(body, /check\.addEventListener\("change", \(\) => setClosed\(panel, !check\.checked\)\)/);
+  assert.match(body, /nudge\(panel, -1\)/);
+  assert.match(body, /dom\.panelsReset\.addEventListener\("click", resetLayout\)/);
+  // An administrator's page opens on the Admin panel, until they arrange things.
+  assert.match(app, /promoteAdminPanel\(allowed\)/);
+  assert.match(body, /if \(!allowed \|\| arranged\(\)\) return;/);
+  // Kept on this device, read the way every other setting is.
+  assert.match(body, /localStorage\.getItem\(PANELS_KEY\)/);
+  assert.match(body, /localStorage\.setItem\(PANELS_KEY, serializeLayout\(layout\)\)/);
 });
