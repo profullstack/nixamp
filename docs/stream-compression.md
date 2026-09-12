@@ -1,5 +1,12 @@
 # Stream compression: the relay envelope and how nixamp uses it
 
+The wire format described here is published, product-neutral, as the
+**OpenStream** standard on LogicSRC: <https://logicsrc.com/docs/openstream>.
+nixamp is its reference implementation. This document is that standard plus
+everything specific to how nixamp applies it: what the server decides to
+compress, what the operator can set, and how to turn it all off. Where the
+two differ, the published standard is the authority on the bytes on the wire.
+
 This is the wire specification for `application/vnd.nixamp.stream`, the
 representation one nixamp sends another when it relays a channel or a
 library file losslessly compressed. It also says how the server decides
