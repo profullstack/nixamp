@@ -25,6 +25,12 @@ import { Fragments, isOpening } from "./fragments.ts";
 export interface Listener {
   write(chunk: Buffer): boolean;
   end(): void;
+  /**
+   * How many bytes it has accepted and not yet sent, when it can say. A
+   * response's writableLength. Without it a listener that stopped reading
+   * is a buffer that grows until the channel ends.
+   */
+  pending?(): number;
 }
 
 export interface ChannelInfo {
@@ -33,8 +39,8 @@ export interface ChannelInfo {
   name: string;
   /** The container it is sending, e.g. webm from a browser, flv over RTMP. */
   format: string;
-  /** How it arrived. */
-  via: "http" | "rtmp" | "pull";
+  /** How it arrived. `relay` is another nixamp's channel, decoded from its envelope. */
+  via: "http" | "rtmp" | "pull" | "relay";
   startedAt: number;
   bytes: number;
   listeners: number;
@@ -115,6 +121,14 @@ const TAIL = 2000;
  */
 export const BACKLOG_VIDEO = 4 * 1024 * 1024;
 export const BACKLOG_AUDIO = 64 * 1024;
+/**
+ * How far behind a listener may fall before it is let go. Sixteen
+ * megabytes is half a minute of 720p television that a socket has accepted
+ * and not delivered: nobody is watching that, and every byte of it was
+ * sitting in this process. Before this a stalled listener's buffer grew
+ * until the channel ended, however long that was.
+ */
+export const LISTENER_QUEUE = 16 * 1024 * 1024;
 
 /**
  * The backlog is really a number of seconds, and four megabytes was that
@@ -185,6 +199,8 @@ export interface ChannelOptions {
   onEnd?: (info: ChannelInfo) => void;
   /** How long an on-demand channel outlives its last viewer. Tests shorten it. */
   idleMs?: number;
+  /** Unsent bytes a listener may hold before it is dropped. Tests shrink it. */
+  maxListenerQueueBytes?: number;
   /** How long a rate is measured over before the backlog is sized off it. Tests shorten it. */
   rateWindowMs?: number;
 }
@@ -592,17 +608,67 @@ export class Channel {
     this.send(chunk);
   }
 
-  /** Write to everyone, and drop anybody whose socket has gone. */
+  /**
+   * Write to everyone, and drop anybody whose socket has gone -- or has
+   * stopped taking anything. A write that returns false is ordinary: the
+   * socket is a little behind and will catch up. One that returns false
+   * with a queue past the limit is a listener that is not reading, and
+   * ending it is the only thing that stops its queue growing.
+   */
   private send(chunk: Buffer): void {
+    const cap = this.options.maxListenerQueueBytes ?? LISTENER_QUEUE;
     for (const listener of this.listeners) {
       try {
-        listener.write(chunk);
+        const drained = listener.write(chunk);
+        if (!drained && (listener.pending?.() ?? 0) > cap) {
+          this.listeners.delete(listener);
+          listener.end();
+        }
       } catch {
         // One listener's broken socket is not the channel's problem.
         this.listeners.delete(listener);
       }
     }
     this.info.listeners = this.listeners.size;
+  }
+
+  /**
+   * What a new listener is written before the live bytes: the opening
+   * boxes when there are any, then the recent backlog. The same rule as
+   * `listen`, handed out so a relay can compress it for one receiver.
+   */
+  opening(): Buffer[] {
+    const out: Buffer[] = [];
+    if (this.fragments?.ready) out.push(this.fragments.header);
+    if (!this.fragments || this.fragments.ready) out.push(...this.recent);
+    return out;
+  }
+
+  /**
+   * Bytes decoded from another nixamp's relay: the channel's own output as
+   * it was there, so they go out here exactly as ffmpeg's would, whole
+   * boxes at a time with the backlog kept.
+   */
+  receive(chunk: Buffer): void {
+    if (this.closing) return;
+    this.info.bytes += chunk.byteLength;
+    this.emit(chunk);
+  }
+
+  /** Ready a channel that will be fed by `receive`: pictures need their boxes tracked. */
+  prepare(): void {
+    if (this.info.kind === "video") this.fragments = new Fragments();
+  }
+
+  /**
+   * The feed behind `receive` started over: a new generation upstream, with
+   * new opening boxes. Everybody listening is ended, as they are when our
+   * own ffmpeg is dialled again, and a newcomer gets the new beginning.
+   */
+  rollover(): void {
+    if (this.closing) return;
+    this.info.redials = (this.info.redials ?? 0) + 1;
+    this.startOver();
   }
 
   listen(listener: Listener): () => void {
@@ -874,6 +940,34 @@ export class Channels {
     );
     this.open.set(id, channel);
     return channel;
+  }
+
+  /**
+   * A channel carried in from another nixamp's relay. Like `attach`, no
+   * ffmpeg of our own; unlike it, the kind is known up front, so a picture
+   * gets its fragment tracking and a newcomer gets the opening boxes.
+   */
+  relayIn(id: string, name: string, kind: "audio" | "video", source: string): Channel | null {
+    if (this.open.has(id)) return null;
+    const channel = new Channel(
+      { id, name: name || id, format: kind === "video" ? "mp4" : "mp3", via: "relay", startedAt: Date.now(), bytes: 0, listeners: 0, kind, source, live: true },
+      this.options,
+      (gone) => this.open.delete(gone),
+    );
+    channel.prepare();
+    this.open.set(id, channel);
+    this.options.onStart?.(channel.info);
+    return channel;
+  }
+
+  /** What a new listener would be written first, for a relay's preface. */
+  opening(id: string): Buffer[] {
+    return this.open.get(id)?.opening() ?? [];
+  }
+
+  /** The kind of a channel, for a relay to say what it is carrying. */
+  kindOf(id: string): "audio" | "video" | undefined {
+    return this.open.get(id)?.info.kind;
   }
 
   stop(id: string): boolean {
