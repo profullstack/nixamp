@@ -765,6 +765,11 @@ test("a pasted link is played by the server you are on, and a whole one can be k
   assert.ok(html.includes("● GO LIVE") && !html.includes("MAKE PUBLIC"));
   // Which server goes live with it: the connected one, or any in the directory.
   assert.ok(html.includes('id="link-server"'));
+  // Filled at the start, not only after Browse; and a Go live button beside
+  // Play link, so the verb is there before anything plays here.
+  assert.match(app, /void loadLinkServers\(\);/);
+  assert.ok(html.includes('id="link-go-live"'));
+  assert.match(app, /dom\.linkGoLive\.addEventListener\("click"/);
   assert.match(app, /directoryServers = streams\.map\(/);
   assert.match(app, /dom\.linkServer\.addEventListener\("change"/);
   // What is on the air can be renamed, by the owner or by whoever put it on.
@@ -1037,7 +1042,10 @@ test("a member may go live, a file goes on the air as its own channel, and every
   assert.match(remote, /session=\$\{encodeURIComponent\(this\.session\)\}/);
   assert.match(app, /fetch\("\/api\/v1\/auth\/token"\)/);
   // The server says whether we are a member; the owner or any member may go live.
-  assert.match(app, /memberHere = member && !allowed;/);
+  // Known to the server -- a member, or the owner who chose to view rather
+  // than drive -- and not administering right now: that is who may go live.
+  assert.match(app, /const known = allowed \|\| member;/);
+  assert.match(app, /memberHere = known && !allowed;/);
   assert.match(app, /const canGoLive = \(\): boolean => isAdmin\(\) \|\| \(mode === "remote" && memberHere\);/);
   assert.equal((app.match(/if \(canGoLive\(\)\) \{?\s*item\.append\(goLiveButton\(/g) ?? []).length, 2, "both go-live rows ask canGoLive");
   assert.doesNotMatch(app, /if \(isAdmin\(\)\) item\.append\(goLiveButton\(/);

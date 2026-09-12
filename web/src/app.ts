@@ -116,6 +116,7 @@ export function start(): void {
     linkForm: need<HTMLFormElement>("link-form"),
     linkUrl: need<HTMLInputElement>("link-url"),
     linkServer: need<HTMLSelectElement>("link-server"),
+    linkGoLive: need<HTMLButtonElement>("link-go-live"),
     goLiveNow: need<HTMLButtonElement>("go-live-now"),
     elapsed: need<HTMLElement>("elapsed"),
     total: need<HTMLElement>("total"),
@@ -1773,6 +1774,50 @@ export function start(): void {
     dom.linkServer.value = "";
     dom.linkServer.hidden = others.length === 0;
   }
+  /**
+   * The directory's servers, asked for once at the start so the picker has
+   * something in it before anybody presses Browse. Only where a directory
+   * answers: a server's own copy of this page has none, and says 404.
+   */
+  async function loadLinkServers(): Promise<void> {
+    try {
+      const answer = await fetch("/api/directory");
+      if (!answer.ok) return;
+      const body = (await answer.json()) as { streams?: { name: string; url: string }[] };
+      directoryServers = (body.streams ?? []).map((one) => ({ name: one.name, url: one.url }));
+      drawLinkServers();
+    } catch { /* no directory here */ }
+  }
+
+  /**
+   * Go live with whatever is in the link box, on the server: the plain
+   * verb beside Play link, for the person who does not want it played
+   * here first. Says what is missing -- a server, a sign-in -- rather
+   * than doing nothing.
+   */
+  async function goLiveFromBox(): Promise<void> {
+    const url = dom.linkUrl.value.trim();
+    if (url === "") {
+      note = "Paste a link first: an IPTV feed, a YouTube page, a file.";
+      draw();
+      return;
+    }
+    if (mode !== "remote") {
+      note = directoryServers.length > 0
+        ? "Pick a server to go live on, beside the link."
+        : "Connect to a server first: Browse the directory, or paste its address below.";
+      draw();
+      return;
+    }
+    if (!canGoLive()) {
+      note = "Sign in to nixamp.com to go live here, or use the server's control link.";
+      draw();
+      return;
+    }
+    await makePublic(url);
+  }
+  dom.linkGoLive.addEventListener("click", () => { void goLiveFromBox(); });
+
   dom.linkServer.addEventListener("change", () => {
     const chosen = dom.linkServer.value;
     if (chosen === "") return;
@@ -2372,10 +2417,14 @@ export function start(): void {
 
     // Asked to be a viewer, so a viewer: what the server would allow is not
     // the question when the person chose the other button.
+    const known = allowed || member;
     if (viewerOnly) allowed = false;
-    // A member: signed in to nixamp.com, known to this server, not its
-    // owner. May go live here, and take off what they put on.
-    memberHere = member && !allowed;
+    // A member: signed in to nixamp.com and known to this server, without
+    // administering it right now. May go live here, and take off what they
+    // put on. The owner viewing their own server is at least that: they
+    // chose not to drive it, not to be a stranger on it, and "go live" was
+    // the one thing a stranger and the owner-as-viewer both could not do.
+    memberHere = known && !allowed;
     dom.adminPanel.hidden = !allowed;
     if (adminTimer) clearInterval(adminTimer);
     adminTimer = null;
@@ -3973,6 +4022,7 @@ export function start(): void {
   void showProviders();
   void askWhoIsSignedIn();
   void checkAdmin();
+  void loadLinkServers();
 
   dom.browse.addEventListener("click", () => {
     if (!dom.directory.hidden) {
