@@ -1,0 +1,29 @@
+{
+  "openaccess": "0.1",
+  "name": "nixamp",
+  "url": "https://nixamp.com",
+  "operator": "https://logicsrc.com/.well-known/openprofile.md",
+  "redirect_uris": [
+    "https://nixamp.com/api/v1/openaccess/callback"
+  ],
+  "jwks": {
+    "keys": [
+      {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "kid": "CtuHXWFE9Z1P",
+        "x": "mHN15NDPYMbdE_Zz8-ePGeskTU2yEM2I7KBp5HqM6xA",
+        "alg": "EdDSA",
+        "use": "sig"
+      }
+    ]
+  },
+  "scopes": {},
+  "honours": [
+    "profullstack.com/all-access"
+  ],
+  "webhooks": "https://nixamp.com/api/v1/openaccess/events",
+  "hubs": [
+    "https://openaccess.logicsrc.com"
+  ]
+}
