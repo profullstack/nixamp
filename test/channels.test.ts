@@ -550,11 +550,12 @@ test("what a channel is and where it got to are remembered, and only for kept pu
   const dir = mkdtempSync(join(tmpdir(), "nixamp-remember-more-"));
   const codecs = { video: "h264", audio: "aac", container: "mov,mp4", duration: 5400 };
   rememberChannels(dir, 4321, [
-    { id: "film", name: "A Film", source: "http://x.test/film.mp4", kind: "video", codecs, position: 1234, live: false },
+    { id: "film", name: "A Film", source: "http://x.test/film.mp4", kind: "video", codecs, position: 1234, live: false, startedBy: "member-7" },
     { id: "tv", name: "TV", source: "http://x.test/tv.m3u8", kind: "video", live: true },
   ]);
   const back = rememberedChannels(dir, 4321);
-  assert.deepEqual(back[0], { id: "film", name: "A Film", source: "http://x.test/film.mp4", kind: "video", codecs, position: 1234, live: false });
+  // Still the member's after a restart: theirs to take off.
+  assert.deepEqual(back[0], { id: "film", name: "A Film", source: "http://x.test/film.mp4", kind: "video", codecs, position: 1234, live: false, startedBy: "member-7" });
   assert.deepEqual(back[1], { id: "tv", name: "TV", source: "http://x.test/tv.m3u8", kind: "video", live: true });
 
   // Junk in the optional fields is dropped, not believed.
@@ -568,12 +569,16 @@ test("what a channel is and where it got to are remembered, and only for kept pu
   const set = new Channels({ ffmpeg: ["true"] });
   const film = set.pull("film", "A Film", "http://x.test/film.mp4", [], "video", true, undefined, [], "", { live: false, position: 100 });
   if (film) film.info.codecs = codecs;
+  // Marked as a member's through the lookup, the way a handler marks it.
+  const marked = set.info("film");
+  if (marked) marked.startedBy = "member-7";
   set.pull("tv", "TV", "http://x.test/tv.m3u8", [], "video");
   set.pull("ondemand", "Somebody's", "http://x.test/od.mp4", [], "video", true, undefined, [], "", { live: false, position: 7 });
   set.ephemeral("ondemand");
   const now = rememberedNow(set);
   assert.deepEqual(now.map((one) => one.id), ["film", "tv"]);
-  assert.deepEqual(now[0], { id: "film", name: "A Film", source: "http://x.test/film.mp4", kind: "video", codecs, live: false, position: 100 });
+  assert.deepEqual(now[0], { id: "film", name: "A Film", source: "http://x.test/film.mp4", kind: "video", codecs, live: false, position: 100, startedBy: "member-7" });
+  assert.equal(set.info("nope"), undefined);
   assert.deepEqual(now[1], { id: "tv", name: "TV", source: "http://x.test/tv.m3u8", kind: "video", live: true });
   set.stopAll();
 });

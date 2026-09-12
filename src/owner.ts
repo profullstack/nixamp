@@ -127,5 +127,28 @@ export function needsAdmin(path: string, method = "GET"): boolean {
   // else's machine, and a listen link used to be able to start as many as
   // it liked. A link a viewer wants to watch plays in their own browser.
   if (path.startsWith("/api/links")) return true;
+  // Going live with a file on this server is the same act as going live
+  // with a catalog entry, and the same question.
+  if (/^\/api\/tracks\/\d+\/live$/.test(path)) return true;
+  return false;
+}
+
+/**
+ * The administering that a member may do too.
+ *
+ * A member is anybody signed in to nixamp.com: not the owner, not holding
+ * the control link, but a known account. Going live is theirs -- a file on
+ * this server, a catalog entry, keeping something that was started on
+ * demand, and taking off what they put on -- because a directory of servers
+ * nobody but their owners can go live on is a directory of empty rooms.
+ * Everything else that administers stays the owner's: the source, the
+ * connections, the catalogs, the links the server fetches.
+ */
+export function needsMember(path: string, method = "GET"): boolean {
+  if (method === "POST" && /^\/api\/tracks\/\d+\/live$/.test(path)) return true;
+  if (method === "POST" && /^\/api\/catalogs\/[^/]+\/entries\/[^/]+\/live$/.test(path)) return true;
+  if (method === "POST" && /^\/api\/channels\/[^/]+\/keep$/.test(path)) return true;
+  // Only their own; the handler checks whose it is.
+  if (method === "DELETE" && /^\/api\/channels\/[^/]+$/.test(path)) return true;
   return false;
 }

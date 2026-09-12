@@ -65,6 +65,12 @@ export interface ChannelInfo {
   live?: boolean;
   /** What the source turned out to hold, so a restart need not ask again. */
   codecs?: { video: string; audio: string; container: string; duration?: number };
+  /**
+   * The nixamp.com account that put it on the air, when a member did rather
+   * than the owner. Theirs to take off again, and counted against how many
+   * a member may have on at once.
+   */
+  startedBy?: string;
 }
 
 /** Where a pulled source is picked up from, and whether it can be at all. */
@@ -708,6 +714,11 @@ export class Channels {
     return total;
   }
 
+  /** What is known about one channel, to read or to mark. Undefined when it is not on. */
+  info(id: string): ChannelInfo | undefined {
+    return this.open.get(id)?.info;
+  }
+
   has(id: string): boolean {
     return this.open.has(id);
   }
@@ -929,6 +940,8 @@ export interface RememberedChannel {
   position?: number;
   /** A live source has nowhere to pick up from. */
   live?: boolean;
+  /** The member who put it on, so it is still theirs after a restart. */
+  startedBy?: string;
 }
 
 const REMEMBERED = "channels.json";
@@ -959,6 +972,7 @@ export function rememberedChannels(dir: string, port: number): RememberedChannel
         }
         if (typeof one["position"] === "number" && Number.isFinite(one["position"]) && one["position"] > 0) kept.position = one["position"];
         if (typeof one["live"] === "boolean") kept.live = one["live"];
+        if (typeof one["startedBy"] === "string" && one["startedBy"] !== "") kept.startedBy = one["startedBy"];
         return kept;
       });
   } catch {
@@ -981,6 +995,7 @@ export function rememberedNow(channels: Channels): RememberedChannel[] {
       if (one.codecs) kept.codecs = one.codecs;
       if (typeof one.live === "boolean") kept.live = one.live;
       if (!one.live && typeof one.position === "number" && one.position > 0) kept.position = Math.floor(one.position);
+      if (one.startedBy) kept.startedBy = one.startedBy;
       return kept;
     });
 }
