@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Directory, ENDED_TTL_MS, clean, parseAnnouncement, publishable } from "../src/directory.ts";
+import { Directory, ENDED_TTL_MS, clean, parseAnnouncement, parseLineupEntry, publishable } from "../src/directory.ts";
 import { Publisher, confirm } from "../src/publish.ts";
 import { allowedForListening, audioLink, scopeOf, shareLink } from "../src/share.ts";
 
@@ -659,4 +659,59 @@ test("a listing says whether the player is running and which channels are on", (
   const listedRich = directory.announce({ ...rich!, url: "https://b.test:4321/view/k" });
   assert.equal(listedRich.playing, false);
   assert.deepEqual(listedRich.channels, ["CNN", "MLB Network", "[31mred [0m"]);
+});
+
+test("a lineup is cleaned like everything else a publisher says", () => {
+  assert.deepEqual(
+    parseLineupEntry({ id: "url-abc", name: " Inspiring Founders ", kind: "audio", art: "https://s1.example/api/channels/url-abc/art?k=K", about: "Season 2\u001b[31m" }),
+    { id: "url-abc", name: "Inspiring Founders", kind: "audio", art: "https://s1.example/api/channels/url-abc/art?k=K", about: "Season 2 [31m" },
+  );
+  // A picture is a web address or nothing: a crawler is sent to fetch it.
+  assert.equal(parseLineupEntry({ id: "a", name: "b", art: "javascript:alert(1)" })?.art, "");
+  assert.equal(parseLineupEntry({ id: "a", name: "b", art: "http://127.0.0.1/x.jpg" })?.art, "");
+  // Anything but video is sound; no id or no name is no entry.
+  assert.equal(parseLineupEntry({ id: "a", name: "b", kind: "weird" })?.kind, "audio");
+  assert.equal(parseLineupEntry({ name: "b" }), null);
+  assert.equal(parseLineupEntry("x"), null);
+
+  const announced = parseAnnouncement({
+    name: "box",
+    url: "https://a.example/view/abc",
+    tracks: 1,
+    nowPlaying: "",
+    channels: ["Late Show"],
+    lineup: [{ id: "url-1", name: "Late Show", kind: "video", art: "https://a.example/api/channels/url-1/art?k=abc", about: "" }, "junk"],
+  });
+  assert.equal(announced?.lineup?.length, 1);
+  assert.equal(announced?.lineup?.[0]?.id, "url-1");
+
+  // The listing carries it, and an older publisher's is empty rather than missing.
+  const directory = new Directory(60_000, () => 1_000_000);
+  const listed = directory.announce(announced as NonNullable<typeof announced>);
+  assert.equal(listed.lineup[0]?.art, "https://a.example/api/channels/url-1/art?k=abc");
+  const plain = directory.announce({ name: "old", url: "https://b.example/view/x", tracks: 0, nowPlaying: "" });
+  assert.deepEqual(plain.lineup, []);
+});
+
+test("a publisher announces its lineup next to the channel names", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const fake = (async (_url: string, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return { ok: true, json: async () => ({ id: "assigned-id" }) } as unknown as Response;
+  }) as unknown as typeof fetch;
+  const publisher = new Publisher(
+    {
+      directory: "https://d.example",
+      name: "n",
+      url: shareLink("https://a.example", "abc", false),
+      tracks: () => 3,
+      nowPlaying: () => "",
+      channels: () => ["Late Show"],
+      lineup: () => [{ id: "url-1", name: "Late Show", kind: "video", art: "https://a.example/api/channels/url-1/art?k=abc", about: "" }],
+    },
+    fake,
+  );
+  await publisher.start();
+  assert.deepEqual(bodies[0]?.["channels"], ["Late Show"]);
+  assert.deepEqual(bodies[0]?.["lineup"], [{ id: "url-1", name: "Late Show", kind: "video", art: "https://a.example/api/channels/url-1/art?k=abc", about: "" }]);
 });

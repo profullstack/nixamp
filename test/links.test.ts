@@ -325,3 +325,32 @@ test("a pasted playlist resolves to a station: the first entry probed, every ent
   const viaResolve = await resolveLink(["false"], "https://x.example/shows/x.m3u", { timeoutMs: 500 });
   assert.ok("error" in viaResolve, "a real fetch of x.example fails, and is an error rather than a yt-dlp run");
 });
+
+test("a link's picture and its line are kept for the card", () => {
+  const rich = parseResolved({
+    ...SOUNDCLOUD,
+    thumbnail: "https://i1.sndcdn.com/artworks-x-t500x500.jpg",
+    uploader: "Forss",
+    description: "  \n\nFrom the album Soulhack.\nMore lines that a card has no room for.",
+  }, "https://soundcloud.com/forss/flickermood");
+  assert.equal(rich?.thumbnail, "https://i1.sndcdn.com/artworks-x-t500x500.jpg");
+  assert.equal(rich?.about, "Forss — From the album Soulhack.");
+  // Without a chosen thumbnail, the biggest of the list, which yt-dlp puts last.
+  const listed = parseResolved({
+    ...SOUNDCLOUD,
+    thumbnails: [{ url: "https://i.example/small.jpg" }, { url: "https://i.example/big.jpg" }],
+    channel: "A Channel",
+  }, "https://x");
+  assert.equal(listed?.thumbnail, "https://i.example/big.jpg");
+  assert.equal(listed?.about, "A Channel");
+  // A picture is somewhere a crawler can go, or nothing.
+  assert.equal(parseResolved({ ...SOUNDCLOUD, thumbnail: "data:image/png;base64,AAAA" }, "https://x")?.thumbnail, "");
+  assert.equal(parseResolved({ ...SOUNDCLOUD, thumbnail: "javascript:alert(1)" }, "https://x")?.thumbnail, "");
+  // A long description is cut to a line.
+  const long = parseResolved({ ...SOUNDCLOUD, description: "w".repeat(500) }, "https://x");
+  assert.ok((long?.about.length ?? 0) <= 200);
+  assert.ok(long?.about.endsWith("…"));
+  // A bare file and a list have neither.
+  assert.equal(directLink("https://x.example/a.mp3").thumbnail, "");
+  assert.equal(directLink("https://x.example/a.mp3").about, "");
+});

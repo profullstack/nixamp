@@ -472,6 +472,17 @@ body.tv .subtitle { font-size: 28px; }
 }
 /* A poster is tall; it stands beside the chips rather than among them. */
 .meta-logo.meta-poster { height: 72px; max-width: 52px; }
+/* A channel's picture in the directory: a small square in front of its name. */
+.live-art {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  object-fit: cover;
+  border-radius: 3px;
+  background: #000;
+  vertical-align: middle;
+  margin-right: 6px;
+}
 
 /* A game: [away logo] Away 17 – Home 21 [home logo], on a row of its own
    above the chips. Names may shrink and wrap; the score never does, so at

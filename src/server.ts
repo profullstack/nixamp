@@ -53,7 +53,8 @@ import { createHash as sha } from "node:crypto";
 import { playJingle } from "./jingle.ts";
 import { stateDir } from "./daemon.ts";
 import { readSession } from "./session.ts";
-import { Directory, ENDED_TTL_MS, parseAnnouncement, type Listing } from "./directory.ts";
+import { Directory, ENDED_TTL_MS, parseAnnouncement, type LineupEntry, type Listing } from "./directory.ts";
+import { ArtCache, coverArtOf, stillFrom } from "./art.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
 import { HlsPackagers, segmentType, withKey } from "./hls.ts";
 import { CompressionService } from "./compression/service.ts";
@@ -114,6 +115,7 @@ import {
   scopeOf,
   shareLink,
   audioLink,
+  KEY_QUERY,
 } from "./share.ts";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1059,6 +1061,9 @@ export interface KnownSource {
   /** A list of entries to play in turn, and which one was on. */
   playlist?: string[];
   playlistAt?: number;
+  /** A picture and a line about it, from the site or the list that named it. */
+  art?: string;
+  about?: string;
 }
 
 /** How many times a source that answers nothing is asked, and how far apart. */
@@ -1142,8 +1147,12 @@ export async function pullChannel(
   // the timestamps a recording cut mid-stream does not carry. Ahead of the
   // caller's own input arguments, which are headers for the address itself.
   const opening = [...transportInputArgs(source, codecs.container), ...input];
+  // A bare file is named by its file name until the file says better: an
+  // MP3's tags name the episode and the show, and "Inspiring Founders" is a
+  // card; "ep-0412-final.mp3" is not.
+  const tagged = looksLikeFileName(name) && codecs.tags?.title ? codecs.tags.title : name;
   const channel = channels.pull(
-    id, name, source, encode, kind, true, undefined, opening, kind === "video" ? audio : "",
+    id, tagged, source, encode, kind, true, undefined, opening, kind === "video" ? audio : "",
     { live, position: known.position ?? 0, ...(playlist ? { playlist } : {}) },
     // Known before the first dial: whether the source is a transport stream
     // decides whether it can be read here for a source-boundary relay.
@@ -1151,6 +1160,28 @@ export async function pullChannel(
   );
   if (channel && !assumed) channel.info.codecs = codecs;
   if (channel && playlist && known.playlistAt !== undefined) channel.info.playlistAt = known.playlistAt;
+  if (channel) {
+    // Its picture from wherever it came with one, and a line about it: what
+    // was given, else the show and the album the file's own tags name.
+    if (known.art && /^https?:\/\//i.test(known.art)) channel.info.art = known.art;
+    const byTags = [codecs.tags?.artist, codecs.tags?.album].filter((one): one is string => Boolean(one)).join(" · ");
+    const about = (known.about ?? byTags).trim().slice(0, 200);
+    if (about !== "") channel.info.about = about;
+    // A channel of sound put back from what an older nixamp wrote down was
+    // never asked whether its file carries a sleeve. Asked now, once, after
+    // it is on: reading the head of an MP3 on a CDN costs nothing and
+    // opens no second connection a panel would count (that is a film's
+    // trap, and a film has a picture of its own to take a frame of).
+    if (kind === "audio" && !channel.info.art && known.codecs && codecs.cover === undefined) {
+      void codecsOf(tools, source, input).then((later) => {
+        if (channel.info.codecs && later.cover) channel.info.codecs.cover = true;
+        if (!channel.info.about) {
+          const line = [later.tags?.artist, later.tags?.album].filter((one): one is string => Boolean(one)).join(" · ");
+          if (line !== "") channel.info.about = line;
+        }
+      });
+    }
+  }
   // What comes out, as opposed to what went in. An H.265 source copied
   // through stays H.265; one re-encoded arrives as H.264, and a packager
   // told otherwise would cut fMP4 segments for a stream that did not need
@@ -1159,6 +1190,53 @@ export async function pullChannel(
     channel.info.emits = encode.includes("libx264") ? "h264" : codecs.video || "h264";
   }
   return channel;
+}
+
+/** Whether a name is only a file's: something.mp3, with nothing said about it. */
+export function looksLikeFileName(name: string): boolean {
+  return /\.[a-z0-9]{2,5}$/i.test(name.trim());
+}
+
+/**
+ * Where a channel's picture is, for the page and the directory.
+ *
+ * The site's own thumbnail as it is; else this server's art route, when
+ * the channel has a picture to read one from -- a sleeve in the file, or a
+ * moving picture to take a frame of. "" for a channel of sound with no
+ * sleeve, which has no picture to be had.
+ */
+export function artOf(info: Pick<ChannelInfo, "id" | "art" | "kind" | "codecs">): string {
+  if (info.art) return info.art;
+  return info.codecs?.cover === true || info.kind === "video" ? `/api/channels/${encodeURIComponent(info.id)}/art` : "";
+}
+
+/**
+ * The same, as a crawler reaches it: an absolute address on this server
+ * with the listen key on it, since a preview is fetched by nobody who
+ * holds the cookie. The listen link is what the directory publishes
+ * already, so the key on the picture gives away nothing new.
+ */
+export function absoluteArtOf(listenLink: string, info: Pick<ChannelInfo, "id" | "art" | "kind" | "codecs">): string {
+  const art = artOf(info);
+  if (art === "" || /^https?:\/\//i.test(art)) return art;
+  try {
+    const link = new URL(listenLink);
+    const key = /\/(?:view|admin)\/([^/?#]+)$/.exec(link.pathname)?.[1] ?? "";
+    return `${link.origin}${art}${key ? `?${KEY_QUERY}=${encodeURIComponent(key)}` : ""}`;
+  } catch {
+    return "";
+  }
+}
+
+/** A channel as the directory's lineup wants it: id, name, kind, picture, line. */
+export function lineupEntry(listenLink: string, info: ChannelInfo): LineupEntry {
+  return {
+    id: info.id,
+    name: info.name,
+    kind: info.kind ?? "audio",
+    art: absoluteArtOf(listenLink, info),
+    about: info.about ?? "",
+  };
 }
 
 /** What a link resolves to, kept so a download can be named without asking twice. */
@@ -1204,6 +1282,9 @@ function shownLink(channelId: string, link: ResolvedLink, channel?: ChannelInfo)
     download: !live && link.extractor !== "direct",
     // How many things a list holds, for the page to say.
     entries: link.playlist?.length ?? 0,
+    // Its picture and its line, for the meta line and the lock screen.
+    art: channel ? artOf(channel) : link.thumbnail,
+    about: channel?.about ?? link.about,
   };
 }
 
@@ -1361,13 +1442,31 @@ function eventDocument(shell: string, event: Awaited<ReturnType<LiveEvents["get"
  * query is not used: a page that titled itself with whatever the address said
  * would be a preview anyone could put words in.
  */
+/** What a join link opens, as the shell's head says it: a name, where it is, and a picture and a line when it has them. */
+export interface JoinSubject {
+  title: string;
+  where: string;
+  /** An absolute picture address a crawler can fetch, or "". */
+  image?: string;
+  /** A line about it, or "". */
+  about?: string;
+  /** Whether the picture is a frame of a moving picture (wide) or a sleeve (square). */
+  kind?: "audio" | "video";
+}
+
 export function joinSubject(
   url: URL,
-  options: Pick<HandlerOptions, "directory" | "channels" | "serverName">,
-): { title: string; where: string } | null {
+  options: Pick<HandlerOptions, "directory" | "channels" | "serverName" | "live">,
+): JoinSubject | null {
   const play = url.searchParams.get("play") ?? "";
   const wanted = play.startsWith("channel:") ? play.slice("channel:".length) : "";
   const link = url.searchParams.get("url") ?? "";
+  const withArt = (subject: JoinSubject, entry: Pick<LineupEntry, "art" | "about" | "kind"> | undefined): JoinSubject => ({
+    ...subject,
+    ...(entry?.art ? { image: entry.art } : {}),
+    ...(entry?.about ? { about: entry.about } : {}),
+    ...(entry ? { kind: entry.kind } : {}),
+  });
   if (options.directory) {
     if (link === "") return null;
     const listings = options.directory.list();
@@ -1379,7 +1478,14 @@ export function joinSubject(
       }
     });
     if (!listing) return null;
-    if (wanted !== "" && listing.channels.includes(wanted)) return { title: wanted, where: listing.name };
+    if (wanted !== "") {
+      // A join link names a channel by id; the directory row names it by
+      // name; the lineup knows both. An older server's listing has names
+      // alone, and is matched on those as before.
+      const entry = listing.lineup.find((one) => one.id === wanted) ?? listing.lineup.find((one) => one.name === wanted);
+      if (entry) return withArt({ title: entry.name, where: listing.name }, entry);
+      if (listing.channels.includes(wanted)) return { title: wanted, where: listing.name };
+    }
     return { title: listing.name, where: "" };
   }
   // A link to somewhere else is that server's to name.
@@ -1387,19 +1493,38 @@ export function joinSubject(
   const name = options.serverName ?? "";
   if (wanted !== "") {
     const channel = options.channels?.list().find((one) => one.id === wanted || one.name === wanted);
-    return channel ? { title: channel.name, where: name } : null;
+    if (!channel) return null;
+    // Its picture as a crawler reaches it: absolute, with the listen key,
+    // which the listing this server publishes carries anyway.
+    const listen = options.live?.status().url ?? "";
+    const entry = listen ? lineupEntry(listen, channel) : undefined;
+    return withArt({ title: channel.name, where: name }, entry);
   }
   return name === "" ? null : { title: name, where: "" };
 }
 
-/** The shell, titled for what a join link opens. */
-export function joinDocument(shell: string, subject: { title: string; where: string }, site: string): string {
+/** The shell, titled for what a join link opens, with its picture on the card. */
+export function joinDocument(shell: string, subject: JoinSubject, site: string): string {
   const brand = brandOf(shell, site);
   const shellTitle = /<title>([^<]*)<\/title>/i.exec(shell)?.[1] ?? "";
   const title = `${subject.title} — ${brand}`;
-  const description = subject.where === ""
+  const where = subject.where === ""
     ? `${subject.title} is live on ${brand}. Tune in free, no account needed.`
     : `${subject.title} is live on ${subject.where}. Tune in free on ${brand}, no account needed.`;
+  // What it is about comes first, then where it is: a card has two lines.
+  const description = subject.about ? `${subject.about} — ${where}` : where;
+  const image = subject.image ?? "";
+  // A frame of a picture is wide and fills the card; a sleeve is square and
+  // sits beside the words. Twitter has a card for each and picks neither
+  // without being told; everything else reads og:image and decides itself.
+  const card = image === "" ? "" : [
+    `<meta property="og:image" content="${htmlText(image)}" />`,
+    `<meta property="og:image:alt" content="${htmlText(subject.title)}" />`,
+    `<meta name="twitter:card" content="${subject.kind === "video" ? "summary_large_image" : "summary"}" />`,
+    `<meta name="twitter:title" content="${htmlText(subject.title)}" />`,
+    `<meta name="twitter:description" content="${htmlText(description)}" />`,
+    `<meta name="twitter:image" content="${htmlText(image)}" />`,
+  ].map((line) => `${line}\n    `).join("");
   return shell
     .replace(/<title>.*?<\/title>/s, `<title>${htmlText(title)}</title>`)
     .replace(/<meta name="description" content="[^"]*"\s*\/>/, `<meta name="description" content="${htmlText(description)}" />`)
@@ -1407,7 +1532,7 @@ export function joinDocument(shell: string, subject: { title: string; where: str
     .replace(/<meta property="og:description" content="[^"]*"\s*\/>/, `<meta property="og:description" content="${htmlText(description)}" />`)
     // What the tab is called once the page takes over, so it does not stack
     // the channel on a title that already names the channel.
-    .replace("</head>", `<meta name="nixamp-shell-title" content="${htmlText(shellTitle)}" />\n  </head>`);
+    .replace("</head>", `${card}<meta name="nixamp-shell-title" content="${htmlText(shellTitle)}" />\n  </head>`);
 }
 
 function json(response: ServerResponse, code: number, body: unknown): void {
@@ -1472,6 +1597,8 @@ export interface HandlerOptions {
   ytdlp?: string[] | null;
   /** Channels as HLS, for Safari on a phone, which plays a live stream no other way. */
   hls?: HlsPackagers;
+  /** The pictures of channels already taken, so a card unfurled by five crawlers costs one ffmpeg. */
+  art?: ArtCache;
   /** Captions for a channel: its sound, as lines, as they are heard. Needs ffmpeg and a sign-in. */
   captions?: Captions;
   /** Lossless relay compression, its policies, diagnostics and static representations. */
@@ -3194,6 +3321,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           ...(one.playlist ? { entries: one.playlist.length, entry: one.playlistAt ?? 0 } : {}),
           // The member who put it on, when one did: theirs to take off.
           startedBy: one.startedBy ?? "",
+          // A picture of it, and a line about it, where there is one.
+          art: artOf(one),
+          about: one.about ?? "",
         })),
         // Anything re-streamed into this server is a live stream too, and was
         // sitting in the middle of the playlist among the files -- which is
@@ -3318,7 +3448,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
             json(response, 429, { error: `this server is already carrying ${MAX_ON_DEMAND} channels on demand; try again in a minute` });
             return;
           }
-          const started = await pullChannel(options.channels, options.ffprobe ?? ["ffprobe"], channelId, entry.title, entry.source);
+          const started = await pullChannel(
+            options.channels, options.ffprobe ?? ["ffprobe"], channelId, entry.title, entry.source, [], "",
+            // The logo the list gave it is its picture.
+            entry.logo ? { art: entry.logo, about: entry.group } : {},
+          );
           if (!started) {
             json(response, 409, { error: "that channel is already starting" });
             return;
@@ -3353,7 +3487,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           }
         }
         if (!options.channels.has(channelId)) {
-          const started = await pullChannel(options.channels, options.ffprobe ?? ["ffprobe"], channelId, entry.title, entry.source);
+          const started = await pullChannel(
+            options.channels, options.ffprobe ?? ["ffprobe"], channelId, entry.title, entry.source, [], "",
+            // The logo the list gave it is its picture.
+            entry.logo ? { art: entry.logo, about: entry.group } : {},
+          );
           if (!started) {
             json(response, 409, { error: "that channel is already starting" });
             return;
@@ -3547,7 +3685,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         const started = await pullChannel(
           options.channels, options.ffprobe ?? ["ffprobe"], channelId, resolved.title, resolved.media,
           inputArgsFor(resolved.headers), resolved.audio,
-          resolved.playlist ? { playlist: resolved.playlist } : {},
+          {
+            ...(resolved.playlist ? { playlist: resolved.playlist } : {}),
+            ...(resolved.thumbnail ? { art: resolved.thumbnail } : {}),
+            ...(resolved.about ? { about: resolved.about } : {}),
+          },
         );
         if (!started) {
           json(response, 409, { error: "that link is already starting" });
@@ -3752,6 +3894,49 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // of it: a relay is a different media type on a different path.
       const compression = compressionCtx();
       if (compression && (await handleChannelCompression(request, response, compression, id, action, file))) return;
+
+      // A picture of the channel: the sleeve in the file, or one frame of
+      // what it is sending, as a JPEG. This is what a link preview shows
+      // and what the lock screen shows, and a crawler fetches it with the
+      // listen key on the address, since it holds no cookie.
+      if (action === "art" && (request.method === "GET" || request.method === "HEAD")) {
+        const info = channels.info(id);
+        if (!info || options.carries === false) {
+          json(response, 404, { error: "nothing is playing on that channel" });
+          return;
+        }
+        // The site's own picture is where it is; sent there, so one address
+        // per channel serves whichever kind it has.
+        if (info.art && /^https?:\/\//i.test(info.art)) {
+          response.writeHead(302, { ...CORS, location: info.art, "cache-control": "public, max-age=300" });
+          response.end();
+          return;
+        }
+        const ffmpeg = options.ffmpeg ?? ["ffmpeg"];
+        const cover = info.codecs?.cover === true && Boolean(info.source);
+        const cache = options.art ?? new ArtCache();
+        const bytes = cover
+          ? await cache.get(`${id}:cover:${info.startedAt}`, true, () => {
+              // With the headers its site wanted, when it came from a link.
+              const link = [...links.values()].find((one) => one.media === info.source);
+              return coverArtOf(ffmpeg, info.source as string, link ? inputArgsFor(link.headers) : []);
+            })
+          : info.kind === "video"
+            ? await cache.get(`${id}:still`, false, () => stillFrom(ffmpeg, channels.opening(id)))
+            : null;
+        if (!bytes) {
+          json(response, 404, { error: "that channel has no picture yet" });
+          return;
+        }
+        response.writeHead(200, {
+          ...CORS,
+          "content-type": "image/jpeg",
+          "content-length": bytes.byteLength,
+          "cache-control": cover ? "public, max-age=3600" : "public, max-age=60",
+        });
+        response.end(request.method === "HEAD" ? undefined : bytes);
+        return;
+      }
 
       // The same channel as HLS: a playlist of short files, which is what
       // Safari on an iPhone plays live -- it will not take the endless MP4
@@ -5088,11 +5273,16 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       key !== null && scopeOf(keyFrom(request, new URL(request.url ?? "/", "http://localhost")), key, null) === "control",
   });
 
+  // The pictures of channels, taken once each and kept while the channel is on.
+  const art = new ArtCache();
   const channels = new Channels({
     ffmpeg: tools.ffmpeg,
     onStart: (info) =>
       console.log(`  ${info.name} is publishing to "${info.id}" (${info.format} over ${info.via}).`),
-    onEnd: (info) => console.log(`  "${info.id}" stopped.`),
+    onEnd: (info) => {
+      console.log(`  "${info.id}" stopped.`);
+      art.forget(info.id);
+    },
   });
   // Channels as HLS, on demand, for Safari on a phone: one ffmpeg copying a
   // channel's fragments into short files while somebody is asking for them.
@@ -5136,6 +5326,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       ...(one.position !== undefined ? { position: one.position } : {}),
       ...(one.live !== undefined ? { live: one.live } : {}),
       ...(one.playlist ? { playlist: one.playlist, playlistAt: one.playlistAt ?? 0 } : {}),
+      ...(one.art ? { art: one.art } : {}),
+      ...(one.about ? { about: one.about } : {}),
     }).then((channel) => {
       if (!channel) console.log(`  "${one.id}" is already on.`);
     });
@@ -5605,6 +5797,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     carries: tools.carries !== false,
     cookies: cookiesFile(),
     hls,
+    art,
     ...(captions ? { captions } : {}),
     compression,
     enricher,
@@ -5952,6 +6145,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         // live: CNN" is one somebody can decide about; "5717 tracks" was not.
         playing: () => engine.snapshot(false).playing,
         channels: () => channels.list().map((one) => one.name),
+        // The same with what a link preview needs: the id a join link names
+        // a channel by, a picture, a line.
+        lineup: () => channels.list().map((one) => lineupEntry(listen, one)),
         // From `nixamp login`. The directory will not list a stream it cannot
         // attribute to somebody, because a listing is now a phone code that
         // costs money to answer.

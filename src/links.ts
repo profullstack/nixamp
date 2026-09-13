@@ -52,6 +52,17 @@ export interface ResolvedLink {
   /** The page it came from. */
   page: string;
   /**
+   * A picture of it, when the site offered one: the video's thumbnail, the
+   * podcast's cover. This is what a link preview shows, and the lock screen
+   * while it plays. "" when there is none.
+   */
+  thumbnail: string;
+  /**
+   * A line about it for a preview: who put it up, and the first line of
+   * what they said about it. "" when the site said nothing.
+   */
+  about: string;
+  /**
    * For a pasted .m3u: every entry in it, in order. The channel plays them
    * one after another and starts over at the end, a station rather than a
    * file; `media` is the first, for the probe that decides what it holds.
@@ -184,6 +195,8 @@ export async function resolvePlaylist(
     extractor: "playlist",
     ext: "",
     page: url,
+    thumbnail: "",
+    about: "",
     playlist: list.sources,
   };
 }
@@ -315,7 +328,56 @@ export function parseResolved(json: unknown, page: string): ResolvedLink | null 
     extractor: typeof record["extractor"] === "string" ? record["extractor"] : "",
     ext: typeof record["ext"] === "string" && /^[a-z0-9]{1,5}$/i.test(record["ext"]) ? record["ext"].toLowerCase() : "",
     page,
+    thumbnail: thumbnailOf(record),
+    about: aboutOf(record),
   };
+}
+
+/** A web address a preview can fetch, or "". Only http(s): a data: URL is a page in a tag. */
+export function pictureUrl(value: unknown): string {
+  if (typeof value !== "string" || value.length > 2048) return "";
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The picture yt-dlp found: `thumbnail` is its pick, and failing that the
+ * last of `thumbnails`, which it lists smallest first.
+ */
+function thumbnailOf(record: Record<string, unknown>): string {
+  const chosen = pictureUrl(record["thumbnail"]);
+  if (chosen !== "") return chosen;
+  const list = Array.isArray(record["thumbnails"]) ? (record["thumbnails"] as unknown[]) : [];
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const one = list[index];
+    const url = one && typeof one === "object" ? pictureUrl((one as Record<string, unknown>)["url"]) : "";
+    if (url !== "") return url;
+  }
+  return "";
+}
+
+/** How much of a description a preview gets. A card is a line or two, not the notes. */
+export const ABOUT_MAX = 200;
+
+/** Who put it up, and the first line they wrote about it, as one line. */
+function aboutOf(record: Record<string, unknown>): string {
+  const who = ["uploader", "channel", "artist", "album"]
+    .map((field) => (typeof record[field] === "string" ? (record[field] as string).trim() : ""))
+    .find((one) => one !== "") ?? "";
+  const said = typeof record["description"] === "string"
+    ? record["description"].split(/\r?\n/).map((line) => line.trim()).find((line) => line !== "") ?? ""
+    : "";
+  return oneLine([who, said].filter((one) => one !== "").join(" — "));
+}
+
+/** One line of plain text, no longer than a card wants. */
+export function oneLine(text: string): string {
+  const flat = text.replace(/[\u0000-\u001F\u007F]+/g, " ").replace(/\s+/g, " ").trim();
+  return flat.length > ABOUT_MAX ? `${flat.slice(0, ABOUT_MAX - 1).trimEnd()}…` : flat;
 }
 
 /** A bare file link, described without asking anybody. */
@@ -332,6 +394,8 @@ export function directLink(url: string): ResolvedLink {
     extractor: "direct",
     ext: (url.match(/\.([a-z0-9]{2,5})(\?.*)?$/i)?.[1] ?? "").toLowerCase(),
     page: url,
+    thumbnail: "",
+    about: "",
   };
 }
 

@@ -382,7 +382,16 @@ its own audience.
 GET  /api/channels              what is live now
 POST /api/channels/<id>         publish to one
 GET  /api/channels/<id>         listen to one
+GET  /api/channels/<id>/art     a picture of it, as JPEG
 ```
+
+The picture is what a share link unfurls into on a chat or a timeline, and
+what the lock screen shows while it plays. A pasted link's thumbnail is sent
+on as it is; a podcast's sleeve is read out of the file; a moving picture
+gets one frame of what the channel is sending, taken from the channel's own
+backlog rather than by opening the source a second time. The page for a
+share link (`/?url=...&play=channel:<id>`) carries it as `og:image` with a
+Twitter card, on nixamp.com and on the server itself.
 
 One ffmpeg decodes each publisher once and the result is written to every
 listener on that channel. A decode per listener would cost a core each and, for

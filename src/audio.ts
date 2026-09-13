@@ -425,6 +425,14 @@ export interface Codecs {
    */
   width?: number;
   height?: number;
+  /**
+   * Whether a sleeve is embedded: the attached picture an MP3 or M4A of a
+   * podcast carries. Not a picture to play, but a picture to show -- on
+   * the link preview and the lock screen -- and `coverArtOf` reads it out.
+   */
+  cover?: boolean;
+  /** What the file says about itself in its tags, for naming a bare file. */
+  tags?: { title?: string; artist?: string; album?: string };
 }
 
 /**
@@ -449,7 +457,7 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
         // The disposition too: an MP3 with its cover art in it carries that
         // art as a video stream of one JPEG, and a probe that took it for a
         // picture put a podcast on the air as a film with no frames.
-        "-show_entries", "format=format_name,duration:stream=codec_type,codec_name,width,height:stream_disposition=attached_pic",
+        "-show_entries", "format=format_name,duration:format_tags=title,artist,album:stream=codec_type,codec_name,width,height:stream_disposition=attached_pic",
         // A transport stream needs looking further into than a file with an
         // index does: there is no header listing the tracks, only packets, and
         // a 4K recording can carry a second of null padding and a long gap to
@@ -475,9 +483,11 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
             codec_type?: string; codec_name?: string; width?: number; height?: number;
             disposition?: { attached_pic?: number };
           }[];
-          format?: { format_name?: string; duration?: string };
+          format?: { format_name?: string; duration?: string; tags?: Record<string, unknown> };
         };
         const streams = parsed.streams ?? [];
+        const cover = streams.some((s) => s.codec_type === "video" && s.disposition?.attached_pic === 1);
+        const tags = tagsOf(parsed.format?.tags);
         // ffprobe prints seconds as a string, and "N/A" for a stream with no
         // end; both of those read as 0.
         const seconds = Number(parsed.format?.duration ?? 0);
@@ -489,12 +499,32 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
           duration: Number.isFinite(seconds) && seconds > 0 ? seconds : 0,
           ...(typeof picture?.width === "number" && picture.width > 0 ? { width: picture.width } : {}),
           ...(typeof picture?.height === "number" && picture.height > 0 ? { height: picture.height } : {}),
+          ...(cover ? { cover } : {}),
+          ...(tags ? { tags } : {}),
         });
       } catch {
         return done(empty);
       }
     });
   });
+}
+
+/**
+ * The title, artist and album a file carries in its tags, however the
+ * container spells the keys (ID3 says TIT2 but ffprobe says title; MP4 and
+ * Matroska say Title). Absent when it carries none worth keeping.
+ */
+export function tagsOf(raw: Record<string, unknown> | undefined): Codecs["tags"] | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const lower: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === "string") lower[key.toLowerCase()] = value.replace(/[\u0000-\u001F\u007F]+/g, " ").trim().slice(0, 200);
+  }
+  const tags: NonNullable<Codecs["tags"]> = {};
+  if (lower["title"]) tags.title = lower["title"];
+  if (lower["artist"]) tags.artist = lower["artist"];
+  if (lower["album"]) tags.album = lower["album"];
+  return Object.keys(tags).length > 0 ? tags : undefined;
 }
 
 /**
