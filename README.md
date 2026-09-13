@@ -6,6 +6,20 @@
 
 It really whips the terminal's ass.
 
+## Live video direction
+
+The product direction for a shared live video workflow is:
+
+- **Nixamp** is the live streamer, responsible for broadcasting and the viewer
+  experience.
+- **PairUX** is the camera and videography app, responsible for capturing and
+  preparing the video feed.
+
+The intended handoff is **PairUX → Nixamp → audience**: PairUX supplies the
+video feed, and Nixamp broadcasts it to viewers.
+
+## Quick start
+
 ```
 curl -fsSL https://nixamp.com/install.sh | sh
 ```
