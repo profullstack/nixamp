@@ -166,6 +166,7 @@ export function needsVideoElement(video: boolean, kind: string): boolean {
 }
 
 export class BrowserPlayer {
+  private playBlocked = false;
   /** The engine currently feeding the element, if any. */
   private attached: AttachedSource | null = null;
   /** The address of what is loaded, for handing to another player. */
@@ -228,6 +229,11 @@ export class BrowserPlayer {
 
   get playing(): boolean {
     return !this.active.paused && !this.active.ended;
+  }
+
+  /** The browser needs a click before it will start the loaded source. */
+  get needsInteraction(): boolean {
+    return this.playBlocked;
   }
 
   get position(): number {
@@ -318,6 +324,7 @@ export class BrowserPlayer {
    * play in the same commit fails permanently rather than loudly.
    */
   async load(track: LocalTrack, autoplay: boolean): Promise<void> {
+    this.playBlocked = false;
     // A picked file is a blob in this tab, which is no address at all.
     this.source = track.objectUrl ? "" : track.url;
     // A picked file is a blob URL with nothing to read a kind from, so the
@@ -376,9 +383,18 @@ export class BrowserPlayer {
     // cannot be read leaves the speakers silent. Such a source plays straight
     // through instead, with no spectrum. Everything else gets the bars.
     if (this.analysable) this.ensureGraph(this.active);
+    this.playBlocked = false;
     try {
       await this.active.play();
     } catch (error) {
+      if (error instanceof Error && error.name === "NotAllowedError") {
+        // A browser permission is not a failed stream. Retrying the source
+        // cannot grant it, and the app would eventually leave the chat room.
+        this.playBlocked = true;
+        this.handlers.onBusy?.(false);
+        this.handlers.onState(false);
+        return;
+      }
       this.handlers.onError(error instanceof Error ? error.message : "playback was refused");
     }
   }
@@ -388,6 +404,7 @@ export class BrowserPlayer {
   }
 
   stop(): void {
+    this.playBlocked = false;
     this.active.pause();
     this.active.currentTime = 0;
     this.source = "";
