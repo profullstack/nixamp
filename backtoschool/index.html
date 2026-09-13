@@ -78,6 +78,17 @@
             </select>
           </label>
         </div>
+        <div class="ai-writer">
+          <div class="ai-writer-actions"><button class="button button-secondary" type="button" id="event-ai-write">Write with AI</button><button class="text-button" type="button" id="event-ai-cancel" hidden>Cancel</button></div>
+          <p class="form-note">Optional: use your current title, description, and topic as the prompt. Review the draft before using it.</p>
+          <p id="event-ai-status" class="form-note ai-writer-status" role="status" aria-live="polite"></p>
+          <div id="event-ai-preview" class="form-stack" hidden>
+            <label for="event-ai-title">Suggested title</label><input id="event-ai-title" readonly />
+            <label for="event-ai-description">Suggested description</label><textarea id="event-ai-description" rows="6" readonly></textarea>
+            <label for="event-ai-topic">Suggested topic</label><input id="event-ai-topic" readonly />
+            <button class="button button-secondary" type="button" id="event-ai-apply" aria-disabled="true">Use these details</button>
+          </div>
+        </div>
         <div id="schedule-fields" class="form-pair" hidden>
           <label>Date and time<input name="startsAt" type="datetime-local" /></label>
           <label>Expected length

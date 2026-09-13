@@ -87,6 +87,7 @@ import { createThrottle, presentedCredential, type Throttle } from "@profullstac
 import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
 import { inviteSubject, inviteText, isEmail, isPhone, watchLink } from "./invite.ts";
+import { EventWriter } from "./event-writer.ts";
 import { handleLiveApi } from "./live-api.ts";
 import { LiveEvents, eventStructuredData, isTicketed, type LiveEvent } from "./live-events.ts";
 import { Tickets, needsTicket, ticketFrom, ticketsFromEnv } from "./tickets.ts";
@@ -1759,6 +1760,7 @@ export interface HandlerOptions {
   settingsSync?: SettingsSync;
   /** Scheduled and live sessions, kept by NixAmp and shared by branded clients. */
   events?: LiveEvents;
+  eventWriter?: EventWriter;
   /** Versioned panel layouts, including event and user overrides. */
   layouts?: Layouts;
   /** Persistent participation state that must not be coupled to live audio. */
@@ -1944,6 +1946,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
 
     if (options.events && await handleLiveApi(request, response, url, {
       events: options.events,
+      ...(options.eventWriter ? {eventWriter: options.eventWriter} : {}),
       ...(options.accounts ? { accounts: options.accounts } : {}),
       ...(options.layouts ? { layouts: options.layouts } : {}),
       ...(options.rooms ? { rooms: options.rooms } : {}),
@@ -6123,6 +6126,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const favorites = pool ? new Favorites(pool) : undefined;
   const settingsSync = pool ? new SettingsSync(pool) : undefined;
   const nixampSite = (process.env["NIXAMP_SITE"] ?? DEFAULT_DIRECTORY).replace(/\/+$/, "");
+  const schoolMailKey = process.env["BACKTOSCHOOL_RESEND_API_KEY"] ?? process.env["RESEND_API_KEY"];
+  const schoolMail = schoolMailKey && process.env["BACKTOSCHOOL_MAIL_FROM"] ? {
+    apiKey: schoolMailKey, from: process.env["BACKTOSCHOOL_MAIL_FROM"],
+  } : undefined;
   const events = pool ? new LiveEvents(pool) : undefined;
   const layouts = pool ? new Layouts(pool) : undefined;
   const rooms = pool ? new Rooms(pool) : undefined;
@@ -6651,7 +6658,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(follows ? { follows, vapidPublicKey } : {}),
     ...(favorites ? { favorites } : {}),
     ...(settingsSync ? { settingsSync } : {}),
-    ...(events ? { events } : {}),
+    ...(events ? { events, eventWriter: new EventWriter({
+      openaiKey: process.env["OPENAI_API_KEY"], anthropicKey: process.env["ANTHROPIC_API_KEY"],
+      openaiModel: process.env["NIXAMP_WRITER_OPENAI_MODEL"], claudeModel: process.env["NIXAMP_WRITER_CLAUDE_MODEL"],
+    }) } : {}),
     ...(layouts ? { layouts } : {}),
     ...(rooms ? { rooms } : {}),
     ...(trollbox ? { trollbox } : {}),
@@ -6668,6 +6678,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       resetMail: resendPasswordReset({
         apiKey: process.env["RESEND_API_KEY"],
         from: process.env["NIXAMP_MAIL_FROM"] ?? "nixamp <notifications@nixamp.com>",
+        backtoschool: schoolMail,
       }),
     } : {}),
     // Other people's OpenProfiles, read for the voice a line is spoken in,
@@ -6692,6 +6703,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
                   email: resendEmail({
                     apiKey: process.env["RESEND_API_KEY"],
                     from: process.env["NIXAMP_MAIL_FROM"] ?? "nixamp <notifications@nixamp.com>",
+                    backtoschool: schoolMail,
+                    reason: "You received this email because a host invited you to join a live session.",
                     onEvent: (message) => console.log(message),
                   }),
                 }

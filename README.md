@@ -261,6 +261,23 @@ on first use in the configured PostgreSQL database. `RESEND_API_KEY` and
 `NIXAMP_MAIL_FROM` are optional if invitation email should be sent rather than
 only returning a shareable link.
 
+For a shared deployment, set `BACKTOSCHOOL_MAIL_FROM` to a sender on the verified
+`backtoschool.help` Resend domain. School password resets and invitations use
+that sender; `BACKTOSCHOOL_RESEND_API_KEY` optionally selects its own key, otherwise
+it uses `RESEND_API_KEY`. Verify the domain's SPF and DKIM records in Resend before
+enabling the sender. Invitation mail identifies the invitation rather than a follow.
+
+The event form's optional **Write with AI** button uses its current title,
+description, and topic as the prompt, with host and schedule context. It previews
+a title, description, and topic for explicit application before saving. Configure
+server-only `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`: OpenAI runs first, with Claude
+as fallback for provider failures or invalid output. Defaults are `gpt-5-mini`
+and `claude-haiku-4-5`; override them with `NIXAMP_WRITER_OPENAI_MODEL` and
+`NIXAMP_WRITER_CLAUDE_MODEL`. Signed-in accounts may request six drafts per ten
+minutes, with one active request per account and four across the server. Requests
+time out after 25 seconds per provider and can be cancelled. Drafting never saves
+an event or changes the schedule, visibility, or broadcast links.
+
 ## Live shows, and tickets
 
 A live event carries a **kind**: `talk`, `class`, or `concert`. The kind is
