@@ -3345,7 +3345,7 @@ export function start(): void {
     drawBackgroundLevel();
     try { localStorage.setItem("nixamp.backgroundLevel", dom.transcriptBackgroundLevel.value); } catch { /* device preference only */ }
   });
-  const purchase = new TranslationPurchase({ account: () => trollboxSite === "" ? meId : "", changed: () => undefined });
+  const purchase = new TranslationPurchase({ account: () => trollboxSite === "" ? meId : "", changed: () => drawVoiceControls() });
   need<HTMLElement>("translation-buy-tools").append(purchase.button());
   void purchase.refresh();
   const sharedAudio = new SharedAudio({
@@ -4066,7 +4066,7 @@ export function start(): void {
 
   function drawVoiceControls(): void {
     const signedIn = meId !== "" && trollboxSite === "";
-    const supported = signedIn && !!transcriptRoom() && !!voiceOptions?.languages.includes(preferredAudioLanguage());
+    const supported = signedIn && purchase.loaded() && !!transcriptRoom() && !!voiceOptions?.languages.includes(preferredAudioLanguage());
     dom.transcriptAudio.disabled = !supported;
     if (!dom.transcriptVoiceSettings.contains(document.activeElement)) dom.transcriptVoiceSettings.hidden = !dom.transcriptAudio.checked;
     if (!supported) {
@@ -4074,6 +4074,7 @@ export function start(): void {
       liveVoice.disable();
       dom.transcriptAudioNote.textContent = !signedIn ? "Sign in to translate audio."
         : !transcriptRoom() ? "Play something to translate its audio."
+        : !purchase.loaded() ? purchase.loadingMessage()
         : voiceError || (!voiceOptions ? "Loading voices…" : "Audio translation is unavailable for this language.");
     } else if (!dom.transcriptAudio.checked) {
       dom.transcriptAudioNote.textContent = voiceError || "Original audio.";
