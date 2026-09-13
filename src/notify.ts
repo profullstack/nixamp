@@ -1,3 +1,5 @@
+import { mailSender, type BrandedMailSender } from "./mail-sender.ts";
+
 /**
  * Telling followers a broadcaster went live, wherever they are.
  *
@@ -119,27 +121,28 @@ export async function notifyAll(
  * blocked, and no dependency: a fetch is the whole client.
  */
 export function resendEmail(
-  { apiKey, from, fetch = globalThis.fetch, onEvent }: {
-    apiKey: string;
-    from: string;
+  { apiKey, from, backtoschool, reason = "You are getting this because you follow them on nixamp.", fetch = globalThis.fetch, onEvent }: BrandedMailSender & {
+    reason?: string;
     fetch?: typeof globalThis.fetch;
     onEvent?: (message: string) => void;
   },
 ): (to: string, note: Notification) => Promise<boolean> {
   return async (to, note) => {
     try {
+      const sender = mailSender({apiKey, from, backtoschool}, note.url);
       const response = await fetch("https://api.resend.com/emails", {
         method: "POST",
-        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+        headers: { authorization: `Bearer ${sender.apiKey}`, "content-type": "application/json" },
+        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify({
-          from,
+          from: sender.from,
           to: [to],
           subject: note.title,
-          text: `${note.body}\n\n${note.url}\n\nYou are getting this because you follow them on nixamp.`,
+          text: `${note.body}\n\n${note.url}\n\n${reason}`,
           html:
             `<p>${escapeHtml(note.body)}</p>` +
             `<p><a href="${escapeHtml(note.url)}">${escapeHtml(note.url)}</a></p>` +
-            `<p style="color:#666;font-size:12px">You are getting this because you follow them on nixamp.</p>`,
+            `<p style="color:#666;font-size:12px">${escapeHtml(reason)}</p>`,
         }),
       });
       if (!response.ok) {

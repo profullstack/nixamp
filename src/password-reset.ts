@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Queryable } from "./follows.ts";
 import type { Tokens } from "./tokens.ts";
+import { mailSender, type BrandedMailSender } from "./mail-sender.ts";
 
 export const RESET_MESSAGE = "If an account exists for that email, you’ll receive a password reset link shortly.";
 export const RESET_INVALID = "This reset link is invalid, expired, or already used. Request a new link.";
@@ -115,17 +116,16 @@ export class PasswordResets {
 }
 
 /** Transactional recovery mail has no follower footer and never logs a token. */
-export function resendPasswordReset(options: {
-  apiKey: string; from: string; fetch?: typeof globalThis.fetch;
-}): ResetMail {
+export function resendPasswordReset(options: BrandedMailSender & { fetch?: typeof globalThis.fetch }): ResetMail {
   return async (email, link) => {
     const host = new URL(link).hostname;
+    const sender = mailSender(options, link);
     const response = await (options.fetch ?? globalThis.fetch)("https://api.resend.com/emails", {
       method: "POST",
-      headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${sender.apiKey}`, "content-type": "application/json" },
       signal: AbortSignal.timeout(15_000),
       body: JSON.stringify({
-        from: options.from, to: [email], subject: `Reset your ${host} password`,
+        from: sender.from, to: [email], subject: `Reset your ${host} password`,
         text: `Someone requested a password reset for your account on ${host}.\n\nChoose a new password using this link:\n${link}\n\nThis link expires in ${LIFETIME_MS / 60_000} minutes and works once. Resetting your password signs out existing sessions.\n\nIf you did not request this, you can ignore this email. Your password will stay the same.`,
       }),
     });

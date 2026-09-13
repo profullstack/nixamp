@@ -1,3 +1,4 @@
+import { EventWriterError, type EventWriter } from "./event-writer.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tokenFrom, type Account, type Accounts } from "./accounts.ts";
 import {
@@ -26,6 +27,7 @@ import { HAND_RAISE_STATES, RoomError, type Rooms } from "./rooms.ts";
 
 export interface LiveApiOptions {
   events: LiveEvents;
+  eventWriter?: EventWriter;
   accounts?: Accounts;
   layouts?: Layouts;
   rooms?: Rooms;
@@ -52,13 +54,13 @@ function json(response: ServerResponse, code: number, body: unknown): void {
   response.end(value);
 }
 
-async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function body(request: IncomingMessage, limit = 64 * 1024): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = chunk as Buffer;
     size += buffer.length;
-    if (size > 64 * 1024) throw new LiveEventError("body too large", 413);
+    if (size > limit) throw new LiveEventError("body too large", 413);
     chunks.push(buffer);
   }
   try {
@@ -256,6 +258,21 @@ export async function handleLiveApi(
       !path.startsWith("/api/v1/layout-presets")) return false;
 
   try {
+    if (path === "/api/v1/events/ai-draft") {
+      if (request.method !== "POST") { json(response, 405, {error: "POST only"}); return true; }
+      const account = await requiredAccount(request, response, options);
+      if (!account) return true;
+      if (!options.eventWriter) { json(response, 503, {error: "The AI writer is temporarily unavailable. You can keep writing here."}); return true; }
+      const input = await body(request, 12 * 1024);
+      const controller = new AbortController();
+      const closed = () => controller.abort();
+      response.once("close", closed);
+      try {
+        const result = await options.eventWriter.draft(account.id, input, controller.signal);
+        if (!response.destroyed) json(response, 200, result);
+      } finally { response.off("close", closed); }
+      return true;
+    }
     if (path === "/api/v1/events") {
       if (request.method === "GET") {
         const account = await signedIn(request, options.accounts);
@@ -624,6 +641,13 @@ export async function handleLiveApi(
     json(response, 404, { error: "no such endpoint" });
     return true;
   } catch (error) {
+    if (error instanceof EventWriterError) {
+      if (!response.destroyed) {
+        if (error.retryAfter) response.setHeader("retry-after", String(error.retryAfter));
+        json(response, error.status, {error: error.message});
+      }
+      return true;
+    }
     if (error instanceof LiveEventError || error instanceof LayoutError || error instanceof RoomError) {
       json(response, error.status, { error: error.message });
       return true;
