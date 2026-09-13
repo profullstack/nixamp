@@ -68,3 +68,15 @@ test('the speaker endpoint needs account authentication before accepting any pai
     assert.equal(calls, 1);
   } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
+
+test('two-second live cadence remains throttled and retains the persistent audio budgets', async () => {
+  let calls = 0;
+  const voice = new LiveVoice({ apiKey: 'key', now: () => 0, fetcher: (async () => { calls++; return Response.json(result); }) as typeof fetch });
+  const bytes = audio(6); // Two new seconds plus four seconds of overlap.
+  for (let i = 0; i < 36; i++) await voice.hear(bytes, 'alice');
+  await assert.rejects(voice.hear(bytes, 'alice'), error => error instanceof SpeechError && error.status === 429);
+  assert.equal(calls, 36);
+  const limited = new LiveVoice({ apiKey: 'key', dailyAudioSeconds: 6, fetcher: (async () => Response.json(result)) as typeof fetch });
+  await limited.hear(bytes, 'bob');
+  await assert.rejects(limited.hear(bytes, 'bob'), /budget/);
+});

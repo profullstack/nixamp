@@ -4,8 +4,8 @@ export interface VoiceChoice { id: string; name: string; gender: string; languag
 export interface VoiceOptions { voices: VoiceChoice[]; languages: string[]; model: string; }
 export const MAX_VOICE_DELAY_MS = 12_000;
 
-/** A streaming PCM player beside the unchanged video. One utterance and one
- * pending caption, with a generation guard for language/channel/voice changes.
+/** A streaming PCM player beside the unchanged video. Bounded speech queued
+ * ahead of playback, with a generation guard for language/channel/voice changes.
  */
 export class LiveVoicePlayer {
   private context: AudioContext | null = null;
@@ -71,8 +71,8 @@ export class LiveVoicePlayer {
     this.pushBatch([{ line, url, lag }]);
   }
 
-  /** Keep all speaker turns from the newest window together, bounded to 12.
-   * Replacing an older pending window prevents a growing dubbing backlog. */
+  /** Preserve unplayed turns when a newer window arrives. Stale speech and
+   * a hard queue bound prevent an unlimited dubbing backlog. */
   pushBatch(items: { line: Caption; url: string; lag: number; init?: RequestInit }[]): void {
     if (!this.enabled || !this.options.playing()) return;
     const batch = items.slice(0, 12).filter(({ line, lag }) => {
@@ -83,7 +83,7 @@ export class LiveVoicePlayer {
       return true;
     });
     if (!batch.length) return;
-    this.next = batch;
+    this.next = [...this.next.filter(item => !this.stale(item.line, item.lag)), ...batch].slice(-24);
     if (this.running === null) void this.run(this.generation);
   }
 
@@ -101,6 +101,10 @@ export class LiveVoicePlayer {
     this.running = generation;
     try {
       while (this.next.length && this.enabled && generation === this.generation) {
+        // Fetch while the preceding phrase is still playing. Waiting until
+        // it ends inserts the full network/provider latency at every turn.
+        await this.waitForRoom(generation, 3);
+        if (generation !== this.generation) return;
         const item = this.next.shift()!;
         if (this.stale(item.line, item.lag) || !this.options.playing()) continue;
         const controller = new AbortController();
@@ -129,21 +133,31 @@ export class LiveVoicePlayer {
               bytes.set(remainder); bytes.set(value, remainder.length);
               const length = bytes.length - bytes.length % 2;
               remainder = bytes.slice(length);
-              if (length) { this.schedule(bytes.subarray(0, length)); received += length; }
+              // Bound decoded audio even when the network delivers a whole
+              // long response at once. Backpressure must not restore native
+              // audio or discard the remaining words.
+              for (let offset = 0; offset < length; offset += 6400) {
+                await this.waitForRoom(generation, 8);
+                if (generation !== this.generation) { await reader.cancel(); return; }
+                const chunk = bytes.subarray(offset, Math.min(length, offset + 6400));
+                this.schedule(chunk); received += chunk.length;
+              }
             }
           } finally { reader.releaseLock(); }
           if (!received || remainder.length) throw new Error("The voice audio was interrupted.");
         } finally { clearTimeout(timeout); }
-        // Avoid fetching/billing the next line until this one is nearly played.
-        while (generation === this.generation && this.context && this.scheduledUntil - this.context.currentTime > 0.15) {
-          await new Promise(resolve => setTimeout(resolve, 50));
-          if (!this.options.playing()) { this.reset(); return; }
-        }
       }
     } catch (error) {
       if (generation === this.generation) this.fail(error instanceof Error ? error.message : "Translated audio stopped.");
     } finally {
       if (this.running === generation) this.running = null;
+    }
+  }
+
+  private async waitForRoom(generation: number, seconds: number): Promise<void> {
+    while (generation === this.generation && this.context && this.scheduledUntil - this.context.currentTime > seconds) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      if (!this.options.playing()) { this.reset(); return; }
     }
   }
 
