@@ -54,3 +54,22 @@ menu replaces that player's original audio. Turning it off restores the source.
 Do not add tab-sharing, microphone-source, or separate capture start/stop controls
 to this interface. Keep optional background settings and speaker overrides
 collapsed. Stock-voice choices must not be presented as detected speaker gender.
+
+## Paid panels and upgrades
+
+All Nixamp-owned paid panels and upgrades use the common server-side
+`UpgradeAllowances` policy: five free session starts total per account per UTC
+day. New paid features must use this shared counter rather than inventing an
+independent trial or a browser-only limit. Creator-sold event tickets and external
+stream access are separate products, not Nixamp upgrades.
+
+Free sessions last while the listener remains, within existing usage limits;
+there is no fixed minute cutoff. Reconnect within 90 seconds to reuse a session.
+Ongoing sessions continue across midnight. Account identity, atomic claims and
+active leases are checked on the server. Polling and rendering never claim or
+renew free use. A session's provider requests do not consume additional starts.
+
+Show the remaining daily allowance and purchased credit beside the upgrade.
+Use free access first and retain paid credit unchanged while it applies. Keep
+the purchase action available after free sessions run out. All normal account,
+IP, provider and concurrency limits continue to apply to free usage.

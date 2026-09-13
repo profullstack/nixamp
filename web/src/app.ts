@@ -3316,7 +3316,14 @@ export function start(): void {
   let voiceOptionsKey = "";
   let voiceError = "";
   let meId = "";
-  const listenerScope = `listener-${crypto.randomUUID()}`;
+  const listenerScope = (() => {
+    try {
+      const saved = sessionStorage.getItem("nixamp.translationSession");
+      if (saved && /^listener-[a-f0-9-]{36}$/.test(saved)) return saved;
+      const scope = `listener-${crypto.randomUUID()}`;
+      sessionStorage.setItem("nixamp.translationSession", scope); return scope;
+    } catch { return `listener-${crypto.randomUUID()}`; }
+  })();
   let voiceGrant: { channel: string; token: string; expires: number; remaining: number } | null = null;
   let captureWanted = false;
   let captureError = "";
@@ -3378,6 +3385,11 @@ export function start(): void {
     },
   });
   const interpreter = new Interpreter({
+    fetcher: (url, init) => {
+      const headers = new Headers(init?.headers);
+      if (String(url).includes("/speech/speakers")) headers.set("x-nixamp-translation-session", listenerScope);
+      return fetch(url, { ...init, headers });
+    },
     language: () => captionsIn, speakers: () => dom.transcriptAudio.checked,
     voices: () => voiceOptions?.voices ?? [], channel: () => listenerScope,
     status: (text) => { if (!capturing && !captureWanted) captureError = text; dom.transcriptNote.textContent = text; },
@@ -3421,7 +3433,12 @@ export function start(): void {
       // media keep the local capture path because their playback times differ.
       if (dom.transcriptAudio.checked && mode === "remote" && channelOn) {
         await sharedAudio.start(playableNow(), captionsIn);
-      } else await capture.start(input.context, input.node, dom.transcriptAudio.checked ? 2 : 5);
+        void purchase.refresh();
+      } else {
+        if (dom.transcriptAudio.checked) await purchase.startSession(listenerScope);
+        if (generation !== captureGeneration) return;
+        await capture.start(input.context, input.node, dom.transcriptAudio.checked ? 2 : 5);
+      }
       if (generation !== captureGeneration) return;
       capturing = true; captureWanted = true;
       captionsLag = 0;

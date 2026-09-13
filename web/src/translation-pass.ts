@@ -31,8 +31,20 @@ export class TranslationPurchase {
   }
   private status(text: string): void { if (this.note.textContent !== text) this.note.textContent = text; }
   loaded(): boolean { return this.access !== null; }
-  loadingMessage(): string { return this.problem || "Checking audio credit…"; }
-  ready(): boolean { return this.access?.required === false || !!(this.access && this.access.balanceMicros > 0 && this.access.expires && Date.parse(this.access.expires) > Date.now()); }
+  loadingMessage(): string { return this.problem || "Checking free sessions and audio credit…"; }
+  ready(): boolean {
+    const access = this.access;
+    return access?.required === false || !!(access && ((access.free?.remaining ?? 0) > 0 ||
+      (access.free?.activeUntil && Date.parse(access.free.activeUntil) > Date.now()) ||
+      (access.balanceMicros > 0 && access.expires && Date.parse(access.expires) > Date.now())));
+  }
+  async startSession(resource: string): Promise<void> {
+    if (this.access?.required === false) return;
+    const response = await fetch("/api/v1/translation-passes/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resource }), signal: AbortSignal.timeout(15_000) });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "This free session could not be started.");
+    void this.refresh();
+  }
   button(): HTMLButtonElement {
     const button = document.createElement("button"); button.type = "button"; button.textContent = "$";
     button.title = "Buy translated audio"; button.setAttribute("aria-label", "Buy translated audio"); button.setAttribute("aria-haspopup", "dialog"); button.setAttribute("aria-controls", "translation-purchase"); button.dataset["translationBuy"] = "";
@@ -59,11 +71,14 @@ export class TranslationPurchase {
       if (!this.plan.options.length) this.plan.replaceChildren(...plans.map(plan => new Option(`${plan.name} · ${money(plan.priceCents * 10000)}`, plan.id)));
       this.describe();
       const balance = this.access.required ? `${money(this.access.balanceMicros)} audio credit${this.access.expires ? ` · expires ${new Date(this.access.expires).toLocaleString()}` : ""}` : "";
-      element("translation-balance").textContent = balance;
-      element("translation-purchase-balance").textContent = balance;
+      const free = this.access.free;
+      const allowance = this.access.required && free ? `${free.remaining} of ${free.limit} free sessions left today${free.activeUntil ? " · free session active" : ""}` : "";
+      element("translation-balance").textContent = [allowance, balance].filter(Boolean).join(" · ");
+      element("translation-purchase-balance").textContent = [allowance, balance].filter(Boolean).join(" · ");
+      element("translation-free-description").textContent = free ? `Each account gets ${free.limit} free sessions a day, shared across paid panels and upgrades. Each lasts while you listen, within daily usage limits. Reconnect within ${free.reconnectSeconds} seconds to keep the same session. Resets at ${new Date(free.resets).toLocaleString()} (midnight UTC). Free time is used before purchased credit.` : "";
       element("translation-sign-in").hidden = !!account;
       this.buy.disabled = !account || !this.access.available || this.loading;
-      if (!this.access.available && this.dialog.open) this.status(this.access.required ? "Checkout is temporarily unavailable. Existing credit still works." : "This server sponsors translated audio; no purchase is required.");
+      if (!this.access.available && this.dialog.open) this.status(this.access.required ? "Checkout is temporarily unavailable. Free sessions and existing credit still work." : "This server sponsors translated audio; no purchase is required.");
       const returned = new URLSearchParams(location.search).get("translation_order");
       const pending = this.access.orders?.find(order => order.id === returned || order.id === this.order) ?? this.access.orders?.[0];
       if (pending && !this.order) { this.order = pending.id; this.link(pending.url); }

@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable } from "./follows.ts";
 import { SpeechError } from "./speech.ts";
+import { UpgradeAllowances, type UpgradeAllowance } from "./upgrade-allowance.ts";
 
 export const TRANSLATION_MULTIPLIER = 5;
 export const TRANSLATION_PLANS = [
@@ -13,10 +14,11 @@ export const TRANSLATION_PLANS = [
 export type TranslationPlan = typeof TRANSLATION_PLANS[number];
 export type TranslationUsage = "transcription" | "voice";
 export interface TranslationMeter {
-  require(by: string): Promise<void>;
-  eligible?(accounts: string[]): Promise<string[]>;
-  reserve(by: string, kind: TranslationUsage, units: number): Promise<string>;
-  reserveMany?(accounts: string[], kind: TranslationUsage, units: number): Promise<{ by: string; id: string }[]>;
+  begin?(by: string, resource: string): Promise<void>;
+  require(by: string, resource?: string): Promise<void>;
+  eligible?(accounts: string[], resource?: string): Promise<string[]>;
+  reserve(by: string, kind: TranslationUsage, units: number, resource?: string): Promise<string>;
+  reserveMany?(accounts: string[], kind: TranslationUsage, units: number, resource?: string): Promise<{ by: string; id: string }[]>;
   commitMany?(ids: string[]): Promise<void>;
   refundMany?(ids: string[]): Promise<void>;
   commit(id: string): Promise<void>;
@@ -26,6 +28,7 @@ export interface TranslationAccess {
   required: boolean; available: boolean; balanceMicros: number; expires: string | null;
   plans: readonly TranslationPlan[]; coins: string[]; orders: { id: string; url: string; plan: string }[];
   rates: { transcriptionHour: number; voiceThousand: number; multiplier: number };
+  free: UpgradeAllowance;
 }
 const COINS = ["USDC_POL", "USDC_SOL", "SOL", "POL", "BTC", "ETH", "USDC_ETH", "BCH", "DOGE"];
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -57,11 +60,14 @@ export class TranslationPasses implements TranslationMeter {
   private merchantUntil = 0;
   private readonly fetcher: typeof fetch;
   private readonly now: () => number;
+  readonly free: UpgradeAllowances;
   constructor(private readonly options: { db: Queryable; key: string; site: string; fetcher?: typeof fetch; now?: () => number }) {
     this.fetcher = options.fetcher ?? fetch; this.now = options.now ?? Date.now;
+    this.free = new UpgradeAllowances(options.db, this.now);
   }
   private async ensure(): Promise<void> {
     this.schema ??= (async () => {
+      await this.free.ensure();
       await this.options.db.query(`CREATE TABLE IF NOT EXISTS translation_wallets (
         by_account TEXT PRIMARY KEY, balance_micros BIGINT NOT NULL CHECK (balance_micros >= 0), expires_at TIMESTAMPTZ NOT NULL)`);
       await this.options.db.query(`CREATE TABLE IF NOT EXISTS translation_orders (
@@ -105,41 +111,45 @@ export class TranslationPasses implements TranslationMeter {
     const row = by ? (await this.options.db.query("SELECT balance_micros, expires_at FROM translation_wallets WHERE by_account = $1 AND expires_at > $2", [by, new Date(this.now())])).rows[0] : null;
     const orders = by ? (await this.options.db.query("SELECT id, payment_id, plan FROM translation_orders WHERE by_account = $1 AND status = 'pending' AND payment_id IS NOT NULL ORDER BY created_at DESC LIMIT 5", [by])).rows.map(order => ({ id: String(order["id"]), plan: String(order["plan"]), url: `https://coinpayportal.com/pay/${order["payment_id"]}` })) : [];
     return { required: true, available: config.coins.length > 0, balanceMicros: Number(row?.["balance_micros"] ?? 0),
-      expires: row ? new Date(String(row["expires_at"])).toISOString() : null, plans: TRANSLATION_PLANS, coins: config.coins, orders,
+      expires: row ? new Date(String(row["expires_at"])).toISOString() : null, plans: TRANSLATION_PLANS, coins: config.coins, orders, free: await this.free.access(by),
       rates: { transcriptionHour: 0.22, voiceThousand: 0.05, multiplier: TRANSLATION_MULTIPLIER } };
   }
-  async require(by: string): Promise<void> {
+  async begin(by: string, resource: string): Promise<void> {
     await this.ensure();
-    const found = await this.options.db.query("SELECT by_account FROM translation_wallets WHERE by_account = $1 AND expires_at > $2 AND balance_micros > 0", [by, new Date(this.now())]);
-    if (!found.rows.length) throw new SpeechError("Buy a translation pass to enable translated audio.", 402);
+    if (await this.free.begin(by, "translation", resource)) return;
+    await this.require(by, resource);
   }
-  async eligible(accounts: string[]): Promise<string[]> {
+  async require(by: string, resource = ""): Promise<void> {
+    await this.ensure();
+    if ((await this.free.active([by], "translation", resource, true)).length) return;
+    const found = await this.options.db.query("SELECT by_account FROM translation_wallets WHERE by_account = $1 AND expires_at > $2 AND balance_micros > 0", [by, new Date(this.now())]);
+    if (!found.rows.length) throw new SpeechError("Buy a pass or start a remaining free session: this session has no free time or audio credit.", 402);
+  }
+  async eligible(accounts: string[], resource = ""): Promise<string[]> {
     await this.ensure();
     const result = await this.options.db.query("SELECT by_account FROM translation_wallets WHERE by_account = ANY($1::text[]) AND expires_at > $2 AND balance_micros > 0", [accounts, new Date(this.now())]);
-    return result.rows.map(row => String(row["by_account"]));
+    return [...new Set([...result.rows.map(row => String(row["by_account"])), ...await this.free.active(accounts, "translation", resource, true)])];
   }
-  async reserve(by: string, kind: TranslationUsage, units: number): Promise<string> {
-    await this.ensure();
-    const { cost, charge } = translationCost(kind, units), id = randomUUID();
-    const result = await this.options.db.query(`WITH debit AS (
-      UPDATE translation_wallets SET balance_micros = balance_micros - $2
-      WHERE by_account = $1 AND expires_at > $3 AND balance_micros >= $2 RETURNING by_account)
-      INSERT INTO translation_usage (id, by_account, kind, units, cost_micros, charge_micros, created_at)
-      SELECT $4, by_account, $5, $6, $7, $2, $3 FROM debit RETURNING id`,
-    [by, charge, new Date(this.now()), id, kind, units, cost]);
-    if (!result.rows.length) throw new SpeechError("Your translation balance is used up or expired. Buy another pass to continue.", 402);
-    return id;
+  async reserve(by: string, kind: TranslationUsage, units: number, resource = ""): Promise<string> {
+    const result = await this.reserveMany([by], kind, units, resource);
+    if (!result.length) throw new SpeechError("This free session ended and audio credit is used up. Start a remaining free session or buy a pass.", 402);
+    return result[0]!.id;
   }
   /** Batch a shared stream's access charges in one database round trip. */
-  async reserveMany(accounts: string[], kind: TranslationUsage, units: number): Promise<{ by: string; id: string }[]> {
+  async reserveMany(accounts: string[], kind: TranslationUsage, units: number, resource = ""): Promise<{ by: string; id: string }[]> {
     await this.ensure();
     const { cost, charge } = translationCost(kind, units);
-    const result = await this.options.db.query(`WITH debit AS (
+    const now = this.now(), key = resource ? this.free.key("translation", resource) : "";
+    const result = await this.options.db.query(`WITH free AS (
+      SELECT DISTINCT by_account FROM upgrade_daily_uses WHERE by_account = ANY($1::text[])
+        AND (sessions->>$7)::bigint > $8), debit AS (
       UPDATE translation_wallets SET balance_micros = balance_micros - $2
-      WHERE by_account = ANY($1::text[]) AND expires_at > $3 AND balance_micros >= $2 RETURNING by_account)
+      WHERE by_account = ANY($1::text[]) AND expires_at > $3 AND balance_micros >= $2
+        AND by_account NOT IN (SELECT by_account FROM free) RETURNING by_account), admitted AS (
+      SELECT by_account, 0::bigint AS charge FROM free UNION ALL SELECT by_account, $2::bigint FROM debit)
       INSERT INTO translation_usage (id, by_account, kind, units, cost_micros, charge_micros, created_at)
-      SELECT gen_random_uuid()::text, by_account, $4, $5, $6, $2, $3 FROM debit RETURNING id, by_account`,
-    [[...new Set(accounts)], charge, new Date(this.now()), kind, units, cost]);
+      SELECT gen_random_uuid()::text, by_account, $4, $5, $6, charge, $3 FROM admitted RETURNING id, by_account`,
+    [[...new Set(accounts)], charge, new Date(now), kind, units, cost, key, now]);
     return result.rows.map(row => ({ by: String(row["by_account"]), id: String(row["id"]) }));
   }
   async commit(id: string): Promise<void> {
