@@ -79,10 +79,13 @@ export class RtmpListeners {
     child.on("close", () => this.done(slot, child, channel));
   }
 
-  private done(slot: RtmpSlot, child: ChildProcess, channel: { close(): void } | null): void {
+  private done(slot: RtmpSlot, child: ChildProcess, channel: { close(): void; finish?(): void } | null): void {
     if (this.running.get(slot.port) !== child) return;
     this.running.delete(slot.port);
-    channel?.close();
+    // The publisher went: the outro plays for whoever is still there, and
+    // whoever joins in the next hour, before the channel closes.
+    if (channel?.finish) channel.finish();
+    else channel?.close();
     if (!this.stopped) this.arm(slot);
   }
 
