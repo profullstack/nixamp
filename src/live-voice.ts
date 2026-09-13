@@ -10,7 +10,7 @@ export const LIVE_VOICE_MODEL = "eleven_flash_v2_5";
 export const LIVE_VOICE_RATE = 16_000;
 export const LIVE_VOICE_LANGUAGES = new Set("en ja zh de hi fr ko pt it es id nl tr fil pl sv bg ro ar cs el fi hr ms sk da ta uk ru hu no vi".split(" "));
 export interface LiveVoiceChoice { id: string; name: string; gender: string; language: string; }
-export interface VoiceRequest { text: string; language: string; voice?: string; profile?: VoiceProfile; channel?: string; }
+export interface VoiceRequest { text: string; language: string; voice?: string; profile?: VoiceProfile; channel?: string; speaker?: string; }
 const HEADERS = { "content-type": "audio/pcm", "cache-control": "no-store", "x-audio-sample-rate": String(LIVE_VOICE_RATE) };
 const budget = (value: number | undefined, fallback: number): number => Number.isFinite(value) && value! >= 0 ? Math.floor(value!) : fallback;
 
@@ -192,10 +192,12 @@ export class LiveVoice {
     if (!LIVE_VOICE_LANGUAGES.has(ask.language)) throw new SpeechError("this language is not supported by Flash voices", 400);
     const voices = await this.voices();
     signal?.throwIfAborted();
-    const gender = ask.profile === "lower" ? "male" : ask.profile === "higher" ? "female" : "neutral";
+    // The browser chooses unique voices for speakers. Legacy callers get a
+    // stable stock voice; pitch is not used to infer gender.
+    const seed = createHash("sha256").update(`${ask.channel ?? ""}|${ask.speaker ?? ""}`).digest().readUInt32BE(0);
     const voice = ask.voice && ask.voice !== "auto"
       ? voices.find(voice => voice.id === ask.voice)
-      : voices.find(voice => voice.gender === gender) ?? voices[0];
+      : voices[seed % voices.length];
     if (!voice) throw new SpeechError("choose an available voice", 400);
     const id = createHash("sha256").update(JSON.stringify([LIVE_VOICE_MODEL, voice.id, ask.language, text])).digest("hex");
     for (const [key, item] of this.cache) if (item.until < this.now()) this.cache.delete(key);

@@ -537,22 +537,13 @@ uses its direct model; it does not first translate the audio into English.
 
 ### Hear it in your language
 
-The browser's Transcript panel works with movies, shows, sports, courses,
-podcasts, live channels, and rooms. Choose a language and enable **Play
-translated audio**. This is a listener preference: the video and the room's
-shared playback clock keep running. Turn it off to restore the original sound.
-**Start player captions** transcribes other playback in its detected source
-language. Files are played locally; these explicit controls opt into sending
-short audio clips for processing. Ordinary playback uploads no audio.
-
-**Translate another tab** opens the browser's audio-sharing chooser, so a
-watch party or video hosted on another site can be interpreted too. Select a
-browser tab with **Share audio** enabled; **Stop listening** releases sharing.
-Only audio is sent, even though the browser requires a video track to select
-its source. Sharing support depends on the browser and the source's permissions;
-protected media and sources whose audio cannot be captured remain unavailable.
-The control requests suppression of the source tab's local sound. If a browser
-ignores that option, mute the source tab to avoid hearing both languages.
+Use **Translate audio** beside the player's language menu to hear whatever
+Nixamp is playing in your language. One click starts translation; it selects
+your preferred supported language if the menu is still on Original. Turn it off
+to restore the original audio. The video and the room's shared playback clock
+keep running. **Captions** in the Transcript panel enables text-only recognition.
+Ordinary file playback uploads no audio; enabling captions or translated audio
+opts into processing short clips from the playing media.
 
 Native captions use local Whisper Base through Transformers.js. Optional
 speaker-aware audio uses ElevenLabs **Scribe v2** for native transcription with
@@ -565,11 +556,12 @@ also checked before enabling the audio toggle.
 
 A rolling 15-second audio window advances every 5 seconds. Speaker labels are
 reconciled using overlapping timestamps, with different voices assigned to
-separate speakers. Lower/higher pitch suggests a male/female stock voice;
-ambiguous audio uses a default. Each speaker's voice can be changed in the
-panel. Pitch is not gender identity, and a speaker returning after leaving the
-rolling context may receive a new label. Simultaneous speech and noisy crowds
-can still confuse recognition. Native captions never translate to English as
+separate speakers. Voices are picked from the available stock catalogue without
+inferring a person's gender from pitch; each detected speaker gets an unused
+voice until the catalogue is exhausted. **Speaker voices** folds away optional
+individual overrides. A speaker returning after leaving the rolling context may
+receive a new label. Simultaneous speech and noisy crowds can still confuse
+recognition. Native captions never translate to English as
 an intermediate recognition step.
 
 Processing has one active request and only the latest pending window per

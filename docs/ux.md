@@ -31,8 +31,8 @@ These rules apply to every Nixamp interface. They are the proposed shared
   visualizers MUST NOT flood assistive technology with repeated announcements.
 - Forms remain usable with password managers, autofill, keyboard, and screen
   readers. Errors and success messages must be available as text.
-- Captions, language selection, voice selection, speaker overrides, and stopping
-  audio capture must be keyboard and screen-reader accessible.
+- Captions, language selection, voice selection, speaker overrides, and disabling
+  translated playback must be keyboard and screen-reader accessible.
 - Accessibility is not a mode users must discover. It is the default interface.
 
 ## Verification
@@ -46,3 +46,11 @@ automated audit alone is not a claim of full WCAG conformance.
 For realtime regressions, focus an unrelated field and scroll to a chosen
 position, deliver multiple updates, and assert that document scroll, panel
 scroll, focus, caret, and the selected browsing page remain unchanged.
+
+## Player translation controls
+
+Keep translated playback in the player: one opt-in beside the existing language
+menu replaces that player's original audio. Turning it off restores the source.
+Do not add tab-sharing, microphone-source, or separate capture start/stop controls
+to this interface. Keep optional speaker overrides collapsed. Stock-voice choices
+must not be presented as detected speaker gender.

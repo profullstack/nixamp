@@ -243,11 +243,8 @@ export function start(): void {
     transcriptOn: need<HTMLInputElement>("transcript-on"),
     transcriptLanguage: need<HTMLSelectElement>("transcript-language"),
     transcriptAudio: need<HTMLInputElement>("transcript-audio"),
-    transcriptVoice: need<HTMLSelectElement>("transcript-voice"),
+    transcriptVoiceSettings: need<HTMLDetailsElement>("transcript-voice-settings"),
     transcriptAudioNote: need<HTMLParagraphElement>("transcript-audio-note"),
-    transcriptCapture: need<HTMLButtonElement>("transcript-capture"),
-    transcriptTab: need<HTMLButtonElement>("transcript-tab"),
-    transcriptStop: need<HTMLButtonElement>("transcript-stop"),
     transcriptSpeakers: need<HTMLDivElement>("transcript-speakers"),
     transcriptList: need<HTMLUListElement>("transcript-list"),
     subtitle: need<HTMLDivElement>("subtitle"),
@@ -3293,17 +3290,12 @@ export function start(): void {
   let voiceGrant: { channel: string; token: string; expires: number; remaining: number } | null = null;
   let captureWanted = false;
   let captureError = "";
-  let choosingTab = false;
   let capturing = false;
   let captureGeneration = 0;
-  let tabAudio: { stream: MediaStream; context: AudioContext; node: MediaStreamAudioSourceNode; monitor: GainNode } | null = null;
   const liveVoice = new LiveVoicePlayer({
-    playing: () => !!tabAudio || player.playing,
+    playing: () => player.playing,
     volume: () => player.volume,
-    active: (on) => {
-      if (tabAudio) tabAudio.monitor.gain.value = on ? 0 : player.volume;
-      else player.translatedAudio(on);
-    },
+    active: (on) => { player.translatedAudio(on); },
     status: (text) => { dom.transcriptAudioNote.textContent = text; },
     failed: () => { voiceError = dom.transcriptAudioNote.textContent || "Translated audio stopped."; captureWanted = false; dom.transcriptAudio.checked = false; stopCapture(); },
     authorization: async (signal, line) => {
@@ -3333,29 +3325,27 @@ export function start(): void {
       if (dom.transcriptAudio.checked) liveVoice.pushBatch(lines.map(line => ({
         line, lag: 0, url: "/api/v1/speech/synthesize",
         init: { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
-          text: line.text, language: captionsIn, channel: listenerScope, profile: line.voiceProfile,
-          voice: dom.transcriptVoice.value !== "auto" ? dom.transcriptVoice.value : interpreter.tracker.speakers.get(line.speaker ?? "")?.voice ?? "auto",
+          text: line.text, language: captionsIn, channel: listenerScope, speaker: line.speaker,
+          voice: interpreter.tracker.speakers.get(line.speaker ?? "")?.voice ?? "auto",
         }) },
       })));
     },
   });
-  const capture = new AudioCapture(window => { if (capturing && (tabAudio || player.playing)) interpreter.push(window); });
+  const capture = new AudioCapture(window => { if (capturing && player.playing) interpreter.push(window); });
   function stopCapture(): void {
     captureGeneration++; capturing = false; capture.stop(); interpreter.reset();
     liveVoice.reset(); player.translatedAudio(false);
-    dom.transcriptSpeakers.replaceChildren();
-    dom.transcriptStop.hidden = !tabAudio;
+    replaceList(dom.transcriptSpeakers);
   }
   async function startCapture(): Promise<void> {
     stopCapture();
     const generation = captureGeneration;
     try {
       if (!meId || trollboxSite !== "") throw new Error("Sign in on nixamp.com to transcribe or translate this audio.");
-      const input = tabAudio ?? player.audioInput();
+      const input = player.audioInput();
       await capture.start(input.context, input.node);
       if (generation !== captureGeneration) return;
       capturing = true; captureWanted = true;
-      dom.transcriptStop.hidden = false;
       captionsLag = 0;
       captionsTick ??= setInterval(revealCaptions, 250);
       dom.transcriptNote.textContent = dom.transcriptAudio.checked
@@ -3376,19 +3366,20 @@ export function start(): void {
       label.append(`Speaker ${speaker.id.split("-")[1]} `);
       const select = document.createElement("select"); select.className = "transcript-language";
       select.setAttribute("aria-label", `Voice for ${label.textContent?.trim()}`);
-      for (const voice of voiceOptions?.voices ?? []) select.append(new Option(`${voice.name} (${voice.gender})`, voice.id));
+      for (const voice of voiceOptions?.voices ?? []) select.append(new Option(voice.name, voice.id));
       select.value = speaker.voice;
       select.addEventListener("change", () => { speaker.voice = select.value; liveVoice.reset(); });
       label.append(select); dom.transcriptSpeakers.append(label);
     }
+    dom.transcriptVoiceSettings.hidden = !dom.transcriptAudio.checked || !recent.length;
     for (const label of dom.transcriptSpeakers.querySelectorAll<HTMLElement>("[data-speaker]")) {
       if (!ids.has(label.dataset["speaker"] ?? "") && !label.contains(document.activeElement)) label.remove();
     }
   }
   for (const media of [dom.audio, dom.video]) {
-    for (const event of ["pause", "ended", "seeking", "emptied"]) media.addEventListener(event, () => { if (!tabAudio) stopCapture(); });
+    for (const event of ["pause", "ended", "seeking", "emptied"]) media.addEventListener(event, () => { stopCapture(); });
     for (const event of ["playing", "seeked"]) media.addEventListener(event, () => {
-      if (!tabAudio && captureWanted && captionsOn && player.playing) void startCapture();
+      if (captureWanted && captionsOn && player.playing) void startCapture();
     });
     media.addEventListener("volumechange", () => { liveVoice.setVolume(); });
   }
@@ -3778,7 +3769,6 @@ export function start(): void {
   const TRANSCRIPT_KEEP = 200;
 
   function transcriptRoom(): { id: string; name: string; hls: boolean } | null {
-    if (tabAudio) return { id: listenerScope, name: "Shared tab", hls: false };
     if (mode === "remote" && channelOn) return { id: channelOn.id, name: channelOn.name, hls: channelOn.video && wantsHls() };
     if (player.loaded || localLink) return { id: listenerScope, name: currentName() || "This audio", hls: false };
     return null;
@@ -3803,30 +3793,30 @@ export function start(): void {
   /** The panel shown for a channel and its lines flowing, or hidden and quiet. Called from draw(). */
   function drawTranscript(): void {
     const room = transcriptRoom();
-    const key = `${room?.id ?? ""}|${tabAudio ? "tab" : player.mediaKey}|${captionsOn}|${captionsIn}|${dom.transcriptAudio.checked}|${captureWanted}|${meId}`;
+    const key = `${room?.id ?? ""}|${player.mediaKey}|${captionsOn}|${captionsIn}|${dom.transcriptAudio.checked}|${captureWanted}|${meId}`;
     if (key === captionsKey) return;
     captionsKey = key;
     closeCaptions();
     dom.transcriptPanel.hidden = false;
-    dom.transcriptOn.checked = captionsOn;
+    dom.transcriptOn.checked = captionsOn && (!!channelOn || captureWanted || dom.transcriptAudio.checked);
     if (dom.transcriptLanguage.options.length === 0) {
       for (const choice of LANGUAGE_CHOICES) dom.transcriptLanguage.append(new Option(choice.label, choice.code));
     }
     dom.transcriptLanguage.value = captionsIn;
     drawVoiceControls();
     void loadVoiceOptions();
-    if (!room) { dom.transcriptNote.textContent = "Translate movies, shows, sports, courses, podcasts, or a shared browser tab."; return; }
+    if (!room) { dom.transcriptNote.textContent = "Play something to see its captions."; return; }
     if (!captionsOn) {
-      dom.transcriptNote.textContent = `Captions are off on this device. Turn them on and ${room.name} is written down as it speaks.`;
+      dom.transcriptNote.textContent = "Captions are off.";
       return;
     }
     if (captureError) { dom.transcriptNote.textContent = captureError; return; }
     dom.transcriptNote.textContent = `Asking for ${room.name}'s captions…`;
-    if (dom.transcriptAudio.checked || captureWanted || tabAudio) {
-      if (tabAudio || player.playing) void startCapture();
+    if (dom.transcriptAudio.checked || captureWanted) {
+      if (player.playing) void startCapture();
       else dom.transcriptNote.textContent = "Press Play to start listening.";
     } else if (mode === "remote" && channelOn) void openCaptions(room, key);
-    else dom.transcriptNote.textContent = "Start captions to transcribe this player in its original language, or choose a language and enable translated audio.";
+    else dom.transcriptNote.textContent = "Turn on captions to transcribe this audio.";
   }
 
   async function openCaptions(room: { id: string; name: string; hls: boolean }, key: string): Promise<void> {
@@ -3877,12 +3867,10 @@ export function start(): void {
       const hello = JSON.parse((event as MessageEvent<string>).data) as { backlog?: number; lines?: Caption[]; error?: string; language?: string; known?: number; hash?: string };
       captionsLag = lagMs(hello.backlog ?? backlog, room.hls);
       take(hello.lines ?? []);
-      const spoken = hello.language ? ` It speaks ${LANGUAGE_CHOICES.find((one) => one.code === hello.language)?.label ?? hello.language}.` : "";
-      const translated = captionsIn && captionsIn !== hello.language ? ` Translated to ${LANGUAGE_CHOICES.find((one) => one.code === captionsIn)?.label ?? captionsIn} as it goes.` : "";
-      const known = hello.known ? ` ${hello.known} lines were already written down.` : "";
-      dom.transcriptNote.textContent = hello.error
-        ? `Captions for ${room.name} are not coming: ${hello.error}`
-        : `What ${room.name} is saying, a few seconds behind the sound.${spoken}${translated}${known}`;
+      const source = LANGUAGE_CHOICES.find(choice => choice.code === hello.language)?.label ?? hello.language;
+      const target = LANGUAGE_CHOICES.find(choice => choice.code === captionsIn)?.label ?? captionsIn;
+      dom.transcriptNote.textContent = hello.error ? `Captions unavailable: ${hello.error}`
+        : captionsIn ? `${source || "Detected audio"} → ${target}` : `Original audio · ${source || "detecting language…"}`;
       // A file has one address for everything known about it, transcript included.
       if (!hello.error && hello.hash && /^[0-9a-f]{64}$/.test(hello.hash)) {
         const link = document.createElement("a");
@@ -3945,7 +3933,7 @@ export function start(): void {
       captionsShown.push(line);
       dom.transcriptList.append(transcriptLine(line));
       if (captionsSpeakable.delete(line) && dom.transcriptAudio.checked && captionsIn) {
-        const query = new URLSearchParams({ at: String(line.at), language: captionsIn, voice: dom.transcriptVoice.value });
+        const query = new URLSearchParams({ at: String(line.at), language: captionsIn, voice: "auto" });
         liveVoice.push(line, remote.url(`/api/channels/${encodeURIComponent(line.channel)}/voice?${query}`), captionsLag);
       }
     }
@@ -3957,7 +3945,7 @@ export function start(): void {
     for (let i = 0; i < items.length; i++) items[i]?.classList.toggle("now", i === at);
     // On the picture only when there is a picture; a sound-only channel's
     // transcript is the panel.
-    const onPicture = !tabAudio && player.playing && current !== null && !dom.video.hidden && dom.video.offsetHeight > 0;
+    const onPicture = player.playing && current !== null && !dom.video.hidden && dom.video.offsetHeight > 0;
     dom.subtitle.hidden = !onPicture;
     if (onPicture && current) {
       if (dom.subtitle.textContent !== current.text) dom.subtitle.textContent = current.text;
@@ -3968,7 +3956,8 @@ export function start(): void {
 
   dom.transcriptOn.addEventListener("change", () => {
     captionsOn = dom.transcriptOn.checked;
-    if (!captionsOn) captureWanted = false;
+    captureWanted = captionsOn && (!channelOn || dom.transcriptAudio.checked);
+    if (!captionsOn) { dom.transcriptAudio.checked = false; liveVoice.disable(); }
     try {
       localStorage.setItem(CAPTIONS_KEY, captionsOn ? "on" : "off");
     } catch {
@@ -3980,6 +3969,7 @@ export function start(): void {
   dom.transcriptLanguage.addEventListener("change", () => {
     captureError = ""; voiceError = "";
     captionsIn = captionsLanguage(() => dom.transcriptLanguage.value);
+    if (!captionsIn && dom.transcriptAudio.checked) { dom.transcriptAudio.checked = false; captureWanted = false; liveVoice.disable(); }
     try {
       if (captionsIn) localStorage.setItem(CAPTIONS_LANGUAGE_KEY, captionsIn);
       else localStorage.removeItem(CAPTIONS_LANGUAGE_KEY);
@@ -3989,24 +3979,25 @@ export function start(): void {
     drawTranscript();
   });
 
+  function preferredAudioLanguage(): string {
+    if (captionsIn) return captionsIn;
+    const preferred = navigator.language.split("-")[0] || "en";
+    return LANGUAGE_CHOICES.some(choice => choice.code === preferred) && voiceOptions?.languages.includes(preferred) ? preferred : "en";
+  }
+
   function drawVoiceControls(): void {
     const signedIn = meId !== "" && trollboxSite === "";
-    const supported = signedIn && !!transcriptRoom() && captionsOn && captionsIn !== "" && !!voiceOptions?.languages.includes(captionsIn);
+    const supported = signedIn && !!transcriptRoom() && !!voiceOptions?.languages.includes(preferredAudioLanguage());
     dom.transcriptAudio.disabled = !supported;
-    dom.transcriptVoice.disabled = !supported;
-    dom.transcriptCapture.disabled = !signedIn;
-    dom.transcriptTab.disabled = choosingTab || !signedIn || !navigator.mediaDevices?.getDisplayMedia;
+    if (!dom.transcriptVoiceSettings.contains(document.activeElement)) dom.transcriptVoiceSettings.hidden = !dom.transcriptAudio.checked || !dom.transcriptSpeakers.children.length;
     if (!supported) {
       dom.transcriptAudio.checked = false;
       liveVoice.disable();
-      dom.transcriptAudioNote.textContent = !captionsIn
-        ? "Choose a translation language to hear it spoken while the video continues."
-        : !signedIn ? "Sign in on nixamp.com to enable translated audio."
-        : !captionsOn ? "Turn on captions to enable translated audio."
-        : !transcriptRoom() ? "Load media or share another tab to translate its audio."
-        : voiceError || (!voiceOptions ? "Checking translated voices…" : "Translated audio is unavailable for this language.");
+      dom.transcriptAudioNote.textContent = !signedIn ? "Sign in to translate audio."
+        : !transcriptRoom() ? "Play something to translate its audio."
+        : voiceError || (!voiceOptions ? "Loading voices…" : "Audio translation is unavailable for this language.");
     } else if (!dom.transcriptAudio.checked) {
-      dom.transcriptAudioNote.textContent = voiceError || "Distinct speaker voices · your language · original video timing";
+      dom.transcriptAudioNote.textContent = voiceError || "Original audio.";
     }
   }
 
@@ -4025,10 +4016,6 @@ export function start(): void {
       if (!response.ok) throw new Error(body.error || "Translated audio is unavailable on this server.");
       if (!Array.isArray(body.voices) || !Array.isArray(body.languages)) throw new Error("This server needs an update for translated audio.");
       voiceOptions = body;
-      const selected = dom.transcriptVoice.value;
-      dom.transcriptVoice.replaceChildren(new Option("Match each speaker (approximate)", "auto"));
-      for (const voice of body.voices) dom.transcriptVoice.append(new Option(`${voice.name} (${voice.gender})`, voice.id));
-      dom.transcriptVoice.value = body.voices.some(voice => voice.id === selected) ? selected : "auto";
     } catch (error) {
       if (voiceOptionsKey !== url) return;
       voiceError = error instanceof Error ? error.message : "Translated audio is unavailable.";
@@ -4039,54 +4026,12 @@ export function start(): void {
   dom.transcriptAudio.addEventListener("change", () => {
     captureError = ""; voiceError = "";
     captionsSpeakable.clear();
-    if (dom.transcriptAudio.checked) { captureWanted = true; void liveVoice.enable(); }
-    else { captureWanted = false; liveVoice.disable(); }
+    if (dom.transcriptAudio.checked) {
+      captionsIn = preferredAudioLanguage();
+      try { localStorage.setItem(CAPTIONS_LANGUAGE_KEY, captionsIn); } catch { /* device preference only */ }
+      captionsOn = true; captureWanted = true; void liveVoice.enable();
+    } else { captureWanted = false; liveVoice.disable(); }
     drawTranscript();
-  });
-  dom.transcriptVoice.addEventListener("change", () => { liveVoice.reset(); });
-  dom.transcriptCapture.addEventListener("click", () => {
-    captureError = ""; voiceError = "";
-    captionsOn = true; captureWanted = true; drawTranscript();
-    if (!capturing && player.playing) void startCapture();
-  });
-  function releaseTab(): void {
-    const old = tabAudio; tabAudio = null;
-    if (old) { for (const track of old.stream.getTracks()) track.stop(); old.node.disconnect(); old.monitor.disconnect(); void old.context.close(); }
-  }
-  dom.transcriptStop.addEventListener("click", () => {
-    captureError = ""; voiceError = "";
-    captureWanted = false; dom.transcriptAudio.checked = false; liveVoice.disable(); stopCapture(); releaseTab();
-    captionsOn = false; drawTranscript();
-  });
-  dom.transcriptTab.addEventListener("click", () => {
-    if (choosingTab) return;
-    choosingTab = true; dom.transcriptTab.disabled = true;
-    const requestingAccount = meId;
-    captureError = ""; voiceError = "";
-    void (async () => {
-      try {
-        // Browser-owned permission chooser. Share another tab's AUDIO; video
-        // is required by getDisplayMedia's chooser but is never transmitted.
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: true, audio: { suppressLocalAudioPlayback: true },
-          selfBrowserSurface: "exclude", systemAudio: "exclude", monitorTypeSurfaces: "exclude", preferCurrentTab: false,
-        } as DisplayMediaStreamOptions);
-        if (!requestingAccount || requestingAccount !== meId) { for (const track of stream.getTracks()) track.stop(); throw new Error("Sign in again before sharing audio."); }
-        if (!stream.getAudioTracks().length) { for (const track of stream.getTracks()) track.stop(); throw new Error("No tab audio was shared. Select a browser tab and enable Share audio."); }
-        stopCapture(); releaseTab();
-        const context = new AudioContext();
-        const node = context.createMediaStreamSource(stream), monitor = context.createGain();
-        monitor.gain.value = player.volume; node.connect(monitor); monitor.connect(context.destination);
-        tabAudio = { stream, context, node, monitor };
-        stream.getAudioTracks()[0]!.addEventListener("ended", () => { if (tabAudio?.stream === stream) dom.transcriptStop.click(); });
-        captionsOn = true; captureWanted = true;
-        player.pause();
-        drawTranscript();
-        dom.transcriptAudioNote.textContent = "Shared tab audio is processed while listening. If original audio is also audible, mute the source tab. Stop listening ends sharing.";
-      } catch (error) {
-        dom.transcriptNote.textContent = error instanceof Error ? error.message : "Tab audio sharing was cancelled.";
-      } finally { choosingTab = false; drawVoiceControls(); }
-    })();
   });
 
   /**
@@ -5004,7 +4949,7 @@ export function start(): void {
   const showAccount = (email: string | null): void => {
     const signedIn = email !== null;
     voiceOptionsKey = ""; voiceGrant = null;
-    if (!signedIn) { captureWanted = false; dom.transcriptAudio.checked = false; liveVoice.disable(); stopCapture(); releaseTab(); }
+    if (!signedIn) { captureWanted = false; dom.transcriptAudio.checked = false; liveVoice.disable(); stopCapture(); }
     drawTranscript();
     // Following and notifications belong to an account; there is nowhere to
     // notify a stranger.

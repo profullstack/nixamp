@@ -121,6 +121,16 @@
           <button id="download-now" type="button" class="ghost" hidden
                   title="Download now: the server fetches the whole thing with yt-dlp and hands it to this device">⤓ Download</button>
         </div>
+        <div class="audio-translation" role="group" aria-label="Audio language">
+          <label class="transcript-switch"><input type="checkbox" id="transcript-audio" disabled /> Translate audio</label>
+          <label class="audio-language">Language <select id="transcript-language" class="transcript-language" aria-label="Translation language"></select></label>
+          <p class="hint" id="transcript-audio-note">Original audio.</p>
+          <details id="transcript-voice-settings" hidden>
+            <summary>Speaker voices</summary>
+            <div id="transcript-speakers" role="group" aria-label="Speaker voices"></div>
+          </details>
+        </div>
+
         <!-- Any link, played here: YouTube, Vimeo and SoundCloud by their own
              players in a frame, a file by the page's own. Anything else -- an
              IPTV feed, a stream with no extension -- the connected server
@@ -372,23 +382,8 @@
              switch turns it off for this device, and the Panels list hides the
              panel. -->
         <section class="panel col-b" data-title="Transcript" id="transcript-panel" tabindex="-1" hidden>
-          <p class="hint" id="transcript-note">Movies, shows, sports, courses, podcasts, and live audio in your language.</p>
           <label class="transcript-switch"><input type="checkbox" id="transcript-on" checked /> Captions</label>
-          <!-- In which language: as spoken, or translated on nixamp.com as each
-               line is said. Filled by the page; remembered per device. -->
-          <label class="transcript-switch">Language <select id="transcript-language" class="transcript-language" aria-label="Caption language"></select></label>
-          <div class="transcript-actions">
-            <button type="button" id="transcript-capture">Start player captions</button>
-            <button type="button" id="transcript-tab">Translate another tab</button>
-            <button type="button" id="transcript-stop" hidden>Stop listening</button>
-          </div>
-          <div class="transcript-audio">
-            <p class="hint">Player captions use nixamp.com. Translated audio also sends short audio clips and translated words to ElevenLabs.</p>
-            <label class="transcript-switch"><input type="checkbox" id="transcript-audio" disabled /> Play translated audio</label>
-            <label class="transcript-switch">Voice <select id="transcript-voice" aria-label="Translated voice" disabled><option value="auto">Match each speaker (approximate)</option></select></label>
-            <p class="hint" id="transcript-audio-note">Choose a translation language to hear it spoken while the video continues.</p>
-          </div>
-          <div id="transcript-speakers" role="group" aria-label="Speaker voices"></div>
+          <p class="hint" id="transcript-note">Original-language captions.</p>
           <ul id="transcript-list" tabindex="0" class="transcript-list" aria-live="off" aria-label="What is being said"></ul>
         </section>
 

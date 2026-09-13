@@ -11,6 +11,7 @@ export class SpeakerTracker {
   private previous: { start: number; end: number; speaker: string }[] = [];
   private sequence = 0;
   readonly speakers = new Map<string, Speaker>();
+  constructor(private readonly random: () => number = Math.random) {}
   reset(): void { this.previous = []; this.sequence = 0; this.speakers.clear(); }
 
   reconcile(turns: SpeakerTurn[], at: number, voices: VoiceChoice[]): Map<string, Speaker> {
@@ -30,11 +31,12 @@ export class SpeakerTracker {
     for (const turn of turns) {
       let speaker = links.get(turn.speaker);
       if (!speaker) {
-        const gender = turn.profile === "lower" ? "male" : turn.profile === "higher" ? "female" : "neutral";
-        const preferred = voices.filter(voice => voice.gender === gender);
-        const pool = preferred.length ? preferred : voices;
+        // Assign contrasting stock voices, without guessing a person's
+        // gender from pitch or a noisy, short opening phrase.
         const taken = new Set([...this.speakers.values()].map(one => one.voice));
-        const voice = pool.find(one => !taken.has(one.id)) ?? pool[this.sequence % Math.max(1, pool.length)];
+        const available = voices.filter(voice => !taken.has(voice.id));
+        const pool = available.length ? available : voices;
+        const voice = pool[Math.floor(this.random() * pool.length)];
         speaker = { id: `speaker-${++this.sequence}`, profile: turn.profile, voice: voice?.id ?? "auto" };
         this.speakers.set(speaker.id, speaker); links.set(turn.speaker, speaker);
       }
@@ -46,8 +48,7 @@ export class SpeakerTracker {
   }
 }
 
-/** Listener-local interpretation for any decoded media or explicitly shared
- * tab. One request in flight and only the latest pending audio window. */
+/** Listener-local interpretation for the playing media. One request in flight and only the latest pending audio window. */
 export class Interpreter {
   readonly tracker = new SpeakerTracker();
   private generation = 0;
