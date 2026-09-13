@@ -59,3 +59,15 @@ test('native captions use only fresh five seconds, and playback changes discard 
   assert.equal(count, 1); interpreter.reset(); finish(Response.json({ text: 'stale words', language: 'es' })); await settle();
   assert.equal(emitted.length, 0); assert.equal(count, 1);
 });
+
+
+test("voice allocation is unique and ignores pitch, including a noisy opening phrase", () => {
+  const low = new SpeakerTracker(() => 0), high = new SpeakerTracker(() => 0);
+  const a = low.reconcile([turn("a", 0, 1), turn("b", 2, 3), turn("c", 4, 5)], 1000, voices);
+  const b = high.reconcile([turn("a", 0, 1, "higher"), turn("b", 2, 3, "higher"), turn("c", 4, 5, "higher")], 1000, voices);
+  assert.deepEqual([...a.values()].map(s=>s.voice), [...b.values()].map(s=>s.voice));
+  assert.equal(new Set([...a.values()].map(s=>s.voice)).size, 3);
+  a.get("a")!.voice = "manual-choice";
+  const next = low.reconcile([turn("changed-label", 0, 1, "higher")], 1000, voices);
+  assert.equal(next.get("changed-label")!.voice, "manual-choice", "manual voice survives recognition label changes");
+});

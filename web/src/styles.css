@@ -1319,3 +1319,12 @@ body.tv input, body.tv .filter { font-size: 1em; padding: 8px 10px; }
   :focus-visible { outline: 2px solid Highlight !important; }
   a { color: LinkText; }
 }
+
+/* One audio opt-in beside the playing media. Voice overrides stay folded away. */
+.audio-translation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 10px; }
+.audio-translation .transcript-switch { margin: 0; }
+.audio-language { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.audio-language select { max-width: 230px; min-width: 0; }
+.audio-translation > .hint { flex-basis: 100%; margin: 0; }
+.audio-translation details { flex-basis: 100%; }
+.audio-translation summary { cursor: pointer; color: var(--muted); padding: 4px 0; }

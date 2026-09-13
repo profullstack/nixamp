@@ -23,17 +23,17 @@ function provider() {
   }) as typeof fetch };
 }
 
-test("voices stream once per text/language/voice, with automatic acoustic matching and a user budget", async () => {
+test("voices stream once per text/language/voice, with explicit voices and a user budget", async () => {
   const remote = provider();
   const voice = new LiveVoice({ apiKey: "test-key", fetcher: remote.fetcher, charsPerMinute: 20 });
-  const ask = { text: "Hello", language: "en", profile: "lower" as const };
+  const ask = { text: "Hello", language: "en", voice: "male", profile: "lower" as const };
   const a = await voice.stream(ask, "alice");
   const b = await voice.stream(ask, "bob");
   assert.deepEqual(await a.arrayBuffer(), await b.arrayBuffer());
   assert.equal(remote.requests.length, 1);
   assert.match(remote.requests[0]!.url, /\/male\/stream\?output_format=pcm_16000$/);
   assert.equal(remote.requests[0]!.body.model_id, "eleven_flash_v2_5");
-  await (await voice.stream({ ...ask, profile: "higher" }, "alice")).arrayBuffer();
+  await (await voice.stream({ ...ask, voice: "female", profile: "higher" }, "alice")).arrayBuffer();
   assert.match(remote.requests[1]!.url, /\/female\/stream/);
   await assert.rejects(voice.stream({ text: "This exceeds the remaining budget", language: "en" }, "alice"), (error: unknown) => error instanceof SpeechError && error.status === 429);
   assert.equal(remote.requests.length, 2);
@@ -105,4 +105,15 @@ test("server requires account auth to issue grants and a scoped grant to synthes
     assert.equal(limited.status, 429);
     assert.equal(limited.headers.get("retry-after"), "60");
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
+
+test("automatic voice fallback ignores noisy pitch and remains stable for a speaker", async () => {
+  const remote = provider();
+  const voice = new LiveVoice({ apiKey: "test", fetcher: remote.fetcher });
+  const ask = { text: "Same speaker.", language: "en", channel: "ufc", speaker: "commentator-1" };
+  const lower = await (await voice.stream({ ...ask, profile: "lower" }, "alice")).arrayBuffer();
+  const higher = await (await voice.stream({ ...ask, profile: "higher" }, "alice")).arrayBuffer();
+  assert.deepEqual(lower, higher);
+  assert.equal(remote.requests.length, 1, "pitch changes must not switch a speaker's voice");
 });
