@@ -1,3 +1,7 @@
+<p align="center">
+  <a href="https://nixamp.com"><img src="web/public/hero.png" alt="nixamp" width="800" /></a>
+</p>
+
 # nixamp
 
 It really whips the terminal's ass.

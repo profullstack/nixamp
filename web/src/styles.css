@@ -116,7 +116,12 @@ body {
   color: var(--green);
   font-weight: 700;
   letter-spacing: 0.14em;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
+/* The mark before the name, the height of the text and no more. */
+.brand-mark { width: 1.15em; height: 1.15em; flex: 0 0 auto; }
 
 .status { color: var(--muted); }
 .status[data-playing="true"] { color: var(--green); }
