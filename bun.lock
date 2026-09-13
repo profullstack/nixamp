@@ -35,7 +35,7 @@
     },
     "desktop": {
       "name": "@nixamp/desktop",
-      "version": "0.22.1",
+      "version": "0.23.7",
       "devDependencies": {
         "electron": "^44.2.0",
         "electron-builder": "^26.15.3",
@@ -46,6 +46,7 @@
       "version": "0.21.4",
       "dependencies": {
         "@profullstack/player": "^0.7.0",
+        "fastenhancer-web": "^0.1.1",
       },
       "devDependencies": {
         "@types/node": "^26",
@@ -501,6 +502,8 @@
     "fast-deep-equal": ["fast-deep-equal@3.1.3", "", {}, "sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q=="],
 
     "fast-uri": ["fast-uri@3.1.7", "", {}, "sha512-dOvZVzjdZdz7phd9v6jCbwxrBW3fK6n8Rc0CtdmM4bumzMnxywBYhuph6J819RRw/ku+rLbelwfMunktuzVVHg=="],
+
+    "fastenhancer-web": ["fastenhancer-web@0.1.1", "", { "peerDependencies": { "react": ">=18.0.0" }, "optionalPeers": ["react"] }, "sha512-58kCJlrc6o070DTr3wPMvv7VOS4X/S7g87kCPn1q7BJD3NXno5MI4iB7hAU3BFHHsjQC/tnkpWyZwsGSqrRFpg=="],
 
     "fdir": ["fdir@6.5.0", "", { "peerDependencies": { "picomatch": "^3 || ^4" }, "optionalPeers": ["picomatch"] }, "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="],
 

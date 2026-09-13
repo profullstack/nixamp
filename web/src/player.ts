@@ -256,7 +256,10 @@ export class BrowserPlayer {
     type WithWebkit = typeof globalThis & { webkitAudioContext?: typeof AudioContext };
     const Ctor = globalThis.AudioContext ?? (globalThis as WithWebkit).webkitAudioContext;
     if (!Ctor) return;
-    this.context ??= new Ctor();
+    if (!this.context) {
+      try { this.context = new Ctor({ sampleRate: 48000 }); }
+      catch { this.context = new Ctor(); } // Playback still works if a device rejects 48 kHz.
+    }
     if (!this.analyser) {
       this.analyser = this.context.createAnalyser();
       this.analyser.fftSize = FFT_SIZE;
@@ -282,7 +285,7 @@ export class BrowserPlayer {
   /** Tap the decoded source before listener-local ducking. Muting the media
    * element would also silence the interpreter's input. */
   audioInput(): { context: AudioContext; node: AudioNode } {
-    if (!this.analysable) throw new Error("This source blocks audio access. Open it in another tab and use Translate another tab.");
+    if (!this.analysable) throw new Error("This source blocks audio access, so its audio cannot be translated here.");
     this.ensureGraph(this.active);
     if (!this.context || !this.analyser) throw new Error("This browser cannot capture player audio.");
     return { context: this.context, node: this.analyser };

@@ -126,7 +126,9 @@
           <label class="audio-language">Language <select id="transcript-language" class="transcript-language" aria-label="Translation language"></select></label>
           <p class="hint" id="transcript-audio-note">Original audio.</p>
           <details id="transcript-voice-settings" hidden>
-            <summary>Speaker voices</summary>
+            <summary>Audio options</summary>
+            <label class="transcript-switch"><input type="checkbox" id="transcript-background" checked /> Keep background sound</label>
+            <p class="hint">Speech removal is approximate; turn this off if original voices bleed through.</p>
             <div id="transcript-speakers" role="group" aria-label="Speaker voices"></div>
           </details>
         </div>
