@@ -71,18 +71,24 @@ export class SharedTranslations {
     if (!this.options.voice.available()) throw new SpeechError("Translated audio is unavailable.", 503);
     const source = sharedSource(raw);
     if (!LIVE_VOICE_LANGUAGES.has(language)) throw new SpeechError("Choose a supported audio language.", 400);
-    await this.options.billing?.require(by);
-    const connections = [...this.feeds.values()].reduce((total, feed) => total + [...feed.members].filter(member => member.by === by).length, 0);
-    if (connections >= 2) throw new SpeechError("Translated audio is already open in two players for this account.", 429);
     const id = `dub-${createHash("sha256").update(`${source}|${language}`).digest("hex").slice(0, 40)}`;
+    const capacity = (): void => {
+      const connections = [...this.feeds.values()].reduce((total, feed) => total + [...feed.members].filter(member => member.by === by).length, 0);
+      if (connections >= 2) throw new SpeechError("Translated audio is already open in two players for this account.", 429);
+      const feed = this.feeds.get(id);
+      if (!feed && this.feeds.size >= 4) throw new SpeechError("Live translation is busy. Try again shortly.", 429);
+      if (feed && feed.members.size >= 1000) throw new SpeechError("This translated stream is full. Try again shortly.", 429);
+    };
+    capacity();
+    if (this.options.billing?.begin) await this.options.billing.begin(by, id);
+    else await this.options.billing?.require(by, id);
+    capacity(); // Other joins can finish during the account/database check.
     let feed = this.feeds.get(id);
     if (!feed) {
-      if (this.feeds.size >= 4) throw new SpeechError("Live translation is busy. Try again shortly.", 429);
       feed = this.make(id, source, language); this.feeds.set(id, feed);
       const current = feed;
       current.heartbeat = setInterval(() => void this.checkMembers(current), 10_000); current.heartbeat.unref?.();
     }
-    if (feed.members.size >= 1000) throw new SpeechError("This translated stream is full. Try again shortly.", 429);
     const member = { by, send, close }; feed.members.add(member);
     this.broadcast(feed, { type: "status", listeners: feed.members.size });
     if (feed.members.size === 1 && !feed.input) void this.start(feed);
@@ -99,14 +105,14 @@ export class SharedTranslations {
   }
   private async checkMembers(feed: Feed): Promise<void> {
     const accounts = [...new Set([...feed.members].map(member => member.by))];
-    let funded = new Set(accounts), message = "Your translation balance is used up or expired. Buy another pass to continue.";
+    let funded = new Set(accounts), message = "This free session ended and audio credit is used up. Start a remaining free session or buy a pass.";
     try {
-      if (this.options.billing?.eligible) funded = new Set(await this.options.billing.eligible(accounts));
+      if (this.options.billing?.eligible) funded = new Set(await this.options.billing.eligible(accounts, feed.id));
       else if (this.options.billing) {
-        const results = await Promise.allSettled(accounts.map(by => this.options.billing!.require(by)));
+        const results = await Promise.allSettled(accounts.map(by => this.options.billing!.require(by, feed.id)));
         funded = new Set(accounts.filter((_by, index) => results[index]?.status === "fulfilled"));
       }
-    } catch { funded.clear(); message = "Your translation balance could not be checked. Try again shortly."; }
+    } catch { funded.clear(); message = "Your translation access could not be checked. Try again shortly."; }
     for (const member of [...feed.members]) if (accounts.includes(member.by) && !funded.has(member.by)) {
       try { member.send({ type: "error", error: message }); } catch { /* disconnected */ }
       finally { this.leave(feed, member); member.close(); }
@@ -123,8 +129,8 @@ export class SharedTranslations {
   }
   private make(id: string, source: URL, language: string): Feed {
     const feed = { id, source, language, members: new Set<Member>(), controller: new AbortController(), reservations: new Map<string, string[]>(), queue: [], speaking: false, previous: Buffer.alloc(0), pending: Buffer.alloc(0), until: Date.now() } as unknown as Feed;
-    // Every active account pays the same published access rate. API work is
-    // done once; additional listeners do not trigger recognition or synthesis.
+    // Each account uses free access first, then the same published credit rate.
+    // Additional listeners do not trigger recognition or synthesis.
     feed.meter = {
       require: async () => { if (!feed.members.size) throw new SpeechError("No listeners.", 410); },
       reserve: async (_by: string, kind: TranslationUsage, units: number) => {
@@ -133,9 +139,9 @@ export class SharedTranslations {
         const accepted = new Set<string>();
         const billing = this.options.billing;
         if (billing?.reserveMany) {
-          for (const charged of await billing.reserveMany(accounts, kind, units)) { ids.push(charged.id); accepted.add(charged.by); }
+          for (const charged of await billing.reserveMany(accounts, kind, units, feed.id)) { ids.push(charged.id); accepted.add(charged.by); }
         } else {
-          const results = await Promise.allSettled(accounts.map(async account => ({ by: account, id: await billing?.reserve(account, kind, units) })));
+          const results = await Promise.allSettled(accounts.map(async account => ({ by: account, id: await billing?.reserve(account, kind, units, feed.id) })));
           let failure: unknown;
           for (const result of results) {
             if (result.status === "fulfilled") { accepted.add(result.value.by); if (result.value.id) ids.push(result.value.id); }
@@ -144,7 +150,7 @@ export class SharedTranslations {
           if (failure) { await Promise.all(ids.map(id => billing!.refund(id))); throw failure; }
         }
         for (const member of [...feed.members]) if (accounts.includes(member.by) && !accepted.has(member.by)) {
-          try { member.send({ type: "error", error: "Your translation balance is used up or expired. Buy another pass to continue." }); }
+          try { member.send({ type: "error", error: "This free session ended and audio credit is used up. Start a remaining free session or buy a pass." }); }
           catch { /* disconnected */ } finally { this.leave(feed, member); member.close(); }
         }
         if (!feed.members.size) { await Promise.all(ids.map(id => this.options.billing!.refund(id))); throw new SpeechError("No funded listeners.", 402); }

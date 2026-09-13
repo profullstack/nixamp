@@ -2968,8 +2968,16 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         if (path === "/api/v1/translation-passes" && request.method === "GET") {
           json(response, 200, await service.access(who?.id)); return;
         }
-        if (!who) throw new SpeechError("Sign in to buy translated audio.", 401);
+        if (!who) throw new SpeechError("Sign in to use translated audio.", 401);
         if (!guard.check(`translation-pass-account:${who.id}`, { allowed: 30, windowMs: 60_000 }).ok) throw new SpeechError("Too many purchase requests.", 429);
+        if (path === "/api/v1/translation-passes/session" && request.method === "POST") {
+          if (!request.headers["content-type"]?.startsWith("application/json")) throw new SpeechError("Send a panel session as JSON.", 415);
+          let body: { resource?: unknown };
+          try { body = JSON.parse(await readBody(request, 1024)); } catch { throw new SpeechError("Choose a panel session.", 400); }
+          if (typeof body?.resource !== "string") throw new SpeechError("Choose a panel session.", 400);
+          await service.begin(who.id, body.resource);
+          json(response, 200, await service.access(who.id)); return;
+        }
         if (path === "/api/v1/translation-passes/checkout" && request.method === "POST") {
           if (!request.headers["content-type"]?.startsWith("application/json")) throw new SpeechError("Send a purchase as JSON.", 415);
           if (!guard.check(`translation-checkout-ip:${caller}`, { allowed: 10, windowMs: 3600_000 }).ok) throw new SpeechError("Too many new checkouts. Resume your pending purchase.", 429);
@@ -3018,7 +3026,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           } else if (path.endsWith("/speakers") && request.method === "POST") {
             if (!request.headers["content-type"]?.startsWith("audio/wav")) { json(response, 415, { error: "send a mono 16 kHz WAV" }); return; }
             const bytes = await readBytes(request, 484_000);
-            json(response, 200, await service.hear(bytes, who.id, controller.signal));
+            const resource = request.headers["x-nixamp-translation-session"];
+            if (resource !== undefined && (typeof resource !== "string" || !/^[\w-]{1,80}$/.test(resource))) throw new SpeechError("Choose a panel session.", 400);
+            json(response, 200, await service.hear(bytes, who.id, controller.signal, undefined, resource));
           } else if (path.endsWith("/grant") && request.method === "POST") {
             if (!request.headers["content-type"]?.startsWith("application/json")) { json(response, 415, { error: "send JSON" }); return; }
             let body: { channel?: unknown };

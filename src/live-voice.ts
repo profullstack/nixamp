@@ -57,9 +57,9 @@ export class LiveVoice {
   /** Optional diarization, billed only while a signed-in listener requests it.
    * Rolling audio is bounded to 15 seconds, including overlap. Every second
    * submitted (also repeated context) consumes the persistent provider budget. */
-  async hear(bytes: Uint8Array, by: string, signal?: AbortSignal, meter = this.billing): Promise<SpeakerTranscript> {
+  async hear(bytes: Uint8Array, by: string, signal?: AbortSignal, meter = this.billing, resource = ""): Promise<SpeakerTranscript> {
     if (!this.available()) throw new SpeechError("speaker voices are unavailable", 503);
-    await meter?.require(by);
+    await meter?.require(by, resource);
     const wav = decodeWav(bytes);
     const seconds = wav.samples.length / wav.rate;
     if (wav.rate !== 16000 || wav.channels !== 1 || seconds < 0.2 || seconds > 15.1) throw new SpeechError("send up to 15 seconds of mono 16 kHz WAV", 400);
@@ -86,7 +86,7 @@ export class LiveVoice {
       form.set("tag_audio_events", "false");
       form.set("timestamps_granularity", "word");
       // No language_code: preserve the source language, including Spanish.
-      reservation = await meter?.reserve(by, "transcription", wav.samples.length);
+      reservation = await meter?.reserve(by, "transcription", wav.samples.length, resource);
       const answer = await this.fetcher("https://api.elevenlabs.io/v1/speech-to-text", {
         method: "POST", headers: { "xi-api-key": this.key }, body: form,
         signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
@@ -122,7 +122,7 @@ export class LiveVoice {
   async grant(by: string, channel: string): Promise<{ token: string; expires: number }> {
     if (!/^[\w-]{1,80}$/.test(channel)) throw new SpeechError("choose a playback session or live channel", 400);
     if (!this.requests.check(`grant:${by}`, { allowed: 10, windowMs: 60_000 }).ok) throw new SpeechError("too many audio authorization requests", 429);
-    await this.billing?.require(by);
+    await this.billing?.require(by, channel);
     for (const [token, grant] of this.grants) if (grant.expires <= this.now()) this.grants.delete(token);
     if (this.grants.size >= 5000) throw new SpeechError("audio authorization is busy", 503);
     const token = `nxd_${randomBytes(32).toString("base64url")}`;
@@ -200,7 +200,7 @@ export class LiveVoice {
   /** Stream the first request immediately; concurrent listeners share its cached result. */
   async stream(ask: VoiceRequest, by: string, signal?: AbortSignal, meter = this.billing): Promise<Response> {
     this.checkRequest(by);
-    await meter?.require(by);
+    await meter?.require(by, ask.channel);
     const text = typeof ask.text === "string" ? ask.text.trim() : "";
     if (!text || text.length > 600) throw new SpeechError("translated audio needs a caption of 1–600 characters", 400);
     if (!LIVE_VOICE_LANGUAGES.has(ask.language)) throw new SpeechError("this language is not supported by Flash voices", 400);
@@ -220,7 +220,7 @@ export class LiveVoice {
     if (cached || pending) {
       const bytes = cached?.bytes ?? await pending!;
       signal?.throwIfAborted();
-      const paid = await meter?.reserve(by, "voice", text.length);
+      const paid = await meter?.reserve(by, "voice", text.length, ask.channel);
       if (paid) await meter!.commit(paid);
       return new Response(new Uint8Array(bytes), { headers: HEADERS });
     }
@@ -239,7 +239,7 @@ export class LiveVoice {
     try {
       await this.charge(by, ask.channel ?? "direct", text.length);
       signal?.throwIfAborted();
-      reservation = await meter?.reserve(by, "voice", text.length);
+      reservation = await meter?.reserve(by, "voice", text.length, ask.channel);
       const response = await this.fetcher(`https://api.elevenlabs.io/v1/text-to-speech/${voice.id}/stream?output_format=pcm_16000`, {
         method: "POST",
         headers: { "xi-api-key": this.key, "content-type": "application/json" },

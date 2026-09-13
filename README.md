@@ -557,6 +557,16 @@ uses its direct model; it does not first translate the audio into English.
 
 ### Hear it in your language
 
+Every signed-in account gets **five free live-use sessions per UTC day**, shared
+across Nixamp's paid panels and upgrades. There is no timed cutoff: a session
+continues while its listener remains, within the existing API usage limits.
+Reconnects to the same session within 90 seconds reuse it. A stopped session
+expires after that grace period; starting again then uses another allowance.
+The counter resets at midnight UTC without interrupting an ongoing session.
+Balance polling, captions and individual voice chunks never consume new sessions.
+Free usage has zero customer charge and leaves purchased credit untouched.
+The panel shows the remaining allowance alongside any purchased credit.
+
 **Buy translated audio** (`$` in the player or Transcript title bar) offers
 prepaid, account-bound passes: **$5 / 24 hours**, **$25 / 7 days**, or **$100 /
 30 days**. Each purchase provides that many dollars of usage credit, not
@@ -587,15 +597,15 @@ multiplied by five. Credentials and balances never travel in checkout URLs.
 New checkout creation is capped at five per account and fifty per account server
 per UTC day, plus IP and request throttles; retries reuse the original invoice.
 
-Account servers require a paid pass by default. Configure `COINPAY_X402_KEY`
+After the five free sessions, new sessions require purchased credit. Configure `COINPAY_X402_KEY`
 with `payments:create` permission and at least one business wallet; the scoped
-key supplies the merchant identity. Existing credit still works during a
+key supplies the merchant identity. Free sessions and existing credit still work during a
 checkout outage. A self-hosted operator explicitly sponsoring API usage may set
 `NIXAMP_TRANSLATION_BILLING=off`.
 
 Live Nixamp channels share **one recognition, translation, and voice pipeline
-per source and target language** on the account server. Every listening account
-pays the same access rate; joining adds no extra recognition or voice generation.
+per source and target language** on the account server. Each listening account
+uses its own free allowance or credit; joining adds no extra recognition or voice generation.
 The pipeline persists while anyone remains and closes its source and pending
 work when the last listener leaves. Disconnecting one viewer does not stop the
 others. Two connections per account, four active source/language pipelines, and
