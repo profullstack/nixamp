@@ -435,7 +435,7 @@ export function start(): void {
    */
   let pending = 0;
   let mediaBusy = false;
-  const loading = (): boolean => pending > 0 || mediaBusy;
+  const loading = (): boolean => !player.needsInteraction && (pending > 0 || mediaBusy);
   async function whileLoading<T>(work: () => Promise<T>): Promise<T> {
     pending += 1;
     draw();
@@ -1008,6 +1008,13 @@ export function start(): void {
   }
 
   async function toggle(): Promise<void> {
+    // A joined channel may have no library tracks at all. Resume its loaded
+    // source on this click, without losing the room or moving the server.
+    if (player.needsInteraction) {
+      await player.play();
+      draw();
+      return;
+    }
     if (remoteDrives()) {
       await remote.send({ type: "toggle" });
       return;
@@ -1294,7 +1301,9 @@ export function start(): void {
     dom.remoteState.dataset.status = mode === "remote" ? remoteStatus : "idle";
     dom.disconnect.hidden = mode !== "remote";
 
-    const message = mode === "remote" && snapshot.note !== "" ? snapshot.note : note;
+    const message = player.needsInteraction
+      ? "Press Play to start playback. Your browser needs a click first."
+      : mode === "remote" && snapshot.note !== "" ? snapshot.note : note;
     dom.note.textContent = message;
     dom.note.hidden = message === "";
     // The same words under the link box, where the person is looking, and
