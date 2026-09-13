@@ -268,6 +268,22 @@
           <!-- Outside the form, because signing out is the one thing you can do
                once the form is gone. -->
           <button id="account-signout" type="button" class="ghost" hidden>Sign out</button>
+          <!-- Who the rooms know you as: the handle on every line, the voice
+               your lines are read in on the phone, and the OpenProfile the
+               voice may be read from. Only once signed in. -->
+          <form id="persona-form" class="picker" hidden>
+            <input id="persona-handle" type="text" maxlength="30" autocomplete="nickname"
+                   placeholder="handle" aria-label="Your public handle" />
+            <select id="persona-voice" aria-label="The voice your lines are read in on the phone">
+              <option value="">Any voice</option>
+              <option value="female">A woman's voice</option>
+              <option value="male">A man's voice</option>
+            </select>
+            <input id="persona-profile" type="url" autocomplete="url"
+                   placeholder="https://you.example/.well-known/openprofile.md" aria-label="Your OpenProfile URL" />
+            <button type="submit" class="button">Save</button>
+          </form>
+          <p class="hint" id="persona-note" hidden></p>
           <!-- The sites that hold a token for this account. Nothing is shown
                until there is something connected, so an account with none
                never sees an empty list asking to be understood. -->
@@ -334,6 +350,11 @@
                     title="Say it instead: tap, talk, tap again, and it is sent">🎤</button>
             <button type="submit" class="button">Send</button>
           </form>
+          <!-- Edit mode: a dictated line waits in the box for Send instead of
+               going straight to the room. Off unless this device turned it on. -->
+          <label class="transcript-switch" id="trollbox-edit-label" hidden>
+            <input type="checkbox" id="trollbox-edit" /> Edit before sending what I say
+          </label>
         </section>
 
         <!-- The transcript: what the live you have joined is saying, written
