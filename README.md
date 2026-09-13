@@ -562,7 +562,8 @@ feature. This uses the direct API; it does not need an MCP server or clone voice
 Supported translation pairs come from `/api/v1/translate`; voice languages are
 also checked before enabling the audio toggle.
 
-A rolling 15-second audio window advances every 5 seconds. Speaker labels are
+For translated audio, a rolling six-second window advances every two seconds.
+Native Whisper captions retain their five-second input. Speaker labels are
 reconciled using overlapping timestamps, with different voices assigned to
 separate speakers. Voices are picked from the available stock catalogue without
 inferring a person's gender from pitch; each detected speaker gets an unused
@@ -572,11 +573,22 @@ receive a new label. Simultaneous speech and noisy crowds can still confuse
 recognition. Native captions never translate to English as
 an intermediate recognition step.
 
-Processing has one active request and only the latest pending window per
-listener; speech queues and response sizes are bounded. Old transcript history
+Recognition, text translation, and streaming voice playback run as separate
+stages. Each stage has at most one active request per listener. Overlapping
+recognition windows recover unprocessed words; unfinished phrases briefly stay
+in context instead of translating every two-second fragment separately. The
+voice player preserves pending speaker turns and fetches the next phrase with
+up to three seconds of audio still queued. Speech queues and decoded audio are
+bounded. Old transcript history
 is never spoken. Pause, seek, source changes, and disabling the feature cancel
 queued speech; errors restore the original audio. This is a delayed live
-interpreter, not a promise of exact lip sync.
+interpreter, not a promise of exact lip sync or word-by-word streaming captions.
+
+OpenStream currently compresses server-to-server relays, not this browser
+translation path. The browser uploads bounded mono 16 kHz WAV clips and plays
+streaming PCM speech. Ordinary media playback already uses its audio/video
+codecs. The short-window overlap ratio and audio-second spending limits remain
+unchanged; smaller windows do not increase the steady-state audio submitted.
 
 Translated playback keeps an approximate version of the original background
 sound. FastEnhancer Web's Tiny model estimates speech locally in a dedicated

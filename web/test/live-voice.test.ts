@@ -99,3 +99,34 @@ test('translation owns the output through initial wait, silent gaps and resets u
   assert.equal(sound.samples.length, 2);
   player.disable(); assert.equal(active.at(-1), false);
 });
+
+test('fetches the next voice while audio plays, preserves queued turns across batches, and bounds lookahead', async () => {
+  let clock = 0;
+  const sound = context(), requested: string[] = [], starts: { at: number; duration: number }[] = [];
+  Object.defineProperty(sound.audio, 'currentTime', { get: () => clock });
+  sound.audio.createBufferSource = (() => {
+    const node = { buffer: null as AudioBuffer | null, connect() {}, disconnect() {}, stop() {}, onended: null,
+      start(at: number) { starts.push({ at, duration: node.buffer!.duration }); } };
+    return node;
+  }) as unknown as typeof sound.audio.createBufferSource;
+  let release!: () => void;
+  const player = new LiveVoicePlayer({
+    audioContext: () => sound.audio, now: () => 7000, volume: () => 1, playing: () => true,
+    active: () => {}, failed: () => assert.fail('unexpected failure'), status: () => {},
+    fetcher: (async url => {
+      requested.push(String(url));
+      if (requested.length === 1) await new Promise<void>(resolve => { release = resolve; });
+      return new Response(new Uint8Array(32000), { headers: { 'content-type': 'audio/pcm' } });
+    }) as typeof fetch,
+  });
+  await player.enable();
+  const item = (id: number) => ({ line: { ...line, at: line.at + id, speaker: String(id) }, url: '/voice/' + id, lag: 0 });
+  player.pushBatch([item(1), item(2)]); await settle();
+  player.pushBatch([item(3), item(4)]); release(); await settle();
+  assert.deepEqual(requested, ['/voice/1', '/voice/2', '/voice/3'], 'next turns fetched without waiting for first audio to end');
+  assert.ok(starts.length > 3, 'a large response is scheduled in bounded chunks');
+  for (let i = 1; i < starts.length; i++) assert.ok(Math.abs(starts[i]!.at - starts[i-1]!.at - starts[i-1]!.duration) < 1e-9, 'continuous scheduled voice timeline');
+  clock = 1; await new Promise(resolve => setTimeout(resolve, 40));
+  assert.deepEqual(requested, ['/voice/1', '/voice/2', '/voice/3', '/voice/4']);
+  player.disable();
+});

@@ -71,3 +71,72 @@ test("voice allocation is unique and ignores pitch, including a noisy opening ph
   const next = low.reconcile([turn("changed-label", 0, 1, "higher")], 1000, voices);
   assert.equal(next.get("changed-label")!.voice, "manual-choice", "manual voice survives recognition label changes");
 });
+
+test('recovers words from a skipped pending window without repeating the overlap', async () => {
+  const now = Date.now(), base = now - 6000, heard: string[] = [];
+  let finish!: (response: Response) => void, requests = 0;
+  const t = (text: string, start: number, end: number) => ({ ...turn('a', start, end), text, words: [{ text, start, end }] });
+  const interpreter = new Interpreter({ language: () => 'es', speakers: () => true, voices: () => voices, channel: () => 'local',
+    lines: lines => heard.push(...lines.map(line => line.text)), status: () => {}, failed: () => assert.fail('unexpected failure'),
+    fetcher: (async () => {
+      if (++requests === 1) return await new Promise<Response>(resolve => { finish = resolve; });
+      return Response.json({ language: 'es', turns: [t('Uno.', .2, 1), t('Dos.', 2.2, 3), t('Tres.', 4.2, 5)] });
+    }) as typeof fetch });
+  const window = (seconds: number) => ({ at: base, until: base + seconds * 1000, freshAt: base + (seconds - 2) * 1000, samples: new Float32Array(seconds * 16000) });
+  interpreter.push(window(2)); interpreter.push(window(4)); interpreter.push(window(6));
+  finish(Response.json({ language: 'es', turns: [t('Uno.', .2, 1)] }));
+  await settle();
+  assert.equal(requests, 2);
+  assert.deepEqual(heard, ['Uno.', 'Dos.', 'Tres.']);
+  interpreter.reset();
+});
+
+test('short capture intervals retain unfinished phrases for context instead of translating sentence fragments', async () => {
+  const now = Date.now(), base = now - 4000, asks: string[][] = [];
+  let requests = 0;
+  const interpreter = new Interpreter({ language: () => 'de', speakers: () => true, voices: () => voices, channel: () => 'local',
+    lines: () => {}, status: () => {}, failed: () => assert.fail('unexpected failure'),
+    fetcher: (async (url, init) => {
+      if (String(url).includes('/speakers')) {
+        const words = [{ text: 'When Rodgers', start: .2, end: 1.85 }];
+        if (++requests > 1) words.push({ text: 'played his best.', start: 2, end: 3.5 });
+        return Response.json({ language: 'en', turns: [{ ...turn('a', .2, words.at(-1)!.end), words }] });
+      }
+      asks.push(JSON.parse(String(init!.body)).texts); return Response.json({ texts: ['Als Rodgers am besten spielte.'] });
+    }) as typeof fetch });
+  interpreter.push({ at: base, until: base + 2000, freshAt: base, samples: new Float32Array(32000) }); await settle();
+  assert.equal(asks.length, 0, 'unfinished opening stays in recognition context');
+  interpreter.push({ at: base, until: now, freshAt: now - 2000, samples: new Float32Array(64000) }); await settle();
+  assert.deepEqual(asks, [['When Rodgers played his best.']]);
+  interpreter.reset();
+});
+
+test('recognition proceeds while translation is pending; reset cancels both stages without late captions', async () => {
+  const now = Date.now(), emitted: Caption[] = [];
+  let heard = 0, translated = 0, finish!: (response: Response) => void;
+  const signals: AbortSignal[] = [];
+  const interpreter = new Interpreter({ language: () => 'de', speakers: () => true, voices: () => voices, channel: () => 'local',
+    lines: lines => emitted.push(...lines), status: () => {}, failed: () => assert.fail('unexpected failure'),
+    fetcher: (async (url, init) => {
+      signals.push(init!.signal!);
+      if (String(url).includes('/speakers')) { heard++; return Response.json({ language: 'es', turns: [turn('a', .2, 1.5)] }); }
+      translated++; return await new Promise<Response>(resolve => { finish = resolve; });
+    }) as typeof fetch });
+  interpreter.push({ at: now - 4000, until: now - 2000, freshAt: now - 4000, samples: new Float32Array(32000) }); await settle();
+  interpreter.push({ at: now - 2000, until: now, freshAt: now - 2000, samples: new Float32Array(32000) }); await settle();
+  assert.equal(heard, 2, 'the text model cannot hold up incoming audio');
+  assert.equal(translated, 1, 'translation remains ordered and bounded to one request');
+  interpreter.reset();
+  assert.ok(signals.at(-1)!.aborted);
+  finish(Response.json({ texts: ['Zu spät.'] })); await settle();
+  assert.equal(emitted.length, 0); assert.equal(translated, 1);
+});
+
+test('long translations are divided without dropping words or speaker metadata', async () => {
+  const { splitCaption } = await import('../src/interpreter.ts');
+  const text = Array.from({ length: 250 }, (_, i) => `Wort${i}`).join(' ');
+  const lines = splitCaption({ channel: 'ufc', at: 1000, until: 6000, text, language: 'de', speaker: 'speaker-2' });
+  assert.equal(lines.map(line => line.text).join(' '), text);
+  assert.ok(lines.every(line => line.text.length <= 600 && line.speaker === 'speaker-2'));
+  assert.ok(lines.every((line, i) => i === 0 || line.at > lines[i-1]!.at));
+});

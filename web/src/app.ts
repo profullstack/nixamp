@@ -3403,7 +3403,7 @@ export function start(): void {
       if (dom.transcriptAudio.checked && dom.transcriptBackground.checked) {
         void background.start(input.context, input.node).then(ready => { if (ready && generation === captureGeneration) background.active(translatedAudioOn && player.playing && dom.transcriptBackground.checked); });
       }
-      await capture.start(input.context, input.node);
+      await capture.start(input.context, input.node, dom.transcriptAudio.checked ? 2 : 5);
       if (generation !== captureGeneration) return;
       capturing = true; captureWanted = true;
       captionsLag = 0;

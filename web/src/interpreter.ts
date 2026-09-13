@@ -53,8 +53,12 @@ export class Interpreter {
   readonly tracker = new SpeakerTracker();
   private generation = 0;
   private pending: AudioWindow | null = null;
+  private committedUntil: number | null = null;
   private running: number | null = null;
   private controller: AbortController | null = null;
+  private translating: number | null = null;
+  private translationController: AbortController | null = null;
+  private translations: { lines: Caption[]; language: string; target: string; until: number }[] = [];
   constructor(private readonly options: {
     language: () => string; speakers: () => boolean; voices: () => VoiceChoice[];
     channel: () => string; lines: (lines: Caption[]) => void;
@@ -62,8 +66,13 @@ export class Interpreter {
     fetcher?: typeof fetch;
   }) {}
 
-  reset(): void { this.generation++; this.controller?.abort(); this.pending = null; this.running = null; this.tracker.reset(); }
+  reset(): void {
+    this.generation++; this.controller?.abort(); this.translationController?.abort();
+    this.pending = null; this.running = null; this.translating = null;
+    this.translations = []; this.committedUntil = null; this.tracker.reset();
+  }
   push(window: AudioWindow): void {
+    this.committedUntil ??= window.freshAt;
     this.pending = window;
     if (this.running === null) void this.run(this.generation);
   }
@@ -90,32 +99,96 @@ export class Interpreter {
         let lines: Caption[] = [];
         if (speakers) {
           const links = this.tracker.reconcile(heard.turns ?? [], window.at, this.options.voices());
-          for (const turn of heard.turns ?? []) {
-            const words = turn.words.filter(word => window.at + (word.start + word.end) * 500 >= window.freshAt);
-            if (!words.length) continue;
+          // The watermark follows emitted words, not the newest capture
+          // interval: an overlapping window can recover audio that arrived
+          // while recognition/translation was busy. Keep unfinished phrases
+          // in that overlap so short capture intervals do not split every
+          // sentence (especially damaging when German changes word order).
+          const cutoff = this.committedUntil ?? window.freshAt;
+          const turns = heard.turns ?? [];
+          for (const [index, turn] of turns.entries()) {
             const speaker = links.get(turn.speaker)!;
-            lines.push({ channel: this.options.channel(), at: window.at + words[0]!.start * 1000, until: window.at + words.at(-1)!.end * 1000,
-              text: words.map(word => word.text).join(" ").trim(), language, speaker: speaker.id, voiceProfile: turn.profile });
+            const words = turn.words.filter(word =>
+              window.at + (word.start + word.end) * 500 >= cutoff &&
+              (window.at + word.end * 1000 <= window.until - 100 || /[.!?。！？]$/.test(word.text)));
+            let phrase: typeof words = [];
+            const emit = (): void => {
+              if (!phrase.length) return;
+              lines.push({ channel: this.options.channel(), at: window.at + phrase[0]!.start * 1000,
+                until: window.at + phrase.at(-1)!.end * 1000, text: phrase.map(word => word.text).join(" ").trim(),
+                language, speaker: speaker.id, voiceProfile: turn.profile });
+              phrase = [];
+            };
+            for (const word of words) {
+              if (phrase.length && word.start - phrase.at(-1)!.end >= 0.45) emit();
+              phrase.push(word);
+              if (/[.!?。！？]$/.test(word.text) || phrase.map(word => word.text).join(" ").length >= 400) emit();
+            }
+            if (phrase.length && (index < turns.length - 1 ||
+              window.until - (window.at + phrase.at(-1)!.end * 1000) >= 350 ||
+              window.until - (window.at + phrase[0]!.start * 1000) >= 3000)) emit();
           }
         } else if (heard.text) {
           lines = [{ channel: this.options.channel(), at: window.freshAt, until: window.until, text: heard.text, language }];
         }
         if (!lines.length) continue;
-        if (target && language !== target) {
-          if (!language) throw new Error("The audio language could not be detected. Waiting for clearer speech.");
-          const translated = await this.json("/api/v1/translate?live=1", {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ texts: lines.map(line => line.text), from: language, to: target }),
-          }, signal) as { texts: string[] };
-          lines = lines.map((line, i) => ({ ...line, original: line.text, sourceLanguage: language, language: target, text: translated.texts[i] ?? "" }));
-        }
-        if (generation !== this.generation) return;
-        if (Date.now() - window.until > 12_000) throw new Error("Translation fell behind. Try again after the language model has warmed up.");
-        this.options.lines(lines.filter(line => line.text.trim() !== "" && line.text.length <= 600));
-        this.options.status(target ? `${language} → ${target} · live translation` : `Original audio language: ${language || "detecting…"}`);
+        this.committedUntil = Math.max(this.committedUntil ?? window.freshAt, ...lines.map(line => line.until));
+        if (this.translations.length >= 12) throw new Error("Translation fell behind. Try again after the language model has warmed up.");
+        this.translations.push({ lines, language, target, until: window.until });
+        // Recognition of the next audio window can proceed while the text
+        // model translates this phrase. Voice synthesis is a third stage.
+        if (this.translating === null) void this.translate(this.generation);
       }
     } catch (error) {
       if (generation === this.generation) { this.reset(); this.options.failed(); this.options.status(error instanceof Error ? error.message : "Live translation stopped."); }
     } finally { if (this.running === generation) this.running = null; }
   }
+
+  private async translate(generation: number): Promise<void> {
+    this.translating = generation;
+    try {
+      while (this.translations.length && generation === this.generation) {
+        const item = this.translations.shift()!;
+        let { lines } = item;
+        const { language, target, until } = item;
+        if (Date.now() - until > 12_000) throw new Error("Translation fell behind. Try again after the language model has warmed up.");
+        const controller = new AbortController(); this.translationController = controller;
+        if (target && language !== target) {
+          if (!language) throw new Error("The audio language could not be detected. Waiting for clearer speech.");
+          const translated = await this.json("/api/v1/translate?live=1", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ texts: lines.map(line => line.text), from: language, to: target }),
+          }, AbortSignal.any([controller.signal, AbortSignal.timeout(12_000)])) as { texts: string[] };
+          if (translated.texts.length !== lines.length || translated.texts.some(text => !text.trim())) throw new Error("Translation omitted a phrase. Enable translated audio again to retry.");
+          lines = lines.map((line, i) => ({ ...line, original: line.text, sourceLanguage: language, language: target, text: translated.texts[i]! }));
+        }
+        if (generation !== this.generation) return;
+        if (Date.now() - until > 12_000) throw new Error("Translation fell behind. Try again after the language model has warmed up.");
+        this.options.lines(lines.flatMap(line => splitCaption(line)));
+        this.options.status(target ? `${language} → ${target} · live translation` : `Original audio language: ${language || "detecting…"}`);
+      }
+    } catch (error) {
+      if (generation === this.generation) { this.reset(); this.options.failed(); this.options.status(error instanceof Error ? error.message : "Live translation stopped."); }
+    } finally { if (this.translating === generation) this.translating = null; }
+  }
+}
+
+/** Preserve all words while respecting the speech API's character limit. */
+export function splitCaption(line: Caption): Caption[] {
+  const text = line.text.trim();
+  if (!text) return [];
+  const parts: string[] = [];
+  let rest = text;
+  while (rest.length > 600) {
+    const space = rest.lastIndexOf(" ", 600);
+    const end = space > 300 ? space : 600;
+    parts.push(rest.slice(0, end)); rest = rest.slice(end).trimStart();
+  }
+  if (rest) parts.push(rest);
+  let offset = 0;
+  return parts.map(part => {
+    const at = line.at + (line.until - line.at) * offset / text.length;
+    offset += part.length + 1;
+    return { ...line, text: part, at, until: Math.min(line.until, line.at + (line.until - line.at) * offset / text.length) };
+  });
 }

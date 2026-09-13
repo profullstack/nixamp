@@ -60,7 +60,7 @@ export class LiveVoice {
     const seconds = wav.samples.length / wav.rate;
     if (wav.rate !== 16000 || wav.channels !== 1 || seconds < 0.2 || seconds > 15.1) throw new SpeechError("send up to 15 seconds of mono 16 kHz WAV", 400);
     if (wav.samples.some(sample => !Number.isFinite(sample))) throw new SpeechError("invalid audio samples", 400);
-    if (!this.requests.check(`hear:${by}`, { allowed: 20, windowMs: 60_000 }).ok) throw new SpeechError("too many speaker transcription requests", 429);
+    if (!this.requests.check(`hear:${by}`, { allowed: 36, windowMs: 60_000 }).ok) throw new SpeechError("too many speaker transcription requests", 429);
     if (quietSamples(wav.samples)) return { language: "", seconds, turns: [] };
     if (this.hearing.has(by) || this.hearing.size >= 4) throw new SpeechError("speaker transcription is busy", 429);
     this.hearing.add(by);
