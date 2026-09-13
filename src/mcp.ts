@@ -18,10 +18,13 @@
  * every diagnostic goes to stderr. That is the one rule of this file.
  */
 import { createInterface } from "node:readline";
+import { basename, extname } from "node:path";
 import { clock, type PartyRow } from "./party.ts";
 import { readSession } from "./session.ts";
-import { askToHear, wavOf } from "./transcribe.ts";
+import { askToHear, awaitTranscript, hearWhole, rendered, wavOf, type Window } from "./transcribe.ts";
 import { readTranscript } from "./transcript.ts";
+import { fetchTranscript, listTranscripts, translateTexts, type StoredTranscript } from "./transcript-client.ts";
+import { fileFingerprint, idFrom, languageCode, mediaOfUrl, transcriptIdOf } from "./transcripts.ts";
 import { personaLines, readPersona, readVoices, writePersona } from "./profile.ts";
 
 export const PROTOCOL_VERSION = "2025-06-18";
@@ -102,16 +105,53 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: "transcribe_audio",
     description:
-      "The words in a recording on this machine, heard by nixamp.com's own open-source ear (Whisper). Any format ffmpeg reads; up to a minute. Given a server, the words are also posted to that server's trollbox as this account.",
+      "The words in a recording, a film or a link on this machine, heard by nixamp.com's own open-source ear (Whisper) a minute at a time, with when each line is said, and kept on nixamp.com under the file's fingerprint so the same file is never heard twice by anybody. Any format ffmpeg reads. Given a server, the recording is a short clip and the words are posted to that server's trollbox as this account instead.",
     inputSchema: {
       type: "object",
       properties: {
-        path: { ...STRING, description: "The recording's path on this machine." },
+        path: { ...STRING, description: "The recording's path on this machine, or a URL ffmpeg can read." },
         language: { ...STRING, description: "A two-letter language code, when Whisper should not guess." },
-        server: { ...STRING, description: "Post the words to this nixamp's trollbox: its address, as in its share link." },
+        translate: { ...STRING, description: "Also in this language: a two-letter code such as de or sv (several: de,sv). Made once on nixamp.com and kept." },
+        format: { ...STRING, description: "How to answer: lines (default, with seconds), srt, vtt or txt." },
+        fresh: { type: "boolean", description: "Hear it again even though it is kept." },
+        server: { ...STRING, description: "Post the words to this nixamp's trollbox: its address, as in its share link. A clip of a minute at most." },
         channel: { ...STRING, description: "Which of that server's channels; its own stream (live) by default." },
       },
       required: ["path"],
+    },
+  },
+  {
+    name: "transcript_get",
+    description:
+      "A kept transcript from nixamp.com: what a file, a link or a past live said, by its id or its media identity (file:v1:<hash>, url:<address>, live:<server>/<channel>@<started>). Ask for a language and it is translated once, on nixamp.com, and kept; a long one is answered with progress and is ready on a later ask.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        media: { ...STRING, description: "The transcript's id, or the media identity." },
+        language: { ...STRING, description: "A two-letter code for a translation; the original when left out." },
+        format: { ...STRING, description: "lines (default, with seconds), srt, vtt or txt." },
+      },
+      required: ["media"],
+    },
+  },
+  {
+    name: "transcripts_list",
+    description: "What this account has had written down on nixamp.com: each transcript's id, what it is, its language, how many lines, and when.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "translate_text",
+    description:
+      "Text in another language, by an open-source model on nixamp.com's own CPU (OPUS-MT). Two-letter codes; German and Swedish among them, and anything with a model from or into English.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { ...STRING, description: "The text. Or `texts`, a list." },
+        texts: { type: "array", items: STRING, description: "Several texts, answered in the same order." },
+        from: { ...STRING, description: "The language the text is in, e.g. en." },
+        to: { ...STRING, description: "The language wanted, e.g. sv." },
+      },
+      required: ["from", "to"],
     },
   },
   {
@@ -131,13 +171,14 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: "transcript_read",
     description:
-      "What a live channel is saying: the recent lines of its transcript, oldest first, each with when its sound was heard. The server carrying the channel captions it while somebody asks. Pass the server's address and share key, and the channel's id.",
+      "What a live channel is saying: the recent lines of its transcript, oldest first, each with when its sound was heard. The server carrying the channel captions it while somebody asks, and translates each line when a language is asked for. Pass the server's address and share key, and the channel's id.",
     inputSchema: {
       type: "object",
       properties: {
         url: { ...STRING, description: "The nixamp server's address, e.g. https://server1.chovy.nixamp.com:4321." },
         key: { ...STRING, description: "The share key from its link, when it has one." },
         channel: { ...STRING, description: "The channel's id on that server (default: main)." },
+        language: { ...STRING, description: "The lines in this language (a two-letter code); as heard when left out." },
         after: { type: "number", description: "Only lines heard after this moment (ms since the epoch)." },
       },
       required: ["url"],
@@ -198,7 +239,21 @@ export interface McpOptions {
   session?: { site: string; token: string } | null;
   /** How a recording becomes a WAV; the tests hand in a fake. */
   wavOf?: typeof wavOf;
+  /** The whole of a file as windows of sound, and a file's identity; the tests hand in fakes. */
+  windows?: (source: string) => AsyncIterable<Window>;
+  fingerprint?: (path: string) => string;
+  sleep?: (ms: number) => Promise<void>;
+  /** How many times a translation is asked about before answering with its progress. */
+  polls?: number;
   say?: (line: string) => void;
+}
+
+/** A kept transcript, as a tool answers it. */
+function transcriptText(transcript: StoredTranscript, format: string): string {
+  const shape = format === "srt" || format === "vtt" || format === "txt" ? format : "lines";
+  const head = `${transcript.title || transcript.media} (${transcript.id.slice(0, 12)}), ${transcript.language || "language unknown"}${transcript.translatedFrom ? ` from ${transcript.translatedFrom}` : ""}, ${transcript.lines.length} lines${transcript.complete ? "" : ", so far"}`;
+  const others = transcript.languages.filter((one) => one.language !== transcript.language).map((one) => one.language || "original");
+  return `${head}${others.length > 0 ? `; also in ${others.join(", ")}` : ""}\n\n${rendered(transcript.lines, shape)}`;
 }
 
 /** A tool answer, in the shape MCP wants: content blocks, and a flag for failure. */
@@ -309,22 +364,101 @@ export async function callTool(name: string, args: Record<string, unknown>, opti
     if (name === "transcribe_audio") {
       const path = typeof args["path"] === "string" ? args["path"] : "";
       if (!path) return failed("Which recording? Pass its path.");
-      let wav: Uint8Array;
-      try {
-        wav = (options.wavOf ?? wavOf)(path);
-      } catch (error) {
-        return failed((error as Error).message);
+      const language = languageCode(args["language"]) || undefined;
+      if (server) {
+        let wav: Uint8Array;
+        try {
+          wav = (options.wavOf ?? wavOf)(path);
+        } catch (error) {
+          return failed((error as Error).message);
+        }
+        const answer = await askToHear(session, { wav, ...(language ? { language } : {}), server, channel }, send, site);
+        if (!answer.ok) return failed(answer.error);
+        if (answer.heard.text === "") return text("Heard nothing in that recording.");
+        return text(answer.heard.message
+          ? `${answer.heard.text}\n\nSaid in the room for ${channel} at ${server} as ${answer.heard.message.handle}.`
+          : answer.heard.text);
       }
-      const answer = await askToHear(session, {
-        wav,
-        ...(typeof args["language"] === "string" ? { language: args["language"] } : {}),
-        ...(server ? { server, channel } : {}),
-      }, send, site);
-      if (!answer.ok) return failed(answer.error);
-      if (answer.heard.text === "") return text("Heard nothing in that recording.");
-      return text(answer.heard.message
-        ? `${answer.heard.text}\n\nSaid in the room for ${channel} at ${server} as ${answer.heard.message.handle}.`
-        : answer.heard.text);
+      // The whole of it, kept under what it is.
+      let media: string;
+      try {
+        media = /^https?:\/\//.test(path) ? mediaOfUrl(path) : (options.fingerprint ?? fileFingerprint)(path);
+      } catch {
+        return failed(`cannot read ${path}`);
+      }
+      const id = transcriptIdOf(media);
+      const title = /^https?:\/\//.test(path) ? path : basename(path, extname(path));
+      const format = typeof args["format"] === "string" ? args["format"] : "lines";
+      const signed = { site, token: session.token };
+      let original: StoredTranscript | null = null;
+      if (args["fresh"] !== true) {
+        const kept = await fetchTranscript(signed, id, "", send);
+        if (kept.ok && kept.body.complete) original = kept.body;
+        else if (!kept.ok && kept.status !== 404) return failed(kept.error);
+      }
+      if (!original) {
+        const heard = await hearWhole(signed, path, media, { ...(language ? { language } : {}), title }, {
+          fetcher: send,
+          ...(options.windows ? { windows: options.windows } : {}),
+          ...(options.sleep ? { sleep: options.sleep } : {}),
+          ...(options.say ? { onProgress: options.say } : {}),
+        });
+        if (!heard.ok) return failed(heard.error);
+        if (heard.heard.lines.length === 0) return text("Heard nothing in that.");
+        const kept = await fetchTranscript(signed, id, "", send);
+        original = kept.ok ? kept.body : {
+          id, media, kind: "file", language: heard.heard.language, translatedFrom: null, model: heard.heard.model, complete: true, title,
+          seconds: heard.heard.seconds, updatedAt: "", lines: heard.heard.lines, languages: [],
+        };
+      }
+      const wanted = (typeof args["translate"] === "string" ? args["translate"] : "").split(",").map((one) => languageCode(one)).filter((one): one is string => typeof one === "string" && one !== "");
+      const parts = [transcriptText(original, format)];
+      for (const to of wanted) {
+        if (to === original.language) continue;
+        const got = await awaitTranscript(signed, id, to, { fetcher: send, ...(options.sleep ? { sleep: options.sleep } : {}), ...(options.polls !== undefined ? { polls: options.polls } : {}) });
+        if (!got.ok) return failed(`could not get it in ${to}: ${got.error}`);
+        parts.push(got.body.translating
+          ? `In ${to}: still being translated, ${got.body.translating.done} of ${got.body.translating.total} lines. Ask transcript_get for ${id} in ${to} in a moment.`
+          : transcriptText(got.body, format));
+      }
+      return text(parts.join("\n\n"));
+    }
+
+    if (name === "transcript_get") {
+      const named = typeof args["media"] === "string" ? args["media"].trim() : "";
+      if (!named) return failed("Which transcript? Pass its id or the media identity.");
+      const language = languageCode(args["language"]);
+      if (language === null) return failed("language is a two-letter code, such as de or sv.");
+      const got = await awaitTranscript({ site, token: session.token }, idFrom(named), language, {
+        fetcher: send, ...(options.sleep ? { sleep: options.sleep } : {}), polls: options.polls ?? 1,
+      });
+      if (!got.ok) return failed(got.error);
+      if (got.body.translating) {
+        return text(`Still being translated to ${language}: ${got.body.translating.done} of ${got.body.translating.total} lines. Ask again in a moment.`);
+      }
+      return text(transcriptText(got.body, typeof args["format"] === "string" ? args["format"] : "lines"));
+    }
+
+    if (name === "transcripts_list") {
+      const got = await listTranscripts({ site, token: session.token }, send);
+      if (!got.ok) return failed(got.error);
+      if (got.body.transcripts.length === 0) return text("Nothing has been written down for this account yet.");
+      return text(got.body.transcripts.map((one) =>
+        `${one.id}  ${one.language || "?"}${one.translatedFrom ? `<${one.translatedFrom}` : ""}  ${one.lines} lines${one.complete ? "" : " so far"}  ${one.title || one.media}  ${one.updatedAt}`,
+      ).join("\n"));
+    }
+
+    if (name === "translate_text") {
+      const texts = Array.isArray(args["texts"])
+        ? args["texts"].filter((one): one is string => typeof one === "string")
+        : typeof args["text"] === "string" ? [args["text"]] : [];
+      if (texts.length === 0) return failed("Translate what? Pass text, or texts.");
+      const from = languageCode(args["from"]);
+      const to = languageCode(args["to"]);
+      if (!from || !to) return failed("from and to are two-letter language codes, such as en and sv.");
+      const got = await translateTexts({ site, token: session.token }, texts, from, to, send);
+      if (!got.ok) return failed(got.error);
+      return text(got.body.texts.join("\n"));
     }
 
     if (name === "trollbox_say") {
@@ -349,6 +483,7 @@ export async function callTool(name: string, args: Record<string, unknown>, opti
         channel === "live" ? "main" : channel,
         typeof args["after"] === "number" ? args["after"] : 0,
         send,
+        languageCode(args["language"]) || "",
       );
       if (!got.ok) return failed(got.error);
       if (got.answer.recent.length === 0) {
@@ -409,9 +544,9 @@ export async function handleMessage(message: Request, options: McpOptions = {}):
     return reply({
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "nixamp", title: "nixamp: watch parties and rooms", version: "1" },
+      serverInfo: { name: "nixamp", title: "nixamp: watch parties, rooms and transcripts", version: "2" },
       instructions:
-        "Watch parties on nixamp. A party lives on the site hosting the film and is bridged here as a room every nixamp client can join. Codes are the ones that site shows; positions are seconds into the film.",
+        "Watch parties on nixamp: a party lives on the site hosting the film and is bridged here as a room every nixamp client can join; codes are the ones that site shows, positions are seconds into the film. Rooms: say and read trollbox lines, hear a recording. Transcripts: a file, a link or a live is written down once by nixamp.com's own ear and kept under what it is; ask for it in another language and it is translated once and kept too.",
     });
   }
   // Notifications carry no id and are answered with silence, which is what

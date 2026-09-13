@@ -11,6 +11,8 @@
  */
 
 export const CAPTIONS_KEY = "nixamp.captions";
+/** The language this device wants its captions in; "" is as spoken. */
+export const CAPTIONS_LANGUAGE_KEY = "nixamp.captions.language";
 
 export interface Caption {
   channel: string;
@@ -18,6 +20,52 @@ export interface Caption {
   at: number;
   until: number;
   text: string;
+  /** The language of the words: as heard, or as translated into. */
+  language?: string;
+  /** What was heard, when this line is a translation of it. */
+  original?: string;
+}
+
+/**
+ * The languages the picker offers: the ones nixamp.com has a model into
+ * from English, which every other language reaches through. "" is what
+ * the channel is saying, untranslated.
+ */
+export const LANGUAGE_CHOICES: { code: string; label: string }[] = [
+  { code: "", label: "As spoken" },
+  { code: "en", label: "English" },
+  { code: "de", label: "Deutsch" },
+  { code: "sv", label: "Svenska" },
+  { code: "es", label: "Español" },
+  { code: "fr", label: "Français" },
+  { code: "it", label: "Italiano" },
+  { code: "nl", label: "Nederlands" },
+  { code: "da", label: "Dansk" },
+  { code: "fi", label: "Suomi" },
+  { code: "ru", label: "Русский" },
+  { code: "uk", label: "Українська" },
+  { code: "cs", label: "Čeština" },
+  { code: "hu", label: "Magyar" },
+  { code: "zh", label: "中文" },
+  { code: "ar", label: "العربية" },
+  { code: "hi", label: "हिन्दी" },
+  { code: "vi", label: "Tiếng Việt" },
+  { code: "id", label: "Bahasa Indonesia" },
+];
+
+/** The language this device asked for, if it is one on offer; "" otherwise. */
+export function captionsLanguage(read: (key: string) => string | null): string {
+  try {
+    const code = (read(CAPTIONS_LANGUAGE_KEY) ?? "").trim().toLowerCase();
+    return LANGUAGE_CHOICES.some((one) => one.code === code) ? code : "";
+  } catch {
+    return "";
+  }
+}
+
+/** A translated line is marked with its language, so a reader knows it is not what was said. */
+export function captionLabel(line: Caption): string {
+  return line.original !== undefined && line.language ? `[${line.language}] ` : "";
 }
 
 /**

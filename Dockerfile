@@ -34,11 +34,27 @@ COPY desktop/package.json desktop/package.json
 COPY backtoschool/package.json backtoschool/package.json
 RUN bun install --frozen-lockfile --production
 
+# The models, fetched once here rather than at the first ask after every
+# deploy: the filesystem is thrown away each time, and the ear (80 MB) plus
+# the German and Swedish translation pairs (about 100 MB each) are what a
+# caption, a dictated line and a translated transcript wait for. See
+# src/warm.ts; NIXAMP_MT_WARM names the pairs.
+FROM oven/bun:1 AS models
+WORKDIR /app
+ENV NIXAMP_STT_CACHE=/app/models
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/package.json ./package.json
+RUN bun dist/warm.js
+
 FROM oven/bun:1-slim
 WORKDIR /app
 ENV NODE_ENV=production
+# Where the models are: the ones baked in above, and anything asked for later.
+ENV NIXAMP_STT_CACHE=/app/models
 
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=models /app/models ./models
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/web/dist ./web/dist
 COPY --from=build /app/package.json ./package.json

@@ -23,7 +23,7 @@ import { isTelevision, pageSize, pageWindow, TV_KEY } from "./tv.ts";
 import { isVideoFile, localPlayback, parseList, type ListEntry } from "./links.ts";
 import { PANELS_KEY, type PanelLayout, emptyLayout, orderedIds, parseLayout, serializeLayout, toggled } from "./panels.ts";
 import { DICTATE_MAX_MS, DICTATE_RATE, encodeWav, listeningLabel, recordingMime } from "./dictate.ts";
-import { CAPTIONS_KEY, type Caption, captionsWanted, due, lagMs, showing, whenLabel } from "./captions.ts";
+import { CAPTIONS_KEY, CAPTIONS_LANGUAGE_KEY, LANGUAGE_CHOICES, type Caption, captionLabel, captionsLanguage, captionsWanted, due, lagMs, showing, whenLabel } from "./captions.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
 
@@ -235,6 +235,7 @@ export function start(): void {
     transcriptPanel: need<HTMLElement>("transcript-panel"),
     transcriptNote: need<HTMLParagraphElement>("transcript-note"),
     transcriptOn: need<HTMLInputElement>("transcript-on"),
+    transcriptLanguage: need<HTMLSelectElement>("transcript-language"),
     transcriptList: need<HTMLUListElement>("transcript-list"),
     subtitle: need<HTMLDivElement>("subtitle"),
     shareNote: need<HTMLParagraphElement>("share-note"),
@@ -3243,6 +3244,8 @@ export function start(): void {
   // The transcript's state, up here for the same reason: drawTranscript()
   // runs from draw().
   let captionsOn = captionsWanted((key) => localStorage.getItem(key));
+  /** The language this device wants the lines in; "" is as spoken. */
+  let captionsIn = captionsLanguage((key) => localStorage.getItem(key));
   let captionsKey = "";
   let captionsSource: EventSource | null = null;
   let captionsLag = lagMs(6, false);
@@ -3672,12 +3675,16 @@ export function start(): void {
   /** The panel shown for a channel and its lines flowing, or hidden and quiet. Called from draw(). */
   function drawTranscript(): void {
     const room = transcriptRoom();
-    const key = room ? `${room.id}|${room.hls}|${captionsOn}` : "";
+    const key = room ? `${room.id}|${room.hls}|${captionsOn}|${captionsIn}` : "";
     if (key === captionsKey) return;
     captionsKey = key;
     closeCaptions();
     dom.transcriptPanel.hidden = room === null;
     dom.transcriptOn.checked = captionsOn;
+    if (dom.transcriptLanguage.options.length === 0) {
+      for (const choice of LANGUAGE_CHOICES) dom.transcriptLanguage.append(new Option(choice.label, choice.code));
+    }
+    dom.transcriptLanguage.value = captionsIn;
     if (!room) return;
     if (!captionsOn) {
       dom.transcriptNote.textContent = `Captions are off on this device. Turn them on and ${room.name} is written down as it speaks.`;
@@ -3691,8 +3698,11 @@ export function start(): void {
     // Asked as JSON first: a server that cannot caption says why in a
     // sentence, where an EventSource would only retry forever in silence.
     let backlog = 6;
+    // The language rides on both asks: "" is as spoken, anything else is
+    // translated on nixamp.com as each line is heard.
+    const inLanguage = captionsIn ? `?language=${encodeURIComponent(captionsIn)}` : "";
     try {
-      const answer = await fetch(remote.url(`/api/channels/${encodeURIComponent(room.id)}/transcript`));
+      const answer = await fetch(remote.url(`/api/channels/${encodeURIComponent(room.id)}/transcript${inLanguage}`));
       const body = (await answer.json().catch(() => ({}))) as { error?: string; backlog?: number; lines?: Caption[] };
       if (key !== captionsKey) return;
       if (!answer.ok) {
@@ -3705,19 +3715,22 @@ export function start(): void {
       return;
     }
     captionsLag = lagMs(backlog, room.hls);
-    const source = new EventSource(remote.url(`/api/channels/${encodeURIComponent(room.id)}/captions`));
+    const source = new EventSource(remote.url(`/api/channels/${encodeURIComponent(room.id)}/captions${inLanguage}`));
     captionsSource = source;
     const take = (lines: Caption[]): void => {
       for (const line of lines) if (line && typeof line.text === "string" && Number.isFinite(line.at)) captionsHeld.push(line);
     };
     source.addEventListener("hello", (event) => {
       if (key !== captionsKey) return;
-      const hello = JSON.parse((event as MessageEvent<string>).data) as { backlog?: number; lines?: Caption[]; error?: string };
+      const hello = JSON.parse((event as MessageEvent<string>).data) as { backlog?: number; lines?: Caption[]; error?: string; language?: string; known?: number };
       captionsLag = lagMs(hello.backlog ?? backlog, room.hls);
       take(hello.lines ?? []);
+      const spoken = hello.language ? ` It speaks ${LANGUAGE_CHOICES.find((one) => one.code === hello.language)?.label ?? hello.language}.` : "";
+      const translated = captionsIn && captionsIn !== hello.language ? ` Translated to ${LANGUAGE_CHOICES.find((one) => one.code === captionsIn)?.label ?? captionsIn} as it goes.` : "";
+      const known = hello.known ? ` ${hello.known} lines were already written down.` : "";
       dom.transcriptNote.textContent = hello.error
         ? `Captions for ${room.name} are not coming: ${hello.error}`
-        : `What ${room.name} is saying, a few seconds behind the sound.`;
+        : `What ${room.name} is saying, a few seconds behind the sound.${spoken}${translated}${known}`;
     });
     source.addEventListener("line", (event) => {
       if (key !== captionsKey) return;
@@ -3741,7 +3754,17 @@ export function start(): void {
     text.className = "line";
     // textContent, always: it is what somebody said, heard by a model.
     text.textContent = line.text;
-    item.append(when, text);
+    const label = captionLabel(line);
+    if (label) {
+      const lang = document.createElement("span");
+      lang.className = "lang";
+      lang.textContent = label.trim();
+      // What was heard, under the pointer.
+      if (line.original) text.title = line.original;
+      item.append(when, lang, text);
+    } else {
+      item.append(when, text);
+    }
     return item;
   }
 
@@ -3778,6 +3801,17 @@ export function start(): void {
       localStorage.setItem(CAPTIONS_KEY, captionsOn ? "on" : "off");
     } catch {
       // A device that remembers nothing still gets captions this once.
+    }
+    drawTranscript();
+  });
+
+  dom.transcriptLanguage.addEventListener("change", () => {
+    captionsIn = captionsLanguage(() => dom.transcriptLanguage.value);
+    try {
+      if (captionsIn) localStorage.setItem(CAPTIONS_LANGUAGE_KEY, captionsIn);
+      else localStorage.removeItem(CAPTIONS_LANGUAGE_KEY);
+    } catch {
+      // Then it is this once.
     }
     drawTranscript();
   });

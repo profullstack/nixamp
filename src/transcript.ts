@@ -12,19 +12,28 @@
  * share link, or the daemon on this machine when neither is given.
  */
 import { resolveTarget } from "./admin.ts";
+import { readSession, type Session } from "./session.ts";
 import { KEY_HEADER } from "./share.ts";
+import { awaitTranscript, rendered } from "./transcribe.ts";
+import { listTranscripts } from "./transcript-client.ts";
+import { idFrom, languageCode } from "./transcripts.ts";
 
 const HELP = `nixamp transcript — what a channel is saying, written down.
 
   nixamp transcript --channel ID                 the recent lines from this machine's daemon
   nixamp transcript --url URL --key K --channel ID   from another server, with its share link
   nixamp transcript ... --follow                 and keep printing as it speaks
+  nixamp transcript ... --language sv            the lines in Swedish, translated as they are said
   nixamp transcript ... --json                   the lines as JSON
+  nixamp transcript --kept MEDIA_OR_ID [--language de] [--srt|--vtt|--txt]
+                                                 a transcript nixamp.com keeps: a file's, a link's, a past live's
+  nixamp transcript --list                       what this account has had written down
 
 ID is the channel's id as the server names it (the address bar says it when
 you are watching one). The server captions a channel while somebody is asking
 for the transcript, with nixamp.com's ear; it needs an ffmpeg and a sign-in
-(\`nixamp login\`) on that server.
+(\`nixamp login\`) on that server. What it hears is kept on nixamp.com under
+what the channel is playing, and read back from there the next time.
 `;
 
 export interface TranscriptLine {
@@ -32,6 +41,8 @@ export interface TranscriptLine {
   at: number;
   until: number;
   text: string;
+  language?: string;
+  original?: string;
 }
 
 export interface TranscriptAnswer {
@@ -53,9 +64,11 @@ export async function readTranscript(
   channel: string,
   after = 0,
   fetcher: typeof fetch = fetch,
+  language = "",
 ): Promise<Fetched> {
   const url = new URL(`${target.url.replace(/\/+$/, "")}/api/channels/${encodeURIComponent(channel)}/transcript`);
   if (after > 0) url.searchParams.set("after", String(after));
+  if (language) url.searchParams.set("language", language);
   let response: Response;
   try {
     response = await fetcher(url.toString(), { headers: target.key ? { [KEY_HEADER]: target.key } : {} });
@@ -81,11 +94,11 @@ export async function readTranscript(
   };
 }
 
-/** A line as the terminal prints it: the time its sound was heard, then the words. */
+/** A line as the terminal prints it: the time its sound was heard, then the words; a translation says its language. */
 export function printed(line: TranscriptLine): string {
   const at = new Date(line.at);
   const clock = Number.isNaN(at.getTime()) ? "--:--:--" : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  return `${clock}  ${line.text}`;
+  return `${clock}  ${line.original !== undefined && line.language ? `[${line.language}] ` : ""}${line.text}`;
 }
 
 function flag(argv: string[], name: string): string | undefined {
@@ -100,6 +113,59 @@ export interface TranscriptDeps {
   /** How many asks --follow makes before it stops. Forever, except in the tests. */
   polls?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** The sign-in, for what nixamp.com keeps; the tests hand one in. */
+  session?: Pick<Session, "site" | "token"> | null;
+}
+
+/** `--kept` and `--list`: what nixamp.com keeps, rather than what a server is saying now. */
+async function kept(argv: string[], deps: TranscriptDeps, language: string): Promise<number> {
+  const session = deps.session === undefined ? readSession() : deps.session;
+  if (session === null) {
+    console.error("nixamp: not signed in. Try `nixamp login`.");
+    return 1;
+  }
+  const fetcher = deps.fetcher ?? fetch;
+  if (argv.includes("--list")) {
+    const got = await listTranscripts(session, fetcher);
+    if (!got.ok) {
+      console.error(`nixamp: ${got.error}`);
+      return 1;
+    }
+    if (argv.includes("--json")) {
+      console.log(JSON.stringify(got.body.transcripts, null, 2));
+      return 0;
+    }
+    if (got.body.transcripts.length === 0) {
+      console.log("Nothing written down yet. `nixamp transcribe FILE` keeps a file; a captioned channel keeps itself.");
+      return 0;
+    }
+    for (const one of got.body.transcripts) {
+      console.log(`${one.id}  ${(one.language || "?").padEnd(2)}${one.translatedFrom ? `<${one.translatedFrom}` : "   "}  ${String(one.lines).padStart(5)} lines${one.complete ? " " : "+"}  ${one.title || one.media}`);
+    }
+    return 0;
+  }
+  const named = flag(argv, "--kept") ?? "";
+  if (!named) {
+    console.error("nixamp: --kept needs the transcript's id, or the media identity.");
+    return 64;
+  }
+  const got = await awaitTranscript(session, idFrom(named), language, {
+    fetcher, onProgress: (line) => console.error(line), ...(deps.sleep ? { sleep: deps.sleep } : {}), ...(deps.polls !== undefined ? { polls: deps.polls } : {}),
+  });
+  if (!got.ok) {
+    console.error(`nixamp: ${got.error}`);
+    return 1;
+  }
+  if (got.body.translating) {
+    console.error(`nixamp: still being translated (${got.body.translating.done} of ${got.body.translating.total}); ask again in a moment.`);
+    return 1;
+  }
+  if (argv.includes("--json")) {
+    console.log(JSON.stringify(got.body, null, 2));
+    return 0;
+  }
+  console.log(rendered(got.body.lines, argv.includes("--srt") ? "srt" : argv.includes("--vtt") ? "vtt" : argv.includes("--txt") ? "txt" : "lines"));
+  return 0;
 }
 
 export async function transcript(argv: string[], deps: TranscriptDeps = {}): Promise<number> {
@@ -107,6 +173,12 @@ export async function transcript(argv: string[], deps: TranscriptDeps = {}): Pro
     console.log(HELP);
     return 0;
   }
+  const language = languageCode(flag(argv, "--language"));
+  if (language === null) {
+    console.error("nixamp: --language is a two-letter code, such as sv.");
+    return 64;
+  }
+  if (argv.includes("--kept") || argv.includes("--list")) return kept(argv, deps, language);
   let target: { url: string; key: string | null };
   try {
     target = resolveTarget(argv);
@@ -122,7 +194,7 @@ export async function transcript(argv: string[], deps: TranscriptDeps = {}): Pro
   let after = 0;
   let polls = 0;
   for (;;) {
-    const got = await readTranscript(target, channel, after, fetcher);
+    const got = await readTranscript(target, channel, after, fetcher, language);
     if (!got.ok) {
       console.error(`nixamp: ${got.error}`);
       return 1;

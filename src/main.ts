@@ -84,8 +84,9 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp server list|add|remove  the machines you run, kept against your account
   nixamp party list|join|host   watch parties, here and on the sites nixamp is connected to
   nixamp mcp                     speak Model Context Protocol on stdin, for an agent
-  nixamp transcribe FILE [--say SERVER]  the words in a recording, and into a trollbox
-  nixamp transcript --channel ID [--follow]  what a channel is saying, as it says it
+  nixamp transcribe FILE [--translate sv]  a recording or a whole film written down, kept, and in other languages
+  nixamp transcript --channel ID [--follow]  what a channel is saying, as it says it; --kept for what nixamp.com keeps
+  nixamp translate --to sv TEXT  say it in another language
   nixamp profile [--handle H] [--voice V] [--profile URL]  who the rooms know you as
   nixamp voices                  the voices a line is read in on the phone
   nixamp opendir list|add|remove  folders found on the web, published for everyone
@@ -267,31 +268,60 @@ takes it away again.
   nixamp mcp    speak Model Context Protocol on stdin and stdout
 
 It offers the watch party tools: list them, read one, put one on the air,
-say where playback is, end it. And the room tools: transcribe a recording
-(transcribe_audio, which can post the words straight into a trollbox), say a
-line in a room (trollbox_say), read a room (trollbox_read), read what a
-channel is saying (transcript_read), and who you are in the rooms and how
-you sound on the phone (profile_get, profile_set, voices_list). It acts as
-whoever this machine is signed in as, so \`nixamp login\` (or NIXAMP_TOKEN)
-comes first.
+say where playback is, end it. The room tools: transcribe a recording or a
+whole film (transcribe_audio, kept on nixamp.com, translated on request, or
+posted straight into a trollbox), say a line in a room (trollbox_say), read
+a room (trollbox_read), read what a channel is saying (transcript_read, in
+any language). The transcript tools: a kept transcript by its id or its
+media (transcript_get), what this account has had written down
+(transcripts_list), and text in another language (translate_text). And who
+you are in the rooms and how you sound on the phone (profile_get,
+profile_set, voices_list). It acts as whoever this machine is signed in as,
+so \`nixamp login\` (or NIXAMP_TOKEN) comes first.
 
-Point an MCP client at it as a stdio server running \`nixamp mcp\`.
+Point an MCP client at it as a stdio server running \`nixamp mcp\`. The same
+tools are at https://nixamp.com/mcp over HTTP, with a nixamp token
+(\`nixamp token create\`) as the bearer, for an agent with no nixamp installed.
 `,
   transcribe: `nixamp transcribe — say it, and have it written down.
 
-  nixamp transcribe FILE                  the words in a recording
-  nixamp transcribe FILE --say SERVER     and post them to that server's trollbox
-  nixamp transcribe FILE --say SERVER --channel ID   to one channel's room (default: live)
-  nixamp transcribe FILE --language de    when Whisper should not guess
+  nixamp transcribe FILE                  the words in a recording, or a whole film, kept on nixamp.com
+  nixamp transcribe URL                   the same for a link ffmpeg can read
+  nixamp transcribe FILE --language sv    when Whisper should not guess
+  nixamp transcribe FILE --translate de   and in German too (de,sv for both)
+  nixamp transcribe FILE --srt | --vtt    as subtitles, on stdout
+  nixamp transcribe FILE --out DIR        subtitle files in DIR, one per language
+  nixamp transcribe FILE --fresh          hear it again even though it is kept
   nixamp transcribe FILE --json           the answer as JSON
+  nixamp transcribe CLIP --say SERVER     a short clip, posted to that server's trollbox
+  nixamp transcribe CLIP --say SERVER --channel ID   to one channel's room (default: live)
 
-FILE is any recording ffmpeg can read; a WAV needs no ffmpeg at all. The
-hearing is done by nixamp.com with an open-source model (Whisper, through
-Transformers.js) on its own CPU: nothing goes to a speech vendor. It needs a
-sign-in (\`nixamp login\`) and nothing else. Up to a minute at a time.
+FILE is any recording ffmpeg can read; a WAV under a minute needs no ffmpeg
+at all. The hearing is done by nixamp.com with an open-source model (Whisper,
+through Transformers.js) on its own CPU: nothing goes to a speech vendor. It
+needs a sign-in (\`nixamp login\`) and nothing else.
+
+A film is heard a minute at a time, with when each line is said, and kept on
+nixamp.com under the file's fingerprint: the next \`nixamp transcribe\` of the
+same file, on any machine, and the next server to put it on the air, read
+the lines instead of hearing them. A translation is made once, on nixamp.com
+with an open-source model (OPUS-MT), and kept beside the original.
 
 The same ear is behind the microphone button in every nixamp.com trollbox,
 and behind the transcribe_audio tool of \`nixamp mcp\`.
+`,
+  translate: `nixamp translate — say it in another language.
+
+  nixamp translate --to sv "Hello there"      Swedish, from English
+  nixamp translate --from de --to en "Guten Tag"
+  cat lines.txt | nixamp translate --to de    each line, in order
+  nixamp translate --languages                what nixamp.com can translate between
+
+The models are open-source (OPUS-MT, through Transformers.js) and run on
+nixamp.com's own CPU; a pair with no model of its own goes through English.
+Needs a sign-in (\`nixamp login\`). The same models turn a live's captions
+into another language as they are said, and a kept transcript into one on
+request.
 `,
   profile: `nixamp profile — who the rooms know you as.
 
@@ -312,13 +342,22 @@ one picked for the account and kept. Two people in a room are two voices.
   nixamp transcript --channel ID                 the recent lines from this machine's daemon
   nixamp transcript --url URL --key K --channel ID   from another server, with its share link
   nixamp transcript ... --follow                 and keep printing as it speaks
+  nixamp transcript ... --language sv            the lines in Swedish, translated as they are said
   nixamp transcript ... --json                   the lines as JSON
+  nixamp transcript --kept MEDIA_OR_ID [--language de] [--srt|--vtt|--txt]
+                                                 a transcript nixamp.com keeps: a file's, a link's, a past live's
+  nixamp transcript --list                       what this account has had written down
 
 A server captions a channel while somebody is asking for its transcript: its
 own ffmpeg turns the sound into five-second windows, nixamp.com's ear turns
 those into lines, each stamped with when its sound was heard. The page shows
 them as subtitles, held until its own sound gets there; this prints them.
 The server needs an ffmpeg and a sign-in (\`nixamp login\`).
+
+What it hears is kept on nixamp.com under what the channel is playing: a
+film by its bytes, a link by its address, a live as the one broadcast it
+was. A channel playing something already kept reads the lines instead of
+hearing them, and a language asked for is translated once and kept too.
 `,
   attach: `nixamp attach — the player, in front of the running daemon.
 
@@ -542,6 +581,11 @@ export async function main(): Promise<void> {
   if (first === "mcp") {
     const { mcp } = await import("./mcp.ts");
     process.exitCode = await mcp();
+    return;
+  }
+  if (first === "translate") {
+    const { translate } = await import("./translate-cli.ts");
+    process.exitCode = await translate(rest);
     return;
   }
   if (first === "token" || first === "tokens") {
