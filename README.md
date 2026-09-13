@@ -599,6 +599,12 @@ sound from 0–200% (100% by default). It never mixes the original dialogue back
 in as a fallback. Increasing it also amplifies any speech the model fails to
 remove. This is an approximate local separator, not lossless dialogue removal.
 
+Translated audio stays selected for the entire session, including the initial
+wait, gaps between lines, buffering, seeking, and changes of speaker or target
+language. With background sound off, gaps are silent; with it on, the separated
+background continues. The original audio returns when translation is disabled
+(including an announced provider failure), not whenever an utterance finishes.
+
 The account server needs `ELEVENLABS_API_KEY`; `NIXAMP_DUBBING=off` disables
 this feature. The key stays on the server. Sign-in is required for speaker
 analysis, voice selection, and short-lived playback grants. Grants expire after
