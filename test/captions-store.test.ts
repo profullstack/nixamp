@@ -203,6 +203,45 @@ test("a listener who wants German gets each line translated once, from the store
   offEn();
 });
 
+test("a file channel describes its file once for nixamp.com/hash/<id>, and the status carries the hash", async () => {
+  const world = storeWorld();
+  const kept: { url: string; body: Record<string, unknown> }[] = [];
+  const HEX = "ef".repeat(32);
+  const inner = world.captions;
+  const captions = new Captions({
+    ffmpeg: ["ffmpeg"],
+    listen: (id, listener) => {
+      world.listeners.set(id, listener);
+      return () => world.listeners.delete(id);
+    },
+    session: () => ({ site: "https://nixamp.test/", token: "nxa_server" }),
+    fetcher: (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/api/v1/media/${HEX}` && init?.method === "PUT") {
+        kept.push({ url: url.toString(), body: JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify({ id: `sha256:${HEX}` }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ error: "nothing" }), { status: 404, headers: { "content-type": "application/json" } });
+    }) as typeof fetch,
+    decoder: (onPcm) => ({ write: (chunk) => { onPcm(chunk); return true; }, end: () => undefined }),
+    mediaOf: () => ({
+      media: FILM, title: "A film", position: 6, startedAt: 1_000_000, backlog: 6,
+      describe: async () => ({ id: HEX, keep: { name: "film.mkv", size: 10, facts: { duration: 90 }, holder: { url: "https://s1", channel: "film" } } }),
+    }),
+    now: () => 1_000_000,
+    idleMs: 10,
+  });
+  void inner;
+  const off = captions.subscribe("film", () => undefined);
+  assert.ok(off);
+  await world.settle(20);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0]?.body["name"], "film.mkv");
+  assert.equal((kept[0]?.body["holder"] as { channel: string }).channel, "film");
+  assert.equal(captions.status("film").hash, HEX);
+  off();
+});
+
 test("a live is kept as the broadcast it is, in seconds from when it began", async () => {
   const world = storeWorld();
   const got: CaptionLine[] = [];

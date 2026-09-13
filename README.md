@@ -459,6 +459,44 @@ and a page that asks for it reads what there is so far. An agent has
 `transcript_get` and `transcripts_list`, and `transcribe_audio` keeps a film
 the same way.
 
+### One address per file: nixamp.com/hash/ID
+
+Every file nixamp meets gets a page at `/hash/<sha256>`, the SHA-256 of its
+bytes, the way OpenFile (logicsrc.com/docs/openfile) names a file, so the same
+film on two machines is one page. The page, and the OpenFile descriptor beside
+it, carry the size, the type, when the file last changed, what ffprobe found
+inside, what nichedb.dev says it is, which servers have carried it and as which
+channel, and its transcripts in every language, as subtitle files. Whoever
+meets the file fills it in: `nixamp hash`, `nixamp transcribe`, and a server
+that puts the file on the air.
+
+```
+nixamp hash FILE                  the hash, the address, and what is known, kept
+nixamp hash FILE --no-keep        the hash and the address only
+nixamp hash --get ID              what nixamp.com knows, by hash or fingerprint
+```
+
+```
+GET /hash/ID                      the page; JSON when Accept says so
+GET /hash/ID.json                 the OpenFile file object with nixamp's facts under `nixamp`
+GET /hash/ID.openfile.json        the same, as a descriptor
+GET /hash/ID.srt                  the transcript as subtitles; .vtt, .txt; ?language=de
+GET /api/v1/media/ID              the record; PUT it, signed in, with what you know
+GET /.well-known/openfile.json    every file nixamp.com knows, as a publisher's listing
+```
+
+ID is the hash with or without `sha256:`, the transcript store's fingerprint,
+or a transcript id. Reading is open, since the hash of the bytes is the file;
+keeping is signed in.
+
+A file changes. The machine holding it keeps an index of what it has told
+nixamp.com and looks at each file again on a schedule set by how recently it
+changed: a quarter of the time since its last change, between a quarter of an
+hour and a month, so a file being edited is checked often and a film from 2019
+once a month. A stat is all it costs until something moved; then the file is
+hashed again, the new record says what it was and the old one what it became.
+An agent has `media_hash` and `media_get`.
+
 ### In another language
 
 Ask for a language and the lines come translated, by an open-source model on

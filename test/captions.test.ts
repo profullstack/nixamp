@@ -101,8 +101,8 @@ test("the first listener starts a captioner, five-second windows go to the ear, 
   assert.equal(world.asked.length, 2);
   assert.deepEqual(world.captions.recent("tv").map((line) => line.text), ["heard 1", "heard 2"]);
   assert.deepEqual(world.captions.recent("tv", got[0]?.at ?? 0).map((line) => line.text), ["heard 2"]);
-  assert.deepEqual(world.captions.status("tv"), { on: true, lines: 2, error: "", language: "", known: 0, languages: [] });
-  assert.deepEqual(world.captions.status("radio"), { on: false, lines: 0, error: "", language: "", known: 0, languages: [] });
+  assert.deepEqual(world.captions.status("tv"), { on: true, lines: 2, error: "", language: "", known: 0, languages: [], hash: "" });
+  assert.deepEqual(world.captions.status("radio"), { on: false, lines: 0, error: "", language: "", known: 0, languages: [], hash: "" });
   assert.deepEqual(world.captions.recent("radio"), []);
   // A second listener joins the same captioner: no second ffmpeg.
   const more: CaptionLine[] = [];
@@ -120,7 +120,7 @@ test("the first listener starts a captioner, five-second windows go to the ear, 
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.deepEqual(world.detached, ["tv"]);
   assert.equal(world.endedDecoders(), 1);
-  assert.deepEqual(world.captions.status("tv"), { on: false, lines: 0, error: "", language: "", known: 0, languages: [] });
+  assert.deepEqual(world.captions.status("tv"), { on: false, lines: 0, error: "", language: "", known: 0, languages: [], hash: "" });
   // Asking again starts a fresh one.
   const again = world.captions.subscribe("tv", () => undefined);
   assert.ok(again);

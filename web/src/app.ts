@@ -3734,7 +3734,7 @@ export function start(): void {
     };
     source.addEventListener("hello", (event) => {
       if (key !== captionsKey) return;
-      const hello = JSON.parse((event as MessageEvent<string>).data) as { backlog?: number; lines?: Caption[]; error?: string; language?: string; known?: number };
+      const hello = JSON.parse((event as MessageEvent<string>).data) as { backlog?: number; lines?: Caption[]; error?: string; language?: string; known?: number; hash?: string };
       captionsLag = lagMs(hello.backlog ?? backlog, room.hls);
       take(hello.lines ?? []);
       const spoken = hello.language ? ` It speaks ${LANGUAGE_CHOICES.find((one) => one.code === hello.language)?.label ?? hello.language}.` : "";
@@ -3743,6 +3743,15 @@ export function start(): void {
       dom.transcriptNote.textContent = hello.error
         ? `Captions for ${room.name} are not coming: ${hello.error}`
         : `What ${room.name} is saying, a few seconds behind the sound.${spoken}${translated}${known}`;
+      // A file has one address for everything known about it, transcript included.
+      if (!hello.error && hello.hash && /^[0-9a-f]{64}$/.test(hello.hash)) {
+        const link = document.createElement("a");
+        link.href = `${trollboxSite || ""}/hash/${hello.hash}`;
+        link.textContent = "Its page";
+        link.target = "_blank";
+        link.rel = "noopener";
+        dom.transcriptNote.append(" ", link, ".");
+      }
     });
     source.addEventListener("line", (event) => {
       if (key !== captionsKey) return;

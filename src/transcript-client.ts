@@ -120,6 +120,40 @@ export async function translateTexts(
   }
 }
 
+/** What a machine tells nixamp.com about a file it has, for the record at /hash/<id>. */
+export interface MediaToKeep {
+  name?: string;
+  size?: number;
+  contentType?: string;
+  updated?: string;
+  facts?: Record<string, unknown>;
+  holder?: { kind?: string; url: string; seenAt?: string; channel?: string; name?: string };
+}
+
+/** Keep what is known about a file, by its SHA-256 hex. */
+export async function keepMedia(signed: Signed, id: string, ask: MediaToKeep, fetcher: typeof fetch = fetch): Promise<Got<Record<string, unknown>>> {
+  try {
+    const response = await fetcher(`${base(signed.site)}/api/v1/media/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${signed.token}`, "content-type": "application/json" },
+      body: JSON.stringify(ask),
+    });
+    return await asJson(response);
+  } catch (error) {
+    return unreachable(signed.site, error);
+  }
+}
+
+/** The record of a file, by id, fingerprint or transcript id. Public: no token needed. */
+export async function fetchMedia(site: string, id: string, fetcher: typeof fetch = fetch): Promise<Got<Record<string, unknown>>> {
+  try {
+    const response = await fetcher(`${base(site)}/api/v1/media/${encodeURIComponent(id)}`, { headers: { accept: "application/json" } });
+    return await asJson(response);
+  } catch (error) {
+    return unreachable(site, error);
+  }
+}
+
 /** Forget some media's transcripts. Only whoever stored them may. */
 export async function forgetTranscript(signed: Signed, id: string, fetcher: typeof fetch = fetch): Promise<Got<{ ok: true }>> {
   try {

@@ -122,7 +122,7 @@ test("the MCP server introduces itself and lists its tools", async () => {
   const tools = (listed?.["result"] as { tools: { name: string }[] }).tools;
   assert.deepEqual(
     tools.map((tool) => tool.name).sort(),
-    ["profile_get", "profile_set", "transcribe_audio", "transcript_get", "transcript_read", "transcripts_list", "translate_text", "trollbox_read", "trollbox_say", "voices_list", "watch_parties_list", "watch_party_end", "watch_party_get", "watch_party_host", "watch_party_sync"],
+    ["media_get", "media_hash", "profile_get", "profile_set", "transcribe_audio", "transcript_get", "transcript_read", "transcripts_list", "translate_text", "trollbox_read", "trollbox_say", "voices_list", "watch_parties_list", "watch_party_end", "watch_party_get", "watch_party_host", "watch_party_sync"],
   );
   // Every tool says what it takes, or a client cannot call it.
   for (const tool of TOOLS) assert.equal((tool.inputSchema as { type: string }).type, "object");

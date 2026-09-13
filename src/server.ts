@@ -94,6 +94,10 @@ import {
   Transcripts, fileFingerprint, formatOf, idFrom, languageCode, linesFrom, mediaOfLive, mediaOfUrl, toSrt, toText, toVtt, transcriptIdOf, wire,
 } from "./transcripts.ts";
 import { handleMessage as mcpMessage } from "./mcp.ts";
+import { Media, factsFromRequest, holderFrom, mediaId, openFileListing, openFileOf, type MediaRecord } from "./media.ts";
+import { mediaPage, type PageTranscript } from "./media-page.ts";
+import { describeFile, refreshChanged } from "./media-local.ts";
+import { WATCH_EVERY_MS, remember, watchOnce } from "./media-index.ts";
 import { Outro } from "./outro.ts";
 import { Profiles, Voices, spokenLine, spokenVoiceFor } from "./voices.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
@@ -1747,6 +1751,8 @@ export interface HandlerOptions {
   transcripts?: Transcripts;
   /** Stored transcripts translated, as jobs. */
   translations?: StoredTranslations;
+  /** The record of every file nixamp has met, by its SHA-256: nixamp.com/hash/<id>. */
+  records?: Media;
   /** nixamp.com's address, for the tools reached over /mcp to call. */
   site?: string;
   /** Other people's OpenProfiles, for the voice their lines are read in. */
@@ -2887,6 +2893,134 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 200, said);
       } catch (error) {
         if (error instanceof SpeechError || error instanceof TrollboxError) json(response, error.status, { error: error.message });
+        else throw error;
+      }
+      return;
+    }
+
+    /*
+     * One address per file: /hash/<sha256>, the record of the bytes (see
+     * media.ts). As a page for a person, as an OpenFile file object or plain
+     * JSON for a program, and its transcript as subtitles. Reading is open:
+     * the id is the hash of the bytes, and whoever has it has the file.
+     * Keeping (PUT on the API) is signed in, like the ear.
+     */
+    if (path === "/.well-known/openfile.json" && options.records && options.site) {
+      json(response, 200, openFileListing(await options.records.recent(), options.site));
+      return;
+    }
+    if ((path.startsWith("/hash/") || path === "/api/v1/media" || path.startsWith("/api/v1/media/")) && options.records && options.transcripts && options.site) {
+      const media = options.records;
+      const store = options.transcripts;
+      const site = options.site;
+      const viaApi = path.startsWith("/api/v1/media");
+      const tail = viaApi ? path.slice("/api/v1/media".length).replace(/^\//, "") : path.slice("/hash/".length);
+      const parts = /^([^/.]+)(?:\.(openfile\.json|json|srt|vtt|txt))?\/?$/.exec(tail);
+      if (!parts) {
+        json(response, 404, { error: "a file is /hash/<sha256>, with .json, .openfile.json, .srt, .vtt or .txt after it" });
+        return;
+      }
+      let named = "";
+      try {
+        named = decodeURIComponent(parts[1] as string);
+      } catch {
+        json(response, 400, { error: "bad id" });
+        return;
+      }
+      const format = parts[2] ?? "";
+      try {
+        if (request.method === "PUT" && viaApi) {
+          const who = await options.accounts?.whoIs(tokenFrom(request.headers));
+          if (!who) {
+            json(response, 401, { error: "sign in to nixamp.com to keep a file's record" });
+            return;
+          }
+          const id = mediaId(named);
+          if (!id) {
+            json(response, 400, { error: "the id is the file's SHA-256, hex" });
+            return;
+          }
+          let body: { name?: unknown; size?: unknown; contentType?: unknown; updated?: unknown; facts?: unknown; holder?: unknown } = {};
+          try {
+            body = JSON.parse(await readBody(request, 256 * 1024)) as typeof body;
+          } catch {
+            json(response, 400, { error: "bad JSON" });
+            return;
+          }
+          const saved = await media.save({
+            id,
+            ...(typeof body.name === "string" ? { name: body.name.trim() } : {}),
+            ...(typeof body.size === "number" && body.size >= 0 ? { size: Math.floor(body.size) } : {}),
+            ...(typeof body.contentType === "string" ? { contentType: body.contentType.trim().slice(0, 100) } : {}),
+            ...(typeof body.updated === "string" && !Number.isNaN(Date.parse(body.updated)) ? { updated: new Date(body.updated).toISOString() } : {}),
+            facts: factsFromRequest(body.facts),
+            holder: holderFrom(body.holder),
+            by: who.id,
+          });
+          if (!saved) {
+            json(response, 500, { error: "the record was not kept" });
+            return;
+          }
+          json(response, 200, openFileOf(saved, site, saved.facts.fingerprint ? await store.languages(transcriptIdOf(saved.facts.fingerprint)) : []));
+          return;
+        }
+        if (request.method !== "GET") {
+          json(response, 405, { error: "GET the record, or PUT what you know" });
+          return;
+        }
+        // By the SHA-256, by the transcript store's fingerprint, or by a transcript id.
+        let record: MediaRecord | null = null;
+        const hex = mediaId(named);
+        if (hex) record = await media.get(hex);
+        if (!record && /^file:v1:[0-9a-f]{64}$/.test(named)) record = await media.byFingerprint(named);
+        if (!record && hex) {
+          const transcript = await store.get(hex);
+          if (transcript && transcript.kind === "file") record = await media.byFingerprint(transcript.media);
+        }
+        if (!record) {
+          json(response, 404, { error: "nixamp.com does not know that file yet. `nixamp hash FILE` tells it." });
+          return;
+        }
+        const transcriptId = record.facts.fingerprint ? transcriptIdOf(record.facts.fingerprint) : null;
+        const languages = transcriptId ? await store.languages(transcriptId) : [];
+        if (format === "srt" || format === "vtt" || format === "txt") {
+          const language = languageCode(url.searchParams.get("language"));
+          if (language === null) {
+            json(response, 400, { error: "language is a two-letter code" });
+            return;
+          }
+          const transcript = transcriptId ? await store.get(transcriptId, language) : null;
+          if (!transcript) {
+            json(response, 404, { error: language ? `not written down in ${language}` : "not written down yet" });
+            return;
+          }
+          const text = format === "srt" ? toSrt(transcript.lines) : format === "vtt" ? toVtt(transcript.lines) : toText(transcript.lines);
+          const name = (record.name.replace(/\.[^.]+$/, "") || record.id.slice(0, 12)).replace(/[^\w.-]+/g, "_").slice(0, 60);
+          response.writeHead(200, {
+            ...CORS,
+            "content-type": `${format === "vtt" ? "text/vtt" : "text/plain"}; charset=utf-8`,
+            "content-length": Buffer.byteLength(text),
+            "cache-control": "public, max-age=300",
+            "content-disposition": `inline; filename="${name}${transcript.language ? `.${transcript.language}` : ""}.${format}"`,
+          });
+          response.end(text);
+          return;
+        }
+        const descriptor = openFileOf(record, site, languages);
+        const accept = String(request.headers["accept"] ?? "");
+        const wantsJson = viaApi || format === "json" || format === "openfile.json" || (accept.includes("application/json") && !accept.includes("text/html"));
+        if (wantsJson) {
+          json(response, 200, descriptor);
+          return;
+        }
+        const original = transcriptId ? await store.get(transcriptId) : null;
+        const forPage: PageTranscript[] = languages
+          .slice()
+          .sort((a, b) => (a.translatedFrom === null ? -1 : 0) - (b.translatedFrom === null ? -1 : 0))
+          .map((one) => (original && one.language === original.language && one.translatedFrom === null ? { ...one, shown: original.lines } : one));
+        html(response, 200, mediaPage(record, site, forPage));
+      } catch (error) {
+        if (error instanceof SpeechError) json(response, error.status, { error: error.message });
         else throw error;
       }
       return;
@@ -5796,6 +5930,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // What was heard, kept: where the accounts are, under the media's identity.
   const transcripts = pool ? new Transcripts(pool, (message) => console.log(message)) : undefined;
   const translations = transcripts ? new StoredTranslations(transcripts, translator, (message) => console.log(message)) : undefined;
+  // The record of every file nixamp has met, by its bytes: nixamp.com/hash/<id>.
+  const records = pool ? new Media(pool, (message) => console.log(message)) : undefined;
 
   // nixamp as an OAuth 2.1 authorization server, and the watch parties a
   // client site bridges through it. Both need the same three things -- a
@@ -6005,7 +6141,28 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
               return { ...base, media: mediaOfUrl(pasted), position: info.position };
             }
             try {
-              return { ...base, media: fileFingerprint(info.source), position: info.position };
+              const source = info.source;
+              return {
+                ...base,
+                media: fileFingerprint(source),
+                position: info.position,
+                // The file itself, for nixamp.com/hash/<id>: hashed here, once,
+                // with what ffprobe and nichedb said and where it is on the air.
+                describe: async () => {
+                  const listen = publishable_ ? shareLink(publishable_.url, listenKey, false) : (options.publicUrl || `http://${options.host}:${options.port}`);
+                  const described = await describeFile(source, {
+                    tools,
+                    enricher: enricher ?? null,
+                    holder: { kind: "gateway", url: listen, seenAt: new Date().toISOString(), channel: id, name: streamName },
+                  });
+                  try {
+                    remember(source, { id: described.id, fingerprint: described.fingerprint, size: described.size, mtimeMs: described.mtimeMs });
+                  } catch {
+                    // The index is a convenience.
+                  }
+                  return { id: described.id, keep: described.keep };
+                },
+              };
             } catch {
               return null;
             }
@@ -6015,6 +6172,25 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         },
       })
     : undefined;
+  // The files this machine has told nixamp.com about, looked at again on
+  // their own schedule (media-index.ts): a changed file is a new record.
+  if (tools.carries) {
+    const watch = async (): Promise<void> => {
+      const signed = readSession();
+      if (!signed) return;
+      const counts = await watchOnce({
+        refresh: (file, before) => refreshChanged(signed, file, before, { tools, enricher: enricher ?? null }),
+        onEvent: (message) => console.log(`  ${message}`),
+      }).catch((error: unknown) => {
+        console.log(`  the media index could not be read: ${(error as Error).message}`);
+        return null;
+      });
+      if (counts && counts.changed > 0) console.log(`  ${counts.changed} file(s) changed since nixamp.com last heard of them; told it`);
+    };
+    const watching = setInterval(() => void watch(), WATCH_EVERY_MS);
+    watching.unref?.();
+    setTimeout(() => void watch(), 60_000).unref?.();
+  }
   const owner = new Owner({
     ownerId: options.owner || (session?.token ? await ownerIdOf(session) : ""),
     site: session?.site ?? DEFAULT_DIRECTORY,
@@ -6227,6 +6403,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(translator ? { translator } : {}),
     ...(transcripts ? { transcripts } : {}),
     ...(translations ? { translations } : {}),
+    ...(records ? { records } : {}),
     site: nixampSite,
     // Other people's OpenProfiles, read for the voice a line is spoken in,
     // and the voices to speak in: ElevenLabs when the Telnyx account holds

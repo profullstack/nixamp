@@ -24,6 +24,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { detectTools, type Tools } from "./audio.ts";
 import { isQuiet } from "./captions.ts";
+import { Enricher } from "./enrich.ts";
+import { describeFile, keepFile } from "./media-local.ts";
 import { readSession, type Session } from "./session.ts";
 import { MAX_SECONDS, RATE, isWav, type Segment } from "./speech.ts";
 import { fetchTranscript, keepLines, type Got, type StoredTranscript } from "./transcript-client.ts";
@@ -430,6 +432,21 @@ export async function transcribe(argv: string[], deps: TranscribeDeps = {}): Pro
   }
   const id = transcriptIdOf(media);
   const title = /^https?:\/\//.test(file) ? file : basename(file, extname(file));
+  // A file gets its address at nixamp.com/hash/<sha256> too, with what this
+  // machine knows about it, so the transcript has somewhere to hang.
+  if (!/^https?:\/\//.test(file) && !deps.fingerprint) {
+    void (async () => {
+      try {
+        const tools = detectTools();
+        const described = await describeFile(file, { tools, enricher: new Enricher() });
+        const refused = await keepFile(signed, file, described, { fetcher });
+        if (refused) console.error(`  The file's record was not kept: ${refused}`);
+        else console.error(`  ${site}/hash/${described.id}`);
+      } catch {
+        // The transcript is the point; the record is a bonus.
+      }
+    })();
+  }
   const wanted = (flag(argv, "--translate") ?? "").split(",").map((one) => languageCode(one)).filter((one): one is string => typeof one === "string" && one !== "");
   if (argv.includes("--translate") && wanted.length === 0) {
     console.error("nixamp: --translate is one or more two-letter codes, such as de,sv.");

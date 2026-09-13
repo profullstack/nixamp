@@ -1460,4 +1460,6 @@ test("a caption is held until this page's sound has reached it, and shown on the
   assert.match(app, /\/captions\$\{inLanguage\}/);
   assert.match(app, /\$\{captionsOn\}\|\$\{captionsIn\}/);
   assert.match(readFileSync(join(webDir, "index.html"), "utf8"), /id="transcript-language"/);
+  // A file's page is linked from the note once the server has said its hash.
+  assert.match(app, /\/hash\/\$\{hello\.hash\}/);
 });
