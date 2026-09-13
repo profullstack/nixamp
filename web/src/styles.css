@@ -1351,3 +1351,20 @@ body.tv input, body.tv .filter { font-size: 1em; padding: 8px 10px; }
 
 .purchase-terms { margin-top: 16px; }
 #transcript-panel > .panel-heading { max-width: calc(100% - 140px); }
+
+/* A classroom iframe uses the same video transport without the publishing desk. */
+body.classroom-embed { padding: 0; margin: 0; background: #101015; }
+.classroom-embed #app { width: 100%; max-width: none; margin: 0; padding: 8px; }
+.classroom-embed #app > :not(.classroom-player):not(#transport),
+.classroom-embed .skip-links,
+.classroom-embed .classroom-player > .panel-heading,
+.classroom-embed .classroom-player > .panel-tools,
+.classroom-embed .classroom-player > .audio-translation,
+.classroom-embed #link-form, .classroom-embed #link-note,
+.classroom-embed #download-now, .classroom-embed #copy-now,
+.classroom-embed #go-live-now, .classroom-embed #prev, .classroom-embed #next { display: none !important; }
+.classroom-embed .classroom-player { margin: 0; border: 0; padding: 0; }
+.classroom-embed #video { max-height: calc(100dvh - 165px); width: 100%; object-fit: contain; }
+.classroom-embed #transport { position: static; margin-top: 8px; }
+.classroom-embed #title-line { font-size: 1rem; margin-top: 8px; }
+.classroom-embed #album-line, .classroom-embed #meta-blurb, .classroom-embed #live-line { display: none !important; }

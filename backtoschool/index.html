@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#34246d" />
-    <meta name="description" content="Learn something live. Listen to public conversations, classes, and talks powered by NixAmp." />
+    <meta name="description" content="Learn something live. Watch live classes, screen shares, and talks powered by NixAmp." />
     <meta property="og:site_name" content="BackToSchool.help" />
     <meta property="og:title" content="BackToSchool.help — Learn something live" />
     <meta property="og:description" content="Live conversations with people who know." />
@@ -34,12 +34,12 @@
         </section>
       </main>
       <footer class="site-footer">
-        <span>Live audio, made simple.</span>
+        <span>Live classes. Screen sharing. Learn together.</span>
         <span>Powered by <a href="https://nixamp.com">NixAmp</a></span>
       </footer>
     </div>
 
-    <dialog id="account-dialog" class="dialog">
+    <dialog id="account-dialog" class="dialog" aria-labelledby="account-title">
       <button class="dialog-close" type="button" data-close aria-label="Close">×</button>
       <span class="eyebrow">Your NixAmp account</span>
       <h2 id="account-title">Welcome back</h2>
@@ -54,16 +54,23 @@
       </form>
     </dialog>
 
-    <dialog id="event-dialog" class="dialog dialog-wide">
+    <dialog id="event-dialog" class="dialog dialog-wide" aria-labelledby="event-form-title">
       <button class="dialog-close" type="button" data-close aria-label="Close">×</button>
       <span class="eyebrow" id="event-kicker">Start a conversation</span>
       <h2 id="event-form-title">Go live</h2>
       <form id="event-form" class="form-stack">
+        <fieldset class="broadcast-options">
+          <legend>Broadcast your class</legend>
+          <p>Share your screen with Pairux, or upload a file and go live in Nixamp. Paste the share link below.</p>
+          <div class="broadcast-links"><a class="button button-secondary" href="https://pairux.com/dashboard" target="_blank" rel="noopener noreferrer">Screen share with Pairux ↗</a><a class="button button-secondary" href="https://nixamp.com/#files-panel" target="_blank" rel="noopener noreferrer">Upload &amp; broadcast in Nixamp ↗</a></div>
+          <label>Broadcast link<input name="broadcastUrl" type="url" maxlength="2048" placeholder="Pairux join link or Nixamp Share link" aria-describedby="broadcast-help" /></label>
+          <p class="form-note" id="broadcast-help">You can add the link now or edit your event when the broadcast is ready.</p>
+        </fieldset>
         <label>Title<input name="title" maxlength="160" placeholder="What will people learn?" required /></label>
-        <label>Description<textarea name="description" maxlength="5000" rows="3" placeholder="A short introduction for listeners"></textarea></label>
+        <label>Description<textarea name="description" maxlength="5000" rows="3" placeholder="What will students learn?"></textarea></label>
         <div class="form-pair">
           <label>Topic<input name="topic" maxlength="100" placeholder="Technology, music…" /></label>
-          <label>Who can listen
+          <label>Who can join
             <select name="visibility">
               <option value="public">Public</option>
               <option value="unlisted">Anyone with the link</option>
@@ -82,10 +89,18 @@
             </select>
           </label>
         </div>
+        <p class="form-note" id="schedule-timezone"></p>
+        <label for="event-recurrence">Repeat</label><select id="event-recurrence" name="recurrence"><option value="none">Does not repeat</option><option value="daily">Every day</option><option value="weekly">Every week</option></select>
+        <p class="form-note">Repeating classes keep this same link. Ending a session schedules the next one at the same local time.</p>
+        <fieldset class="broadcast-options"><legend>Host profile</legend>
+          <label>Host name<input name="hostName" maxlength="100" autocomplete="name" /></label>
+          <label>Homepage<input name="homepageUrl" type="url" maxlength="2048" placeholder="https://your-site.com" /></label>
+          <label>Profile photo URL<input name="avatarUrl" type="url" maxlength="2048" placeholder="https://your-site.com/photo.jpg" /></label>
+        </fieldset>
         <div class="form-checks">
           <label><input name="chatEnabled" type="checkbox" checked /> Chat</label>
           <label><input name="handRaiseEnabled" type="checkbox" checked /> Raise hand</label>
-          <label><input name="recordingEnabled" type="checkbox" /> Record</label>
+
         </div>
         <p class="form-error" id="event-error" role="alert"></p>
         <button class="button button-primary" type="submit" id="event-submit">Create live</button>

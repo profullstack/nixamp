@@ -79,6 +79,8 @@ function need<T extends Element>(id: string): T {
 }
 
 export function start(): void {
+  const classroomEmbed = new URLSearchParams(location.search).get("embed") === "1";
+  document.body.classList.toggle("classroom-embed", classroomEmbed);
   // A television first, before anything is measured: the lists lose their
   // own scrollbars and page with buttons, and the type grows, because a
   // remote's ring cannot scroll a box inside the page and 14px is nothing
@@ -5486,6 +5488,7 @@ export function start(): void {
   }
   /** The panels where the layout says: zone and column first, then the order within each zone. */
   function applyLayout(): void {
+    if (classroomEmbed) return;
     for (const panel of movablePanels()) {
       const where = layout.placement[panel.id];
       if (!where) continue;
