@@ -75,6 +75,22 @@ export const LANGUAGES: Record<string, { name: string; native: string }> = {
   hi: { name: "Hindi", native: "हिन्दी" },
 };
 
+/**
+ * A Marian model's line, tidied. Given a short line it tends to run on in
+ * punctuation until the token cap ("Och sånt.............."), and to put a
+ * comma and a full stop where one was meant. A space before a mark, a mark
+ * repeated, and a run of different marks each become the one mark, the
+ * first of them.
+ */
+export function tidyTranslation(text: string): string {
+  return text
+    .replace(/\s+([.,!?;:])/g, "$1")
+    .replace(/([.,!?;:])[.,;:]+/g, "$1")
+    .replace(/([!?])[!?]+/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** The models a translation from one language to another goes through, or null when there is no way. */
 export function route(from: string, to: string, pairs: ReadonlySet<string> = PAIRS): [string, string][] | null {
   if (from === to) return [];
@@ -262,7 +278,7 @@ export class Translator {
       }
       const out = [...spoken];
       which.forEach((i, at) => {
-        out[i] = (current[at] ?? "").trim();
+        out[i] = tidyTranslation(current[at] ?? "");
       });
       return out;
     });

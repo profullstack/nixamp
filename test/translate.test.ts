@@ -1,7 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SpeechError } from "../src/speech.ts";
-import { BATCH, CHARS_PER_MINUTE, KEEP_LOADED, LANGUAGES, PAIRS, QUEUE_LIMIT, Translator, modelFor, route, type Pair } from "../src/translate.ts";
+import { BATCH, CHARS_PER_MINUTE, KEEP_LOADED, LANGUAGES, PAIRS, QUEUE_LIMIT, Translator, modelFor, route, tidyTranslation, type Pair } from "../src/translate.ts";
+
+test("a Marian line that ran on in punctuation is tidied to the one mark that was meant", () => {
+  assert.equal(tidyTranslation("Och sånt.............."), "Och sånt.");
+  assert.equal(tidyTranslation("Men just nu har vi mycket mer att täcka.........."), "Men just nu har vi mycket mer att täcka.");
+  assert.equal(tidyTranslation("Det finns massor av exempel om du vill titta., jag ska ägna för mycket uppmärksamhet åt det,."), "Det finns massor av exempel om du vill titta. jag ska ägna för mycket uppmärksamhet åt det,");
+  assert.equal(tidyTranslation("eller nåt sånt.."), "eller nåt sånt.");
+  assert.equal(tidyTranslation("Hej !  Hur mår du ??"), "Hej! Hur mår du?");
+  assert.equal(tidyTranslation("  Guten Abend und willkommen. "), "Guten Abend und willkommen.");
+  assert.equal(tidyTranslation("3.14 is a number, e.g. pi."), "3.14 is a number, e.g. pi.");
+});
 
 test("a route is the pair model when there is one, English in between when there is not, and nothing when English cannot reach it", () => {
   assert.deepEqual(route("en", "de"), [["en", "de"]]);
@@ -52,6 +62,9 @@ test("pairs load once, translate in order through English when they must, and th
 
   const one = await translator.translate(["Hello there.", "", "  Bye.  "], "en", "de", { by: "acct-1" });
   assert.deepEqual(one, { texts: ["en-de(Hello there.)", "", "en-de(Bye.)"], from: "en", to: "de", model: "Xenova/opus-mt-en-de" });
+  // What comes out of a pair is tidied on the way back.
+  const ran = new Translator({ load: async () => ({ translate: async (texts) => texts.map((text) => `${text}.......`) }) });
+  assert.deepEqual((await ran.translate(["Och sånt"], "en", "sv")).texts, ["Och sånt."]);
   // Empty lines never reach the model.
   assert.deepEqual(asked[0]?.texts, ["Hello there.", "Bye."]);
   await translator.translate(["Again."], "en", "de");
