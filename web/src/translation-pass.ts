@@ -11,6 +11,7 @@ export class TranslationPurchase {
   private selected = "";
   private timer: ReturnType<typeof setTimeout> | null = null;
   private loading = false;
+  private problem = "";
   private checking = false;
   private readonly dialog = element<HTMLDialogElement>("translation-purchase");
   private readonly plan = element<HTMLSelectElement>("translation-plan");
@@ -26,9 +27,11 @@ export class TranslationPurchase {
     this.buy.addEventListener("click", () => void this.purchase());
     element("translation-check-payment").addEventListener("click", () => void this.check());
     window.addEventListener("pagehide", () => { if (this.timer) clearTimeout(this.timer); });
-    setInterval(() => { if (this.options.account() && this.access?.required) void this.refresh(); }, 30_000);
+    setInterval(() => { if (this.options.account() && (!this.access || this.access.required)) void this.refresh(); }, 30_000);
   }
   private status(text: string): void { if (this.note.textContent !== text) this.note.textContent = text; }
+  loaded(): boolean { return this.access !== null; }
+  loadingMessage(): string { return this.problem || "Checking audio credit…"; }
   ready(): boolean { return this.access?.required === false || !!(this.access && this.access.balanceMicros > 0 && this.access.expires && Date.parse(this.access.expires) > Date.now()); }
   button(): HTMLButtonElement {
     const button = document.createElement("button"); button.type = "button"; button.textContent = "$";
@@ -43,6 +46,7 @@ export class TranslationPurchase {
   }
   async refresh(): Promise<void> {
     const account = this.options.account();
+    this.problem = "";
     if (this.account !== account) { this.account = account; this.access = null; this.order = ""; this.requestKey = ""; this.checkoutLink.hidden = true; }
     try {
       const response = await fetch("/api/v1/translation-passes", { signal: AbortSignal.timeout(15_000) });
@@ -66,7 +70,7 @@ export class TranslationPurchase {
       if (returned && !this.order && /^[a-f0-9-]{36}$/i.test(returned) && account) { this.order = returned; void this.check(); }
       this.options.changed();
       if (this.order && !this.dialog.open && !this.checking) void this.check();
-    } catch (error) { if (this.dialog.open) this.status(error instanceof Error ? error.message : "Purchases are unavailable."); }
+    } catch (error) { this.problem = error instanceof Error ? error.message : "Audio credit could not be checked. Use Buy to retry."; if (this.dialog.open) this.status(this.problem); this.options.changed(); }
   }
   private describe(): void {
     const plan = this.access?.plans.find(plan => plan.id === this.plan.value);
