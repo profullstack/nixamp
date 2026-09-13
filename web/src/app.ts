@@ -22,6 +22,8 @@ import { fixtureState, scoreLine } from "./score.ts";
 import { isTelevision, pageSize, pageWindow, TV_KEY } from "./tv.ts";
 import { isVideoFile, localPlayback, parseList, type ListEntry } from "./links.ts";
 import { PANELS_KEY, type PanelLayout, emptyLayout, orderedIds, parseLayout, serializeLayout, toggled } from "./panels.ts";
+import { DICTATE_MAX_MS, DICTATE_RATE, encodeWav, joinDictated, listeningLabel, recordingMime } from "./dictate.ts";
+import { CAPTIONS_KEY, type Caption, captionsWanted, due, lagMs, showing, whenLabel } from "./captions.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
 
@@ -222,6 +224,12 @@ export function start(): void {
     trollboxList: need<HTMLUListElement>("trollbox-list"),
     trollboxForm: need<HTMLFormElement>("trollbox-form"),
     trollboxInput: need<HTMLInputElement>("trollbox-input"),
+    trollboxMic: need<HTMLButtonElement>("trollbox-mic"),
+    transcriptPanel: need<HTMLElement>("transcript-panel"),
+    transcriptNote: need<HTMLParagraphElement>("transcript-note"),
+    transcriptOn: need<HTMLInputElement>("transcript-on"),
+    transcriptList: need<HTMLUListElement>("transcript-list"),
+    subtitle: need<HTMLDivElement>("subtitle"),
     shareNote: need<HTMLParagraphElement>("share-note"),
     shareLink: need<HTMLInputElement>("share-link"),
     shareCopy: need<HTMLButtonElement>("share-copy"),
@@ -1194,6 +1202,8 @@ export function start(): void {
     dom.shareNow.hidden = shareLinkNow() === "";
     // The trollbox follows whatever live is joined.
     drawTrollbox();
+    // And so does the transcript.
+    drawTranscript();
     // Keeping it is for a pasted link that is a whole file somewhere: the
     // server fetches it and this device ends up with it. A live has no whole.
     dom.downloadNow.hidden = !(channelOn && nowMeta?.link?.download);
@@ -3172,6 +3182,25 @@ export function start(): void {
   let trollboxTimer: ReturnType<typeof setTimeout> | null = null;
   let trollboxBusy = false;
   const trollboxSeen = new Set<string>();
+  /** Who this page is in the room, or "" when it may only read: the gate on the mic. */
+  let trollboxYou = "";
+  // Declared up here, beside the room state, because drawTrollbox() runs from
+  // draw() and touches them: a `let` below that first call is a crash at boot.
+  let listening: {
+    recorder: MediaRecorder; stream: MediaStream; chunks: Blob[]; startedAt: number;
+    stop: ReturnType<typeof setTimeout>; tick: ReturnType<typeof setInterval>;
+  } | null = null;
+  let hearing = false;
+  // The transcript's state, up here for the same reason: drawTranscript()
+  // runs from draw().
+  let captionsOn = captionsWanted((key) => localStorage.getItem(key));
+  let captionsKey = "";
+  let captionsSource: EventSource | null = null;
+  let captionsLag = lagMs(6, false);
+  /** Lines whose sound this page has not reached yet, and the ones it has. */
+  let captionsHeld: Caption[] = [];
+  let captionsShown: Caption[] = [];
+  let captionsTick: ReturnType<typeof setInterval> | null = null;
   /** Which room the page is in: the server's origin and the channel joined, or null. */
   function trollboxRoom(): { server: string; channel: string } | null {
     if (mode !== "remote") return null;
@@ -3204,6 +3233,7 @@ export function start(): void {
     trollboxTimer = null;
     dom.trollboxPanel.hidden = room === null;
     dom.trollboxForm.hidden = true;
+    stopListening(false);
     if (!room) return;
     dom.trollboxNote.textContent = `The room for ${currentName() || room.channel}. Loading…`;
     void pollTrollbox();
@@ -3263,7 +3293,9 @@ export function start(): void {
       if (fresh.length > 0) dom.trollboxList.lastElementChild?.scrollIntoView({ block: "nearest" });
       // Signed in on nixamp.com: a line of your own. Elsewhere: read along.
       const you = body.you ?? "";
+      trollboxYou = you;
       dom.trollboxForm.hidden = you === "";
+      if (you === "") stopListening(false);
       dom.trollboxNote.textContent = you !== ""
         ? `You are ${you} in the room for ${currentName() || room.channel}.`
         : trollboxSite === ""
@@ -3326,6 +3358,284 @@ export function start(): void {
         dom.trollboxInput.focus();
       }
     })();
+  });
+
+  // ---- dictating a line: tap, talk, tap ------------------------------------
+  //
+  // The microphone is recorded here, brought to 16 kHz mono here, and sent
+  // to nixamp.com as a small WAV; nixamp.com's own ear (Whisper, on its own
+  // CPU) sends the words back, and they land in the box for Send. Nothing
+  // goes to a speech vendor. The button exists only where a line can be
+  // sent from -- signed in, on nixamp.com -- and only where the browser can
+  // record at all; a page that cannot simply has no mic.
+  const canRecord = typeof MediaRecorder !== "undefined" && typeof navigator.mediaDevices?.getUserMedia === "function";
+  const recordAs = canRecord ? recordingMime((type) => MediaRecorder.isTypeSupported(type)) : "";
+  dom.trollboxMic.hidden = !canRecord;
+
+  function trollboxSay(message: string): void {
+    dom.trollboxNote.textContent = message;
+    logMessage(message);
+  }
+
+  /** Recording over: the tracks released, the button a button again. Sends what was heard when asked. */
+  function stopListening(send: boolean): void {
+    const was = listening;
+    if (!was) return;
+    listening = null;
+    clearTimeout(was.stop);
+    clearInterval(was.tick);
+    dom.trollboxMic.setAttribute("aria-pressed", "false");
+    dom.trollboxMic.textContent = "🎤";
+    const done = new Promise<void>((resolve) => { was.recorder.addEventListener("stop", () => resolve(), { once: true }); });
+    if (was.recorder.state !== "inactive") was.recorder.stop();
+    for (const track of was.stream.getTracks()) track.stop();
+    if (!send) return;
+    void done.then(() => hear(new Blob(was.chunks, { type: was.recorder.mimeType || recordAs || "audio/webm" }), was.startedAt));
+  }
+
+  async function startListening(): Promise<void> {
+    if (listening || hearing || trollboxYou === "" || !trollboxRoom()) return;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+    } catch (error) {
+      trollboxSay((error as Error).name === "NotAllowedError"
+        ? "The microphone was refused. Allow it for nixamp.com and tap again."
+        : "No microphone could be opened here.");
+      return;
+    }
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(stream, recordAs ? { mimeType: recordAs } : {});
+    } catch {
+      for (const track of stream.getTracks()) track.stop();
+      trollboxSay("This browser cannot record the microphone.");
+      return;
+    }
+    const chunks: Blob[] = [];
+    recorder.addEventListener("dataavailable", (event) => { if (event.data.size > 0) chunks.push(event.data); });
+    const startedAt = Date.now();
+    listening = {
+      recorder, stream, chunks, startedAt,
+      stop: setTimeout(() => stopListening(true), DICTATE_MAX_MS),
+      tick: setInterval(() => { dom.trollboxMic.textContent = listeningLabel(startedAt, Date.now()); }, 500),
+    };
+    recorder.start(250);
+    dom.trollboxMic.setAttribute("aria-pressed", "true");
+    dom.trollboxMic.textContent = listeningLabel(startedAt, startedAt);
+    trollboxSay(`Listening. Tap the mic again when you have said it (${Math.round(DICTATE_MAX_MS / 1000)} s at most).`);
+  }
+
+  /** The recording, decoded and resampled here, heard by nixamp.com, and put in the box. */
+  async function hear(recorded: Blob, startedAt: number): Promise<void> {
+    const room = trollboxRoom();
+    if (!room || trollboxYou === "") return;
+    if (Date.now() - startedAt < 400 || recorded.size === 0) {
+      trollboxSay("That was too short to hear. Tap, say it, then tap again.");
+      return;
+    }
+    hearing = true;
+    dom.trollboxMic.disabled = true;
+    dom.trollboxMic.textContent = "…";
+    trollboxSay("Hearing you…");
+    try {
+      const context = new AudioContext();
+      let decoded: AudioBuffer;
+      try {
+        decoded = await context.decodeAudioData(await recorded.arrayBuffer());
+      } finally {
+        void context.close();
+      }
+      // The audio API resamples properly; the server would only average.
+      const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * DICTATE_RATE)), DICTATE_RATE);
+      const source = offline.createBufferSource();
+      source.buffer = decoded;
+      source.connect(offline.destination);
+      source.start();
+      const mono = (await offline.startRendering()).getChannelData(0);
+      const wav = encodeWav(mono, DICTATE_RATE);
+      const query = new URLSearchParams();
+      const language = navigator.language.slice(0, 2).toLowerCase();
+      if (/^[a-z]{2}$/.test(language)) query.set("language", language);
+      const answer = await fetch(`${trollboxSite}/api/v1/speech/transcribe?${query.toString()}`, {
+        method: "POST",
+        headers: { "content-type": "audio/wav" },
+        body: new Blob([wav.buffer as ArrayBuffer], { type: "audio/wav" }),
+      });
+      const body = (await answer.json().catch(() => ({}))) as { text?: string; error?: string };
+      if (!answer.ok) {
+        trollboxSay(body.error ?? "nixamp.com could not hear that.");
+        return;
+      }
+      const heard = (body.text ?? "").trim();
+      if (heard === "") {
+        trollboxSay("Heard nothing. Try again, closer to the mic.");
+        return;
+      }
+      dom.trollboxInput.value = joinDictated(dom.trollboxInput.value, heard).slice(0, dom.trollboxInput.maxLength > 0 ? dom.trollboxInput.maxLength : 500);
+      dom.trollboxInput.focus();
+      dom.trollboxInput.setSelectionRange(dom.trollboxInput.value.length, dom.trollboxInput.value.length);
+      trollboxSay(`Heard: “${heard}”. Send it, or fix it first.`);
+    } catch {
+      trollboxSay("That recording could not be read here.");
+    } finally {
+      hearing = false;
+      dom.trollboxMic.disabled = false;
+      dom.trollboxMic.textContent = "🎤";
+    }
+  }
+
+  dom.trollboxMic.addEventListener("click", () => {
+    if (listening) stopListening(true);
+    else void startListening();
+  });
+  // A form that hides itself under a recording takes the microphone with it.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible" && listening) stopListening(true);
+  });
+
+  // ---- the transcript: what the live is saying, as it says it -------------
+  //
+  // The server carrying the channel captions it -- its ffmpeg makes PCM,
+  // nixamp.com's ear makes lines -- and sends the lines here over SSE, each
+  // stamped with when its sound was at the live edge. This page's sound is
+  // behind that edge by the backlog it was handed plus a little buffering,
+  // so every line is held until the page's sound has got there and shown
+  // then: on the picture when there is one, and in the panel always. On by
+  // default. The switch is per device; the Panels list hides the panel.
+  const CAPTIONS_TICK_MS = 250;
+  const TRANSCRIPT_KEEP = 200;
+
+  function transcriptRoom(): { id: string; name: string; hls: boolean } | null {
+    if (mode !== "remote" || !channelOn) return null;
+    return { id: channelOn.id, name: channelOn.name, hls: channelOn.video && wantsHls() };
+  }
+
+  function closeCaptions(): void {
+    captionsSource?.close();
+    captionsSource = null;
+    if (captionsTick) clearInterval(captionsTick);
+    captionsTick = null;
+    captionsHeld = [];
+    captionsShown = [];
+    dom.transcriptList.replaceChildren();
+    dom.subtitle.hidden = true;
+    dom.subtitle.textContent = "";
+  }
+
+  /** The panel shown for a channel and its lines flowing, or hidden and quiet. Called from draw(). */
+  function drawTranscript(): void {
+    const room = transcriptRoom();
+    const key = room ? `${room.id}|${room.hls}|${captionsOn}` : "";
+    if (key === captionsKey) return;
+    captionsKey = key;
+    closeCaptions();
+    dom.transcriptPanel.hidden = room === null;
+    dom.transcriptOn.checked = captionsOn;
+    if (!room) return;
+    if (!captionsOn) {
+      dom.transcriptNote.textContent = `Captions are off on this device. Turn them on and ${room.name} is written down as it speaks.`;
+      return;
+    }
+    dom.transcriptNote.textContent = `Asking for ${room.name}'s captions…`;
+    void openCaptions(room, key);
+  }
+
+  async function openCaptions(room: { id: string; name: string; hls: boolean }, key: string): Promise<void> {
+    // Asked as JSON first: a server that cannot caption says why in a
+    // sentence, where an EventSource would only retry forever in silence.
+    let backlog = 6;
+    try {
+      const answer = await fetch(remote.url(`/api/channels/${encodeURIComponent(room.id)}/transcript`));
+      const body = (await answer.json().catch(() => ({}))) as { error?: string; backlog?: number; lines?: Caption[] };
+      if (key !== captionsKey) return;
+      if (!answer.ok) {
+        dom.transcriptNote.textContent = body.error ?? "This server is not captioning.";
+        return;
+      }
+      backlog = body.backlog ?? backlog;
+    } catch {
+      if (key === captionsKey) dom.transcriptNote.textContent = "The server did not answer about captions.";
+      return;
+    }
+    captionsLag = lagMs(backlog, room.hls);
+    const source = new EventSource(remote.url(`/api/channels/${encodeURIComponent(room.id)}/captions`));
+    captionsSource = source;
+    const take = (lines: Caption[]): void => {
+      for (const line of lines) if (line && typeof line.text === "string" && Number.isFinite(line.at)) captionsHeld.push(line);
+    };
+    source.addEventListener("hello", (event) => {
+      if (key !== captionsKey) return;
+      const hello = JSON.parse((event as MessageEvent<string>).data) as { backlog?: number; lines?: Caption[]; error?: string };
+      captionsLag = lagMs(hello.backlog ?? backlog, room.hls);
+      take(hello.lines ?? []);
+      dom.transcriptNote.textContent = hello.error
+        ? `Captions for ${room.name} are not coming: ${hello.error}`
+        : `What ${room.name} is saying, a few seconds behind the sound.`;
+    });
+    source.addEventListener("line", (event) => {
+      if (key !== captionsKey) return;
+      take([JSON.parse((event as MessageEvent<string>).data) as Caption]);
+    });
+    source.addEventListener("error", () => {
+      // The browser reconnects by itself, sending the last line's id; the
+      // hello that follows carries what was missed.
+      if (key === captionsKey && source.readyState === EventSource.CLOSED) dom.transcriptNote.textContent = "Captions stopped; the server went away.";
+    });
+    captionsTick = setInterval(revealCaptions, CAPTIONS_TICK_MS);
+  }
+
+  function transcriptLine(line: Caption): HTMLElement {
+    const item = document.createElement("li");
+    const when = document.createElement("time");
+    when.className = "when";
+    when.dateTime = new Date(line.at).toISOString();
+    when.textContent = whenLabel(line.at);
+    const text = document.createElement("span");
+    text.className = "line";
+    // textContent, always: it is what somebody said, heard by a model.
+    text.textContent = line.text;
+    item.append(when, text);
+    return item;
+  }
+
+  /** Every quarter second: the lines whose sound this page has reached come out of the hold. */
+  function revealCaptions(): void {
+    const now = Date.now();
+    const { ready, still } = due(captionsHeld, now, captionsLag);
+    captionsHeld = still;
+    for (const line of ready) {
+      captionsShown.push(line);
+      dom.transcriptList.append(transcriptLine(line));
+    }
+    while (captionsShown.length > TRANSCRIPT_KEEP) captionsShown.shift();
+    while (dom.transcriptList.children.length > TRANSCRIPT_KEEP) dom.transcriptList.firstElementChild?.remove();
+    if (ready.length > 0) dom.transcriptList.lastElementChild?.scrollIntoView({ block: "nearest" });
+    const current = showing(captionsShown, now, captionsLag);
+    const items = dom.transcriptList.children;
+    const at = current ? captionsShown.indexOf(current) : -1;
+    for (let i = 0; i < items.length; i++) items[i]?.classList.toggle("now", i === at);
+    // On the picture only when there is a picture; a sound-only channel's
+    // transcript is the panel.
+    const onPicture = current !== null && !dom.video.hidden && dom.video.offsetHeight > 0;
+    dom.subtitle.hidden = !onPicture;
+    if (onPicture && current) {
+      if (dom.subtitle.textContent !== current.text) dom.subtitle.textContent = current.text;
+      // Laid over the picture's foot, wherever the picture is in the panel.
+      dom.subtitle.style.top = `${dom.video.offsetTop + dom.video.offsetHeight - dom.subtitle.offsetHeight - 10}px`;
+    }
+  }
+
+  dom.transcriptOn.addEventListener("change", () => {
+    captionsOn = dom.transcriptOn.checked;
+    try {
+      localStorage.setItem(CAPTIONS_KEY, captionsOn ? "on" : "off");
+    } catch {
+      // A device that remembers nothing still gets captions this once.
+    }
+    drawTranscript();
   });
 
   /**

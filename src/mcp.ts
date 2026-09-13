@@ -8,7 +8,9 @@
  *
  * What it offers is the watch party, because that is the part of nixamp an
  * agent can usefully do something with: find the party, say where it is, put
- * one on the air, move everybody to the same second. It signs in as whoever
+ * one on the air, move everybody to the same second. And the room: hear a
+ * recording (nixamp.com's own ear, see speech.ts), say a line in a trollbox,
+ * read one back. It signs in as whoever
  * this machine is signed in as -- the session on disk, or NIXAMP_TOKEN --
  * because an agent holding its own credential is a credential nobody revokes.
  *
@@ -18,6 +20,8 @@
 import { createInterface } from "node:readline";
 import { clock, type PartyRow } from "./party.ts";
 import { readSession } from "./session.ts";
+import { askToHear, wavOf } from "./transcribe.ts";
+import { readTranscript } from "./transcript.ts";
 
 export const PROTOCOL_VERSION = "2025-06-18";
 
@@ -94,12 +98,82 @@ export const TOOLS: ToolDefinition[] = [
     description: "End a watch party. Only its host may.",
     inputSchema: { type: "object", properties: { code: STRING }, required: ["code"] },
   },
+  {
+    name: "transcribe_audio",
+    description:
+      "The words in a recording on this machine, heard by nixamp.com's own open-source ear (Whisper). Any format ffmpeg reads; up to a minute. Given a server, the words are also posted to that server's trollbox as this account.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { ...STRING, description: "The recording's path on this machine." },
+        language: { ...STRING, description: "A two-letter language code, when Whisper should not guess." },
+        server: { ...STRING, description: "Post the words to this nixamp's trollbox: its address, as in its share link." },
+        channel: { ...STRING, description: "Which of that server's channels; its own stream (live) by default." },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "trollbox_say",
+    description:
+      "Say a line in a live room's trollbox, as this account and under its public handle. A room is a nixamp server's address and one of its channels (or `live`, the server's own stream).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server: { ...STRING, description: "The nixamp server's address, as in its share link." },
+        channel: { ...STRING, description: "The channel's id, or live (default)." },
+        text: { ...STRING, description: "The line. At most 500 characters." },
+      },
+      required: ["server", "text"],
+    },
+  },
+  {
+    name: "transcript_read",
+    description:
+      "What a live channel is saying: the recent lines of its transcript, oldest first, each with when its sound was heard. The server carrying the channel captions it while somebody asks. Pass the server's address and share key, and the channel's id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { ...STRING, description: "The nixamp server's address, e.g. https://server1.chovy.nixamp.com:4321." },
+        key: { ...STRING, description: "The share key from its link, when it has one." },
+        channel: { ...STRING, description: "The channel's id on that server (default: main)." },
+        after: { type: "number", description: "Only lines heard after this moment (ms since the epoch)." },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "trollbox_read",
+    description: "The recent lines in a live room's trollbox, oldest first: who said what, and when.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server: { ...STRING, description: "The nixamp server's address, as in its share link." },
+        channel: { ...STRING, description: "The channel's id, or live (default)." },
+        after: { ...STRING, description: "Only lines after this moment (an ISO timestamp)." },
+      },
+      required: ["server"],
+    },
+  },
 ];
+
+interface TrollboxLine {
+  id: string;
+  handle: string;
+  body: string;
+  createdAt: string;
+}
+
+function said(line: TrollboxLine): string {
+  return `${line.createdAt}  ${line.handle}: ${line.body}`;
+}
 
 export interface McpOptions {
   fetcher?: typeof fetch;
   /** Injected by the tests; the session on disk otherwise. */
   session?: { site: string; token: string } | null;
+  /** How a recording becomes a WAV; the tests hand in a fake. */
+  wavOf?: typeof wavOf;
   say?: (line: string) => void;
 }
 
@@ -204,6 +278,75 @@ export async function callTool(name: string, args: Record<string, unknown>, opti
       if (!response.ok) return failed(await answerOf(response));
       return text(`Ended ${code}.`);
     }
+
+    const server = typeof args["server"] === "string" ? args["server"].trim() : "";
+    const channel = typeof args["channel"] === "string" && args["channel"].trim() ? args["channel"].trim() : "live";
+
+    if (name === "transcribe_audio") {
+      const path = typeof args["path"] === "string" ? args["path"] : "";
+      if (!path) return failed("Which recording? Pass its path.");
+      let wav: Uint8Array;
+      try {
+        wav = (options.wavOf ?? wavOf)(path);
+      } catch (error) {
+        return failed((error as Error).message);
+      }
+      const answer = await askToHear(session, {
+        wav,
+        ...(typeof args["language"] === "string" ? { language: args["language"] } : {}),
+        ...(server ? { server, channel } : {}),
+      }, send, site);
+      if (!answer.ok) return failed(answer.error);
+      if (answer.heard.text === "") return text("Heard nothing in that recording.");
+      return text(answer.heard.message
+        ? `${answer.heard.text}\n\nSaid in the room for ${channel} at ${server} as ${answer.heard.message.handle}.`
+        : answer.heard.text);
+    }
+
+    if (name === "trollbox_say") {
+      if (!server) return failed("Which room? Pass the server's address.");
+      const line = typeof args["text"] === "string" ? args["text"] : "";
+      if (!line.trim()) return failed("Say what? Pass the text.");
+      const response = await send(`${site}/api/v1/trollbox`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ server, channel, body: line }),
+      });
+      if (!response.ok) return failed(await answerOf(response));
+      const body = (await response.json()) as { message?: TrollboxLine };
+      return text(body.message ? `Said, as ${body.message.handle}: ${body.message.body}` : "Said.");
+    }
+
+    if (name === "transcript_read") {
+      const url = typeof args["url"] === "string" ? args["url"].trim() : "";
+      if (!url) return failed("Which server? Pass its address.");
+      const got = await readTranscript(
+        { url, key: typeof args["key"] === "string" && args["key"] ? args["key"] : null },
+        channel === "live" ? "main" : channel,
+        typeof args["after"] === "number" ? args["after"] : 0,
+        send,
+      );
+      if (!got.ok) return failed(got.error);
+      if (got.answer.recent.length === 0) {
+        return text(got.answer.error
+          ? `Nothing yet: ${got.answer.error}`
+          : "Nothing said yet. The server has just started listening; ask again in a few seconds.");
+      }
+      return text(got.answer.recent.map((line) => `${new Date(line.at).toISOString()}  ${line.text}`).join("\n"));
+    }
+
+    if (name === "trollbox_read") {
+      if (!server) return failed("Which room? Pass the server's address.");
+      const url = new URL(`${site}/api/v1/trollbox`);
+      url.searchParams.set("server", server);
+      url.searchParams.set("channel", channel);
+      if (typeof args["after"] === "string" && args["after"]) url.searchParams.set("after", args["after"]);
+      const response = await send(url.toString(), { headers });
+      if (!response.ok) return failed(await answerOf(response));
+      const body = (await response.json()) as { messages?: TrollboxLine[] };
+      const lines = body.messages ?? [];
+      return text(lines.length === 0 ? `Nobody has said anything in the room for ${channel} at ${server}.` : lines.map(said).join("\n"));
+    }
   } catch (error) {
     return failed(`Could not reach ${site}: ${(error as Error).message}`);
   }
@@ -219,7 +362,7 @@ export async function handleMessage(message: Request, options: McpOptions = {}):
     return reply({
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "nixamp", title: "nixamp watch parties", version: "1" },
+      serverInfo: { name: "nixamp", title: "nixamp: watch parties and rooms", version: "1" },
       instructions:
         "Watch parties on nixamp. A party lives on the site hosting the film and is bridged here as a room every nixamp client can join. Codes are the ones that site shows; positions are seconds into the film.",
     });

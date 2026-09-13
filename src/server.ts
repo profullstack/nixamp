@@ -27,7 +27,7 @@ import {
 } from "./broadcast.ts";
 import { Ingest, normaliseFormat } from "./ingest.ts";
 import {
-  Channels, cleanId, generatedId, rememberChannels, rememberedChannels, rememberedNow,
+  BACKLOG_SECONDS, Channels, cleanId, generatedId, rememberChannels, rememberedChannels, rememberedNow,
   type Channel, type ChannelInfo, type RememberedChannel,
 } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
@@ -84,6 +84,8 @@ import { Tickets, needsTicket, ticketFrom, ticketsFromEnv } from "./tickets.ts";
 import { Layouts } from "./layouts.ts";
 import { Rooms } from "./rooms.ts";
 import { Trollbox, TrollboxError, fallbackHandle, roomFor } from "./trollbox.ts";
+import { MAX_BYTES as SPEECH_BYTES, Speech, SpeechError, isWav, languageOf } from "./speech.ts";
+import { Captions } from "./captions.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
   applyRemoteConfig,
@@ -1430,6 +1432,19 @@ async function readBody(request: IncomingMessage, limit = 64 * 1024): Promise<st
   return Buffer.concat(chunks).toString("utf8");
 }
 
+/** The body as bytes: sound, not text. */
+async function readBytes(request: IncomingMessage, limit: number): Promise<Uint8Array> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = chunk as Buffer;
+    size += buffer.length;
+    if (size > limit) throw new SpeechError("that is too much sound", 413);
+    chunks.push(buffer);
+  }
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
 export interface HandlerOptions {
   web: string | null;
   media: boolean;
@@ -1456,6 +1471,8 @@ export interface HandlerOptions {
   ytdlp?: string[] | null;
   /** Channels as HLS, for Safari on a phone, which plays a live stream no other way. */
   hls?: HlsPackagers;
+  /** Captions for a channel: its sound, as lines, as they are heard. Needs ffmpeg and a sign-in. */
+  captions?: Captions;
   /** Lossless relay compression, its policies, diagnostics and static representations. */
   compression?: CompressionService;
   /** What a name is -- a film, a channel, a fixture -- asked of nichedb.dev and remembered. */
@@ -1584,6 +1601,8 @@ export interface HandlerOptions {
   rooms?: Rooms;
   /** The trollbox: a chat per live room, kept at nixamp.com. */
   trollbox?: Trollbox;
+  /** Speech to text: a line said out loud, heard here. Needs the optional model. */
+  speech?: Speech;
   /** Tickets: a paid pass to one event's room. Absent means every show is free. */
   tickets?: Tickets;
   /**
@@ -2606,6 +2625,54 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 405, { error: "GET, POST or DELETE" });
       } catch (error) {
         if (error instanceof TrollboxError) json(response, error.status, { error: error.message });
+        else throw error;
+      }
+      return;
+    }
+
+    /*
+     * Speech to text: a WAV in, the words out. Signed in only -- the ear
+     * costs CPU and a trollbox line needs a name anyway -- and, given a
+     * room, the words go straight into that room's trollbox as a line by
+     * whoever spoke them. The page, the CLI and the MCP tools all come here.
+     */
+    if (path === "/api/v1/speech/transcribe" && options.speech && options.accounts) {
+      const speech = options.speech;
+      try {
+        if (request.method !== "POST") {
+          json(response, 405, { error: "POST a WAV" });
+          return;
+        }
+        const who = await options.accounts.whoIs(tokenFrom(request.headers));
+        if (who === null) {
+          json(response, 401, { error: "sign in to nixamp.com to dictate" });
+          return;
+        }
+        const bytes = await readBytes(request, SPEECH_BYTES);
+        if (!isWav(bytes)) {
+          json(response, 415, { error: "send a WAV: 16-bit PCM, mono, 16 kHz is ideal" });
+          return;
+        }
+        // A room named is a line posted, by the same rules as typing it.
+        const roomAsked = url.searchParams.has("server") || url.searchParams.has("channel");
+        const where = roomAsked ? roomFor(url.searchParams.get("server"), url.searchParams.get("channel")) : null;
+        if (roomAsked && !where) {
+          json(response, 400, { error: "a room is a server address and a channel" });
+          return;
+        }
+        const heard = await speech.transcribe(bytes, { language: languageOf(url.searchParams.get("language")), by: who.id });
+        if (where && options.trollbox && heard.text !== "") {
+          const handle = (await options.handles?.of(who.id)) || fallbackHandle(who.id);
+          const line = await options.trollbox.post(where, who.id, handle, heard.text);
+          json(response, 201, {
+            text: heard.text, seconds: heard.seconds, model: speech.model,
+            message: { id: line.id, handle: line.handle, body: line.body, createdAt: line.createdAt, mine: true },
+          });
+          return;
+        }
+        json(response, 200, { text: heard.text, seconds: heard.seconds, model: speech.model });
+      } catch (error) {
+        if (error instanceof SpeechError || error instanceof TrollboxError) json(response, error.status, { error: error.message });
         else throw error;
       }
       return;
@@ -3704,6 +3771,68 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           "content-length": statSync(segment).size,
         });
         createReadStream(segment).pipe(response);
+        return;
+      }
+
+      /*
+       * The channel's captions: what it is saying, as lines, as they are
+       * heard by nixamp.com's ear on this server's behalf. Read the way the
+       * sound is read -- the key gate above has already passed -- and
+       * started by the first person asking. `captions` is the live stream
+       * of lines; `transcript` is the recent ones as JSON, for a poll.
+       */
+      if ((action === "captions" || action === "transcript") && request.method === "GET") {
+        const captions = options.captions;
+        if (!captions) {
+          json(response, 503, { error: "this server cannot caption: it has no ffmpeg" });
+          return;
+        }
+        if (!captions.available()) {
+          json(response, 503, { error: "this server is not signed in to nixamp.com, so it cannot caption; run `nixamp login` on it" });
+          return;
+        }
+        if (!channels.has(id)) {
+          json(response, 404, { error: "nothing is playing on that channel" });
+          return;
+        }
+        // Lines after a moment: a poll's ?after=, or the last line a
+        // reconnecting EventSource saw, which the browser sends by itself.
+        const lastSeen = request.headers["last-event-id"];
+        const after = Number(url.searchParams.get("after") ?? (Array.isArray(lastSeen) ? lastSeen[0] : lastSeen) ?? 0) || 0;
+        if (action === "transcript") {
+          // Asking keeps the captioner up: it stops a minute after the last ask.
+          captions.subscribe(id, () => undefined)?.();
+          json(response, 200, {
+            channel: id, backlog: BACKLOG_SECONDS, now: Date.now(), ...captions.status(id), lines: captions.recent(id, after),
+          });
+          return;
+        }
+        response.writeHead(200, {
+          ...CORS,
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-store",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+        });
+        const write = (event: string, data: unknown, eventId?: number): void => {
+          response.write(`${eventId === undefined ? "" : `id: ${eventId}\n`}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        };
+        const off = captions.subscribe(id, (line) => write("line", line, line.at));
+        if (off === null) {
+          response.end();
+          return;
+        }
+        // How far behind the live edge a newcomer's playback starts, so the
+        // page can hold each line until its own sound gets there.
+        write("hello", { channel: id, backlog: BACKLOG_SECONDS, now: Date.now(), ...captions.status(id), lines: captions.recent(id, after) });
+        const beat = setInterval(() => response.write(": beat\n\n"), 20_000);
+        beat.unref?.();
+        const done = (): void => {
+          clearInterval(beat);
+          off();
+        };
+        request.on("close", done);
+        response.on("close", done);
         return;
       }
 
@@ -5051,6 +5180,15 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
           secret: process.env["NIXAMP_JWT_SECRET"] ?? "",
         })
       : undefined;
+  // The ear lives where the accounts live. Loaded now, in the background, so
+  // the first person to speak does not wait for the model to arrive; a box
+  // without the optional model never says it is ready, and answers 503.
+  const speech = accounts && process.env["NIXAMP_STT"] !== "off" ? new Speech() : undefined;
+  if (speech) {
+    void speech.warm().then((ready) => {
+      if (ready) console.error(`nixamp: hearing with ${speech.model}`);
+    });
+  }
 
   // nixamp as an OAuth 2.1 authorization server, and the watch parties a
   // client site bridges through it. Both need the same three things -- a
@@ -5235,6 +5373,18 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   }
 
   const session = readSession();
+  // Captions for a channel: this server's ffmpeg turns the sound into PCM
+  // and nixamp.com's ear, asked as this server, turns that into lines. A
+  // server without ffmpeg cannot; a server nobody signed in on is refused
+  // by the ear, and says so to whoever asks.
+  const captions = tools.carries
+    ? new Captions({
+        ffmpeg: tools.ffmpeg,
+        listen: (id, listener) => channels.listen(id, listener),
+        session: () => readSession(),
+        onEvent: (message) => console.log(`  ${message}`),
+      })
+    : undefined;
   const owner = new Owner({
     ownerId: options.owner || (session?.token ? await ownerIdOf(session) : ""),
     site: session?.site ?? DEFAULT_DIRECTORY,
@@ -5426,6 +5576,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     carries: tools.carries !== false,
     cookies: cookiesFile(),
     hls,
+    ...(captions ? { captions } : {}),
     compression,
     enricher,
     ...(tls ? { tls } : {}),
@@ -5440,6 +5591,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(layouts ? { layouts } : {}),
     ...(rooms ? { rooms } : {}),
     ...(trollbox ? { trollbox } : {}),
+    ...(speech ? { speech } : {}),
     ...(tickets ? { tickets } : {}),
     ...(authServer ? { authServer } : {}),
     ...(parties ? { parties } : {}),

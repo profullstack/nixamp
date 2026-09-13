@@ -18,6 +18,8 @@ import { isMatchupName } from "../../src/matchup.ts";
 import { NEVER_CACHE, serviceWorkerSource } from "../scripts/sw.ts";
 import { Bitmap, crc32, drawIcon, encodePng, ICONS } from "../scripts/icons.ts";
 import { PANELS_KEY, emptyLayout, orderedIds, parseLayout, serializeLayout, toggled } from "../src/panels.ts";
+import { DICTATE_MAX_MS, DICTATE_RATE, encodeWav, joinDictated, listeningLabel, recordingMime } from "../src/dictate.ts";
+import { CAPTIONS_KEY, type Caption, captionsWanted, due, lagMs, showing, whenLabel } from "../src/captions.ts";
 
 const webDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -1375,4 +1377,65 @@ test("a channel on the connected server is read by the analyser, even from nixam
   assert.equal(onServer(base, "https://server2.chovy.nixamp.com:4321/api/live?k=K"), false);
   assert.equal(onServer(base, "http://server1.chovy.nixamp.com:4321/api/live?k=K"), false);
   assert.equal(onServer(base, "not a url"), false);
+});
+
+test("a dictated line is a small WAV the server reads, added after what was typed", () => {
+  const samples = new Float32Array([0, 0.5, -0.5, 1, -1, 2, -2]);
+  const wav = encodeWav(samples, DICTATE_RATE);
+  assert.equal(wav.length, 44 + samples.length * 2);
+  assert.equal(String.fromCharCode(...wav.subarray(0, 4)), "RIFF");
+  assert.equal(String.fromCharCode(...wav.subarray(8, 12)), "WAVE");
+  const view = new DataView(wav.buffer);
+  assert.equal(view.getUint16(20, true), 1);
+  assert.equal(view.getUint16(22, true), 1);
+  assert.equal(view.getUint32(24, true), DICTATE_RATE);
+  assert.equal(view.getUint16(34, true), 16);
+  assert.equal(view.getUint32(40, true), samples.length * 2);
+  assert.equal(view.getInt16(44, true), 0);
+  assert.equal(view.getInt16(46, true), 16383);
+  assert.equal(view.getInt16(48, true), -16384);
+  // Clipped, never wrapped: 2 is full scale, not a negative number.
+  assert.equal(view.getInt16(54, true), 32767);
+  assert.equal(view.getInt16(56, true), -32768);
+
+  // The browser's first supported container, of the ones the decoder reads back.
+  assert.equal(recordingMime((type) => type === "audio/mp4"), "audio/mp4");
+  assert.equal(recordingMime((type) => type.startsWith("audio/webm")), "audio/webm;codecs=opus");
+  assert.equal(recordingMime(() => false), "");
+
+  // Heard words go after the typed ones, one space between, and never replace them.
+  assert.equal(joinDictated("", " hello room "), "hello room");
+  assert.equal(joinDictated("so ", "hello"), "so hello");
+  assert.equal(joinDictated("typed", "  "), "typed");
+  assert.equal(listeningLabel(1000, 4600), "● 3s");
+  assert.equal(listeningLabel(1000, 900), "● 0s");
+  assert.ok(DICTATE_MAX_MS <= 60_000);
+});
+
+test("a caption is held until this page's sound has reached it, and shown on the picture while it is being said", () => {
+  // The lag: the backlog handed to a newcomer plus buffering; HLS never closer than six seconds.
+  assert.equal(lagMs(6, false), 7500);
+  assert.equal(lagMs(2, false), 3500);
+  assert.equal(lagMs(2, true), 7500);
+  assert.equal(lagMs(-1, false), 1500);
+  const line = (at: number, text: string): Caption => ({ channel: "tv", at, until: at + 5000, text });
+  const held = [line(20_000, "second"), line(15_000, "first"), line(30_000, "third")];
+  // At 27.5 s with a 7.5 s lag the page's sound is at 20 s: the first two are due, in order.
+  const split = due(held, 27_500, 7500);
+  assert.deepEqual(split.ready.map((one) => one.text), ["first", "second"]);
+  assert.deepEqual(split.still.map((one) => one.text), ["third"]);
+  assert.deepEqual(due([], 1, 1), { ready: [], still: [] });
+  const shown = [line(15_000, "first"), line(20_000, "second")];
+  // Sound at 21 s: the second line is being said. At 26 s it just ended: the grace keeps it. At 27 s it is gone.
+  assert.equal(showing(shown, 21_000 + 7500, 7500)?.text, "second");
+  assert.equal(showing(shown, 26_000 + 7500, 7500)?.text, "second");
+  assert.equal(showing(shown, 27_000 + 7500, 7500), null);
+  assert.equal(showing(shown, 16_000 + 7500, 7500)?.text, "first");
+  assert.equal(showing([], 1, 1), null);
+  // Wanted unless this device said no; a storage that throws means yes.
+  assert.equal(captionsWanted(() => null), true);
+  assert.equal(captionsWanted((key) => (key === CAPTIONS_KEY ? "off" : null)), false);
+  assert.equal(captionsWanted(() => { throw new Error("private mode"); }), true);
+  assert.equal(whenLabel(Number.NaN), "");
+  assert.match(whenLabel(1_700_000_000_000), /\d/);
 });

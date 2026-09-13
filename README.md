@@ -293,6 +293,81 @@ something else.
 Entries expire a few minutes after a stream stops renewing, so the list is
 always what is actually live.
 
+## The trollbox, and saying a line out loud
+
+Every live room has a trollbox: the chat for whoever has joined that stream,
+kept at nixamp.com and keyed by the server and the channel, so everybody
+watching one stream is in the same box whichever page they came from.
+Reading it needs nobody. A line needs a nixamp.com sign-in, and is signed
+with the account's public handle, never its address.
+
+A line can be said rather than typed. The microphone button beside the box
+is tap, talk, tap: the page records, brings the sound to 16 kHz mono itself,
+and sends nixamp.com a small WAV; the words come back into the box, and
+**Send** is still yours, so a misheard word is fixed before the room sees it.
+The ear is [Whisper](https://github.com/openai/whisper) run through
+[Transformers.js](https://github.com/huggingface/transformers.js), an
+Apache-2.0 library carrying MIT-licensed models, on nixamp.com's own CPU.
+Nothing is sent to a speech vendor and nothing is billed. It works in the
+PWA, the desktop app and on a phone, wherever the browser can record; the
+button only appears where a line can be sent from, which is signed in on
+nixamp.com.
+
+The same ear is one route, for anything else that has a recording:
+
+```
+POST /api/v1/speech/transcribe            a WAV in (16-bit PCM; 16 kHz mono is ideal), {text} out
+POST /api/v1/speech/transcribe?server=URL&channel=ID   and the words posted to that room
+```
+
+Signed in only, up to a minute at a time, twelve asks a minute per account,
+`?language=de` when Whisper should not guess. The CLI and the MCP server
+front the same route:
+
+```
+nixamp transcribe clip.m4a                        the words in a recording
+nixamp transcribe clip.m4a --say https://server1.chovy.nixamp.com:4321
+nixamp transcribe clip.m4a --say URL --channel cat-1
+```
+
+Anything ffmpeg can read is converted here first; a WAV needs no ffmpeg.
+`nixamp mcp` offers `transcribe_audio` (with the same optional room),
+`trollbox_say` and `trollbox_read`.
+
+### Subtitles: what a live is saying
+
+Every live channel can be captioned. The server carrying it listens to its
+own stream, turns the sound into five-second windows with its ffmpeg, and
+has nixamp.com's ear turn each window into a line stamped with the moment
+its sound was at the live edge. The lines go out as Server-Sent Events:
+
+```
+GET /api/channels/ID/captions      an event stream: `hello` with the recent lines, then a `line` each
+GET /api/channels/ID/transcript    the recent lines as JSON (?after=MS for only the new ones)
+```
+
+Both are read with the same key as the sound. The page opens the stream as
+soon as you join a live and shows a **Transcript** panel, on by default:
+each line is held until your own playback has reached the sound it came
+from (the backlog you were handed, plus a little buffering) and then shown,
+on the picture when there is one and in the panel always. Close to the
+voice, not on it: a line is a window, not a word. The switch in the panel
+turns captions off for that device; the Panels list hides the panel.
+
+A captioner runs only while somebody is asking, and stops a minute after
+the last one leaves; silence between songs is never sent. The server needs
+an ffmpeg and a sign-in (`nixamp login`) for the ear to answer it. In the
+terminal, `nixamp transcript --channel ID --follow` prints the lines as
+they come; an agent reads them with the `transcript_read` tool.
+
+The model is an optional dependency, because it is hundreds of megabytes
+with the ONNX runtime under it and the CLI tarball is pure JavaScript. A
+`nixamp serve` on a laptop answers 503 to this route and every client asks
+nixamp.com instead. `NIXAMP_STT_MODEL` picks another Whisper
+(`onnx-community/whisper-base` by default; `whisper-small` hears better and
+takes twice as long), `NIXAMP_STT_CACHE` says where its files are kept, and
+`NIXAMP_STT=off` leaves the ear out of a deployment altogether.
+
 ## Several streams at once
 
 A channel is one publisher and everybody listening to them. Two or three devices

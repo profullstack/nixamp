@@ -75,6 +75,9 @@
 
       <section class="panel player-only" data-title="Now Playing">
         <video id="video" playsinline hidden></video>
+        <!-- What the picture is saying, on the picture: the current caption
+             line, held until this page's sound has got there. -->
+        <div id="subtitle" class="subtitle" hidden aria-live="off"></div>
         <!-- A pasted YouTube, Vimeo or SoundCloud link, played by that site's
              own player, here in this browser: the viewer's own address and
              session, which the site will serve when it refuses a server's. -->
@@ -322,8 +325,24 @@
           <form id="trollbox-form" class="picker" hidden>
             <input id="trollbox-input" type="text" maxlength="500" autocomplete="off"
                    placeholder="Say something to the room…" aria-label="A line for the trollbox" />
+            <!-- Tap, talk, tap: the words land in the box, and Send is still
+                 yours. Heard by nixamp.com's own ear (Whisper), so it only
+                 appears where a line can be sent from: signed in, on nixamp.com. -->
+            <button type="button" class="button mic" id="trollbox-mic" hidden aria-pressed="false"
+                    title="Say it instead: tap, talk, tap again">🎤</button>
             <button type="submit" class="button">Send</button>
           </form>
+        </section>
+
+        <!-- The transcript: what the live you have joined is saying, written
+             down as it says it by nixamp.com's ear on the server's behalf, and
+             held here until your own sound gets there. On by default; the
+             switch turns it off for this device, and the Panels list hides the
+             panel. -->
+        <section class="panel col-b" data-title="Transcript" id="transcript-panel" hidden>
+          <p class="hint" id="transcript-note">Join a live and what it says is written here.</p>
+          <label class="transcript-switch"><input type="checkbox" id="transcript-on" checked /> Captions</label>
+          <ul id="transcript-list" class="transcript-list" aria-live="off" aria-label="What is being said"></ul>
         </section>
 
         <!-- What to send somebody who is not technical: one link, one number,
