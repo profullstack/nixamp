@@ -275,18 +275,30 @@ export class Translator {
       fresh();
       // Only the lines with something in them go to the model; the rest keep their place.
       const spoken = texts.map((text) => text.trim());
-      const which = spoken.map((text, i) => (text === "" ? -1 : i)).filter((i) => i >= 0);
-      let current = which.map((i) => spoken[i] as string);
+      // Marian is trained on sentences. A multi-sentence Spanish caption
+      // made es-de silently discard its first sentence. Translate each
+      // sentence, preserving its original caption/speaker slot across hops.
+      const segmenter = new Intl.Segmenter(from, { granularity: "sentence" });
+      const owners: number[] = [];
+      let current: string[] = [];
+      spoken.forEach((text, owner) => {
+        for (const part of segmenter.segment(text)) {
+          const sentence = part.segment.trim();
+          if (sentence) { owners.push(owner); current.push(sentence); }
+        }
+      });
       for (const [a, b] of hops) {
         const pair = await this.pair(a, b);
         fresh();
-        current = await pair.translate(current);
+        const translated = await pair.translate(current);
+        if (translated.length !== current.length || translated.some(text => !text.trim())) {
+          throw new SpeechError("the translation omitted a sentence; try the next line", 502);
+        }
+        current = translated;
       }
-      const out = [...spoken];
-      which.forEach((i, at) => {
-        out[i] = tidyTranslation(current[at] ?? "");
-      });
-      return out;
+      const out: string[][] = spoken.map(() => []);
+      current.forEach((text, at) => { out[owners[at]!]!.push(tidyTranslation(text)); });
+      return out.map(parts => parts.join(" "));
     });
     this.tail = turn.catch(() => undefined);
     try {

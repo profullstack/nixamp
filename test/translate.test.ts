@@ -141,3 +141,27 @@ test('expired live translation skips queued inference and rate-limited downloads
   await assert.rejects(translator.translate(['Hola'], 'es', 'en', { deadline: now - 1 }), /expired/);
   assert.equal(attempts, 1);
 });
+
+
+test("multi-sentence captions keep every sentence in its original speaker slot", async () => {
+  const translations = new Map([
+    ["Queda un minuto para terminar el combate.", "Noch eine Minute bis zum Ende des Kampfes."],
+    ["Moreno avanza y lanza un golpe con la derecha.", "Moreno geht vor und schlägt mit der Rechten."],
+    ["La pelea sigue.", "Der Kampf geht weiter."],
+    ["Quedan 3.5 segundos.", "Es bleiben 3.5 Sekunden."],
+  ]);
+  const translator = new Translator({ load: async () => ({ translate: async texts =>
+    // Reproduce a sentence model retaining only the last recognized sentence.
+    texts.map(text => [...translations].filter(([source]) => text.endsWith(source)).at(-1)?.[1] ?? "")
+  }) });
+  const result = await translator.translate([
+    "Queda un minuto para terminar el combate. Moreno avanza y lanza un golpe con la derecha.",
+    "", "La pelea sigue. Quedan 3.5 segundos.",
+  ], "es", "de");
+  assert.deepEqual(result.texts, [
+    "Noch eine Minute bis zum Ende des Kampfes. Moreno geht vor und schlägt mit der Rechten.",
+    "", "Der Kampf geht weiter. Es bleiben 3.5 Sekunden.",
+  ]);
+  const incomplete = new Translator({ load: async () => ({ translate: async () => ["Nur ein Satz."] }) });
+  await assert.rejects(incomplete.translate(["Primera frase. Segunda frase."], "es", "de"), /omitted a sentence/);
+});
