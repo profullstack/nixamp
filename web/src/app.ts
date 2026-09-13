@@ -7,6 +7,7 @@
  * here as well — the phone becomes the remote, or the speaker, or both.
  */
 import { displayName, formatTime } from "./format.ts";
+import { liveContext, liveTitle } from "./live-context.ts";
 import {
   BrowserPlayer, revoke, tracksFromFiles,
   type LocalTrack,
@@ -459,6 +460,8 @@ export function start(): void {
   } | null = null;
   /** The last answer to "what is on", so the meta line can say who is watching. */
   let lastAir: OnAir | null = null;
+  let mediaSessionKey = "";
+  let liveContextCache: { tracks: FullSnapshot["tracks"]; index: number; fallback: string; value: ReturnType<typeof liveContext> } | null = null;
   /** Which channel the page has already said has ended, so it says so once. */
   let endedSaid = "";
   /**
@@ -806,6 +809,7 @@ export function start(): void {
       // A frame without a track list has nothing new to say about it, which is
       // every frame but the first: keep what we had rather than emptying the
       // playlist twelve times a second.
+      const changedTrack = next.tracks !== undefined || snapshot.index !== next.index;
       snapshot = merge(snapshot, next);
       // A link to a file on this server: played here, once the library has
       // arrived, from the second the link named.
@@ -829,6 +833,7 @@ export function start(): void {
         peaks = holdPeaks(peaks, bars);
       }
       draw();
+      if (changedTrack && lastAir) drawOnAir(lastAir);
     },
     onStatus: (status, detail) => {
       remoteStatus = status;
@@ -852,11 +857,24 @@ export function start(): void {
     return Math.min(watching, Math.max(0, snapshot.tracks.length - 1));
   };
 
+  const serverContext = (): ReturnType<typeof liveContext> => {
+    const fallback = lastAir?.server.nowPlaying || "Live";
+    if (!liveContextCache || liveContextCache.tracks !== snapshot.tracks ||
+        liveContextCache.index !== snapshot.index || liveContextCache.fallback !== fallback) {
+      liveContextCache = { tracks: snapshot.tracks, index: snapshot.index, fallback,
+        value: liveContext(snapshot.tracks, snapshot.index, fallback) };
+    }
+    return liveContextCache.value;
+  };
+  const onServerLive = (): boolean => mode === "remote" && !channelOn && nowMeta?.kind === "live";
+  const currentShareTitle = (): string => onServerLive() ? serverContext().fullTitle : currentName();
+
   const currentName = (): string => {
     // On a channel, the channel: it is not in the playlist, and naming the
     // server's own track over CNN said the wrong thing was playing.
     if (channelOn) return channelOn.name;
     if (localLink) return localLink.label;
+    if (onServerLive()) return serverContext().title;
     const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
     return track ? displayName(track) : "Nothing loaded.";
   };
@@ -864,7 +882,10 @@ export function start(): void {
   const currentAlbum = (): string => {
     if (channelOn) return "live on this server";
     if (localLink) return "playing here, in this browser";
-    if (nowMeta?.kind === "live" && mode === "remote") return `live on ${serverName || "this server"}`;
+    if (onServerLive()) {
+      const { context, position } = serverContext();
+      return [context, position, `live on ${serverName || "this server"}`].filter(Boolean).join(" · ");
+    }
     const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
     return track?.album || "—";
   };
@@ -879,10 +900,11 @@ export function start(): void {
     if (!onLive) {
       dom.liveLine.hidden = true;
       dom.liveLine.replaceChildren();
+      delete dom.liveLine.dataset.drawn;
       return;
     }
     const where = serverName || "this server";
-    const what = channelOn ? channelOn.name : (lastAir?.server.nowPlaying || currentName());
+    const what = channelOn ? channelOn.name : serverContext().fullTitle;
     const parts: (string | HTMLElement)[] = [
       channelOn ? `Live on ${where}: ` : `Live from ${where}, now playing: `,
       boldly(what),
@@ -1086,7 +1108,7 @@ export function start(): void {
         if (isAdmin() && channel.error) chips.push(channel.error);
       } else if (mode === "remote" && !channelOn) {
         const track = snapshot.tracks[at()];
-        if (track && count() > 0) chips.push(`track ${at() + 1} of ${count()}`);
+        if (track && count() > 0) chips.push(`${onServerLive() ? "library track" : "track"} ${at() + 1} of ${count()}`);
         if (remoteDrives() && lastAir) chips.push(`${lastAir.server.playing ? "playing" : "stopped"} on ${serverName || "the server"}`);
       } else if (mode === "local" && count() > 0) {
         chips.push(`track ${at() + 1} of ${count()}`);
@@ -1218,6 +1240,9 @@ export function start(): void {
     dom.status.textContent = wait ? "LOADING" : live ? "▶ PLAYING" : "■ STOPPED";
     dom.status.dataset.playing = wait ? "loading" : String(live);
     dom.title.textContent = currentName();
+    dom.title.classList.toggle("with-context", onServerLive());
+    dom.album.classList.toggle("with-context", onServerLive());
+    if (onServerLive() || channelOn) updateMediaSession();
     drawLiveLine();
     drawMeta();
     // Going live is for whoever administers this server, with something to
@@ -1225,7 +1250,7 @@ export function start(): void {
     dom.goLiveNow.hidden = !canGoLive() || whatToGoLiveWith() === null;
     // The tab says what is on, the way a radio does, so a row of tabs reads
     // as "CNN" rather than as five copies of the site's name.
-    const tab = live ? `${currentName()} · ${baseTitle}` : baseTitle;
+    const tab = live ? `${currentShareTitle()} · ${baseTitle}` : baseTitle;
     if (document.title !== tab) document.title = tab;
     // The address of what is playing, for another player. A picked file has
     // none, and nothing loaded has nothing to copy.
@@ -1685,11 +1710,14 @@ export function start(): void {
   }
 
   function updateMediaSession(): void {
-    if (!("mediaSession" in navigator)) return;
+    if (!("mediaSession" in navigator) || typeof MediaMetadata === "undefined") return;
     // The channel's own picture on the lock screen, when it has one; the
     // mark otherwise. This is the one place an iPhone shows a live stream's
     // art at all: HLS carries no picture, the page does.
     const art = channelOn ? artUrl(lastAir?.channels.find((one) => one.id === channelOn?.id)?.art ?? channelOn.art) : "";
+    const key = JSON.stringify([currentName(), currentAlbum(), art]);
+    if (key === mediaSessionKey) return;
+    mediaSessionKey = key;
     navigator.mediaSession.metadata = new MediaMetadata({
       title: currentName(),
       album: currentAlbum(),
@@ -3864,7 +3892,7 @@ export function start(): void {
     // clipboard where there is not. A sheet dismissed is not a failure.
     const sharing = navigator as Navigator & { share?: (data: { title?: string; url?: string }) => Promise<void> };
     if (typeof sharing.share === "function") {
-      sharing.share({ title: `${currentName()} on nixamp`, url: link }).catch(() => undefined);
+      sharing.share({ title: `${currentShareTitle()} on nixamp`, url: link }).catch(() => undefined);
       return;
     }
     void copyText(link, dom.shareNow, "Copied");
@@ -5530,10 +5558,16 @@ export function start(): void {
     dom.onairPanel.hidden = false;
     lastAir = air;
     playWhatWasAsked(air);
+    draw();
+    drawOnAir(air);
+  }
+
+  function drawOnAir(air: OnAir): void {
+    const context = serverContext();
     // Part of the key, because the admin's buttons are part of the drawing:
     // learning you may drive this server is news even when nothing on the
     // air has changed.
-    const key = `${dom.adminPanel.hidden ? "view" : "drive"}:${JSON.stringify(air)}`;
+    const key = `${dom.adminPanel.hidden ? "view" : "drive"}:${JSON.stringify(air)}:${context.fullTitle}:${context.position}`;
     if (key === drawnOnAir) return;
     drawnOnAir = key;
 
@@ -5557,11 +5591,11 @@ export function start(): void {
       title: air.server.name,
       detail: [
         running
-          ? `playing ${air.server.nowPlaying}`
+          ? `playing ${context.fullTitle}`
           : air.server.nowPlaying
-            ? `stopped on ${air.server.nowPlaying}`
+            ? `stopped on ${liveTitle(air.server.nowPlaying)}`
             : "nothing loaded",
-        `${air.server.tracks} track${air.server.tracks === 1 ? "" : "s"}`,
+        running && context.position ? context.position : `${air.server.tracks} track${air.server.tracks === 1 ? "" : "s"}`,
         air.server.code ? `☎ ${air.server.code}` : "not listed",
       ].join(" · "),
       // Joining, not starting your own copy. Everybody pointed at this sees

@@ -745,7 +745,7 @@ test("on a live stream the page says whose it is, what is on, and how to call in
   // The server's own live stream and a channel both count; a file does not.
   assert.match(body, /channelOn !== null \|\| nowMeta\?\.kind === "live"/);
   // What is on comes from the server's current answer, so it follows the track.
-  assert.match(body, /lastAir\?\.server\.nowPlaying/);
+  assert.match(body, /serverContext\(\)\.fullTitle/);
   // The number and the code, in the same words as the Share panel, as text.
   assert.match(body, /To talk about it, call /);
   assert.match(body, /boldly\(code\)/);
@@ -1110,7 +1110,7 @@ test("Share hands out nixamp.com/?play=<the stream's own address>, and nixamp.co
   assert.match(body, /apiUrl\(base, `\/api\/channels\/\$\{encodeURIComponent\(channelOn\.id\)\}`, key\)/);
   assert.match(body, /apiUrl\(base, "\/api\/live", key\)/);
   // The device's share sheet where there is one; the clipboard otherwise.
-  assert.match(app, /sharing\.share\(\{ title: `\$\{currentName\(\)\} on nixamp`, url: link \}\)/);
+  assert.match(app, /sharing\.share\(\{ title: `\$\{currentShareTitle\(\)\} on nixamp`, url: link \}\)/);
   assert.match(app, /copyText\(link, dom\.shareNow, "Copied"\)/);
   // Arriving: a nixamp stream address becomes a viewer connection to that server.
   assert.match(app, /const sent = sentToPlay\(play\)/);
