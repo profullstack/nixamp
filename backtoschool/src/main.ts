@@ -1,4 +1,5 @@
 import "./styles.css";
+import { installEventWriter } from "./event-writer.ts";
 import type { LiveEvent } from "../../src/live-events.ts";
 import { classroomBroadcast } from "../../src/classroom.ts";
 import { api, ApiError, send, type Account, type EventEnvelope } from "./api.ts";
@@ -27,6 +28,7 @@ let formPending = false;
 let afterSignIn: (() => void) | null = null;
 let routeCleanup: (() => void) | null = null;
 let envelope: EventEnvelope | null = null;
+const writer = installEventWriter(eventForm, eventDialog, () => editing?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC");
 const renderedUpdates = new WeakMap<HTMLElement, string>();
 function renderUpdate(target: HTMLElement, html: string): void {
   if (renderedUpdates.get(target) === html || target.contains(document.activeElement)) return;
@@ -130,6 +132,7 @@ function openEventForm(mode: "live" | "scheduled", existing: LiveEvent | null = 
   if (!account) { openAccount(() => openEventForm(mode, existing)); return; }
   if (formPending) return;
   editing = existing;
+  writer.reset();
   eventForm.reset();
   scheduling = mode === "scheduled";
   scheduleFields.hidden = !scheduling;

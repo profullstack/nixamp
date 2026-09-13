@@ -390,3 +390,9 @@ button[aria-disabled="true"] { opacity: .65; cursor: default; }
 .class-update { position: fixed; right: 12px; bottom: 12px; z-index: 20; width: min(430px, calc(100% - 24px)); padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--cream, #f7f3e9); box-shadow: 0 6px 24px #34246d22; }
 .class-update .form-note { margin: 0 0 8px; }
 .class-update button + button { margin-left: 18px; }
+.ai-writer { padding: 16px; border: 1px solid var(--line); border-radius: 12px; }
+.ai-writer-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); align-items: center; gap: 14px; }
+.ai-writer-status { height: 5em; overflow: auto; line-height: 1.4; margin: 10px 0 0; }
+#event-ai-preview { margin-top: 12px; }
+#event-ai-preview textarea { resize: vertical; }
+#event-ai-preview input, #event-ai-preview textarea { background: #f7f3e9; }
