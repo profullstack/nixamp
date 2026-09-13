@@ -360,7 +360,9 @@ test("cover art in an audio file is not a picture, so a podcast goes on as sound
     + '{"codec_type":"video","codec_name":"mjpeg","width":1400,"height":1400,"disposition":{"attached_pic":1}}],'
     + '"format":{"format_name":"mp3","duration":"5584.3"}}',
   )), "x");
-  assert.deepEqual(podcast, { video: "", audio: "mp3", container: "mp3", duration: 5584.3 });
+  // Not a picture to play, but a picture to show: the sleeve is noted so the
+  // card and the lock screen can read it out of the file.
+  assert.deepEqual(podcast, { video: "", audio: "mp3", container: "mp3", duration: 5584.3, cover: true });
   // A still-image codec is the same thing from a container that does not flag it.
   const flac = await codecsOf(tools(say(
     '{"streams":[{"codec_type":"video","codec_name":"png"},{"codec_type":"audio","codec_name":"flac"}],"format":{"format_name":"flac","duration":"200"}}',

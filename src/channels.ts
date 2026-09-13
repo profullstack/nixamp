@@ -72,7 +72,7 @@ export interface ChannelInfo {
   position?: number;
   live?: boolean;
   /** What the source turned out to hold, so a restart need not ask again. */
-  codecs?: { video: string; audio: string; container: string; duration?: number; width?: number; height?: number };
+  codecs?: { video: string; audio: string; container: string; duration?: number; width?: number; height?: number; cover?: boolean };
   /**
    * What the channel itself is producing, which is not always what its source
    * holds: an H.265 source is usually re-encoded to H.264 on the way out,
@@ -95,6 +95,15 @@ export interface ChannelInfo {
    * plain URL is read this way, and only when a policy asks for it.
    */
   teed?: boolean;
+  /**
+   * A picture of it from somewhere else: the thumbnail the site offered
+   * for a pasted link, the logo a catalog gave a channel. A channel with
+   * none may still have one of its own -- a sleeve in the file, a frame of
+   * the picture -- which /api/channels/:id/art reads out on demand.
+   */
+  art?: string;
+  /** A line about it for a preview: the show, the uploader, the first line of the notes. */
+  about?: string;
 }
 
 /** Where a pulled source is picked up from, and whether it can be at all. */
@@ -1201,7 +1210,7 @@ export interface RememberedChannel {
    * air as sound alone.
    */
   kind?: "audio" | "video";
-  codecs?: { video: string; audio: string; container: string; duration?: number; width?: number; height?: number };
+  codecs?: { video: string; audio: string; container: string; duration?: number; width?: number; height?: number; cover?: boolean };
   /** Where a film had got to, in seconds, so it picks up there. */
   position?: number;
   /** A live source has nowhere to pick up from. */
@@ -1211,6 +1220,9 @@ export interface RememberedChannel {
   /** For a list: every entry, and which was on, so it carries on from there. */
   playlist?: string[];
   playlistAt?: number;
+  /** Its picture and its line, as the site gave them, so a restart need not ask. */
+  art?: string;
+  about?: string;
 }
 
 const REMEMBERED = "channels.json";
@@ -1242,6 +1254,9 @@ export function rememberedChannels(dir: string, port: number): RememberedChannel
             // channel comes back at a size that cannot keep up.
             if (typeof c["width"] === "number" && Number.isFinite(c["width"])) kept.codecs.width = c["width"];
             if (typeof c["height"] === "number" && Number.isFinite(c["height"])) kept.codecs.height = c["height"];
+            // A sleeve in the file is a picture for the card, and knowing it
+            // is there saves reading the file again to find out.
+            if (c["cover"] === true) kept.codecs.cover = true;
           }
         }
         if (typeof one["position"] === "number" && Number.isFinite(one["position"]) && one["position"] > 0) kept.position = one["position"];
@@ -1252,6 +1267,8 @@ export function rememberedChannels(dir: string, port: number): RememberedChannel
           if (entries.length > 0) kept.playlist = entries;
           if (typeof one["playlistAt"] === "number" && Number.isInteger(one["playlistAt"]) && one["playlistAt"] >= 0) kept.playlistAt = one["playlistAt"];
         }
+        if (typeof one["art"] === "string" && /^https?:\/\//i.test(one["art"])) kept.art = one["art"].slice(0, 2048);
+        if (typeof one["about"] === "string" && one["about"] !== "") kept.about = one["about"].slice(0, 200);
         return kept;
       });
   } catch {
@@ -1279,6 +1296,8 @@ export function rememberedNow(channels: Channels): RememberedChannel[] {
         kept.playlist = one.playlist;
         kept.playlistAt = one.playlistAt ?? 0;
       }
+      if (one.art) kept.art = one.art;
+      if (one.about) kept.about = one.about;
       return kept;
     });
 }

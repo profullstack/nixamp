@@ -6,7 +6,7 @@
  * defaults to no, because "there was nobody to ask" is not consent.
  */
 import { createInterface } from "node:readline/promises";
-import { DEFAULT_DIRECTORY, HEARTBEAT_MS, type Listing } from "./directory.ts";
+import { DEFAULT_DIRECTORY, HEARTBEAT_MS, type LineupEntry, type Listing } from "./directory.ts";
 
 export interface PublishTarget {
   directory: string;
@@ -36,6 +36,8 @@ export interface PublishTarget {
   playing?: () => boolean;
   /** The live channels on this server, by name, for the listing to show. */
   channels?: () => string[];
+  /** The same channels with their id, picture and line, for a link preview. */
+  lineup?: () => LineupEntry[];
   /**
    * The account this stream belongs to, from `nixamp login`.
    *
@@ -122,6 +124,7 @@ export class Publisher {
           nowPlaying: this.target.nowPlaying(),
           ...(this.target.playing ? { playing: this.target.playing() } : {}),
           ...(this.target.channels ? { channels: this.target.channels() } : {}),
+          ...(this.target.lineup ? { lineup: this.target.lineup() } : {}),
         }),
       });
       if (!response.ok) {

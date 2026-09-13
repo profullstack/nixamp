@@ -404,7 +404,17 @@ export function start(): void {
    * cannot follow that mid-picture -- so "ended" on a live channel means
    * "rejoin", never "play the next track in the library".
    */
-  let channelOn: { id: string; name: string; video: boolean } | null = null;
+  let channelOn: { id: string; name: string; video: boolean; art?: string } | null = null;
+
+  /**
+   * A channel's picture as this page can load it: a site's thumbnail as it
+   * is, and this server's art route through the connection, which puts the
+   * key (and, on another origin, the session) on the address.
+   */
+  function artUrl(art: string | undefined): string {
+    if (!art) return "";
+    return /^https?:\/\//i.test(art) ? art : remote.url(art);
+  }
   let rejoins = 0;
   /**
    * Requests in flight that will end in something playing, and whether the
@@ -1071,6 +1081,9 @@ export function start(): void {
         chips.push(nowMeta.entry?.group ? `${nowMeta.catalog.name} › ${nowMeta.entry.group}` : nowMeta.catalog.name);
         logo = nowMeta.entry?.logo ?? "";
       }
+      // The channel's own picture -- the podcast's sleeve, the video's
+      // thumbnail -- when nothing else has given one.
+      if (logo === "" && channelOn) logo = artUrl(channel?.art ?? channelOn.art);
       // What nichedb knows: the year, the rating, the genres of a film; the
       // country and category of a channel; the score of a game. The poster
       // or logo goes in front; a game gets its two teams on a row of its own.
@@ -1158,7 +1171,7 @@ export function start(): void {
       row.replaceChildren(...team(score.away, true), dash, ...team(score.home, false));
       children.push(row);
     }
-    if (logo !== "" && /^https?:\/\//.test(logo)) {
+    if (logo !== "" && /^(https?:\/\/|\/api\/)/.test(logo)) {
       const img = document.createElement("img");
       // A film's poster is tall and stands beside the chips; a logo sits among them.
       img.className = known?.kind === "title" && logo === known.image ? "meta-logo meta-poster" : "meta-logo";
@@ -1654,11 +1667,17 @@ export function start(): void {
 
   function updateMediaSession(): void {
     if (!("mediaSession" in navigator)) return;
+    // The channel's own picture on the lock screen, when it has one; the
+    // mark otherwise. This is the one place an iPhone shows a live stream's
+    // art at all: HLS carries no picture, the page does.
+    const art = channelOn ? artUrl(lastAir?.channels.find((one) => one.id === channelOn?.id)?.art ?? channelOn.art) : "";
     navigator.mediaSession.metadata = new MediaMetadata({
       title: currentName(),
       album: currentAlbum(),
       artist: "nixamp",
-      artwork: [{ src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" }],
+      artwork: art !== ""
+        ? [{ src: art }]
+        : [{ src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" }],
     });
     navigator.mediaSession.setActionHandler("play", () => void toggle());
     navigator.mediaSession.setActionHandler("pause", () => void toggle());
@@ -1865,7 +1884,7 @@ export function start(): void {
       let answer: Response;
       let body: {
         channel?: string; name?: string; live?: boolean; video?: boolean; download?: boolean;
-        extractor?: string; error?: string; entries?: number;
+        extractor?: string; error?: string; entries?: number; art?: string;
       } = {};
       try {
         // live: kept and listed by the server itself, for a member
@@ -1890,7 +1909,7 @@ export function start(): void {
       try {
         await fetch(remote.url(`/api/channels/${encodeURIComponent(body.channel)}/keep`), { method: "POST" });
       } catch { /* on the air, unkept */ }
-      await watchChannel({ id: body.channel, name: body.name || url, video: body.video !== false }, true, {
+      await watchChannel({ id: body.channel, name: body.name || url, video: body.video !== false, art: body.art }, true, {
         kind: "channel",
         link: {
           url,
@@ -2217,6 +2236,8 @@ export function start(): void {
       /** Each channel's own phone code and how many are on the phone for it. */
       channelCodes?: Record<string, string>;
       channelCallers?: Record<string, number>;
+      /** The same channels with a picture and a line each, from a server that sends them. */
+      lineup?: { id: string; name: string; kind: "audio" | "video"; art: string; about: string }[];
       /** The control link, present only when this account owns the server. */
       admin?: string;
     }[];
@@ -2318,6 +2339,19 @@ export function start(): void {
         const onPhone = stream.channelCallers?.[channelName] ?? 0;
         dot.textContent = `● ${channelName}` +
           (code ? ` · ☎ ${code}${onPhone ? ` · ${onPhone} on the phone` : ""}` : "");
+        // Its picture, small, in front of its name: a row you can tell apart
+        // from the next at a glance. The server vouched for the address.
+        const entry = stream.lineup?.find((one) => one.name === channelName);
+        if (entry?.art && /^https?:\/\//i.test(entry.art)) {
+          const art = document.createElement("img");
+          art.className = "live-art";
+          art.alt = "";
+          art.loading = "lazy";
+          art.src = entry.art;
+          art.addEventListener("error", () => { art.hidden = true; });
+          row.append(art);
+        }
+        if (entry?.about) dot.title = entry.about;
         const play = document.createElement("button");
         play.type = "button";
         play.className = "button";
@@ -5280,6 +5314,9 @@ export function start(): void {
       code?: string;
       /** The member who put it on, when one did: theirs to take off. */
       startedBy?: string;
+      /** A picture of it -- a site's thumbnail, or this server's art route -- and a line about it. */
+      art?: string;
+      about?: string;
     }[];
     restreams?: { name: string; at: number; tracks: number }[];
   }
@@ -5433,7 +5470,7 @@ export function start(): void {
         title: channel.name,
         detail: detail.join(" · "),
         onPlay: () => {
-          void watchChannel({ id: channel.id, name: channel.name, video: withPicture });
+          void watchChannel({ id: channel.id, name: channel.name, video: withPicture, art: channel.art });
         },
         link: address,
         page: pageLinkFor(`channel:${channel.id}`),
@@ -5538,7 +5575,7 @@ export function start(): void {
    * of those in a row without the picture ever settling means it is gone.
    */
   async function watchChannel(
-    channel: { id: string; name: string; video: boolean },
+    channel: { id: string; name: string; video: boolean; art?: string },
     fresh = true,
     from?: typeof nowMeta,
   ): Promise<void> {
@@ -5757,7 +5794,7 @@ export function start(): void {
     // Maybe on the next answer: a channel can be a moment behind the page.
     if (!channel) return;
     askedToPlay = "";
-    void watchChannel({ id: channel.id, name: channel.name, video: channel.kind !== "audio" });
+    void watchChannel({ id: channel.id, name: channel.name, video: channel.kind !== "audio", art: channel.art });
   }
 
   /**

@@ -79,6 +79,12 @@ export interface Listing {
    * about another on the same server.
    */
   channelCodes: Record<string, string>;
+  /**
+   * The same channels with what a preview needs: the id a join link names
+   * them by, a picture, a line. `channels` stays the list of names for
+   * the phone line and for anything reading an older listing.
+   */
+  lineup: LineupEntry[];
   /** Set by the directory from the request, never by the publisher. */
   updatedAt: number;
   /** When this stream first announced itself: the "started at" a caller hears. */
@@ -131,9 +137,27 @@ export interface Announcement {
   playing?: boolean;
   /** Names of the live channels on it. Absent from an older publisher. */
   channels?: string[];
+  /** Each of those with its id, picture and line. Absent from an older publisher. */
+  lineup?: LineupEntry[];
+}
+
+/**
+ * One live channel as a preview sees it. The picture is a web address the
+ * publisher vouches for -- its own art route, or the thumbnail a site gave
+ * it -- and a crawler fetches it, so it is only ever http(s).
+ */
+export interface LineupEntry {
+  id: string;
+  name: string;
+  kind: "audio" | "video";
+  art: string;
+  about: string;
 }
 
 const MAX_NAME = 60;
+const MAX_ID = 64;
+const MAX_ABOUT = 200;
+const MAX_ART = 2048;
 const MAX_TRACK = 120;
 /** How many channel names a listing carries. A multiview is four; eight is plenty. */
 const MAX_CHANNELS = 8;
@@ -206,6 +230,28 @@ export function parseAnnouncement(input: unknown): Announcement | null {
             .slice(0, MAX_CHANNELS),
         }
       : {}),
+    ...(Array.isArray(record["lineup"])
+      ? { lineup: (record["lineup"] as unknown[]).map(parseLineupEntry).filter((one): one is LineupEntry => one !== null).slice(0, MAX_CHANNELS) }
+      : {}),
+  };
+}
+
+/** One lineup entry as a publisher sent it, cleaned, or null when it is not one. */
+export function parseLineupEntry(input: unknown): LineupEntry | null {
+  if (typeof input !== "object" || input === null) return null;
+  const record = input as Record<string, unknown>;
+  const id = clean(record["id"], MAX_ID);
+  const name = clean(record["name"], MAX_NAME);
+  if (id === "" || name === "") return null;
+  const art = clean(record["art"], MAX_ART);
+  return {
+    id,
+    name,
+    kind: record["kind"] === "video" ? "video" : "audio",
+    // A picture is somewhere a crawler can go, or nothing: a data: URL is a
+    // page in a tag, and javascript: is a page in a tag that runs.
+    art: publishable(art) !== null ? art : "",
+    about: clean(record["about"], MAX_ABOUT),
   };
 }
 
@@ -304,6 +350,7 @@ export class Directory {
       // listing always meant, and no channels is the honest empty list.
       playing: announcement.playing ?? true,
       channels: announcement.channels ?? [],
+      lineup: announcement.lineup ?? [],
       channelCodes: this.codesFor(
         announcement.channels ?? [],
         // What each channel has been called before, on this listing: a
