@@ -47,14 +47,31 @@ export class SpeechError extends Error {
   }
 }
 
+/** A stretch of the clip and what was said in it, seconds from the clip's start. */
+export interface Segment {
+  start: number;
+  end: number;
+  text: string;
+}
+
 export interface Heard {
   text: string;
   /** How long the audio was, in seconds. */
   seconds: number;
+  /** The language heard, as told or as guessed; absent when neither was possible. */
+  language?: string;
+  /** The clip in pieces with their timing, when asked for. */
+  segments?: Segment[];
+}
+
+export interface RecognizeOptions {
+  language?: string;
+  /** Also say when each piece was said. Slower: the ear takes about twice as long. */
+  timestamps?: boolean;
 }
 
 /** Mono samples in [-1, 1] at RATE -> words. What the loaded model is, to this file. */
-export type Recognizer = (pcm: Float32Array, options: { language?: string }) => Promise<{ text: string }>;
+export type Recognizer = (pcm: Float32Array, options: RecognizeOptions) => Promise<{ text: string; language?: string; segments?: Segment[] }>;
 
 export interface SpeechOptions {
   /** A Hugging Face model id; NIXAMP_STT_MODEL otherwise; whisper-base by default. */
@@ -205,21 +222,36 @@ export function languageOf(value: unknown): string | undefined {
   return /^[a-z]{2}$/.test(code) ? code : undefined;
 }
 
+/** What the pipeline answers: the words, and the pieces with their timing when asked. */
+interface AsrOutput {
+  text: string;
+  chunks?: { timestamp: [number, number | null]; text: string }[];
+}
+
+/** The pipeline, and the parts under it that language detection needs. */
+interface AsrPipeline {
+  (audio: Float32Array, options: Record<string, unknown>): Promise<AsrOutput | AsrOutput[]>;
+  model: {
+    (inputs: Record<string, unknown>): Promise<{ logits: { data: Float32Array | number[] } }>;
+    generation_config: { decoder_start_token_id: number; is_multilingual?: boolean; lang_to_id?: Record<string, number> };
+  };
+  processor: (audio: Float32Array) => Promise<{ input_features: unknown }>;
+}
+
 /** The module, as much of it as this file touches. Typed here so the import can be by name. */
 interface Transformers {
   env: { cacheDir?: string; allowLocalModels?: boolean };
-  pipeline(task: "automatic-speech-recognition", model: string, options: { dtype: string }): Promise<
-    (audio: Float32Array, options: Record<string, unknown>) => Promise<{ text: string } | { text: string }[]>
-  >;
+  Tensor: new (type: string, data: BigInt64Array, dims: number[]) => unknown;
+  pipeline(task: "automatic-speech-recognition", model: string, options: { dtype: string }): Promise<AsrPipeline>;
 }
 
-async function loadWhisper(model: string, cacheDir: string): Promise<Recognizer> {
+/** Load the library, or say why not with a status. */
+export async function loadTransformers<T>(): Promise<T> {
   // By name held in a variable: an optional dependency that is not on disk
   // must fail here, at the first ask, and not when the file is imported.
   const name = "@huggingface/transformers";
-  let transformers: Transformers;
   try {
-    transformers = (await import(name)) as Transformers;
+    return (await import(name)) as T;
   } catch (error) {
     // The reason travels with the refusal: "not installed" and "installed
     // but its native runtime would not load" need different fixes, and the
@@ -227,16 +259,63 @@ async function loadWhisper(model: string, cacheDir: string): Promise<Recognizer>
     const why = String((error as Error).message ?? error).split("\n")[0] ?? "";
     throw new SpeechError(`this nixamp cannot hear: @huggingface/transformers did not load here (${why}). nixamp.com can.`, 503);
   }
+}
+
+/**
+ * Which language a clip is in, the way whisper.cpp asks: the encoder once
+ * over the first thirty seconds, one decoder step from the start token,
+ * and the loudest of the language tokens wins. Whisper told nothing
+ * assumes English, and a Swedish sentence heard as English comes back as
+ * the same three English words repeated to the end of the clip; guessing
+ * first costs an encoder pass and is what makes a caption in Swedish say
+ * something. Undefined for a model that knows one language.
+ */
+async function detectLanguage(transformers: Transformers, asr: AsrPipeline, pcm: Float32Array): Promise<string | undefined> {
+  const config = asr.model.generation_config;
+  const languages = config.lang_to_id;
+  if (!languages || config.is_multilingual === false) return undefined;
+  const inputs = await asr.processor(pcm.subarray(0, 30 * RATE));
+  const start = new transformers.Tensor("int64", BigInt64Array.from([BigInt(config.decoder_start_token_id)]), [1, 1]);
+  const out = await asr.model({ input_features: inputs.input_features, decoder_input_ids: start });
+  const logits = out.logits.data;
+  let best: string | undefined;
+  let loudest = -Infinity;
+  for (const [token, id] of Object.entries(languages)) {
+    const score = logits[id];
+    if (typeof score === "number" && score > loudest) {
+      loudest = score;
+      best = token;
+    }
+  }
+  // The token is written <|sv|>.
+  const code = best?.replace(/^<\|/, "").replace(/\|>$/, "");
+  return code && /^[a-z]{2,3}$/.test(code) ? code : undefined;
+}
+
+async function loadWhisper(model: string, cacheDir: string): Promise<Recognizer> {
+  const transformers = await loadTransformers<Transformers>();
   transformers.env.cacheDir = cacheDir;
   const recognize = await transformers.pipeline("automatic-speech-recognition", model, { dtype: "q8" });
-  return async (pcm, { language }) => {
+  return async (pcm, { language, timestamps }) => {
+    const spoken = language ?? (await detectLanguage(transformers, recognize, pcm));
     const heard = await recognize(pcm, {
       // Whisper hears thirty seconds at a time; longer is heard in overlapping pieces.
       chunk_length_s: 30,
       stride_length_s: 5,
-      ...(language ? { language, task: "transcribe" } : {}),
+      ...(spoken ? { language: spoken, task: "transcribe" } : {}),
+      ...(timestamps ? { return_timestamps: true } : {}),
     });
-    return { text: Array.isArray(heard) ? heard.map((piece) => piece.text).join(" ") : heard.text };
+    const pieces = Array.isArray(heard) ? heard : [heard];
+    const text = pieces.map((piece) => piece.text).join(" ");
+    const seconds = pcm.length / RATE;
+    const segments = timestamps
+      ? pieces.flatMap((piece) => piece.chunks ?? []).map((chunk) => ({
+          start: Math.max(0, chunk.timestamp[0] ?? 0),
+          end: Math.min(seconds, chunk.timestamp[1] ?? seconds),
+          text: chunk.text,
+        }))
+      : undefined;
+    return { text, ...(spoken ? { language: spoken } : {}), ...(segments ? { segments } : {}) };
   };
 }
 
@@ -306,7 +385,7 @@ export class Speech {
    * The words in a WAV. Refuses what is not a WAV, or is too long, or more
    * than the account may have heard this minute, with a status.
    */
-  async transcribe(bytes: Uint8Array, options: { language?: string; by?: string } = {}): Promise<Heard> {
+  async transcribe(bytes: Uint8Array, options: { language?: string; timestamps?: boolean; by?: string } = {}): Promise<Heard> {
     if (bytes.length > MAX_BYTES) throw new SpeechError(`that is too much sound: ${MAX_SECONDS} seconds at most`, 413);
     const wav = decodeWav(bytes);
     const seconds = wav.samples.length / wav.rate;
@@ -318,13 +397,24 @@ export class Speech {
     this.waiting += 1;
     const turn = this.tail.then(async () => {
       const recognize = await this.ear();
-      return recognize(pcm, options.language ? { language: options.language } : {});
+      return recognize(pcm, {
+        ...(options.language ? { language: options.language } : {}),
+        ...(options.timestamps ? { timestamps: true } : {}),
+      });
     });
     // The queue moves on whether or not this one was heard.
     this.tail = turn.catch(() => undefined);
     try {
       const heard = await turn;
-      return { text: tidy(heard.text), seconds };
+      const segments = heard.segments
+        ?.map((segment) => ({ start: segment.start, end: segment.end, text: tidy(segment.text) }))
+        .filter((segment) => segment.text !== "");
+      return {
+        text: tidy(heard.text),
+        seconds,
+        ...(heard.language ? { language: heard.language } : {}),
+        ...(segments ? { segments } : {}),
+      };
     } finally {
       this.waiting -= 1;
     }

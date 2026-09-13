@@ -366,6 +366,9 @@
         <section class="panel col-b" data-title="Transcript" id="transcript-panel" hidden>
           <p class="hint" id="transcript-note">Join a live and what it says is written here.</p>
           <label class="transcript-switch"><input type="checkbox" id="transcript-on" checked /> Captions</label>
+          <!-- In which language: as spoken, or translated on nixamp.com as each
+               line is said. Filled by the page; remembered per device. -->
+          <label class="transcript-switch">in <select id="transcript-language" class="transcript-language" aria-label="Caption language"></select></label>
           <ul id="transcript-list" class="transcript-list" aria-live="off" aria-label="What is being said"></ul>
         </section>
 

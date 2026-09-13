@@ -197,11 +197,15 @@ nixamp party sync ABC123 --at 930    where playback is (hosts only)
 and an agent reaches the same five actions over the Model Context Protocol:
 
 ```
-nixamp mcp     a stdio MCP server: list, get, host, sync, end
+nixamp mcp     a stdio MCP server: the parties, the rooms, the transcripts
 ```
 
 It acts as whoever the machine is signed in as, so `nixamp login` comes first.
-The film never crosses over: what nixamp carries is the room.
+The film never crosses over: what nixamp carries is the room. The same tools
+are at `https://nixamp.com/mcp` over HTTP, with a nixamp token
+(`nixamp token create`) as the bearer, for an agent with no nixamp installed;
+`/.well-known/oauth-protected-resource` says where the authorization server
+is.
 
 ## BackToSchool.help
 
@@ -409,6 +413,73 @@ nixamp.com instead. `NIXAMP_STT_MODEL` picks another Whisper
 (`onnx-community/whisper-base` by default; `whisper-small` hears better and
 takes twice as long), `NIXAMP_STT_CACHE` says where its files are kept, and
 `NIXAMP_STT=off` leaves the ear out of a deployment altogether.
+
+The ear tells which language it heard: one pass over the first thirty
+seconds, the way whisper.cpp does it, before the words are read. Without
+that a Swedish channel came back as three English words repeated to the end
+of the window. A captioner learns the language from its first line and says
+it on every ask after that.
+
+### Kept: written down once, for everybody
+
+What the ear hears is kept on nixamp.com under the identity of what was
+playing, not of the channel that happened to play it: a file by its
+fingerprint (its size and a megabyte at each end), a link by its address, a
+live as the one broadcast it was. Lines are seconds into the media. The next
+captioner to meet the same film reads the lines out of the store instead of
+hearing them, whichever server it is on; what it hears beyond them is added.
+
+```
+nixamp transcribe FILE                     the whole film, a minute at a time, kept when it is done
+nixamp transcribe FILE --srt > film.srt    as subtitles; --vtt, --txt, --json
+nixamp transcribe FILE --out DIR           a subtitle file per language in DIR
+nixamp transcript --kept MEDIA_OR_ID       what nixamp.com keeps, for a file, a link or a past live
+nixamp transcript --list                   everything this account has had written down
+```
+
+```
+GET  /api/v1/transcripts                   what you have had written down
+GET  /api/v1/transcripts/ID                the transcript; ?format=srt|vtt|txt, ?language=de
+POST /api/v1/transcripts/ID/lines          keep lines: {media, language, lines: [{start, end, text}], complete?}
+DELETE /api/v1/transcripts/ID              forget it (whoever kept it)
+```
+
+ID is the sha256 of the media identity, or the identity itself
+(`file:v1:<hash>`, `url:<address>`, `live:<server>/<channel>@<started>`).
+Signed in to read and to keep, like the ear. A whole-file pass marks the row
+complete and replaces the pieces a captioner left; a live grows as it goes
+and a page that asks for it reads what there is so far. An agent has
+`transcript_get` and `transcripts_list`, and `transcribe_audio` keeps a film
+the same way.
+
+### In another language
+
+Ask for a language and the lines come translated, by an open-source model on
+nixamp.com's own CPU (Helsinki-NLP's OPUS-MT pairs, through Transformers.js):
+German and Swedish among the languages, and anything with a model from or
+into English; a pair with no model of its own goes through English. A
+translation is made once and kept beside the original.
+
+```
+GET  /api/channels/ID/captions?language=sv   a live's lines in Swedish, each translated as it is heard
+GET  /api/v1/transcripts/ID?language=de      a kept transcript in German; 202 with progress while a long one is made
+GET  /api/v1/translate                       the languages, and what each can be turned into here
+POST /api/v1/translate                       {texts, from, to} -> {texts}
+```
+
+```
+nixamp transcript --channel ID --language sv    a live, in Swedish, as it speaks
+nixamp transcribe FILE --translate de,sv        a film in German and Swedish too
+nixamp translate --to sv "Hello there"          a line; or lines on stdin
+nixamp translate --languages                    what nixamp.com can do
+```
+
+The page has the same choice beside the Captions switch, remembered per
+device; a translated line is marked with its language and shows what was
+heard under the pointer. An agent has `translate_text`. `NIXAMP_MT_WARM`
+names pairs to load at boot (`en-de,en-sv`), `NIXAMP_MT=off` leaves
+translation out, and the Docker image bakes the ear and the German and
+Swedish pairs in so a deploy never downloads them again.
 
 ## Several streams at once
 

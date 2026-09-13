@@ -19,7 +19,7 @@ import { NEVER_CACHE, serviceWorkerSource } from "../scripts/sw.ts";
 import { Bitmap, crc32, drawIcon, encodePng, ICONS } from "../scripts/icons.ts";
 import { PANELS_KEY, emptyLayout, orderedIds, parseLayout, serializeLayout, toggled } from "../src/panels.ts";
 import { DICTATE_MAX_MS, DICTATE_RATE, encodeWav, joinDictated, listeningLabel, recordingMime } from "../src/dictate.ts";
-import { CAPTIONS_KEY, type Caption, captionsWanted, due, lagMs, showing, whenLabel } from "../src/captions.ts";
+import { CAPTIONS_KEY, CAPTIONS_LANGUAGE_KEY, LANGUAGE_CHOICES, type Caption, captionLabel, captionsLanguage, captionsWanted, due, lagMs, showing, whenLabel } from "../src/captions.ts";
 
 const webDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -1438,4 +1438,22 @@ test("a caption is held until this page's sound has reached it, and shown on the
   assert.equal(captionsWanted(() => { throw new Error("private mode"); }), true);
   assert.equal(whenLabel(Number.NaN), "");
   assert.match(whenLabel(1_700_000_000_000), /\d/);
+  // The language: one on offer, or as spoken; German and Swedish are on offer.
+  assert.equal(captionsLanguage(() => null), "");
+  assert.equal(captionsLanguage((key) => (key === CAPTIONS_LANGUAGE_KEY ? " DE " : null)), "de");
+  assert.equal(captionsLanguage(() => "sv"), "sv");
+  assert.equal(captionsLanguage(() => "klingon"), "");
+  assert.equal(captionsLanguage(() => { throw new Error("private mode"); }), "");
+  assert.equal(LANGUAGE_CHOICES[0]?.code, "");
+  assert.ok(LANGUAGE_CHOICES.some((one) => one.code === "sv" && one.label === "Svenska"));
+  // A translated line is marked; a heard one is not.
+  assert.equal(captionLabel({ channel: "tv", at: 0, until: 1, text: "hallo", language: "de", original: "hello" }), "[de] ");
+  assert.equal(captionLabel({ channel: "tv", at: 0, until: 1, text: "hello", language: "en" }), "");
+  assert.equal(captionLabel({ channel: "tv", at: 0, until: 1, text: "hello" }), "");
+  // The page asks for the language on both routes, and reopens the stream when it changes.
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  assert.match(app, /\/transcript\$\{inLanguage\}/);
+  assert.match(app, /\/captions\$\{inLanguage\}/);
+  assert.match(app, /\$\{captionsOn\}\|\$\{captionsIn\}/);
+  assert.match(readFileSync(join(webDir, "index.html"), "utf8"), /id="transcript-language"/);
 });

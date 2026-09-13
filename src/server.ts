@@ -45,7 +45,7 @@ import {
   signInFailedPage,
   SignIn,
 } from "./oauth.ts";
-import { AuthorizationServer, clientsFrom } from "./oauth-server.ts";
+import { AuthorizationServer, SCOPE_NAMES, clientsFrom } from "./oauth-server.ts";
 import { handleOAuthApi, oauthApiPath } from "./oauth-api.ts";
 import { WatchParties } from "./watch-party.ts";
 import { needsAdmin, needsMember, Owner } from "./owner.ts";
@@ -88,6 +88,12 @@ import { Rooms } from "./rooms.ts";
 import { Trollbox, TrollboxError, fallbackHandle, roomFor } from "./trollbox.ts";
 import { MAX_BYTES as SPEECH_BYTES, Speech, SpeechError, isWav, languageOf } from "./speech.ts";
 import { Captions } from "./captions.ts";
+import { LANGUAGES, Translator } from "./translate.ts";
+import { StoredTranslations } from "./translate-jobs.ts";
+import {
+  Transcripts, fileFingerprint, formatOf, idFrom, languageCode, linesFrom, mediaOfLive, mediaOfUrl, toSrt, toText, toVtt, transcriptIdOf, wire,
+} from "./transcripts.ts";
+import { handleMessage as mcpMessage } from "./mcp.ts";
 import { Outro } from "./outro.ts";
 import { Profiles, Voices, spokenLine, spokenVoiceFor } from "./voices.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
@@ -1735,6 +1741,14 @@ export interface HandlerOptions {
   trollbox?: Trollbox;
   /** Speech to text: a line said out loud, heard here. Needs the optional model. */
   speech?: Speech;
+  /** Translation: texts in another language, by a model here. The same optional library. */
+  translator?: Translator;
+  /** The transcript store: what was heard, kept under the media's identity. Where the accounts are. */
+  transcripts?: Transcripts;
+  /** Stored transcripts translated, as jobs. */
+  translations?: StoredTranslations;
+  /** nixamp.com's address, for the tools reached over /mcp to call. */
+  site?: string;
   /** Other people's OpenProfiles, for the voice their lines are read in. */
   profiles?: Profiles;
   /** The voices lines are read in: ElevenLabs when Telnyx holds the key, Kokoro otherwise. */
@@ -2866,22 +2880,303 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           json(response, 400, { error: "a room is a server address and a channel" });
           return;
         }
-        const heard = await speech.transcribe(bytes, { language: languageOf(url.searchParams.get("language")), by: who.id });
+        const heard = await speech.transcribe(bytes, {
+          language: languageOf(url.searchParams.get("language")),
+          // Pieces with their timing, for a whole file being written down.
+          timestamps: url.searchParams.get("timestamps") === "1",
+          by: who.id,
+        });
+        // The language travels back: as told, or as the ear guessed it, so
+        // a captioner can say it next time and a transcript can be kept as it.
+        const said = {
+          text: heard.text, seconds: heard.seconds, model: speech.model,
+          ...(heard.language ? { language: heard.language } : {}),
+          ...(heard.segments ? { segments: heard.segments } : {}),
+        };
         if (where && options.trollbox && heard.text !== "") {
           const handle = (await options.handles?.of(who.id)) || fallbackHandle(who.id);
           const line = await options.trollbox.post(where, who.id, handle, heard.text);
           readOnThePhone(where, who.id, line.handle, line.body);
           json(response, 201, {
-            text: heard.text, seconds: heard.seconds, model: speech.model,
+            ...said,
             message: { id: line.id, handle: line.handle, body: line.body, createdAt: line.createdAt, mine: true },
           });
           return;
         }
-        json(response, 200, { text: heard.text, seconds: heard.seconds, model: speech.model });
+        json(response, 200, said);
       } catch (error) {
         if (error instanceof SpeechError || error instanceof TrollboxError) json(response, error.status, { error: error.message });
         else throw error;
       }
+      return;
+    }
+
+    /*
+     * Translation: texts in one language, said in another, by a model on
+     * this CPU (see translate.ts). Signed in only, like the ear. GET says
+     * which languages, and which each can be turned into here.
+     */
+    if (path === "/api/v1/translate" && options.accounts) {
+      const translator = options.translator;
+      if (request.method === "GET") {
+        json(response, 200, {
+          available: translator !== undefined,
+          languages: Object.entries(LANGUAGES).map(([code, names]) => ({ code, ...names, targets: translator ? translator.targets(code) : [] })),
+        });
+        return;
+      }
+      if (request.method !== "POST") {
+        json(response, 405, { error: "POST texts, or GET the languages" });
+        return;
+      }
+      if (!translator) {
+        json(response, 503, { error: "this nixamp cannot translate: the models are not here. nixamp.com can." });
+        return;
+      }
+      const who = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (who === null) {
+        json(response, 401, { error: "sign in to nixamp.com to translate" });
+        return;
+      }
+      let body: { texts?: unknown; text?: unknown; from?: unknown; to?: unknown } = {};
+      try {
+        body = JSON.parse(await readBody(request, 256 * 1024)) as typeof body;
+      } catch {
+        json(response, 400, { error: "bad JSON" });
+        return;
+      }
+      const texts = Array.isArray(body.texts)
+        ? body.texts.filter((one): one is string => typeof one === "string")
+        : typeof body.text === "string" ? [body.text] : [];
+      if (texts.length === 0) {
+        json(response, 400, { error: "say what: texts, a list of strings" });
+        return;
+      }
+      if (texts.length > 200) {
+        json(response, 413, { error: "200 texts at a time at most" });
+        return;
+      }
+      const from = languageCode(body.from);
+      const to = languageCode(body.to);
+      if (from === null || to === null || to === "") {
+        json(response, 400, { error: "from and to are two-letter language codes, such as en and sv" });
+        return;
+      }
+      if (from === "") {
+        json(response, 400, { error: "say which language the texts are in: from" });
+        return;
+      }
+      try {
+        json(response, 200, await translator.translate(texts, from, to, { by: who.id }));
+      } catch (error) {
+        if (error instanceof SpeechError) json(response, error.status, { error: error.message });
+        else throw error;
+      }
+      return;
+    }
+
+    /*
+     * The transcript store: what a file, a link or a live said, kept once
+     * under the media's identity (see transcripts.ts). Signed in to read
+     * and to keep, the way the ear is: a captioning server, the CLI, the
+     * MCP tools. A language asks for a translation, made before answering
+     * when it is short and as a job when it is not; a format asks for it
+     * as subtitles.
+     */
+    if ((path === "/api/v1/transcripts" || path.startsWith("/api/v1/transcripts/")) && options.transcripts && options.translations && options.accounts) {
+      const store = options.transcripts;
+      const parts = path.slice("/api/v1/transcripts".length).split("/").filter(Boolean);
+      const who = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (who === null) {
+        json(response, 401, { error: "sign in to nixamp.com to read or keep transcripts" });
+        return;
+      }
+      try {
+        if (parts.length === 0) {
+          if (request.method !== "GET") {
+            json(response, 405, { error: "GET: what you have had written down" });
+            return;
+          }
+          json(response, 200, { transcripts: await store.list(who.id, Number(url.searchParams.get("limit") ?? 50) || 50) });
+          return;
+        }
+        let named = "";
+        try {
+          named = decodeURIComponent(parts[0] as string);
+        } catch {
+          json(response, 400, { error: "bad id" });
+          return;
+        }
+        // By id, or by the media identity itself: both name the same row.
+        const id = idFrom(named);
+        const action = parts[1];
+        if (action === undefined && request.method === "GET") {
+          const language = languageCode(url.searchParams.get("language"));
+          const format = formatOf(url.searchParams.get("format"));
+          if (language === null) {
+            json(response, 400, { error: "language is a two-letter code, or original" });
+            return;
+          }
+          if (format === null) {
+            json(response, 400, { error: "format is json, srt, vtt or txt" });
+            return;
+          }
+          const answer = await options.translations.get(id, language, who.id);
+          if (answer.status !== 200 && answer.status !== 202) {
+            json(response, answer.status, { error: answer.error });
+            return;
+          }
+          if (answer.status === 202) {
+            json(response, 202, {
+              ...(answer.transcript ? wire(answer.transcript, await store.languages(id)) : { id, language, lines: [], languages: await store.languages(id) }),
+              translating: answer.translating,
+            });
+            return;
+          }
+          const transcript = answer.transcript;
+          if (format === "json") {
+            json(response, 200, wire(transcript, await store.languages(id)));
+            return;
+          }
+          const text = format === "srt" ? toSrt(transcript.lines) : format === "vtt" ? toVtt(transcript.lines) : toText(transcript.lines);
+          const name = (transcript.title || id).replace(/[^\w.-]+/g, "_").slice(0, 60) || "transcript";
+          response.writeHead(200, {
+            ...CORS,
+            "content-type": `${format === "vtt" ? "text/vtt" : "text/plain"}; charset=utf-8`,
+            "content-length": Buffer.byteLength(text),
+            "cache-control": "no-store",
+            "content-disposition": `inline; filename="${name}${transcript.language ? `.${transcript.language}` : ""}.${format}"`,
+          });
+          response.end(text);
+          return;
+        }
+        if (action === "lines" && request.method === "POST") {
+          let body: { media?: unknown; language?: unknown; translatedFrom?: unknown; model?: unknown; title?: unknown; complete?: unknown; lines?: unknown } = {};
+          try {
+            body = JSON.parse(await readBody(request, 4 * 1024 * 1024)) as typeof body;
+          } catch {
+            json(response, 400, { error: "bad JSON, or more than 4 MB of it" });
+            return;
+          }
+          const media = typeof body.media === "string" ? body.media.trim() : "";
+          if (media === "" || media.length > 2048 || !/^(file|url|live):/.test(media)) {
+            json(response, 400, { error: "media is the identity: file:v1:<hash>, url:<address> or live:<server>/<channel>@<started>" });
+            return;
+          }
+          if (transcriptIdOf(media) !== id) {
+            json(response, 400, { error: "that media is not this transcript's id" });
+            return;
+          }
+          const language = languageCode(body.language);
+          const translatedFrom = body.translatedFrom === undefined || body.translatedFrom === null ? "" : languageCode(body.translatedFrom);
+          if (language === null || translatedFrom === null) {
+            json(response, 400, { error: "language and translatedFrom are two-letter codes" });
+            return;
+          }
+          const lines = linesFrom(body.lines);
+          if (lines.length === 0 && body.complete !== true) {
+            json(response, 400, { error: "lines: a list of {start, end, text}, seconds into the media" });
+            return;
+          }
+          const saved = await store.save({
+            media,
+            language,
+            translatedFrom: translatedFrom === "" ? null : translatedFrom,
+            model: typeof body.model === "string" ? body.model.slice(0, 100) : "",
+            title: typeof body.title === "string" ? body.title : "",
+            complete: body.complete === true,
+            by: who.id,
+            lines,
+          });
+          json(response, 200, { id, language: saved?.language ?? language, saved: lines.length, seconds: saved?.seconds ?? 0, complete: saved?.complete ?? false });
+          return;
+        }
+        if (action === undefined && request.method === "DELETE") {
+          const gone = await store.forget(id, who.id);
+          json(response, gone ? 200 : 404, gone ? { ok: true } : { error: "nothing of yours under that id" });
+          return;
+        }
+        json(response, 405, { error: "GET a transcript, POST its lines, or DELETE it" });
+      } catch (error) {
+        if (error instanceof SpeechError) json(response, error.status, { error: error.message });
+        else throw error;
+      }
+      return;
+    }
+
+    /*
+     * MCP over HTTP: the tools `nixamp mcp` offers on a pipe, at
+     * nixamp.com/mcp for an agent with no nixamp installed. A JSON-RPC
+     * message, or a batch of them, in a POST; the answers as JSON. The
+     * bearer token says whose tools they are, as on every other route, and
+     * the tools call nixamp.com as that account. No stream is offered on
+     * GET: nothing here has to be pushed, so a client is told so and gets
+     * on with POST.
+     */
+    if (path === "/mcp" && options.accounts && options.site) {
+      if (request.method === "GET") {
+        response.writeHead(405, { ...CORS, allow: "POST, DELETE" });
+        response.end();
+        return;
+      }
+      if (request.method === "DELETE") {
+        response.writeHead(204, CORS);
+        response.end();
+        return;
+      }
+      if (request.method !== "POST") {
+        json(response, 405, { error: "POST a JSON-RPC message" });
+        return;
+      }
+      const token = tokenFrom(request.headers);
+      const who = await options.accounts.whoIs(token);
+      if (who === null) {
+        const error = JSON.stringify({ error: "sign in: a nixamp token as the bearer (`nixamp token create`), or OAuth" });
+        response.writeHead(401, {
+          ...CORS,
+          "content-type": "application/json; charset=utf-8",
+          "content-length": Buffer.byteLength(error),
+          "www-authenticate": `Bearer resource_metadata="${options.site}/.well-known/oauth-protected-resource"`,
+        });
+        response.end(error);
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await readBody(request, 1024 * 1024));
+      } catch {
+        json(response, 400, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
+        return;
+      }
+      const messages = Array.isArray(parsed) ? parsed : [parsed];
+      const session = { site: options.site, token };
+      const answers: unknown[] = [];
+      for (const message of messages) {
+        if (!message || typeof message !== "object" || typeof (message as { method?: unknown }).method !== "string") {
+          answers.push({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "invalid request" } });
+          continue;
+        }
+        const answer = await mcpMessage(message as Parameters<typeof mcpMessage>[0], { session, fetcher: fetch });
+        if (answer) answers.push(answer);
+      }
+      if (answers.length === 0) {
+        response.writeHead(202, CORS);
+        response.end();
+        return;
+      }
+      json(response, 200, Array.isArray(parsed) ? answers : answers[0]);
+      return;
+    }
+
+    /* Where a client of /mcp finds the authorization server (RFC 9728). */
+    if (path === "/.well-known/oauth-protected-resource" && options.site && options.authServer) {
+      json(response, 200, {
+        resource: options.site,
+        authorization_servers: [options.site],
+        bearer_methods_supported: ["header"],
+        scopes_supported: SCOPE_NAMES,
+        resource_name: "nixamp",
+      });
       return;
     }
 
@@ -4094,11 +4389,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         // reconnecting EventSource saw, which the browser sends by itself.
         const lastSeen = request.headers["last-event-id"];
         const after = Number(url.searchParams.get("after") ?? (Array.isArray(lastSeen) ? lastSeen[0] : lastSeen) ?? 0) || 0;
+        // The lines in another language, translated as they are heard; "" is what was said.
+        const wanted = languageCode(url.searchParams.get("language"));
+        if (wanted === null) {
+          json(response, 400, { error: "language is a two-letter code, such as de or sv" });
+          return;
+        }
         if (action === "transcript") {
           // Asking keeps the captioner up: it stops a minute after the last ask.
-          captions.subscribe(id, () => undefined)?.();
+          captions.subscribe(id, () => undefined, wanted)?.();
           json(response, 200, {
-            channel: id, backlog: BACKLOG_SECONDS, now: Date.now(), ...captions.status(id), lines: captions.recent(id, after),
+            channel: id, backlog: BACKLOG_SECONDS, now: Date.now(), wanted, ...captions.status(id), lines: captions.recent(id, after, wanted),
           });
           return;
         }
@@ -4112,14 +4413,14 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         const write = (event: string, data: unknown, eventId?: number): void => {
           response.write(`${eventId === undefined ? "" : `id: ${eventId}\n`}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
         };
-        const off = captions.subscribe(id, (line) => write("line", line, line.at));
+        const off = captions.subscribe(id, (line) => write("line", line, line.at), wanted);
         if (off === null) {
           response.end();
           return;
         }
         // How far behind the live edge a newcomer's playback starts, so the
         // page can hold each line until its own sound gets there.
-        write("hello", { channel: id, backlog: BACKLOG_SECONDS, now: Date.now(), ...captions.status(id), lines: captions.recent(id, after) });
+        write("hello", { channel: id, backlog: BACKLOG_SECONDS, now: Date.now(), wanted, ...captions.status(id), lines: captions.recent(id, after, wanted) });
         const beat = setInterval(() => response.write(": beat\n\n"), 20_000);
         beat.unref?.();
         const done = (): void => {
@@ -5498,6 +5799,22 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       console.error(ready ? `nixamp: hearing with ${speech.model}` : `nixamp: not hearing: ${speech.lastFailure}`);
     });
   }
+  // Translation lives beside the ear: the same optional library, a model
+  // per pair of languages, loaded when first asked for. NIXAMP_MT_WARM
+  // names pairs to load at boot (en-de,en-sv) so the first line does not
+  // wait; NIXAMP_MT=off turns it off.
+  const translator = accounts && process.env["NIXAMP_MT"] !== "off" ? new Translator() : undefined;
+  if (translator) {
+    const warm = (process.env["NIXAMP_MT_WARM"] ?? "").split(",").map((one) => one.trim()).filter(Boolean);
+    if (warm.length > 0) {
+      void translator.warm(warm).then((ready) => {
+        console.error(ready ? `nixamp: translating (${warm.join(", ")} loaded)` : `nixamp: not translating everything: ${translator.lastFailure}`);
+      });
+    }
+  }
+  // What was heard, kept: where the accounts are, under the media's identity.
+  const transcripts = pool ? new Transcripts(pool, (message) => console.log(message)) : undefined;
+  const translations = transcripts ? new StoredTranslations(transcripts, translator, (message) => console.log(message)) : undefined;
 
   // nixamp as an OAuth 2.1 authorization server, and the watch parties a
   // client site bridges through it. Both need the same three things -- a
@@ -5692,6 +6009,29 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         listen: (id, listener) => channels.listen(id, listener),
         session: () => readSession(),
         onEvent: (message) => console.log(`  ${message}`),
+        // What a channel is playing, for the transcript store: a film by
+        // its bytes and where it has got to, a link by its address, and
+        // anything live as the broadcast it is.
+        mediaOf: (id) => {
+          const info = channels.info(id);
+          if (!info) return null;
+          const base = { title: info.name, startedAt: info.startedAt, backlog: info.codecs?.video ? BACKLOG_SECONDS : 3 };
+          if (info.via === "pull" && !info.live && typeof info.position === "number" && info.source) {
+            if (/^https?:\/\//.test(info.source)) {
+              // The pasted address while it is still known: it outlives a media URL with a token in it.
+              let pasted = info.source;
+              for (const [link] of links) if (linkChannelId(link) === id) pasted = link;
+              return { ...base, media: mediaOfUrl(pasted), position: info.position };
+            }
+            try {
+              return { ...base, media: fileFingerprint(info.source), position: info.position };
+            } catch {
+              return null;
+            }
+          }
+          const self = publishable_?.url || options.publicUrl || `${options.host}:${options.port}`;
+          return { ...base, media: mediaOfLive(self, id, info.startedAt) };
+        },
       })
     : undefined;
   const owner = new Owner({
@@ -5903,6 +6243,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(rooms ? { rooms } : {}),
     ...(trollbox ? { trollbox } : {}),
     ...(speech ? { speech } : {}),
+    ...(translator ? { translator } : {}),
+    ...(transcripts ? { transcripts } : {}),
+    ...(translations ? { translations } : {}),
+    site: nixampSite,
     // Other people's OpenProfiles, read for the voice a line is spoken in,
     // and the voices to speak in: ElevenLabs when the Telnyx account holds
     // the key for it (an integration secret named "elevenlabs"), Kokoro
