@@ -19,6 +19,7 @@ import { NEVER_CACHE, serviceWorkerSource } from "../scripts/sw.ts";
 import { Bitmap, crc32, drawIcon, encodePng, ICONS } from "../scripts/icons.ts";
 import { PANELS_KEY, emptyLayout, orderedIds, parseLayout, serializeLayout, toggled } from "../src/panels.ts";
 import { DICTATE_MAX_MS, DICTATE_RATE, encodeWav, joinDictated, listeningLabel, recordingMime } from "../src/dictate.ts";
+import { CAPTIONS_KEY, type Caption, captionsWanted, due, lagMs, showing, whenLabel } from "../src/captions.ts";
 
 const webDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -1409,4 +1410,32 @@ test("a dictated line is a small WAV the server reads, added after what was type
   assert.equal(listeningLabel(1000, 4600), "● 3s");
   assert.equal(listeningLabel(1000, 900), "● 0s");
   assert.ok(DICTATE_MAX_MS <= 60_000);
+});
+
+test("a caption is held until this page's sound has reached it, and shown on the picture while it is being said", () => {
+  // The lag: the backlog handed to a newcomer plus buffering; HLS never closer than six seconds.
+  assert.equal(lagMs(6, false), 7500);
+  assert.equal(lagMs(2, false), 3500);
+  assert.equal(lagMs(2, true), 7500);
+  assert.equal(lagMs(-1, false), 1500);
+  const line = (at: number, text: string): Caption => ({ channel: "tv", at, until: at + 5000, text });
+  const held = [line(20_000, "second"), line(15_000, "first"), line(30_000, "third")];
+  // At 27.5 s with a 7.5 s lag the page's sound is at 20 s: the first two are due, in order.
+  const split = due(held, 27_500, 7500);
+  assert.deepEqual(split.ready.map((one) => one.text), ["first", "second"]);
+  assert.deepEqual(split.still.map((one) => one.text), ["third"]);
+  assert.deepEqual(due([], 1, 1), { ready: [], still: [] });
+  const shown = [line(15_000, "first"), line(20_000, "second")];
+  // Sound at 21 s: the second line is being said. At 26 s it just ended: the grace keeps it. At 27 s it is gone.
+  assert.equal(showing(shown, 21_000 + 7500, 7500)?.text, "second");
+  assert.equal(showing(shown, 26_000 + 7500, 7500)?.text, "second");
+  assert.equal(showing(shown, 27_000 + 7500, 7500), null);
+  assert.equal(showing(shown, 16_000 + 7500, 7500)?.text, "first");
+  assert.equal(showing([], 1, 1), null);
+  // Wanted unless this device said no; a storage that throws means yes.
+  assert.equal(captionsWanted(() => null), true);
+  assert.equal(captionsWanted((key) => (key === CAPTIONS_KEY ? "off" : null)), false);
+  assert.equal(captionsWanted(() => { throw new Error("private mode"); }), true);
+  assert.equal(whenLabel(Number.NaN), "");
+  assert.match(whenLabel(1_700_000_000_000), /\d/);
 });

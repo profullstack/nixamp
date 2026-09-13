@@ -27,7 +27,7 @@ import {
 } from "./broadcast.ts";
 import { Ingest, normaliseFormat } from "./ingest.ts";
 import {
-  Channels, cleanId, generatedId, rememberChannels, rememberedChannels, rememberedNow,
+  BACKLOG_SECONDS, Channels, cleanId, generatedId, rememberChannels, rememberedChannels, rememberedNow,
   type Channel, type ChannelInfo, type RememberedChannel,
 } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
@@ -85,6 +85,7 @@ import { Layouts } from "./layouts.ts";
 import { Rooms } from "./rooms.ts";
 import { Trollbox, TrollboxError, fallbackHandle, roomFor } from "./trollbox.ts";
 import { MAX_BYTES as SPEECH_BYTES, Speech, SpeechError, isWav, languageOf } from "./speech.ts";
+import { Captions } from "./captions.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
   applyRemoteConfig,
@@ -1470,6 +1471,8 @@ export interface HandlerOptions {
   ytdlp?: string[] | null;
   /** Channels as HLS, for Safari on a phone, which plays a live stream no other way. */
   hls?: HlsPackagers;
+  /** Captions for a channel: its sound, as lines, as they are heard. Needs ffmpeg and a sign-in. */
+  captions?: Captions;
   /** Lossless relay compression, its policies, diagnostics and static representations. */
   compression?: CompressionService;
   /** What a name is -- a film, a channel, a fixture -- asked of nichedb.dev and remembered. */
@@ -2645,7 +2648,6 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           json(response, 401, { error: "sign in to nixamp.com to dictate" });
           return;
         }
-        speech.allow(who.id);
         const bytes = await readBytes(request, SPEECH_BYTES);
         if (!isWav(bytes)) {
           json(response, 415, { error: "send a WAV: 16-bit PCM, mono, 16 kHz is ideal" });
@@ -2658,7 +2660,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           json(response, 400, { error: "a room is a server address and a channel" });
           return;
         }
-        const heard = await speech.transcribe(bytes, { language: languageOf(url.searchParams.get("language")) });
+        const heard = await speech.transcribe(bytes, { language: languageOf(url.searchParams.get("language")), by: who.id });
         if (where && options.trollbox && heard.text !== "") {
           const handle = (await options.handles?.of(who.id)) || fallbackHandle(who.id);
           const line = await options.trollbox.post(where, who.id, handle, heard.text);
@@ -3769,6 +3771,68 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           "content-length": statSync(segment).size,
         });
         createReadStream(segment).pipe(response);
+        return;
+      }
+
+      /*
+       * The channel's captions: what it is saying, as lines, as they are
+       * heard by nixamp.com's ear on this server's behalf. Read the way the
+       * sound is read -- the key gate above has already passed -- and
+       * started by the first person asking. `captions` is the live stream
+       * of lines; `transcript` is the recent ones as JSON, for a poll.
+       */
+      if ((action === "captions" || action === "transcript") && request.method === "GET") {
+        const captions = options.captions;
+        if (!captions) {
+          json(response, 503, { error: "this server cannot caption: it has no ffmpeg" });
+          return;
+        }
+        if (!captions.available()) {
+          json(response, 503, { error: "this server is not signed in to nixamp.com, so it cannot caption; run `nixamp login` on it" });
+          return;
+        }
+        if (!channels.has(id)) {
+          json(response, 404, { error: "nothing is playing on that channel" });
+          return;
+        }
+        // Lines after a moment: a poll's ?after=, or the last line a
+        // reconnecting EventSource saw, which the browser sends by itself.
+        const lastSeen = request.headers["last-event-id"];
+        const after = Number(url.searchParams.get("after") ?? (Array.isArray(lastSeen) ? lastSeen[0] : lastSeen) ?? 0) || 0;
+        if (action === "transcript") {
+          // Asking keeps the captioner up: it stops a minute after the last ask.
+          captions.subscribe(id, () => undefined)?.();
+          json(response, 200, {
+            channel: id, backlog: BACKLOG_SECONDS, now: Date.now(), ...captions.status(id), lines: captions.recent(id, after),
+          });
+          return;
+        }
+        response.writeHead(200, {
+          ...CORS,
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-store",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+        });
+        const write = (event: string, data: unknown, eventId?: number): void => {
+          response.write(`${eventId === undefined ? "" : `id: ${eventId}\n`}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        };
+        const off = captions.subscribe(id, (line) => write("line", line, line.at));
+        if (off === null) {
+          response.end();
+          return;
+        }
+        // How far behind the live edge a newcomer's playback starts, so the
+        // page can hold each line until its own sound gets there.
+        write("hello", { channel: id, backlog: BACKLOG_SECONDS, now: Date.now(), ...captions.status(id), lines: captions.recent(id, after) });
+        const beat = setInterval(() => response.write(": beat\n\n"), 20_000);
+        beat.unref?.();
+        const done = (): void => {
+          clearInterval(beat);
+          off();
+        };
+        request.on("close", done);
+        response.on("close", done);
         return;
       }
 
@@ -5309,6 +5373,18 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   }
 
   const session = readSession();
+  // Captions for a channel: this server's ffmpeg turns the sound into PCM
+  // and nixamp.com's ear, asked as this server, turns that into lines. A
+  // server without ffmpeg cannot; a server nobody signed in on is refused
+  // by the ear, and says so to whoever asks.
+  const captions = tools.carries
+    ? new Captions({
+        ffmpeg: tools.ffmpeg,
+        listen: (id, listener) => channels.listen(id, listener),
+        session: () => readSession(),
+        onEvent: (message) => console.log(`  ${message}`),
+      })
+    : undefined;
   const owner = new Owner({
     ownerId: options.owner || (session?.token ? await ownerIdOf(session) : ""),
     site: session?.site ?? DEFAULT_DIRECTORY,
@@ -5500,6 +5576,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     carries: tools.carries !== false,
     cookies: cookiesFile(),
     hls,
+    ...(captions ? { captions } : {}),
     compression,
     enricher,
     ...(tls ? { tls } : {}),

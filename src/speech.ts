@@ -28,8 +28,15 @@ export const RATE = 16_000;
 export const MAX_SECONDS = 60;
 /** A minute of 16-bit mono at 16 kHz is under 2 MB; 48 kHz stereo is under 12. */
 export const MAX_BYTES = 12 * 1024 * 1024;
-/** How often one account may ask. Twelve a minute is a conversation, not a firehose. */
-export const ASKS_PER_MINUTE = 12;
+/**
+ * How much one account may have heard in a minute, in seconds of sound.
+ * Counted in sound rather than asks because a live channel being captioned
+ * asks twelve times a minute for five seconds each, and a person dictating
+ * asks twice for thirty: the cost is the sound, not the call. Five minutes
+ * of sound a minute is four channels captioned, or a conversation, and
+ * not a firehose.
+ */
+export const SECONDS_PER_MINUTE = 300;
 /** How many may wait for the one CPU. Past this, the honest answer is "later". */
 export const QUEUE_LIMIT = 8;
 export const DEFAULT_MODEL = "onnx-community/whisper-base";
@@ -238,7 +245,7 @@ export class Speech {
   /** One at a time: the model is CPU-bound, and two at once is slower than two in turn. */
   private tail: Promise<unknown> = Promise.resolve();
   private waiting = 0;
-  private readonly asked = new Map<string, { minute: number; count: number }>();
+  private readonly asked = new Map<string, { minute: number; seconds: number }>();
 
   constructor(options: SpeechOptions = {}) {
     this.model = options.model ?? process.env["NIXAMP_STT_MODEL"] ?? DEFAULT_MODEL;
@@ -269,28 +276,34 @@ export class Speech {
     }
   }
 
-  /** Whether this account may ask now, and the bookkeeping if so. */
-  allow(accountId: string): void {
+  /** Whether this account may have this much heard now, and the bookkeeping if so. */
+  allow(accountId: string, seconds: number): void {
     const minute = Math.floor(this.now() / 60_000);
-    const record = this.asked.get(accountId) ?? { minute, count: 0 };
+    const record = this.asked.get(accountId) ?? { minute, seconds: 0 };
     if (record.minute !== minute) {
       record.minute = minute;
-      record.count = 0;
+      record.seconds = 0;
     }
-    if (record.count >= ASKS_PER_MINUTE) throw new SpeechError(`${ASKS_PER_MINUTE} a minute is plenty`, 429);
-    record.count += 1;
+    if (record.seconds + seconds > SECONDS_PER_MINUTE) {
+      throw new SpeechError(`${SECONDS_PER_MINUTE} seconds of sound a minute is plenty; try again in a moment`, 429);
+    }
+    record.seconds += seconds;
     this.asked.set(accountId, record);
     if (this.asked.size > 5000) {
       for (const [id, one] of this.asked) if (one.minute !== minute) this.asked.delete(id);
     }
   }
 
-  /** The words in a WAV. Refuses what is not a WAV, or is too long, with a status. */
-  async transcribe(bytes: Uint8Array, options: { language?: string } = {}): Promise<Heard> {
+  /**
+   * The words in a WAV. Refuses what is not a WAV, or is too long, or more
+   * than the account may have heard this minute, with a status.
+   */
+  async transcribe(bytes: Uint8Array, options: { language?: string; by?: string } = {}): Promise<Heard> {
     if (bytes.length > MAX_BYTES) throw new SpeechError(`that is too much sound: ${MAX_SECONDS} seconds at most`, 413);
     const wav = decodeWav(bytes);
     const seconds = wav.samples.length / wav.rate;
     if (seconds > MAX_SECONDS) throw new SpeechError(`that is ${Math.round(seconds)} seconds; ${MAX_SECONDS} at most`, 413);
+    if (options.by) this.allow(options.by, seconds);
     if (wav.samples.length < wav.rate / 10) return { text: "", seconds };
     const pcm = resample(wav.samples, wav.rate, RATE);
     if (this.waiting >= QUEUE_LIMIT) throw new SpeechError("too many people are talking at once; try again in a moment", 503);

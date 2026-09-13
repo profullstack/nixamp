@@ -334,6 +334,32 @@ Anything ffmpeg can read is converted here first; a WAV needs no ffmpeg.
 `nixamp mcp` offers `transcribe_audio` (with the same optional room),
 `trollbox_say` and `trollbox_read`.
 
+### Subtitles: what a live is saying
+
+Every live channel can be captioned. The server carrying it listens to its
+own stream, turns the sound into five-second windows with its ffmpeg, and
+has nixamp.com's ear turn each window into a line stamped with the moment
+its sound was at the live edge. The lines go out as Server-Sent Events:
+
+```
+GET /api/channels/ID/captions      an event stream: `hello` with the recent lines, then a `line` each
+GET /api/channels/ID/transcript    the recent lines as JSON (?after=MS for only the new ones)
+```
+
+Both are read with the same key as the sound. The page opens the stream as
+soon as you join a live and shows a **Transcript** panel, on by default:
+each line is held until your own playback has reached the sound it came
+from (the backlog you were handed, plus a little buffering) and then shown,
+on the picture when there is one and in the panel always. Close to the
+voice, not on it: a line is a window, not a word. The switch in the panel
+turns captions off for that device; the Panels list hides the panel.
+
+A captioner runs only while somebody is asking, and stops a minute after
+the last one leaves; silence between songs is never sent. The server needs
+an ffmpeg and a sign-in (`nixamp login`) for the ear to answer it. In the
+terminal, `nixamp transcript --channel ID --follow` prints the lines as
+they come; an agent reads them with the `transcript_read` tool.
+
 The model is an optional dependency, because it is hundreds of megabytes
 with the ONNX runtime under it and the CLI tarball is pure JavaScript. A
 `nixamp serve` on a laptop answers 503 to this route and every client asks

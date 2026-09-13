@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  ASKS_PER_MINUTE, MAX_SECONDS, QUEUE_LIMIT, RATE, Speech, SpeechError,
+  MAX_SECONDS, QUEUE_LIMIT, RATE, SECONDS_PER_MINUTE, Speech, SpeechError,
   decodeWav, encodeWav, isWav, languageOf, resample, tidy,
 } from "../src/speech.ts";
 
@@ -132,12 +132,19 @@ test("the ear is loaded once, hears one at a time, and refuses what is too long 
   );
   await assert.rejects(() => speech.transcribe(new Uint8Array(3)), (error: unknown) => error instanceof SpeechError && error.status === 415);
 
-  // The throttle: so many a minute per account, and a new minute starts over.
-  for (let i = 0; i < ASKS_PER_MINUTE; i++) speech.allow("acct-1");
-  assert.throws(() => speech.allow("acct-1"), (error: unknown) => error instanceof SpeechError && error.status === 429);
-  speech.allow("acct-2");
+  // The throttle: so many seconds of sound a minute per account, counted
+  // through transcribe() when it is told who is asking, and a new minute
+  // starts over. Refused before the ear is woken.
+  for (let i = 0; i < SECONDS_PER_MINUTE - 5; i += 5) speech.allow("acct-1", 5);
+  speech.allow("acct-1", 5);
+  assert.throws(() => speech.allow("acct-1", 1), (error: unknown) => error instanceof SpeechError && error.status === 429);
+  speech.allow("acct-2", 30);
+  const before = heard.length;
+  await assert.rejects(() => speech.transcribe(clip, { by: "acct-1" }), /seconds of sound a minute/);
+  assert.equal(heard.length, before);
   now += 60_000;
-  speech.allow("acct-1");
+  speech.allow("acct-1", 30);
+  assert.equal((await speech.transcribe(clip, { by: "acct-1" })).text, "Hello, room.");
 
   // The queue has a ceiling, and the ceiling is a 503, not a wait.
   const slow = new Speech({

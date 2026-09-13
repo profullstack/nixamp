@@ -84,6 +84,7 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp party list|join|host   watch parties, here and on the sites nixamp is connected to
   nixamp mcp                     speak Model Context Protocol on stdin, for an agent
   nixamp transcribe FILE [--say SERVER]  the words in a recording, and into a trollbox
+  nixamp transcript --channel ID [--follow]  what a channel is saying, as it says it
   nixamp opendir list|add|remove  folders found on the web, published for everyone
   nixamp update [version]        re-run the installer, keeping your choices
   nixamp uninstall [--yes]       remove everything the installer created
@@ -265,7 +266,8 @@ takes it away again.
 It offers the watch party tools: list them, read one, put one on the air,
 say where playback is, end it. And the room tools: transcribe a recording
 (transcribe_audio, which can post the words straight into a trollbox), say a
-line in a room (trollbox_say), read a room (trollbox_read). It acts as
+line in a room (trollbox_say), read a room (trollbox_read), read what a
+channel is saying (transcript_read). It acts as
 whoever this machine is signed in as, so \`nixamp login\` (or NIXAMP_TOKEN)
 comes first.
 
@@ -286,6 +288,19 @@ sign-in (\`nixamp login\`) and nothing else. Up to a minute at a time.
 
 The same ear is behind the microphone button in every nixamp.com trollbox,
 and behind the transcribe_audio tool of \`nixamp mcp\`.
+`,
+  transcript: `nixamp transcript — what a channel is saying, written down.
+
+  nixamp transcript --channel ID                 the recent lines from this machine's daemon
+  nixamp transcript --url URL --key K --channel ID   from another server, with its share link
+  nixamp transcript ... --follow                 and keep printing as it speaks
+  nixamp transcript ... --json                   the lines as JSON
+
+A server captions a channel while somebody is asking for its transcript: its
+own ffmpeg turns the sound into five-second windows, nixamp.com's ear turns
+those into lines, each stamped with when its sound was heard. The page shows
+them as subtitles, held until its own sound gets there; this prints them.
+The server needs an ffmpeg and a sign-in (\`nixamp login\`).
 `,
   attach: `nixamp attach — the player, in front of the running daemon.
 
@@ -484,6 +499,11 @@ export async function main(): Promise<void> {
   if (first === "party" || first === "parties" || first === "watch-party") {
     const { party } = await import("./party.ts");
     process.exitCode = await party(rest);
+    return;
+  }
+  if (first === "transcript" || first === "captions") {
+    const { transcript } = await import("./transcript.ts");
+    process.exitCode = await transcript(rest);
     return;
   }
   if (first === "transcribe" || first === "dictate") {

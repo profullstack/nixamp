@@ -21,6 +21,7 @@ import { createInterface } from "node:readline";
 import { clock, type PartyRow } from "./party.ts";
 import { readSession } from "./session.ts";
 import { askToHear, wavOf } from "./transcribe.ts";
+import { readTranscript } from "./transcript.ts";
 
 export const PROTOCOL_VERSION = "2025-06-18";
 
@@ -124,6 +125,21 @@ export const TOOLS: ToolDefinition[] = [
         text: { ...STRING, description: "The line. At most 500 characters." },
       },
       required: ["server", "text"],
+    },
+  },
+  {
+    name: "transcript_read",
+    description:
+      "What a live channel is saying: the recent lines of its transcript, oldest first, each with when its sound was heard. The server carrying the channel captions it while somebody asks. Pass the server's address and share key, and the channel's id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { ...STRING, description: "The nixamp server's address, e.g. https://server1.chovy.nixamp.com:4321." },
+        key: { ...STRING, description: "The share key from its link, when it has one." },
+        channel: { ...STRING, description: "The channel's id on that server (default: main)." },
+        after: { type: "number", description: "Only lines heard after this moment (ms since the epoch)." },
+      },
+      required: ["url"],
     },
   },
   {
@@ -299,6 +315,24 @@ export async function callTool(name: string, args: Record<string, unknown>, opti
       if (!response.ok) return failed(await answerOf(response));
       const body = (await response.json()) as { message?: TrollboxLine };
       return text(body.message ? `Said, as ${body.message.handle}: ${body.message.body}` : "Said.");
+    }
+
+    if (name === "transcript_read") {
+      const url = typeof args["url"] === "string" ? args["url"].trim() : "";
+      if (!url) return failed("Which server? Pass its address.");
+      const got = await readTranscript(
+        { url, key: typeof args["key"] === "string" && args["key"] ? args["key"] : null },
+        channel === "live" ? "main" : channel,
+        typeof args["after"] === "number" ? args["after"] : 0,
+        send,
+      );
+      if (!got.ok) return failed(got.error);
+      if (got.answer.recent.length === 0) {
+        return text(got.answer.error
+          ? `Nothing yet: ${got.answer.error}`
+          : "Nothing said yet. The server has just started listening; ask again in a few seconds.");
+      }
+      return text(got.answer.recent.map((line) => `${new Date(line.at).toISOString()}  ${line.text}`).join("\n"));
     }
 
     if (name === "trollbox_read") {
