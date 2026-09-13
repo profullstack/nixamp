@@ -52,5 +52,5 @@ scroll, focus, caret, and the selected browsing page remain unchanged.
 Keep translated playback in the player: one opt-in beside the existing language
 menu replaces that player's original audio. Turning it off restores the source.
 Do not add tab-sharing, microphone-source, or separate capture start/stop controls
-to this interface. Keep optional speaker overrides collapsed. Stock-voice choices
-must not be presented as detected speaker gender.
+to this interface. Keep optional background settings and speaker overrides
+collapsed. Stock-voice choices must not be presented as detected speaker gender.

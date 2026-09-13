@@ -558,7 +558,7 @@ A rolling 15-second audio window advances every 5 seconds. Speaker labels are
 reconciled using overlapping timestamps, with different voices assigned to
 separate speakers. Voices are picked from the available stock catalogue without
 inferring a person's gender from pitch; each detected speaker gets an unused
-voice until the catalogue is exhausted. **Speaker voices** folds away optional
+voice until the catalogue is exhausted. **Audio options** folds away optional
 individual overrides. A speaker returning after leaving the rolling context may
 receive a new label. Simultaneous speech and noisy crowds can still confuse
 recognition. Native captions never translate to English as
@@ -568,7 +568,19 @@ Processing has one active request and only the latest pending window per
 listener; speech queues and response sizes are bounded. Old transcript history
 is never spoken. Pause, seek, source changes, and disabling the feature cancel
 queued speech; errors restore the original audio. This is a delayed live
-interpreter, not a promise of exact lip sync or background-music separation.
+interpreter, not a promise of exact lip sync.
+
+Translated playback keeps an approximate version of the original background
+sound. FastEnhancer Web's Tiny model estimates speech locally in a dedicated
+browser worker; the player subtracts that estimate from the aligned source in
+each stereo channel and mixes the remainder with translated voices. Background
+processing adds no API calls or provider charges. It stops with translation;
+recognition starts without waiting for it. If the device cannot keep up or load the model, that
+background branch is silenced while translated speech continues. Separation can
+leave some original speech or remove parts of music and crowd noise; disable
+**Keep background sound** under **Audio options** when needed. This uses
+[FastEnhancer Web](https://github.com/ryyr-ry/fastenhancer-web), under the MIT
+license.
 
 The account server needs `ELEVENLABS_API_KEY`; `NIXAMP_DUBBING=off` disables
 this feature. The key stays on the server. Sign-in is required for speaker

@@ -19,6 +19,7 @@
     "vite": "^8.2.2"
   },
   "dependencies": {
-    "@profullstack/player": "^0.7.0"
+    "@profullstack/player": "^0.7.0",
+    "fastenhancer-web": "^0.1.1"
   }
 }

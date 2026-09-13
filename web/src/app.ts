@@ -28,6 +28,7 @@ import { DICTATE_MAX_MS, DICTATE_RATE, encodeWav, listeningLabel, recordingMime 
 import { CAPTIONS_KEY, CAPTIONS_LANGUAGE_KEY, LANGUAGE_CHOICES, type Caption, captionLabel, captionsLanguage, captionsWanted, due, lagMs, showing, whenLabel } from "./captions.ts";
 import { LiveVoicePlayer, type VoiceOptions } from "./live-voice.ts";
 import { AudioCapture } from "./audio-capture.ts";
+import { BackgroundAudio } from "./background.ts";
 import { Interpreter } from "./interpreter.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
@@ -244,6 +245,7 @@ export function start(): void {
     transcriptLanguage: need<HTMLSelectElement>("transcript-language"),
     transcriptAudio: need<HTMLInputElement>("transcript-audio"),
     transcriptVoiceSettings: need<HTMLDetailsElement>("transcript-voice-settings"),
+    transcriptBackground: need<HTMLInputElement>("transcript-background"),
     transcriptAudioNote: need<HTMLParagraphElement>("transcript-audio-note"),
     transcriptSpeakers: need<HTMLDivElement>("transcript-speakers"),
     transcriptList: need<HTMLUListElement>("transcript-list"),
@@ -3292,11 +3294,18 @@ export function start(): void {
   let captureError = "";
   let capturing = false;
   let captureGeneration = 0;
+  let translatedPlaying = false;
+  let backgroundFailed = false;
+  try { dom.transcriptBackground.checked = localStorage.getItem("nixamp.backgroundSound") !== "off"; } catch { /* default on */ }
+  const background = new BackgroundAudio(() => {
+    backgroundFailed = true;
+    if (translatedPlaying) dom.transcriptAudioNote.textContent = "Translated audio · background sound unavailable on this device";
+  });
   const liveVoice = new LiveVoicePlayer({
     playing: () => player.playing,
     volume: () => player.volume,
-    active: (on) => { player.translatedAudio(on); },
-    status: (text) => { dom.transcriptAudioNote.textContent = text; },
+    active: (on) => { translatedPlaying = on; player.translatedAudio(on); background.active(on && dom.transcriptBackground.checked); },
+    status: (text) => { dom.transcriptAudioNote.textContent = text + (backgroundFailed && translatedPlaying ? " · background unavailable" : ""); },
     failed: () => { voiceError = dom.transcriptAudioNote.textContent || "Translated audio stopped."; captureWanted = false; dom.transcriptAudio.checked = false; stopCapture(); },
     authorization: async (signal, line) => {
       if (!meId || trollboxSite !== "") throw new Error("Sign in on nixamp.com to enable translated audio.");
@@ -3333,7 +3342,7 @@ export function start(): void {
   });
   const capture = new AudioCapture(window => { if (capturing && player.playing) interpreter.push(window); });
   function stopCapture(): void {
-    captureGeneration++; capturing = false; capture.stop(); interpreter.reset();
+    captureGeneration++; capturing = false; capture.stop(); interpreter.reset(); background.stop();
     liveVoice.reset(); player.translatedAudio(false);
     replaceList(dom.transcriptSpeakers);
   }
@@ -3343,6 +3352,10 @@ export function start(): void {
     try {
       if (!meId || trollboxSite !== "") throw new Error("Sign in on nixamp.com to transcribe or translate this audio.");
       const input = player.audioInput();
+      backgroundFailed = false;
+      if (dom.transcriptAudio.checked && dom.transcriptBackground.checked) {
+        void background.start(input.context, input.node).then(ready => { if (ready && generation === captureGeneration) background.active(translatedPlaying && dom.transcriptBackground.checked); });
+      }
       await capture.start(input.context, input.node);
       if (generation !== captureGeneration) return;
       capturing = true; captureWanted = true;
@@ -4022,6 +4035,16 @@ export function start(): void {
     }
     drawVoiceControls();
   }
+
+  dom.transcriptBackground.addEventListener("change", () => {
+    try { localStorage.setItem("nixamp.backgroundSound", dom.transcriptBackground.checked ? "on" : "off"); } catch { /* device preference only */ }
+    background.stop(); backgroundFailed = false;
+    if (dom.transcriptBackground.checked && dom.transcriptAudio.checked && player.playing) {
+      const generation = captureGeneration;
+      const input = player.audioInput();
+      void background.start(input.context, input.node).then(ready => { if (ready && generation === captureGeneration) background.active(translatedPlaying && dom.transcriptBackground.checked); });
+    }
+  });
 
   dom.transcriptAudio.addEventListener("change", () => {
     captureError = ""; voiceError = "";
