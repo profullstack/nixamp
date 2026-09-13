@@ -12,6 +12,7 @@ import { Owner } from "../src/owner.ts";
 import { Rooms } from "../src/rooms.ts";
 import { EmptyEngine, createServer } from "../src/server.ts";
 import { Tickets } from "../src/tickets.ts";
+import { webSitesFromEnv } from "../src/web-sites.ts";
 
 const row = {
   id: "event-1",
@@ -126,6 +127,7 @@ const accounts = {
 async function withApi(
   options: {
     web?: string | null;
+    webSites?: ReturnType<typeof webSitesFromEnv>;
     channels?: Channels;
     events?: LiveEvents;
     rooms?: Rooms;
@@ -137,6 +139,7 @@ async function withApi(
 ): Promise<void> {
   const server = createServer(new EmptyEngine(), {
     web: options.web ?? null,
+    ...(options.webSites ? { webSites: options.webSites } : {}),
     media: true,
     version: "test",
     load: async () => [],
@@ -275,6 +278,66 @@ test("event pages receive useful metadata before the client starts", async () =>
     });
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("BackToSchool serves its own shell and assets with the shared events API", async () => {
+  const defaultWeb = mkdtempSync(join(tmpdir(), "nixamp-web-"));
+  const schoolWeb = mkdtempSync(join(tmpdir(), "nixamp-school-"));
+  writeFileSync(join(defaultWeb, "index.html"), "<title>NixAmp</title>");
+  writeFileSync(join(defaultWeb, "icon.svg"), "nixamp-icon");
+  writeFileSync(join(schoolWeb, "index.html"), "<html><head><title>BackToSchool.help — Learn something live</title></head><body></body></html>");
+  writeFileSync(join(schoolWeb, "icon.svg"), "school-icon");
+  const webSites = webSitesFromEnv(JSON.stringify({
+    "https://backtoschool.help": schoolWeb,
+    "https://www.backtoschool.help": schoolWeb,
+  }));
+  const events = eventStore();
+  events.invite = async () => ({
+    id: "invite-1", eventId: row.id, inviterId: row.owner_id,
+    role: "listener", state: "pending", token: "share-token",
+    createdAt: row.created_at, updatedAt: row.updated_at,
+  });
+  try {
+    await withApi({ web: defaultWeb, webSites, events }, async (base) => {
+      const request = (path: string, host: string) => fetch(`${base}${path}`, { headers: { host } });
+      for (const host of ["backtoschool.help", "www.backtoschool.help", "BACKTOSCHOOL.HELP"]) {
+        assert.match(await (await request("/", host)).text(), /BackToSchool.help/);
+        assert.equal(await (await request("/icon.svg", host)).text(), "school-icon");
+        const page = await (await request(`/live/${row.slug}`, host)).text();
+        assert.match(page, /Building Your First AI Agent — BackToSchool.help/);
+        assert.ok(page.includes(`https://${host.toLowerCase()}/live/${row.slug}`));
+        const listing = await (await request("/api/v1/events", host)).json() as { events: { id: string }[] };
+        assert.equal(listing.events[0]?.id, row.id);
+        const invite = await fetch(`${base}/api/v1/events/${row.id}/invitations`, {
+          method: "POST", headers: { host, authorization: "Bearer host", "content-type": "application/json" }, body: "{}",
+        });
+        assert.equal(invite.status, 201);
+        assert.equal((await invite.json() as { inviteUrl: string }).inviteUrl,
+          `https://${host.toLowerCase()}/live/${row.slug}?invite=share-token`);
+      }
+      for (const host of ["nixamp.com", "backtoschool.help.evil.example", "unknown.example"]) {
+        assert.equal(await (await request("/", host)).text(), "<title>NixAmp</title>");
+        assert.equal(await (await request("/icon.svg", host)).text(), "nixamp-icon");
+      }
+      const forged = await fetch(base, { headers: { host: "nixamp.com", "x-forwarded-host": "backtoschool.help" } });
+      assert.equal(await forged.text(), "<title>NixAmp</title>");
+      const hidden = await request("/api/v1/events/not-an-event", "backtoschool.help");
+      assert.equal(hidden.status, 404);
+      assert.match(hidden.headers.get("content-type") ?? "", /application\/json/);
+    });
+  } finally {
+    rmSync(defaultWeb, { recursive: true, force: true });
+    rmSync(schoolWeb, { recursive: true, force: true });
+  }
+});
+
+test("web site configuration refuses missing builds and non-origin URLs", () => {
+  assert.equal(webSitesFromEnv("").size, 0);
+  assert.throws(() => webSitesFromEnv("[]"), /map public origins/);
+  assert.throws(() => webSitesFromEnv('{"https://backtoschool.help":"/no-such-build"}'), /Missing web build/);
+  for (const origin of ["file:///tmp/", "https://user@backtoschool.help", "https://backtoschool.help/path"]) {
+    assert.throws(() => webSitesFromEnv(JSON.stringify({ [origin]: "/tmp" })), /Invalid web site/);
   }
 });
 
