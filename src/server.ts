@@ -88,7 +88,7 @@ import { Rooms } from "./rooms.ts";
 import { Trollbox, TrollboxError, fallbackHandle, roomFor } from "./trollbox.ts";
 import { MAX_BYTES as SPEECH_BYTES, Speech, SpeechError, isWav, languageOf } from "./speech.ts";
 import { Captions } from "./captions.ts";
-import { Profiles, spokenLine, telnyxVoiceFor, voicesFromEnv } from "./voices.ts";
+import { Profiles, Voices, spokenLine, spokenVoiceFor } from "./voices.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
   applyRemoteConfig,
@@ -1736,6 +1736,8 @@ export interface HandlerOptions {
   speech?: Speech;
   /** Other people's OpenProfiles, for the voice their lines are read in. */
   profiles?: Profiles;
+  /** The voices lines are read in: ElevenLabs when Telnyx holds the key, Kokoro otherwise. */
+  voices?: Voices;
   /** Tickets: a paid pass to one event's room. Absent means every show is free. */
   tickets?: Tickets;
   /**
@@ -2728,10 +2730,27 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       void (async () => {
         const persona = (await options.handles?.persona(authorId)) ?? { handle, voice: "", profile: "" };
         const profile = persona.profile && options.profiles ? await options.profiles.voiceOf(persona.profile) : null;
-        const voice = telnyxVoiceFor({ userId: authorId, voice: persona.voice, profile }, voicesFromEnv());
-        await partyLine.say(code, spokenLine(handle, body), voice);
+        const pools = options.voices ? await options.voices.pools() : { provider: "kokoro" as const, female: [], male: [] };
+        const spoken = spokenVoiceFor({ userId: authorId, voice: persona.voice, profile }, pools);
+        await partyLine.say(code, spokenLine(handle, body), spoken.voice, spoken.settings);
       })().catch(() => undefined);
     };
+
+    /*
+     * The voices a line can be read in, for whoever wants to pick one by
+     * id: which provider, and the women's and the men's pools. Signed in,
+     * like the profile it feeds.
+     */
+    if (path === "/api/v1/voices" && options.accounts) {
+      const who = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (who === null) {
+        json(response, 401, { error: "not signed in" });
+        return;
+      }
+      const pools = options.voices ? await options.voices.pools() : { provider: "kokoro" as const, female: [], male: [] };
+      json(response, 200, { provider: pools.provider, female: pools.female, male: pools.male });
+      return;
+    }
 
     /*
      * The trollbox: the chat for one live room, keyed by the server and
@@ -2878,7 +2897,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // be sent alone; what is not sent is kept.
       if (request.method === "GET") {
         const persona = await handles.persona(who.id);
-        json(response, 200, { ...persona, handle: persona.handle || fallbackHandle(who.id), chosen: persona.handle !== "" });
+        // And the voice a line of theirs would be read in right now, so the
+        // panel and the CLI can say it rather than describe the rule.
+        const pools = options.voices ? await options.voices.pools() : null;
+        const profile = persona.profile && options.profiles ? await options.profiles.voiceOf(persona.profile) : null;
+        const spoken = pools ? spokenVoiceFor({ userId: who.id, voice: persona.voice, profile }, pools).voice : "";
+        json(response, 200, { ...persona, handle: persona.handle || fallbackHandle(who.id), chosen: persona.handle !== "", spoken });
         return;
       }
       if (request.method === "PUT" || request.method === "POST") {
@@ -5870,8 +5894,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(rooms ? { rooms } : {}),
     ...(trollbox ? { trollbox } : {}),
     ...(speech ? { speech } : {}),
-    // Other people's OpenProfiles, read for the voice a line is spoken in.
+    // Other people's OpenProfiles, read for the voice a line is spoken in,
+    // and the voices to speak in: ElevenLabs when the Telnyx account holds
+    // the key for it (an integration secret named "elevenlabs"), Kokoro
+    // otherwise. Nothing to configure on the deployment for either.
     ...(accounts ? { profiles: new Profiles() } : {}),
+    ...(accounts && process.env["TELNYX_API_KEY"]
+      ? { voices: new Voices({ telnyxApiKey: process.env["TELNYX_API_KEY"], onEvent: (message) => console.log(message) }) }
+      : {}),
     ...(tickets ? { tickets } : {}),
     ...(authServer ? { authServer } : {}),
     ...(parties ? { parties } : {}),

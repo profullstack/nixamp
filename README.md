@@ -314,14 +314,22 @@ which case the words wait in the box for Send. A wrong line is taken down
 with its ✕.
 
 **On the phone, too.** Every live room has a six-digit code on the party
-line (see below), and when anybody is on the phone in a room, each trollbox
-line is read aloud to them: "chovy says: …", in a voice that is theirs as
-far as a machine can manage. The Account panel sets it: a woman's voice, a
-man's, any, or a provider voice id; or an OpenProfile URL, whose `Voice`,
-`Gender` or `Pronouns` decide. Nothing set picks one from the account, so
-the same person is always the same voice. The voices are Telnyx's Kokoro
-ones, open weights, no bill beyond the call; `NIXAMP_VOICE_FEMALE` and
-`NIXAMP_VOICE_MALE` swap in others (an ElevenLabs id, say).
+line (see below), and only when somebody is on the phone in a room, each
+trollbox line is read aloud to them: "chovy says: …", in a voice that is
+theirs as far as a machine can manage, and different from everybody
+else's in the room. The Account panel (or `nixamp profile`, or the
+`profile_set` MCP tool) sets it: a woman's voice, a man's, any, or a voice
+id; or an OpenProfile URL, whose `Voice`, `Gender` or `Pronouns` decide.
+Given a sex, the account picks one voice from that sex's pool and keeps
+it; given nothing, one from the whole pool. `nixamp voices` lists them.
+
+Two pools. Telnyx's Kokoro voices are an open-weights model with no bill
+beyond the call: eleven women, eight men. ElevenLabs reads better and bills
+per character: when the Telnyx account holds an integration secret named
+`elevenlabs` with the ElevenLabs key, nixamp.com finds it on its own and
+uses ElevenLabs' premade voices by their labelled gender; `NIXAMP_TTS=kokoro`
+keeps the free ones regardless. `NIXAMP_VOICES_FEMALE` / `NIXAMP_VOICES_MALE`
+(comma lists of Telnyx voice ids) replace either pool outright.
 The ear is [Whisper](https://github.com/openai/whisper) run through
 [Transformers.js](https://github.com/huggingface/transformers.js), an
 Apache-2.0 library carrying MIT-licensed models, on nixamp.com's own CPU.

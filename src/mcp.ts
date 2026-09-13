@@ -22,6 +22,7 @@ import { clock, type PartyRow } from "./party.ts";
 import { readSession } from "./session.ts";
 import { askToHear, wavOf } from "./transcribe.ts";
 import { readTranscript } from "./transcript.ts";
+import { personaLines, readPersona, readVoices, writePersona } from "./profile.ts";
 
 export const PROTOCOL_VERSION = "2025-06-18";
 
@@ -141,6 +142,29 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["url"],
     },
+  },
+  {
+    name: "profile_get",
+    description: "Who the rooms know this account as: its handle, the voice its trollbox lines are read in on the phone, the OpenProfile URL, and the voice that would be used right now.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "profile_set",
+    description:
+      "Set this account's handle, the voice its lines are read in on the phone (female, male, any, or a voice id from voices_list), and/or its OpenProfile URL (whose Voice, Gender or Pronouns pick the voice when none is set). Any one may be given alone.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        handle: { ...STRING, description: "Letters, digits and hyphens, 2 to 30 characters." },
+        voice: { ...STRING, description: "female, male, any, or a voice id such as ElevenLabs.pNInz6obpgDQGcFmaJgB." },
+        profile: { ...STRING, description: "The URL of an OpenProfile.md, or an empty string to clear it." },
+      },
+    },
+  },
+  {
+    name: "voices_list",
+    description: "The voices trollbox lines can be read in on the phone: the provider in use and the women's and men's voice ids.",
+    inputSchema: { type: "object", properties: {} },
   },
   {
     name: "trollbox_read",
@@ -333,6 +357,29 @@ export async function callTool(name: string, args: Record<string, unknown>, opti
           : "Nothing said yet. The server has just started listening; ask again in a few seconds.");
       }
       return text(got.answer.recent.map((line) => `${new Date(line.at).toISOString()}  ${line.text}`).join("\n"));
+    }
+
+    if (name === "profile_get") {
+      const answer = await readPersona(session, send);
+      if (!answer.ok) return failed(answer.error);
+      return text(personaLines(answer.body).join("\n"));
+    }
+
+    if (name === "profile_set") {
+      const wanted: { handle?: string; voice?: string; profile?: string } = {};
+      if (typeof args["handle"] === "string") wanted.handle = args["handle"];
+      if (typeof args["voice"] === "string") wanted.voice = args["voice"];
+      if (typeof args["profile"] === "string") wanted.profile = args["profile"];
+      if (Object.keys(wanted).length === 0) return failed("Set what? Pass handle, voice and/or profile.");
+      const answer = await writePersona(session, wanted, send);
+      if (!answer.ok) return failed(answer.error);
+      return text(personaLines(answer.body).join("\n"));
+    }
+
+    if (name === "voices_list") {
+      const answer = await readVoices(session, send);
+      if (!answer.ok) return failed(answer.error);
+      return text([`Voices: ${answer.body.provider}.`, "Women:", ...answer.body.female.map((one) => `  ${one}`), "Men:", ...answer.body.male.map((one) => `  ${one}`)].join("\n"));
     }
 
     if (name === "trollbox_read") {

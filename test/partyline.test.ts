@@ -196,6 +196,12 @@ test("a line is read into a room only while somebody is on the phone in it, in t
   assert.equal(said?.body["voice"], "Telnyx.KokoroTTS.am_adam");
   // To the whole room, not one leg: a trollbox line is for everybody there.
   assert.equal(said?.body["call_control_ids"], undefined);
+  assert.equal(said?.body["voice_settings"], undefined);
+  // An ElevenLabs voice carries the name of the secret Telnyx holds the key under.
+  await party.say("482917", "chovy says: again", "ElevenLabs.pNInz6obpgDQGcFmaJgB", { api_key_ref: "elevenlabs" });
+  const eleven = calls.filter((c) => c.path === "/conferences/conf-482917/actions/speak").pop();
+  assert.deepEqual(eleven?.body["voice_settings"], { api_key_ref: "elevenlabs" });
+  assert.equal(eleven?.body["voice"], "ElevenLabs.pNInz6obpgDQGcFmaJgB");
   // An empty line is not worth a call.
   assert.equal(await party.say("482917", "   ", "female"), false);
   // No voice given: the room's own.
