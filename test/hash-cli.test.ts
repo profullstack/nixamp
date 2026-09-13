@@ -20,16 +20,18 @@ function recorder() {
     const headers = (init?.headers ?? {}) as Record<string, string>;
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     calls.push({ url: url.toString(), method, body, auth: headers["authorization"] });
+    // As the real route reads an id: decoded, with or without its prefix.
     const m = /^\/api\/v1\/media\/(.+)$/.exec(url.pathname);
+    const named = m ? decodeURIComponent(m[1] as string).replace(/^sha256:/, "") : "";
     if (m && method === "PUT") {
-      const id = m[1] as string;
+      const id = named;
       const had = records.get(id) ?? { id: `sha256:${id}`, url: `https://nixamp.test/hash/${id}`, holders: [], nixamp: {} };
       const kept = { ...had, ...(body.name ? { name: body.name } : {}), ...(body.size ? { size: body.size } : {}), nixamp: { ...(had["nixamp"] as object), ...(body.facts ?? {}) } };
       records.set(id, kept);
       return new Response(JSON.stringify(kept), { status: 200, headers: { "content-type": "application/json" } });
     }
     if (m && method === "GET") {
-      const record = records.get(m[1] as string);
+      const record = records.get(named);
       return new Response(JSON.stringify(record ?? { error: "nixamp.com does not know that file yet" }), { status: record ? 200 : 404, headers: { "content-type": "application/json" } });
     }
     return new Response(JSON.stringify({ error: `no route ${url.pathname}` }), { status: 404 });
