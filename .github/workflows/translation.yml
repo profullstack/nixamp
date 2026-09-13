@@ -1,0 +1,39 @@
+name: Translation billing and sharing
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'web/**'
+      - 'test/**'
+      - '.github/workflows/translation.yml'
+      - 'package.json'
+      - 'bun.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  translation:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: translation-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      NIXAMP_TEST_DATABASE_URL: postgres://postgres:translation-test-only@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test test/translation-passes.test.ts test/shared-translation.test.ts test/live-voice.test.ts web/test/interpreter.test.ts

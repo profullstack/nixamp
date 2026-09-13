@@ -1,7 +1,8 @@
 # The hosted nixamp: the PWA, served by nixamp's own server.
 #
-# The same backend serves BackToSchool.help and carries its live microphone
-# audio. FFmpeg is required even though the hosted library starts empty.
+# The same backend serves BackToSchool.help and carries live microphone audio.
+# It also decodes each shared live translation once for all its listeners.
+# FFmpeg is required even though the hosted library starts empty.
 FROM oven/bun:1 AS build
 WORKDIR /app
 
@@ -49,7 +50,7 @@ RUN bun dist/warm.js
 
 FROM oven/bun:1-slim
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 ENV NIXAMP_WEB_SITES='{"https://backtoschool.help":"/app/backtoschool/dist","https://www.backtoschool.help":"/app/backtoschool/dist"}'
 # Where the models are: the ones baked in above, and anything asked for later.

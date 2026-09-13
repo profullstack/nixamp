@@ -1337,3 +1337,17 @@ body.tv input, body.tv .filter { font-size: 1em; padding: 8px 10px; }
 .background-level { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-top: 6px; }
 .background-level input { flex: 1; min-width: 0; max-width: 180px; }
 .background-level output { min-width: 4ch; }
+
+/* An explicit purchase opens a compact dialog; payment updates never navigate. */
+#translation-purchase { color: var(--fg); background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; width: min(480px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; padding: 20px; }
+#translation-purchase::backdrop { background: #000a; }
+.purchase-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.purchase-heading h2 { font-size: 18px; margin: 0; }
+#translation-purchase p { margin: 12px 0; line-height: 1.5; }
+#translation-purchase label { display: block; margin-top: 12px; }
+#translation-purchase select { width: 100%; min-height: 36px; margin-top: 4px; }
+.purchase-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
+#translation-balance:empty { display: none; }
+
+.purchase-terms { margin-top: 16px; }
+#transcript-panel > .panel-heading { max-width: calc(100% - 140px); }
