@@ -199,6 +199,7 @@ export function start(): void {
     partiesList: need<HTMLUListElement>("parties-list"),
     partyForm: need<HTMLFormElement>("party-form"),
     partyCode: need<HTMLInputElement>("party-code"),
+    partyJoin: need<HTMLButtonElement>("party-join"),
     connectionsNote: need<HTMLParagraphElement>("connections-note"),
     connectionsList: need<HTMLUListElement>("connections-list"),
     catalogsPanel: need<HTMLElement>("catalogs-panel"),
@@ -261,7 +262,8 @@ export function start(): void {
    * is an empty box in most monospace faces, which is what the icons were
    * on a machine without an emoji font. These are drawn, not typed.
    */
-  const ICONS: Record<"link" | "copy" | "restart" | "remove" | "rename" | "check" | "live" | "eye" | "gear", string> = {
+  const ICONS: Record<"link" | "copy" | "restart" | "remove" | "rename" | "check" | "live" | "party" | "eye" | "gear", string> = {
+    party: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 21 4-12 8 8Z"/><path d="m7 9 8 8M12 7l1-3M16 10l4-1M16 5l2-2M20 14l1 1M8 4l-1-1"/><circle cx="21" cy="4" r=".5" fill="currentColor"/></svg>',
     rename: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
     // An eye is a viewer; a gear is an administrator. Both a size up from the
     // row icons, because each is a way in rather than a thing to do to a row.
@@ -714,16 +716,17 @@ export function start(): void {
     }
   }
 
-  /** A row's go-live icon, for whoever may. */
   /**
-   * "Join live", with the stream icon, on a button: the one label for the
-   * one act, wherever a live is shown. Static markup for the icon, then the
-   * words as text, never the other way round.
+   * One joining label for streams and connected-site parties. The party
+   * popper is decorative; the text names the action for everyone.
    */
-  function joinLiveLabel(button: HTMLButtonElement, text = "Join live"): void {
-    drawIcon(button, "live");
+  function joinPartyLabel(button: HTMLElement, text = "Join party"): void {
+    drawIcon(button, text === "Join party" ? "party" : "live");
     button.append(document.createTextNode(` ${text}`));
+    button.title = text === "Join party" ? "Join live" : text;
   }
+
+  joinPartyLabel(dom.partyJoin);
 
   function goLiveButton(what: () => GoLiveWith, name: string): HTMLButtonElement {
     const button = document.createElement("button");
@@ -1882,7 +1885,7 @@ export function start(): void {
   /**
    * A link, on the air for everybody: the server fetches it and carries it
    * as a channel, kept -- up with nobody watching, remembered across a
-   * restart, listed in the directory with Join live and a phone code. Going
+   * restart, listed in the directory with Join party and a phone code. Going
    * live, so offered to the owner and to any member; and asked of the
    * server once here, so a site that refuses the server is an answer on
    * this page rather than a channel that dies.
@@ -2370,8 +2373,8 @@ export function start(): void {
         const play = document.createElement("button");
         play.type = "button";
         play.className = "button";
-        joinLiveLabel(play);
-        play.title = `Join ${channelName}, live on ${stream.name}`;
+        joinPartyLabel(play);
+        play.title = `Join live: ${channelName} on ${stream.name}`;
         play.addEventListener("click", () => open(true, `channel:${channelName}`));
         row.append(dot, play);
         lives.append(row);
@@ -2949,11 +2952,12 @@ export function start(): void {
     watch.href = row.links.partyUrl || row.links.nixampUrl;
     watch.rel = "noopener";
     watch.target = "_blank";
-    watch.textContent = "Watch";
+    joinPartyLabel(watch);
+    watch.title = "Join live on the site hosting this party (opens in a new tab)";
     const room = document.createElement("a");
     room.className = "ghost";
     room.href = row.links.nixampUrl;
-    room.textContent = "Room";
+    room.textContent = "Open room";
     item.append(label, watch, room);
     return item;
   }
@@ -2975,8 +2979,8 @@ export function start(): void {
       const rows = body.parties ?? [];
       dom.partiesPanel.hidden = false;
       dom.partiesNote.textContent = rows.length === 0
-        ? "No parties on right now. Have a code from a site? Put it in."
-        : "Parties on now. Watch opens the film where it lives; Room is here.";
+        ? "No parties happening right now. Join with an invite code."
+        : "Join a party on the site hosting the film, or open its room here.";
       dom.partiesList.replaceChildren(...rows.map(partyItem));
     } catch {
       dom.partiesPanel.hidden = true;
@@ -2992,7 +2996,7 @@ export function start(): void {
         const answer = await fetch(`/api/v1/watch-parties/${encodeURIComponent(code)}`);
         const body = (await answer.json().catch(() => ({}))) as PartyRow & { error?: string };
         if (!answer.ok) {
-          note = body.error ?? "no party with that code";
+          note = body.error ?? "No party found with that invite code.";
           draw();
           return;
         }
@@ -3001,7 +3005,7 @@ export function start(): void {
         // code has already chosen.
         window.location.href = body.links.nixampUrl;
       } catch {
-        note = "could not ask about that party";
+        note = "Could not look up that party. Try again.";
         draw();
       }
     })();
@@ -5300,7 +5304,7 @@ export function start(): void {
     dom.publishPanel.hidden = true;
     dom.adminPanel.hidden = true;
     dom.onairPanel.hidden = true;
-    dom.onairPanel.dataset.title = "Live on this server";
+    dom.onairPanel.dataset.title = "Parties on this server";
     dom.catalogsPanel.hidden = true;
     dom.catalogsPanel.dataset.title = "Catalogs on this server";
     serverName = "";
@@ -5479,7 +5483,7 @@ export function start(): void {
       // titled with: "Files on ubuntu" says where you are, "Playlist" did not.
       if (air.server.name && air.server.name !== serverName) {
         serverName = air.server.name;
-        dom.onairPanel.dataset.title = `Live on ${serverName}`;
+        dom.onairPanel.dataset.title = `Parties on ${serverName}`;
         dom.catalogsPanel.dataset.title = `Catalogs on ${serverName}`;
         updateFavHere();
         draw();
@@ -5531,7 +5535,7 @@ export function start(): void {
       //
       // With nothing running there is nothing to join, so somebody who can
       // drive this server is offered the thing that would fix that instead.
-      playLabel: running ? "Join live" : canDrive ? "Start the stream" : "Nothing playing",
+      playLabel: running ? "Join party" : canDrive ? "Start the stream" : "Nothing playing",
       onPlay: () => {
         if (running) {
           void joinLive(air.server.nowPlaying);
@@ -5949,9 +5953,7 @@ export function start(): void {
     const play = document.createElement("button");
     play.type = "button";
     play.className = "button";
-    // One word for the one thing, wherever a live is: Join live, with the
-    // stream icon. It was Play here and Join live there, for the same act.
-    joinLiveLabel(play, row.playLabel ?? "Join live");
+    joinPartyLabel(play, row.playLabel ?? "Join party");
     play.addEventListener("click", row.onPlay);
     actions.append(play);
 

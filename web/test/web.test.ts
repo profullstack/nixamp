@@ -1059,7 +1059,7 @@ test("wherever a server is shown, the eye and the gear are the way in", () => {
   assert.match(app, /eye\.hidden = !driving;\s*gear\.hidden = driving;/);
 });
 
-test("a member may go live, a file goes on the air as its own channel, and every live says Join live", () => {
+test("a member may go live, a file goes on the air as its own channel, and joining says Join party", () => {
   const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
   const remote = readFileSync(join(webDir, "src/remote.ts"), "utf8");
   // The session travels to a server on another origin in the query, the way the key does.
@@ -1078,10 +1078,10 @@ test("a member may go live, a file goes on the air as its own channel, and every
   assert.doesNotMatch(app, /remote\.send\(\{ type: "play", index: what\.index \}\)/);
   // A member takes off what they put on.
   assert.match(app, /onStop: canDrive \|\| \(memberHere && meId !== "" && channel\.startedBy === meId\)/);
-  // One label for the one act: Join live with the stream icon, in the live list and the directory.
-  assert.match(app, /function joinLiveLabel\(button: HTMLButtonElement, text = "Join live"\)/);
-  assert.match(app, /joinLiveLabel\(play, row\.playLabel \?\? "Join live"\)/);
-  assert.match(app, /joinLiveLabel\(play\);\s*play\.title = `Join \$\{channelName\}, live on \$\{stream\.name\}`/);
+  // The list and directory share the party label; live wording stays in the tooltip.
+  assert.match(app, /function joinPartyLabel\(button: HTMLElement, text = "Join party"\)/);
+  assert.match(app, /joinPartyLabel\(play, row\.playLabel \?\? "Join party"\)/);
+  assert.match(app, /joinPartyLabel\(play\);\s*play\.title = `Join live: \$\{channelName\} on \$\{stream\.name\}`/);
   assert.doesNotMatch(app, /play\.textContent = "Play"/);
 });
 
