@@ -136,28 +136,108 @@ export function drawIcon(size: number, maskable: boolean): Bitmap {
   }
 
   const pad = plate * 0.16;
-  const left = inset + pad;
-  const width = plate - pad * 2;
-  const bottom = inset + plate - pad;
-  const tallest = plate - pad * 2.2;
+  drawBars(bitmap, inset + pad, inset + plate - pad, plate - pad * 2, plate - pad * 2.2, size);
+  return bitmap;
+}
+
+/**
+ * The bars themselves, wherever they stand: `left`/`bottom` is the baseline's
+ * start, `width` its length, `tallest` the highest bar, `scale` what the
+ * peak and baseline thickness are drawn in proportion to.
+ */
+function drawBars(bitmap: Bitmap, left: number, bottom: number, width: number, tallest: number, scale: number): void {
   const slot = width / BARS.length;
   const bar = slot * 0.62;
-
   BARS.forEach((value, i) => {
     const height = Math.max(2, tallest * value);
     const x = left + i * slot + (slot - bar) / 2;
     bitmap.rect(x, bottom - height, bar, height, GREEN);
     // The peak marker that sinks — the detail that made the original readable.
-    const peak = Math.max(2, size * 0.018);
+    const peak = Math.max(2, scale * 0.018);
     bitmap.rect(x, bottom - height - peak * 2.4, bar, peak, DIM);
   });
-
   // The baseline the bars stand on.
-  bitmap.rect(left, bottom, width, Math.max(2, size * 0.028), DIM);
+  bitmap.rect(left, bottom, width, Math.max(2, scale * 0.028), DIM);
+}
+
+/**
+ * The logo: the mark alone, on nothing. For a page header, a README, a
+ * slide -- anywhere the plate would be a dark square on somebody else's
+ * background. Square, the bars filling it edge to edge but for a hair.
+ */
+export function drawLogo(size: number): Bitmap {
+  const bitmap = new Bitmap(size, size);
+  bitmap.fill({ r: 0, g: 0, b: 0, a: 0 });
+  const pad = size * 0.04;
+  drawBars(bitmap, pad, size - pad, size - pad * 2, size - pad * 2 - size * 0.06, size);
   return bitmap;
 }
 
-export interface IconSpec { file: string; size: number; maskable: boolean }
+/**
+ * A 5x7 pixel face for the wordmark: the letters of NIXAMP and nothing
+ * else, because a bitmap font is a font only for the letters it has.
+ * Chunky on purpose -- it is a terminal player, and the header spells its
+ * name in a Braille block.
+ */
+const GLYPHS: Record<string, string[]> = {
+  N: ["X...X", "XX..X", "X.X.X", "X..XX", "X...X", "X...X", "X...X"],
+  I: ["XXXXX", "..X..", "..X..", "..X..", "..X..", "..X..", "XXXXX"],
+  X: ["X...X", "X...X", ".X.X.", "..X..", ".X.X.", "X...X", "X...X"],
+  A: [".XXX.", "X...X", "X...X", "XXXXX", "X...X", "X...X", "X...X"],
+  M: ["X...X", "XX.XX", "X.X.X", "X.X.X", "X...X", "X...X", "X...X"],
+  P: ["XXXX.", "X...X", "X...X", "XXXX.", "X....", "X....", "X...."],
+};
+
+/** The width a string takes at a cell size, letters a cell apart. */
+export function textWidth(text: string, cell: number): number {
+  return text.length * 5 * cell + (text.length - 1) * cell;
+}
+
+/** A word in the pixel face, its top-left at x/y. Letters it lacks are a gap. */
+export function drawText(bitmap: Bitmap, text: string, x: number, y: number, cell: number, color: Rgba): void {
+  let at = x;
+  for (const letter of text) {
+    const rows = GLYPHS[letter];
+    if (rows) {
+      rows.forEach((row, r) => {
+        for (let c = 0; c < row.length; c++) if (row[c] === "X") bitmap.rect(at + c * cell, y + r * cell, cell, cell, color);
+      });
+    }
+    at += 6 * cell;
+  }
+}
+
+/**
+ * The hero: the mark and the name side by side on the plate, wide, for the
+ * top of the README and anywhere a banner goes. Rounded so it reads as a
+ * card on GitHub's light and dark pages alike.
+ */
+export function drawHero(width: number, height: number): Bitmap {
+  const bitmap = new Bitmap(width, height);
+  bitmap.fill({ r: 0, g: 0, b: 0, a: 0 });
+  bitmap.roundedRect(0, 0, width, height, height * 0.09, BACKGROUND);
+  // The mark: a square the height of the plate less its margins.
+  const margin = height * 0.16;
+  const mark = height - margin * 2;
+  const cell = Math.round(mark / 12.5);
+  const word = textWidth("NIXAMP", cell);
+  const gap = mark * 0.36;
+  const left = (width - (mark + gap + word)) / 2;
+  drawBars(bitmap, left, margin + mark, mark, mark - height * 0.04, height * 1.8);
+  // The name, on the baseline the bars stand on, dim like the header's.
+  drawText(bitmap, "NIXAMP", left + mark + gap, margin + mark - 7 * cell, cell, GREEN);
+  return bitmap;
+}
+
+export interface IconSpec {
+  file: string;
+  size: number;
+  maskable: boolean;
+  /** What is drawn: the plated icon unless said otherwise. */
+  kind?: "icon" | "logo" | "hero";
+  /** The hero's width; its height is `size`. */
+  width?: number;
+}
 
 export const ICONS: IconSpec[] = [
   { file: "icons/icon-192.png", size: 192, maskable: false },
@@ -167,13 +247,26 @@ export const ICONS: IconSpec[] = [
   // iOS ignores the manifest icons and crops whatever it is given, so the
   // apple-touch-icon is the maskable drawing on an opaque plate.
   { file: "apple-touch-icon.png", size: 180, maskable: true },
+  // The tab's icon: the plated mark, small. A plate, because a tab strip
+  // is light as often as dark and bare green bars vanish on white.
+  { file: "favicon.png", size: 64, maskable: false },
+  // The mark alone, for the header and for anybody who wants the logo.
+  { file: "logo.png", size: 512, maskable: false, kind: "logo" },
+  // The banner at the top of the README.
+  { file: "hero.png", size: 500, width: 1600, maskable: false, kind: "hero" },
 ];
 
+function draw({ size, maskable, kind, width }: IconSpec): Bitmap {
+  if (kind === "logo") return drawLogo(size);
+  if (kind === "hero") return drawHero(width ?? size * 3, size);
+  return drawIcon(size, maskable);
+}
+
 export function writeIcons(publicDir: string): string[] {
-  return ICONS.map(({ file, size, maskable }) => {
-    const path = join(publicDir, file);
+  return ICONS.map((spec) => {
+    const path = join(publicDir, spec.file);
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, encodePng(drawIcon(size, maskable)));
+    writeFileSync(path, encodePng(draw(spec)));
     return path;
   });
 }
