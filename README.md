@@ -307,8 +307,10 @@ with the account's public handle, never its address.
 
 A line can be said rather than typed. The microphone button beside the box
 is tap, talk, tap: the page records, brings the sound to 16 kHz mono itself,
-and sends nixamp.com a small WAV; the words come back into the box, and
-**Send** is still yours, so a misheard word is fixed before the room sees it.
+and sends nixamp.com a small WAV with the room's name on it; the ear posts
+the words to the room in the same request, and the line appears. Said is
+sent. A line you would rather see first is typed; a wrong one is taken down
+with its ✕.
 The ear is [Whisper](https://github.com/openai/whisper) run through
 [Transformers.js](https://github.com/huggingface/transformers.js), an
 Apache-2.0 library carrying MIT-licensed models, on nixamp.com's own CPU.
