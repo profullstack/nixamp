@@ -5186,7 +5186,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const speech = accounts && process.env["NIXAMP_STT"] !== "off" ? new Speech() : undefined;
   if (speech) {
     void speech.warm().then((ready) => {
-      if (ready) console.error(`nixamp: hearing with ${speech.model}`);
+      console.error(ready ? `nixamp: hearing with ${speech.model}` : `nixamp: not hearing: ${speech.lastFailure}`);
     });
   }
 

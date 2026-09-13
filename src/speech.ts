@@ -220,8 +220,12 @@ async function loadWhisper(model: string, cacheDir: string): Promise<Recognizer>
   let transformers: Transformers;
   try {
     transformers = (await import(name)) as Transformers;
-  } catch {
-    throw new SpeechError("this nixamp cannot hear: @huggingface/transformers is not installed here. nixamp.com can.", 503);
+  } catch (error) {
+    // The reason travels with the refusal: "not installed" and "installed
+    // but its native runtime would not load" need different fixes, and the
+    // one place this is read is a deployment's log.
+    const why = String((error as Error).message ?? error).split("\n")[0] ?? "";
+    throw new SpeechError(`this nixamp cannot hear: @huggingface/transformers did not load here (${why}). nixamp.com can.`, 503);
   }
   transformers.env.cacheDir = cacheDir;
   const recognize = await transformers.pipeline("automatic-speech-recognition", model, { dtype: "q8" });
@@ -271,10 +275,14 @@ export class Speech {
     try {
       await this.ear();
       return true;
-    } catch {
+    } catch (error) {
+      this.lastFailure = (error as Error).message;
       return false;
     }
   }
+
+  /** Why the last warm() could not load the ear, for the boot log. */
+  lastFailure = "";
 
   /** Whether this account may have this much heard now, and the bookkeeping if so. */
   allow(accountId: string, seconds: number): void {
