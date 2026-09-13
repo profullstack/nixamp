@@ -22,7 +22,7 @@ import { fixtureState, scoreLine } from "./score.ts";
 import { isTelevision, pageSize, pageWindow, TV_KEY } from "./tv.ts";
 import { isVideoFile, localPlayback, parseList, type ListEntry } from "./links.ts";
 import { PANELS_KEY, type PanelLayout, emptyLayout, orderedIds, parseLayout, serializeLayout, toggled } from "./panels.ts";
-import { DICTATE_MAX_MS, DICTATE_RATE, encodeWav, joinDictated, listeningLabel, recordingMime } from "./dictate.ts";
+import { DICTATE_MAX_MS, DICTATE_RATE, encodeWav, listeningLabel, recordingMime } from "./dictate.ts";
 import { CAPTIONS_KEY, type Caption, captionsWanted, due, lagMs, showing, whenLabel } from "./captions.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
@@ -3397,11 +3397,13 @@ export function start(): void {
   // ---- dictating a line: tap, talk, tap ------------------------------------
   //
   // The microphone is recorded here, brought to 16 kHz mono here, and sent
-  // to nixamp.com as a small WAV; nixamp.com's own ear (Whisper, on its own
-  // CPU) sends the words back, and they land in the box for Send. Nothing
-  // goes to a speech vendor. The button exists only where a line can be
-  // sent from -- signed in, on nixamp.com -- and only where the browser can
-  // record at all; a page that cannot simply has no mic.
+  // to nixamp.com as a small WAV with the room's name on it; nixamp.com's
+  // own ear (Whisper, on its own CPU) hears it and posts the words to the
+  // room in the same breath, by the trollbox's own rules, and the line
+  // comes back to be shown. Said is sent: there is no Send to click after
+  // talking. Nothing goes to a speech vendor. The button exists only where
+  // a line can be sent from -- signed in, on nixamp.com -- and only where
+  // the browser can record at all; a page that cannot simply has no mic.
   const canRecord = typeof MediaRecorder !== "undefined" && typeof navigator.mediaDevices?.getUserMedia === "function";
   const recordAs = canRecord ? recordingMime((type) => MediaRecorder.isTypeSupported(type)) : "";
   dom.trollboxMic.hidden = !canRecord;
@@ -3490,7 +3492,8 @@ export function start(): void {
       source.start();
       const mono = (await offline.startRendering()).getChannelData(0);
       const wav = encodeWav(mono, DICTATE_RATE);
-      const query = new URLSearchParams();
+      // The room rides along, so the ear posts the words itself.
+      const query = new URLSearchParams({ server: room.server, channel: room.channel });
       const language = navigator.language.slice(0, 2).toLowerCase();
       if (/^[a-z]{2}$/.test(language)) query.set("language", language);
       const answer = await fetch(`${trollboxSite}/api/v1/speech/transcribe?${query.toString()}`, {
@@ -3498,20 +3501,27 @@ export function start(): void {
         headers: { "content-type": "audio/wav" },
         body: new Blob([wav.buffer as ArrayBuffer], { type: "audio/wav" }),
       });
-      const body = (await answer.json().catch(() => ({}))) as { text?: string; error?: string };
+      const body = (await answer.json().catch(() => ({}))) as {
+        text?: string; error?: string;
+        message?: { id: string; handle: string; body: string; createdAt: string; mine?: boolean };
+      };
       if (!answer.ok) {
         trollboxSay(body.error ?? "nixamp.com could not hear that.");
         return;
       }
       const heard = (body.text ?? "").trim();
-      if (heard === "") {
+      if (heard === "" || !body.message) {
         trollboxSay("Heard nothing. Try again, closer to the mic.");
         return;
       }
-      dom.trollboxInput.value = joinDictated(dom.trollboxInput.value, heard).slice(0, dom.trollboxInput.maxLength > 0 ? dom.trollboxInput.maxLength : 500);
-      dom.trollboxInput.focus();
-      dom.trollboxInput.setSelectionRange(dom.trollboxInput.value.length, dom.trollboxInput.value.length);
-      trollboxSay(`Heard: “${heard}”. Send it, or fix it first.`);
+      // Posted by the ear; shown here at once rather than on the next poll.
+      if (trollboxRoom() && !trollboxSeen.has(body.message.id)) {
+        trollboxSeen.add(body.message.id);
+        dom.trollboxList.append(trollboxLine(body.message));
+        trollboxAfter = body.message.createdAt;
+        dom.trollboxList.lastElementChild?.scrollIntoView({ block: "nearest" });
+      }
+      trollboxSay(`Said: “${body.message.body}”`);
     } catch {
       trollboxSay("That recording could not be read here.");
     } finally {
