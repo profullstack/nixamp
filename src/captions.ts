@@ -32,7 +32,8 @@
  */
 import { spawn } from "node:child_process";
 import type { Listener } from "./channels.ts";
-import { RATE } from "./speech.ts";
+import { NATIVE_REVISION, RATE, SpeechError, reliableText } from "./speech.ts";
+import { voiceProfile } from "./voice-profile.ts";
 import { fetchTranscript, keepLines, keepMedia, translateTexts, type MediaToKeep } from "./transcript-client.ts";
 import { covered, lineAt, transcriptIdOf, type TranscriptLine } from "./transcripts.ts";
 
@@ -47,6 +48,8 @@ export interface CaptionLine {
   language?: string;
   /** What was heard, when this line is a translation of it. */
   original?: string;
+  sourceLanguage?: string;
+  voiceProfile?: "lower" | "higher" | "unknown";
 }
 
 /** What turns a channel's bytes into 16 kHz mono 16-bit PCM. ffmpeg, or a test's stand-in. */
@@ -104,6 +107,8 @@ export const IDLE_MS = 60_000;
 export const QUIET = 0.004;
 /** Windows waiting on the ear at once. Past this the sound is dropped, not queued: late words are worse than none. */
 export const IN_FLIGHT = 2;
+export const LIVE_DEADLINE_MS = 12_000;
+export const MAX_CAPTIONERS = 4;
 /** Heard lines wait this long, at most, before they are kept. */
 export const FLUSH_MS = 20_000;
 /** Or this many. */
@@ -252,6 +257,9 @@ class Captioner {
   private stopped = false;
   private complainedAt = 0;
   private windows = 0;
+  private audioUntil = 0;
+  private lastEmittedAt = -Infinity;
+  private readonly requests = new Set<AbortController>();
   /** What the channel is playing, when the store is to be told. */
   private readonly media: ChannelMedia | null;
   private readonly transcriptId: string | null;
@@ -264,6 +272,8 @@ class Captioner {
   private flush: ReturnType<typeof setTimeout> | null = null;
   /** Translations in order, per language: a slow one must not overtake the next. */
   private readonly chains = new Map<string, Promise<void>>();
+  private readonly translating = new Set<string>();
+  private readonly nextTranslation = new Map<string, { line: CaptionLine; mediaStart: number | null }>();
 
   constructor(
     readonly id: string,
@@ -326,16 +336,18 @@ class Captioner {
     this.asked.add(language);
     const session = this.options.session();
     if (session === null) return;
-    const got = await fetchTranscript(session, this.transcriptId, language, this.options.fetcher ?? fetch);
+    const got = await fetchTranscript(session, this.transcriptId, language, this.options.fetcher ?? fetch, true);
     if (this.stopped) return;
     if (!got.ok) {
       if (got.status !== 404) this.complain(`the store did not answer: ${got.error}`);
       return;
     }
-    this.known.set(language, got.body.lines);
-    if (language === "" && this.language === "" && got.body.language) this.language = got.body.language;
-    if (got.body.lines.length > 0) {
-      this.options.onEvent?.(`captions for "${this.id}": the store knows ${got.body.lines.length} lines of this${language ? ` in ${language}` : ""}`);
+    // A row's model/language could have been updated while its old bad lines remained.
+    // Trust individual lines made with the corrected native pipeline only.
+    const usable = got.body.lines.filter((line) => line.revision === NATIVE_REVISION && reliableText(line.text, line.end - line.start));
+    this.known.set(language, usable);
+    if (usable.length > 0) {
+      this.options.onEvent?.(`captions for "${this.id}": the store knows ${usable.length} lines of this${language ? ` in ${language}` : ""}`);
     }
   }
 
@@ -350,7 +362,9 @@ class Captioner {
       const rest = all.subarray(size);
       this.pending = rest.length > 0 ? [Buffer.from(rest)] : [];
       this.pendingBytes = rest.length;
-      const until = this.now();
+      const duration = this.options.windowMs ?? WINDOW_MS;
+      const until = Math.max(this.audioUntil + duration, this.now() - rest.length / (RATE * 2) * 1000);
+      this.audioUntil = until;
       const index = this.windows;
       this.windows += 1;
       void this.hear(Buffer.from(window), until - (this.options.windowMs ?? WINDOW_MS), until, index);
@@ -368,7 +382,8 @@ class Captioner {
           if (this.readOut.has(line.start)) continue;
           this.readOut.add(line.start);
           const lineAt = at + (line.start - span.start) * 1000;
-          this.emit({ channel: this.id, at: lineAt, until: lineAt + (line.end - line.start) * 1000, text: line.text, ...(this.language ? { language: this.language } : {}) }, line.start);
+          this.emit({ channel: this.id, at: lineAt, until: lineAt + (line.end - line.start) * 1000, text: line.text,
+            ...(line.language ? { language: line.language } : {}), ...(line.voiceProfile ? { voiceProfile: line.voiceProfile } : {}) }, line.start);
         }
         return;
       }
@@ -380,37 +395,47 @@ class Captioner {
       return;
     }
     this.inFlight += 1;
+    const controller = new AbortController();
+    this.requests.add(controller);
+    const timeout = setTimeout(() => controller.abort(), LIVE_DEADLINE_MS);
     try {
       const wav = wavAround(pcm);
       const url = new URL(`${session.site.replace(/\/+$/, "")}/api/v1/speech/transcribe`);
-      if (this.language) url.searchParams.set("language", this.language);
+      // Let each audio window detect its own language. Cached text and a viewer's
+      // translation selection must never constrain the recognizer.
+      url.searchParams.set("live", "1");
       const response = await (this.options.fetcher ?? fetch)(url.toString(), {
         method: "POST",
         headers: { authorization: `Bearer ${session.token}`, "content-type": "audio/wav" },
         body: new Blob([wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength) as ArrayBuffer]),
+        signal: controller.signal,
       });
       const body = (await response.json().catch(() => ({}))) as { text?: string; language?: string; model?: string; error?: string };
       if (!response.ok) {
         this.complain(body.error ?? `nixamp.com answered ${response.status}`);
         return;
       }
-      const text = (body.text ?? "").trim();
-      if (text === "" || this.stopped) return;
+      const text = reliableText(body.text ?? "", (until - at) / 1000);
+      if (text === "" || this.stopped || controller.signal.aborted || this.now() - until > LIVE_DEADLINE_MS) return;
       this.error = "";
-      if (body.language && this.language === "") this.language = body.language;
       if (body.model) this.model = body.model;
-      const line: CaptionLine = { channel: this.id, at, until, text, ...(this.language ? { language: this.language } : {}) };
+      const line: CaptionLine = { channel: this.id, at, until, text, ...(body.language ? { language: body.language } : {}), voiceProfile: voiceProfile(pcm) };
       this.emit(line, span?.start ?? null);
-      if (span) this.keep("", { start: span.start, end: span.end, text });
+      if (span) this.keep("", { start: span.start, end: span.end, text, language: line.language, voiceProfile: line.voiceProfile, revision: NATIVE_REVISION });
     } catch (error) {
       this.complain(`could not reach the ear: ${(error as Error).message}`);
     } finally {
+      clearTimeout(timeout);
+      this.requests.delete(controller);
       this.inFlight -= 1;
     }
   }
 
   /** A line as heard, to whoever wants the original, and translated to whoever wants another language. */
   private emit(line: CaptionLine, mediaStart: number | null): void {
+    if (line.at <= this.lastEmittedAt) return;
+    this.lastEmittedAt = line.at;
+    this.language = line.language ?? "";
     this.lines.push(line);
     while (this.lines.length > KEEP) this.lines.shift();
     for (const [subscriber, language] of this.subscribers) {
@@ -436,33 +461,46 @@ class Captioner {
 
   /** The line in another language: from the store when it has been through this moment, from nixamp.com otherwise. */
   private translated(language: string, line: CaptionLine, mediaStart: number | null): void {
-    const chain = (this.chains.get(language) ?? Promise.resolve()).then(async () => {
-      if (this.stopped) return;
+    // One active request and the latest pending line per target, never a promise
+    // chain containing minutes of stale commentary.
+    if (this.translating.has(language)) {
+      this.nextTranslation.set(language, { line, mediaStart });
+      return;
+    }
+    this.translating.add(language);
+    const chain = Promise.resolve().then(async () => {
+      if (this.stopped || !this.wanted().has(language) || this.now() - line.until > LIVE_DEADLINE_MS) return;
       let text = "";
       const stored = mediaStart === null ? null : lineAt(this.known.get(language) ?? [], mediaStart);
-      if (stored) {
+      if (stored && stored.original === line.text) {
         text = stored.text;
       } else {
         const session = this.options.session();
         if (session === null) return;
-        const got = await translateTexts(session, [line.text], this.language, language, this.options.fetcher ?? fetch);
+        if (!line.language) return;
+        const got = await translateTexts(session, [line.text], line.language, language, this.options.fetcher ?? fetch, AbortSignal.timeout(LIVE_DEADLINE_MS));
         if (!got.ok) {
           this.complain(`could not translate to ${language}: ${got.error}`);
           return;
         }
-        text = (got.body.texts[0] ?? "").trim();
+        text = reliableText(got.body.texts[0] ?? "", (line.until - line.at) / 1000);
         if (text === "") return;
-        if (mediaStart !== null) this.keep(language, { start: mediaStart, end: round(mediaStart + (line.until - line.at) / 1000), text });
+        if (mediaStart !== null) this.keep(language, { start: mediaStart, end: round(mediaStart + (line.until - line.at) / 1000), text, original: line.text, revision: NATIVE_REVISION });
       }
-      if (this.stopped) return;
-      const said: CaptionLine = { ...line, text, language, original: line.text };
+      if (this.stopped || !this.wanted().has(language) || this.now() - line.until > LIVE_DEADLINE_MS) return;
+      const said: CaptionLine = { ...line, text, language, sourceLanguage: line.language, original: line.text };
       const lines = this.linesBy.get(language) ?? [];
       lines.push(said);
       while (lines.length > KEEP) lines.shift();
       this.linesBy.set(language, lines);
       for (const [subscriber, wanted] of this.subscribers) if (wanted === language) this.tell(subscriber, said);
     });
-    this.chains.set(language, chain.catch(() => undefined));
+    this.chains.set(language, chain.catch(() => undefined).finally(() => {
+      this.translating.delete(language);
+      const next = this.nextTranslation.get(language);
+      this.nextTranslation.delete(language);
+      if (next && !this.stopped) this.translated(language, next.line, next.mediaStart);
+    }));
   }
 
   /** A line for the store, kept with the others of its language until the next flush. */
@@ -494,7 +532,7 @@ class Captioner {
       const got = await keepLines(session, this.transcriptId, {
         media: this.media.media,
         title: this.media.title,
-        language: language === "" ? this.language : language,
+        language,
         ...(language === "" ? {} : { translatedFrom: this.language }),
         ...(this.model ? { model: this.model } : {}),
         lines,
@@ -529,7 +567,7 @@ class Captioner {
   }
 
   recent(after: number, language = ""): CaptionLine[] {
-    const lines = language === "" || language === this.language ? this.lines : (this.linesBy.get(language) ?? []);
+    const lines = language === "" ? this.lines : [...this.lines.filter((line) => line.language === language), ...(this.linesBy.get(language) ?? [])].sort((a, b) => a.at - b.at);
     return after > 0 ? lines.filter((line) => line.at > after) : [...lines];
   }
 
@@ -548,6 +586,9 @@ class Captioner {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
+    for (const request of this.requests) request.abort();
+    this.requests.clear();
+    this.nextTranslation.clear();
     if (this.idle) clearTimeout(this.idle);
     this.idle = null;
     this.detach?.();
@@ -572,6 +613,25 @@ export class Captions {
     return this.options.session() !== null;
   }
 
+  capacity(id: string): boolean { return this.running.has(id) || this.running.size < MAX_CAPTIONERS; }
+
+  /** Voice requests are constrained to captions this channel actually produced. */
+  async voiceRequest(id: string, at: number | null, language: string, voice: string, signal: AbortSignal, grant = ""): Promise<Response> {
+    const session = this.options.session();
+    if (!session) throw new SpeechError("this server must sign in to use translated audio", 503);
+    if (at === null) return (this.options.fetcher ?? fetch)(`${session.site.replace(/\/+$/, "")}/api/v1/speech/voices`, {
+      headers: { authorization: `Bearer ${session.token}` }, signal,
+    });
+    if (!language) throw new SpeechError("choose a translation language first", 400);
+    if (!/^nxd_[A-Za-z0-9_-]{43}$/.test(grant)) throw new SpeechError("sign in to enable translated audio", 401);
+    const line = this.recent(id, 0, language).find(line => line.at === at);
+    if (!line || (this.options.now ?? Date.now)() - line.until > 30_000) throw new SpeechError("that live caption is no longer available for audio", 404);
+    return (this.options.fetcher ?? fetch)(`${session.site.replace(/\/+$/, "")}/api/v1/speech/synthesize`, {
+      method: "POST", headers: { authorization: `Bearer ${grant}`, "content-type": "application/json" },
+      body: JSON.stringify({ text: line.text, language, voice, profile: line.voiceProfile, channel: id }), signal,
+    });
+  }
+
   /**
    * Lines for a channel as they are heard, starting the captioner if it is
    * not running. Null when there is no such channel. The returned function
@@ -580,6 +640,7 @@ export class Captions {
    * "" is the original.
    */
   subscribe(id: string, subscriber: Subscriber, language = ""): (() => void) | null {
+    if (!this.capacity(id)) return null;
     let captioner = this.running.get(id);
     if (!captioner) {
       const made = new Captioner(id, this.options, () => {

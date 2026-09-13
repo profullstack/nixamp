@@ -60,9 +60,10 @@ export class StoredTranslations {
     const translation = await this.store.get(id, language);
     const missing = StoredTranslations.missing(original, translation);
     if (translation && missing.length === 0) return { status: 200, transcript: translation };
-    if (original.language === "") return { status: 409, error: "the language this was heard in is not known, so it cannot be translated" };
+    const sources = new Set(missing.map((line) => line.language || original.language));
+    if (sources.has("")) return { status: 409, error: "the language this was heard in is not known, so it cannot be translated" };
     if (!this.translator) return { status: 503, error: "this nixamp cannot translate: no model here. nixamp.com can." };
-    if (!this.translator.can(original.language, language)) {
+    if ([...sources].some((source) => !this.translator!.can(source, language))) {
       return { status: 409, error: `there is no model here from ${original.language} to ${language}` };
     }
     const key = `${id}|${language}`;
@@ -107,19 +108,24 @@ export class StoredTranslations {
     let model = "";
     for (let at = 0; at < missing.length; at += BATCH) {
       const batch = missing.slice(at, at + BATCH);
-      const done = await translator.translate(batch.map((line) => line.text), original.language, language);
-      model = done.model;
-      const lines = batch.map((line, i) => ({ start: line.start, end: line.end, text: done.texts[i] ?? "" })).filter((line) => line.text !== "");
+      const lines: TranscriptLine[] = [];
+      for (const source of new Set(batch.map((line) => line.language || original.language))) {
+        const group = batch.filter((line) => (line.language || original.language) === source);
+        const done = await translator.translate(group.map((line) => line.text), source, language);
+        model = done.model;
+        lines.push(...group.map((line, i) => ({ ...line, language, original: line.text, text: done.texts[i] ?? "" })).filter((line) => line.text !== ""));
+      }
+      lines.sort((a, b) => a.start - b.start);
       made.push(...lines);
       await this.store.save({
-        media: original.media, language, translatedFrom: original.language, model, title: original.title, by, lines,
+        media: original.media, language, translatedFrom: original.language || "mul", model, title: original.title, by, lines,
       });
       job.progress.done += batch.length;
     }
     if (original.complete) {
       // Whole, like the original: the pieces are replaced by the lot, and nothing partial touches it again.
       await this.store.save({
-        media: original.media, language, translatedFrom: original.language, model, title: original.title, by, lines: made, complete: true,
+        media: original.media, language, translatedFrom: original.language || "mul", model, title: original.title, by, lines: made, complete: true,
       });
     }
     if (missing.length > 0) this.onEvent(`  translated ${missing.length} lines of ${original.title || original.media} to ${language}`);

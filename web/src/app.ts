@@ -7,6 +7,7 @@
  * here as well — the phone becomes the remote, or the speaker, or both.
  */
 import { displayName, formatTime } from "./format.ts";
+import { replaceList } from "./accessibility.ts";
 import { liveContext, liveTitle } from "./live-context.ts";
 import {
   BrowserPlayer, revoke, tracksFromFiles,
@@ -25,6 +26,9 @@ import { isVideoFile, localPlayback, parseList, type ListEntry } from "./links.t
 import { PANELS_KEY, type PanelLayout, emptyLayout, orderedIds, parseLayout, serializeLayout, toggled } from "./panels.ts";
 import { DICTATE_MAX_MS, DICTATE_RATE, encodeWav, listeningLabel, recordingMime } from "./dictate.ts";
 import { CAPTIONS_KEY, CAPTIONS_LANGUAGE_KEY, LANGUAGE_CHOICES, type Caption, captionLabel, captionsLanguage, captionsWanted, due, lagMs, showing, whenLabel } from "./captions.ts";
+import { LiveVoicePlayer, type VoiceOptions } from "./live-voice.ts";
+import { AudioCapture } from "./audio-capture.ts";
+import { Interpreter } from "./interpreter.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
 
@@ -238,6 +242,13 @@ export function start(): void {
     transcriptNote: need<HTMLParagraphElement>("transcript-note"),
     transcriptOn: need<HTMLInputElement>("transcript-on"),
     transcriptLanguage: need<HTMLSelectElement>("transcript-language"),
+    transcriptAudio: need<HTMLInputElement>("transcript-audio"),
+    transcriptVoice: need<HTMLSelectElement>("transcript-voice"),
+    transcriptAudioNote: need<HTMLParagraphElement>("transcript-audio-note"),
+    transcriptCapture: need<HTMLButtonElement>("transcript-capture"),
+    transcriptTab: need<HTMLButtonElement>("transcript-tab"),
+    transcriptStop: need<HTMLButtonElement>("transcript-stop"),
+    transcriptSpeakers: need<HTMLDivElement>("transcript-speakers"),
     transcriptList: need<HTMLUListElement>("transcript-list"),
     subtitle: need<HTMLDivElement>("subtitle"),
     shareNote: need<HTMLParagraphElement>("share-note"),
@@ -254,6 +265,7 @@ export function start(): void {
     volume: need<HTMLInputElement>("volume"),
     prev: need<HTMLButtonElement>("prev"),
     playPause: need<HTMLButtonElement>("play-pause"),
+    transport: need<HTMLElement>("transport"),
     stop: need<HTMLButtonElement>("stop"),
     next: need<HTMLButtonElement>("next"),
     shareNow: need<HTMLButtonElement>("share-now"),
@@ -1285,6 +1297,8 @@ export function start(): void {
 
     dom.playPause.textContent = live ? "❚❚" : "▶";
     dom.playPause.setAttribute("aria-label", live ? "Pause" : "Play");
+    dom.seek.setAttribute("aria-valuetext", `${formatTime(player.position)} of ${formatTime(player.duration)}`);
+    dom.volume.setAttribute("aria-valuetext", `${dom.volume.value} percent`);
     // Connected, the list is that server's files, and says so; on its own it
     // is a playlist of what was picked.
     dom.playlistTitle.dataset.title = mode === "remote"
@@ -1320,8 +1334,6 @@ export function start(): void {
   }
 
   let renderedFor = "";
-  /** The row the list was last scrolled to, so it is only done when it moves. */
-  let scrolledTo = -1;
   /**
    * The folder being looked at, "" for the top of the library.
    *
@@ -1367,8 +1379,6 @@ export function start(): void {
         listPage = to;
         renderedFor = "";
         renderPlaylist();
-        // The list is what was just asked for; put its top where the eye is.
-        dom.playlist.scrollIntoView({ block: "nearest" });
       });
       return button;
     };
@@ -1424,8 +1434,10 @@ export function start(): void {
     amount.textContent = `${count} file${count === 1 ? "" : "s"}`;
     item.append(label, amount);
     // Focusable, so a remote in navigation mode can land on it and press OK.
-    item.tabIndex = 0;
-    item.addEventListener("click", () => lookAt(openFolder === "" ? name : `${openFolder}/${name}`));
+    const open = document.createElement("button"); open.type = "button"; open.className = "row-main";
+    open.setAttribute("aria-label", `Open folder ${name}, ${count} files`);
+    open.append(label, amount); item.replaceChildren(open);
+    open.addEventListener("click", event => { event.stopPropagation(); lookAt(openFolder === "" ? name : `${openFolder}/${name}`); });
     return item;
   }
   function renderPlaylist(): void {
@@ -1516,7 +1528,7 @@ export function start(): void {
         const item = document.createElement("li");
         item.className = "row";
         // Focusable, so a remote in navigation mode can land on it and press OK.
-        item.tabIndex = 0;
+
         // The index into the whole playlist, not into what is on screen: what
         // plays is a track number the server knows, and folders are a way of
         // looking rather than a different list.
@@ -1530,7 +1542,9 @@ export function start(): void {
         const time = document.createElement("span");
         time.className = "time";
         time.textContent = row.seconds > 0 ? formatTime(row.seconds) : "--:--";
-        item.append(n, label, time);
+        const play = document.createElement("button"); play.type = "button"; play.className = "row-main";
+        play.setAttribute("aria-label", `Play ${row.name}${row.seconds > 0 ? `, ${formatTime(row.seconds)}` : ""}`);
+        play.append(n, label, time); item.append(play);
         // The file's own address, for whoever wants it somewhere other than
         // here. A picked file is a blob in this tab and has no address.
         if (mode === "remote") {
@@ -1554,11 +1568,10 @@ export function start(): void {
         }
         children.push(item);
       }
-      dom.playlist.replaceChildren(...children);
+      replaceList(dom.playlist, ...children);
     }
     const active = at();
     const live = playing();
-    let selected: HTMLElement | undefined;
     for (const child of Array.from(dom.playlist.children)) {
       const row = child as HTMLElement;
       // By the index it carries, not by where it sits: headings are rows in
@@ -1567,29 +1580,12 @@ export function start(): void {
       const isActive = Number.isInteger(index) && index === active;
       row.classList.toggle("selected", isActive);
       row.classList.toggle("playing", isActive && live);
-      if (isActive) selected = row;
+      if (isActive) row.setAttribute("aria-current", "true");
+      else row.removeAttribute("aria-current");
     }
 
-    // Only when the track actually changed.
-    //
-    // This used to run on every draw, and a draw happens twelve times a
-    // second, so the list dragged itself back to the playing row a moment
-    // after any attempt to scroll away from it. Scrolling up through a
-    // playlist was impossible -- it read as the list scrolling forever on its
-    // own -- and the fix is not to scroll when there is no news.
-    if (active !== scrolledTo) {
-      scrolledTo = active;
-      // On another page of this folder: turn to it, the way the list used to
-      // scroll to it. Somewhere else in the library: leave the page alone.
-      const among = files.findIndex((row) => row.index === active);
-      if (among >= 0 && !selected) {
-        listPage = Math.floor((sortedFolders.length + among) / LIST_PAGE);
-        renderedFor = "";
-        renderPlaylist();
-        return;
-      }
-      selected?.scrollIntoView({ block: "nearest" });
-    }
+    // Playback updates never move the reader, switch their browsing page, or steal focus.
+
   }
 
   /**
@@ -2078,7 +2074,6 @@ export function start(): void {
         : "Connect to a server first: Browse the directory, or paste a server's link in the Server panel.";
       draw();
       // The thing that is missing, put under the cursor.
-      if (directoryServers.length > 0) dom.linkServer.focus();
       return;
     }
     if (!serverCarries) {
@@ -2267,7 +2262,7 @@ export function start(): void {
     dom.directory.hidden = false;
     if (!quiet) {
       dom.directoryNote.textContent = "Looking for live streams…";
-      dom.directoryList.replaceChildren();
+      replaceList(dom.directoryList, );
     }
     if (!directoryTimer) {
       directoryTimer = setInterval(() => {
@@ -2325,7 +2320,7 @@ export function start(): void {
       if (!quiet) dom.directoryNote.textContent = "The directory is not answering. Type an address instead.";
       return;
     }
-    dom.directoryList.replaceChildren();
+    replaceList(dom.directoryList, );
 
     if (streams.length === 0) {
       dom.directoryNote.textContent = "Nobody is streaming right now.";
@@ -3019,7 +3014,7 @@ export function start(): void {
       dom.partiesNote.textContent = rows.length === 0
         ? "No parties happening right now. Join with an invite code."
         : "Join a party on the site hosting the film, or open its room here.";
-      dom.partiesList.replaceChildren(...rows.map(partyItem));
+      replaceList(dom.partiesList, ...rows.map(partyItem));
     } catch {
       dom.partiesPanel.hidden = true;
     }
@@ -3070,7 +3065,7 @@ export function start(): void {
       const rows = body.connections ?? [];
       dom.connectionsNote.hidden = rows.length === 0;
       dom.connectionsList.hidden = rows.length === 0;
-      dom.connectionsList.replaceChildren(...rows.map((row) => {
+      replaceList(dom.connectionsList, ...rows.map((row) => {
         const item = document.createElement("li");
         const label = document.createElement("span");
         label.className = "server-label";
@@ -3142,7 +3137,7 @@ export function start(): void {
       favoriteUrls = new Set(list.map((one) => one.url));
       dom.favoritesPanel.hidden = list.length === 0;
       dom.favoritesNote.textContent = "Servers you hearted. Connect to one, or let it go.";
-      dom.favoritesList.replaceChildren(...list.map((fav) => {
+      replaceList(dom.favoritesList, ...list.map((fav) => {
         const item = document.createElement("li");
         const label = document.createElement("span");
         label.className = "server-label";
@@ -3287,6 +3282,111 @@ export function start(): void {
   let captionsOn = captionsWanted((key) => localStorage.getItem(key));
   /** The language this device wants the lines in; "" is as spoken. */
   let captionsIn = captionsLanguage((key) => localStorage.getItem(key));
+  const captionsSeen = new Set<string>();
+  const captionsSpeakable = new Set<Caption>();
+  let voiceOptions: VoiceOptions | null = null;
+  let voiceOptionsKey = "";
+  let voiceError = "";
+  let meId = "";
+  const listenerScope = `listener-${crypto.randomUUID()}`;
+  let voiceGrant: { channel: string; token: string; expires: number; remaining: number } | null = null;
+  let captureWanted = false;
+  let captureError = "";
+  let choosingTab = false;
+  let capturing = false;
+  let captureGeneration = 0;
+  let tabAudio: { stream: MediaStream; context: AudioContext; node: MediaStreamAudioSourceNode; monitor: GainNode } | null = null;
+  const liveVoice = new LiveVoicePlayer({
+    playing: () => !!tabAudio || player.playing,
+    volume: () => player.volume,
+    active: (on) => {
+      if (tabAudio) tabAudio.monitor.gain.value = on ? 0 : player.volume;
+      else player.translatedAudio(on);
+    },
+    status: (text) => { dom.transcriptAudioNote.textContent = text; },
+    failed: () => { voiceError = dom.transcriptAudioNote.textContent || "Translated audio stopped."; captureWanted = false; dom.transcriptAudio.checked = false; stopCapture(); },
+    authorization: async (signal, line) => {
+      if (!meId || trollboxSite !== "") throw new Error("Sign in on nixamp.com to enable translated audio.");
+      if (!voiceGrant || voiceGrant.channel !== line.channel || voiceGrant.expires < Date.now() + 20_000 || voiceGrant.remaining < line.text.length) {
+        const response = await fetch("/api/v1/speech/grant", {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ channel: line.channel }), signal,
+        });
+        const body = await response.json() as { token?: string; expires?: number; error?: string };
+        if (!response.ok || !body.token || !body.expires) throw new Error(body.error || "Sign in to enable translated audio.");
+        voiceGrant = { channel: line.channel, token: body.token, expires: body.expires, remaining: 2000 };
+      }
+      voiceGrant.remaining -= line.text.length;
+      return { authorization: `Bearer ${voiceGrant.token}` };
+    },
+  });
+  const interpreter = new Interpreter({
+    language: () => captionsIn, speakers: () => dom.transcriptAudio.checked,
+    voices: () => voiceOptions?.voices ?? [], channel: () => listenerScope,
+    status: (text) => { if (!capturing && !captureWanted) captureError = text; dom.transcriptNote.textContent = text; },
+    failed: () => { captureWanted = false; dom.transcriptAudio.checked = false; liveVoice.disable(); stopCapture(); },
+    lines: (lines) => {
+      captionsLag = 0;
+      captionsHeld.push(...lines);
+      revealCaptions();
+      drawSpeakerVoices();
+      if (dom.transcriptAudio.checked) liveVoice.pushBatch(lines.map(line => ({
+        line, lag: 0, url: "/api/v1/speech/synthesize",
+        init: { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+          text: line.text, language: captionsIn, channel: listenerScope, profile: line.voiceProfile,
+          voice: dom.transcriptVoice.value !== "auto" ? dom.transcriptVoice.value : interpreter.tracker.speakers.get(line.speaker ?? "")?.voice ?? "auto",
+        }) },
+      })));
+    },
+  });
+  const capture = new AudioCapture(window => { if (capturing && (tabAudio || player.playing)) interpreter.push(window); });
+  function stopCapture(): void {
+    captureGeneration++; capturing = false; capture.stop(); interpreter.reset();
+    liveVoice.reset(); player.translatedAudio(false);
+    dom.transcriptSpeakers.replaceChildren();
+    dom.transcriptStop.hidden = !tabAudio;
+  }
+  async function startCapture(): Promise<void> {
+    stopCapture();
+    const generation = captureGeneration;
+    try {
+      if (!meId || trollboxSite !== "") throw new Error("Sign in on nixamp.com to transcribe or translate this audio.");
+      const input = tabAudio ?? player.audioInput();
+      await capture.start(input.context, input.node);
+      if (generation !== captureGeneration) return;
+      capturing = true; captureWanted = true;
+      dom.transcriptStop.hidden = false;
+      captionsLag = 0;
+      captionsTick ??= setInterval(revealCaptions, 250);
+      dom.transcriptNote.textContent = dom.transcriptAudio.checked
+        ? "Listening for speech and speaker changes…" : "Listening in the original audio language…";
+    } catch (error) {
+      if (generation !== captureGeneration) return;
+      captureWanted = false; dom.transcriptAudio.checked = false; liveVoice.disable(); stopCapture();
+      captureError = error instanceof Error ? error.message : "This audio could not be captured.";
+      dom.transcriptNote.textContent = captureError;
+    }
+  }
+  function drawSpeakerVoices(): void {
+    for (const speaker of interpreter.tracker.speakers.values()) {
+      if (dom.transcriptSpeakers.querySelector(`[data-speaker="${speaker.id}"]`)) continue;
+      const label = document.createElement("label"); label.className = "transcript-switch"; label.dataset["speaker"] = speaker.id;
+      label.append(`Speaker ${speaker.id.split("-")[1]} `);
+      const select = document.createElement("select"); select.className = "transcript-language";
+      select.setAttribute("aria-label", `Voice for ${label.textContent?.trim()}`);
+      for (const voice of voiceOptions?.voices ?? []) select.append(new Option(`${voice.name} (${voice.gender})`, voice.id));
+      select.value = speaker.voice;
+      select.addEventListener("change", () => { speaker.voice = select.value; liveVoice.reset(); });
+      label.append(select); dom.transcriptSpeakers.append(label);
+    }
+    while (dom.transcriptSpeakers.children.length > 32) dom.transcriptSpeakers.firstElementChild?.remove();
+  }
+  for (const media of [dom.audio, dom.video]) {
+    for (const event of ["pause", "ended", "seeking", "emptied"]) media.addEventListener(event, () => { if (!tabAudio) stopCapture(); });
+    for (const event of ["playing", "seeked"]) media.addEventListener(event, () => {
+      if (!tabAudio && captureWanted && captionsOn && player.playing) void startCapture();
+    });
+    media.addEventListener("volumechange", () => { liveVoice.setVolume(); });
+  }
   let captionsKey = "";
   let captionsSource: EventSource | null = null;
   let captionsLag = lagMs(6, false);
@@ -3374,10 +3474,11 @@ export function start(): void {
         trollboxAfter = one.createdAt;
       }
       while (dom.trollboxList.children.length > TROLLBOX_KEEP) dom.trollboxList.firstElementChild?.remove();
-      if (fresh.length > 0) dom.trollboxList.lastElementChild?.scrollIntoView({ block: "nearest" });
       // Signed in on nixamp.com: a line of your own. Elsewhere: read along.
       const you = body.you ?? "";
+      const signedInChanged = trollboxYou !== you;
       trollboxYou = you;
+      if (signedInChanged) { voiceGrant = null; drawVoiceControls(); }
       dom.trollboxForm.hidden = you === "";
       dom.trollboxEditLabel.hidden = you === "" || !canRecord;
       if (you === "") stopListening(false);
@@ -3423,13 +3524,11 @@ export function start(): void {
           trollboxSeen.add(body.message.id);
           dom.trollboxList.append(trollboxLine(body.message));
           trollboxAfter = body.message.createdAt;
-          dom.trollboxList.lastElementChild?.scrollIntoView({ block: "nearest" });
         }
       } catch {
         dom.trollboxNote.textContent = "The trollbox is not answering.";
       } finally {
         dom.trollboxInput.disabled = false;
-        dom.trollboxInput.focus();
       }
     })();
   });
@@ -3560,8 +3659,6 @@ export function start(): void {
       if (editFirst || !body.message) {
         const typed = dom.trollboxInput.value.trimEnd();
         dom.trollboxInput.value = (typed === "" ? heard : `${typed} ${heard}`).slice(0, 500);
-        dom.trollboxInput.focus();
-        dom.trollboxInput.setSelectionRange(dom.trollboxInput.value.length, dom.trollboxInput.value.length);
         trollboxSay(`Heard: “${heard}”. Send it, or fix it first.`);
         return;
       }
@@ -3570,7 +3667,6 @@ export function start(): void {
         trollboxSeen.add(body.message.id);
         dom.trollboxList.append(trollboxLine(body.message));
         trollboxAfter = body.message.createdAt;
-        dom.trollboxList.lastElementChild?.scrollIntoView({ block: "nearest" });
       }
       trollboxSay(`Said: “${body.message.body}”`);
     } catch {
@@ -3677,11 +3773,17 @@ export function start(): void {
   const TRANSCRIPT_KEEP = 200;
 
   function transcriptRoom(): { id: string; name: string; hls: boolean } | null {
-    if (mode !== "remote" || !channelOn) return null;
-    return { id: channelOn.id, name: channelOn.name, hls: channelOn.video && wantsHls() };
+    if (tabAudio) return { id: listenerScope, name: "Shared tab", hls: false };
+    if (mode === "remote" && channelOn) return { id: channelOn.id, name: channelOn.name, hls: channelOn.video && wantsHls() };
+    if (player.loaded || localLink) return { id: listenerScope, name: currentName() || "This audio", hls: false };
+    return null;
   }
 
   function closeCaptions(): void {
+    stopCapture();
+    voiceGrant = null;
+    captionsSeen.clear();
+    captionsSpeakable.clear();
     captionsSource?.close();
     captionsSource = null;
     if (captionsTick) clearInterval(captionsTick);
@@ -3696,23 +3798,30 @@ export function start(): void {
   /** The panel shown for a channel and its lines flowing, or hidden and quiet. Called from draw(). */
   function drawTranscript(): void {
     const room = transcriptRoom();
-    const key = room ? `${room.id}|${room.hls}|${captionsOn}|${captionsIn}` : "";
+    const key = `${room?.id ?? ""}|${tabAudio ? "tab" : player.mediaKey}|${captionsOn}|${captionsIn}|${dom.transcriptAudio.checked}|${captureWanted}|${meId}`;
     if (key === captionsKey) return;
     captionsKey = key;
     closeCaptions();
-    dom.transcriptPanel.hidden = room === null;
+    dom.transcriptPanel.hidden = false;
     dom.transcriptOn.checked = captionsOn;
     if (dom.transcriptLanguage.options.length === 0) {
       for (const choice of LANGUAGE_CHOICES) dom.transcriptLanguage.append(new Option(choice.label, choice.code));
     }
     dom.transcriptLanguage.value = captionsIn;
-    if (!room) return;
+    drawVoiceControls();
+    void loadVoiceOptions();
+    if (!room) { dom.transcriptNote.textContent = "Translate movies, shows, sports, courses, podcasts, or a shared browser tab."; return; }
     if (!captionsOn) {
       dom.transcriptNote.textContent = `Captions are off on this device. Turn them on and ${room.name} is written down as it speaks.`;
       return;
     }
+    if (captureError) { dom.transcriptNote.textContent = captureError; return; }
     dom.transcriptNote.textContent = `Asking for ${room.name}'s captions…`;
-    void openCaptions(room, key);
+    if (dom.transcriptAudio.checked || captureWanted || tabAudio) {
+      if (tabAudio || player.playing) void startCapture();
+      else dom.transcriptNote.textContent = "Press Play to start listening.";
+    } else if (mode === "remote" && channelOn) void openCaptions(room, key);
+    else dom.transcriptNote.textContent = "Start captions to transcribe this player in its original language, or choose a language and enable translated audio.";
   }
 
   async function openCaptions(room: { id: string; name: string; hls: boolean }, key: string): Promise<void> {
@@ -3724,10 +3833,19 @@ export function start(): void {
     const inLanguage = captionsIn ? `?language=${encodeURIComponent(captionsIn)}` : "";
     try {
       const answer = await fetch(remote.url(`/api/channels/${encodeURIComponent(room.id)}/transcript${inLanguage}`));
-      const body = (await answer.json().catch(() => ({}))) as { error?: string; backlog?: number; lines?: Caption[] };
+      const body = (await answer.json().catch(() => ({}))) as { error?: string; backlog?: number; lines?: Caption[]; recognitionRevision?: string };
       if (key !== captionsKey) return;
       if (!answer.ok) {
         dom.transcriptNote.textContent = body.error ?? "This server is not captioning.";
+        return;
+      }
+      if (body.recognitionRevision !== "native-v2") {
+        // An older broadcaster may pin cached English as the source language.
+        // Listen to this viewer's actual audio instead; never replay that cache.
+        if (meId && trollboxSite === "") {
+          captureWanted = true;
+          drawTranscript();
+        } else dom.transcriptNote.textContent = "This broadcaster needs an update for native captions. Sign in to transcribe the audio on this device.";
         return;
       }
       backlog = body.backlog ?? backlog;
@@ -3738,8 +3856,16 @@ export function start(): void {
     captionsLag = lagMs(backlog, room.hls);
     const source = new EventSource(remote.url(`/api/channels/${encodeURIComponent(room.id)}/captions${inLanguage}`));
     captionsSource = source;
-    const take = (lines: Caption[]): void => {
-      for (const line of lines) if (line && typeof line.text === "string" && Number.isFinite(line.at)) captionsHeld.push(line);
+    const take = (lines: Caption[], live = false): void => {
+      for (const line of lines) {
+        if (!line || typeof line.text !== "string" || !Number.isFinite(line.at) || !Number.isFinite(line.until)) continue;
+        const id = `${line.at}|${line.language}`;
+        if (captionsSeen.has(id)) continue;
+        captionsSeen.add(id);
+        if (captionsSeen.size > 600) captionsSeen.delete(captionsSeen.values().next().value as string);
+        captionsHeld.push(line);
+        if (live && dom.transcriptAudio.checked) captionsSpeakable.add(line);
+      }
     };
     source.addEventListener("hello", (event) => {
       if (key !== captionsKey) return;
@@ -3764,7 +3890,14 @@ export function start(): void {
     });
     source.addEventListener("line", (event) => {
       if (key !== captionsKey) return;
-      take([JSON.parse((event as MessageEvent<string>).data) as Caption]);
+      const line = JSON.parse((event as MessageEvent<string>).data) as Caption;
+      take([line], true);
+      const spoken = line.sourceLanguage ?? (line.original === undefined ? line.language : "");
+      const sourceLabel = LANGUAGE_CHOICES.find(choice => choice.code === spoken)?.label ?? spoken;
+      const targetLabel = LANGUAGE_CHOICES.find(choice => choice.code === captionsIn)?.label ?? captionsIn;
+      dom.transcriptNote.textContent = captionsIn
+        ? `${room.name} · ${sourceLabel || "Detected audio"} → ${targetLabel}`
+        : `${room.name} · Original audio language: ${sourceLabel || "detecting…"}`;
     });
     source.addEventListener("error", () => {
       // The browser reconnects by itself, sending the last line's id; the
@@ -3806,17 +3939,20 @@ export function start(): void {
     for (const line of ready) {
       captionsShown.push(line);
       dom.transcriptList.append(transcriptLine(line));
+      if (captionsSpeakable.delete(line) && dom.transcriptAudio.checked && captionsIn) {
+        const query = new URLSearchParams({ at: String(line.at), language: captionsIn, voice: dom.transcriptVoice.value });
+        liveVoice.push(line, remote.url(`/api/channels/${encodeURIComponent(line.channel)}/voice?${query}`), captionsLag);
+      }
     }
     while (captionsShown.length > TRANSCRIPT_KEEP) captionsShown.shift();
     while (dom.transcriptList.children.length > TRANSCRIPT_KEEP) dom.transcriptList.firstElementChild?.remove();
-    if (ready.length > 0) dom.transcriptList.lastElementChild?.scrollIntoView({ block: "nearest" });
     const current = showing(captionsShown, now, captionsLag);
     const items = dom.transcriptList.children;
     const at = current ? captionsShown.indexOf(current) : -1;
     for (let i = 0; i < items.length; i++) items[i]?.classList.toggle("now", i === at);
     // On the picture only when there is a picture; a sound-only channel's
     // transcript is the panel.
-    const onPicture = current !== null && !dom.video.hidden && dom.video.offsetHeight > 0;
+    const onPicture = !tabAudio && player.playing && current !== null && !dom.video.hidden && dom.video.offsetHeight > 0;
     dom.subtitle.hidden = !onPicture;
     if (onPicture && current) {
       if (dom.subtitle.textContent !== current.text) dom.subtitle.textContent = current.text;
@@ -3827,6 +3963,7 @@ export function start(): void {
 
   dom.transcriptOn.addEventListener("change", () => {
     captionsOn = dom.transcriptOn.checked;
+    if (!captionsOn) captureWanted = false;
     try {
       localStorage.setItem(CAPTIONS_KEY, captionsOn ? "on" : "off");
     } catch {
@@ -3836,6 +3973,7 @@ export function start(): void {
   });
 
   dom.transcriptLanguage.addEventListener("change", () => {
+    captureError = ""; voiceError = "";
     captionsIn = captionsLanguage(() => dom.transcriptLanguage.value);
     try {
       if (captionsIn) localStorage.setItem(CAPTIONS_LANGUAGE_KEY, captionsIn);
@@ -3844,6 +3982,106 @@ export function start(): void {
       // Then it is this once.
     }
     drawTranscript();
+  });
+
+  function drawVoiceControls(): void {
+    const signedIn = meId !== "" && trollboxSite === "";
+    const supported = signedIn && !!transcriptRoom() && captionsOn && captionsIn !== "" && !!voiceOptions?.languages.includes(captionsIn);
+    dom.transcriptAudio.disabled = !supported;
+    dom.transcriptVoice.disabled = !supported;
+    dom.transcriptCapture.disabled = !signedIn;
+    dom.transcriptTab.disabled = choosingTab || !signedIn || !navigator.mediaDevices?.getDisplayMedia;
+    if (!supported) {
+      dom.transcriptAudio.checked = false;
+      liveVoice.disable();
+      dom.transcriptAudioNote.textContent = !captionsIn
+        ? "Choose a translation language to hear it spoken while the video continues."
+        : !signedIn ? "Sign in on nixamp.com to enable translated audio."
+        : !captionsOn ? "Turn on captions to enable translated audio."
+        : !transcriptRoom() ? "Load media or share another tab to translate its audio."
+        : voiceError || (!voiceOptions ? "Checking translated voices…" : "Translated audio is unavailable for this language.");
+    } else if (!dom.transcriptAudio.checked) {
+      dom.transcriptAudioNote.textContent = voiceError || "Distinct speaker voices · your language · original video timing";
+    }
+  }
+
+  async function loadVoiceOptions(): Promise<void> {
+    if (!meId || trollboxSite !== "") return;
+    const url = "/api/v1/speech/voices";
+    if (voiceOptionsKey === url) return;
+    voiceOptionsKey = url;
+    voiceOptions = null;
+    voiceError = "";
+    drawVoiceControls();
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      const body = await response.json() as VoiceOptions & { error?: string };
+      if (voiceOptionsKey !== url) return;
+      if (!response.ok) throw new Error(body.error || "Translated audio is unavailable on this server.");
+      if (!Array.isArray(body.voices) || !Array.isArray(body.languages)) throw new Error("This server needs an update for translated audio.");
+      voiceOptions = body;
+      const selected = dom.transcriptVoice.value;
+      dom.transcriptVoice.replaceChildren(new Option("Match each speaker (approximate)", "auto"));
+      for (const voice of body.voices) dom.transcriptVoice.append(new Option(`${voice.name} (${voice.gender})`, voice.id));
+      dom.transcriptVoice.value = body.voices.some(voice => voice.id === selected) ? selected : "auto";
+    } catch (error) {
+      if (voiceOptionsKey !== url) return;
+      voiceError = error instanceof Error ? error.message : "Translated audio is unavailable.";
+    }
+    drawVoiceControls();
+  }
+
+  dom.transcriptAudio.addEventListener("change", () => {
+    captureError = ""; voiceError = "";
+    captionsSpeakable.clear();
+    if (dom.transcriptAudio.checked) { captureWanted = true; void liveVoice.enable(); }
+    else { captureWanted = false; liveVoice.disable(); }
+    drawTranscript();
+  });
+  dom.transcriptVoice.addEventListener("change", () => { liveVoice.reset(); });
+  dom.transcriptCapture.addEventListener("click", () => {
+    captureError = ""; voiceError = "";
+    captionsOn = true; captureWanted = true; drawTranscript();
+    if (!capturing && player.playing) void startCapture();
+  });
+  function releaseTab(): void {
+    const old = tabAudio; tabAudio = null;
+    if (old) { for (const track of old.stream.getTracks()) track.stop(); old.node.disconnect(); old.monitor.disconnect(); void old.context.close(); }
+  }
+  dom.transcriptStop.addEventListener("click", () => {
+    captureError = ""; voiceError = "";
+    captureWanted = false; dom.transcriptAudio.checked = false; liveVoice.disable(); stopCapture(); releaseTab();
+    captionsOn = false; drawTranscript();
+  });
+  dom.transcriptTab.addEventListener("click", () => {
+    if (choosingTab) return;
+    choosingTab = true; dom.transcriptTab.disabled = true;
+    const requestingAccount = meId;
+    captureError = ""; voiceError = "";
+    void (async () => {
+      try {
+        // Browser-owned permission chooser. Share another tab's AUDIO; video
+        // is required by getDisplayMedia's chooser but is never transmitted.
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true, audio: { suppressLocalAudioPlayback: true },
+          selfBrowserSurface: "exclude", systemAudio: "exclude", monitorTypeSurfaces: "exclude", preferCurrentTab: false,
+        } as DisplayMediaStreamOptions);
+        if (!requestingAccount || requestingAccount !== meId) { for (const track of stream.getTracks()) track.stop(); throw new Error("Sign in again before sharing audio."); }
+        if (!stream.getAudioTracks().length) { for (const track of stream.getTracks()) track.stop(); throw new Error("No tab audio was shared. Select a browser tab and enable Share audio."); }
+        stopCapture(); releaseTab();
+        const context = new AudioContext();
+        const node = context.createMediaStreamSource(stream), monitor = context.createGain();
+        monitor.gain.value = player.volume; node.connect(monitor); monitor.connect(context.destination);
+        tabAudio = { stream, context, node, monitor };
+        stream.getAudioTracks()[0]!.addEventListener("ended", () => { if (tabAudio?.stream === stream) dom.transcriptStop.click(); });
+        captionsOn = true; captureWanted = true;
+        player.pause();
+        drawTranscript();
+        dom.transcriptAudioNote.textContent = "Shared tab audio is processed while listening. If original audio is also audible, mute the source tab. Stop listening ends sharing.";
+      } catch (error) {
+        dom.transcriptNote.textContent = error instanceof Error ? error.message : "Tab audio sharing was cancelled.";
+      } finally { choosingTab = false; drawVoiceControls(); }
+    })();
   });
 
   /**
@@ -3998,7 +4236,7 @@ export function start(): void {
       void drawGroups(openCatalog);
       return;
     }
-    dom.catalogsList.replaceChildren(...catalogs.map((catalog) => catalogRow(catalog, canDrive)));
+    replaceList(dom.catalogsList, ...catalogs.map((catalog) => catalogRow(catalog, canDrive)));
   }
 
   /** The way back out: all catalogs, the catalog, the group. */
@@ -4096,7 +4334,7 @@ export function start(): void {
   }
 
   async function drawGroups(catalog: CatalogSummary): Promise<void> {
-    dom.catalogsList.replaceChildren();
+    replaceList(dom.catalogsList, );
     let groups: { name: string; count: number; live: number; vod: number }[] = [];
     try {
       const answer = await whileLoading(() => fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/groups`)));
@@ -4114,7 +4352,7 @@ export function start(): void {
       groupRow("All groups", "", catalog.entries, catalog.live, catalog.vod),
       ...groups.map((group) => groupRow(group.name || "(no group)", group.name, group.count, group.live, group.vod)),
     ];
-    dom.catalogsList.replaceChildren(...rows);
+    replaceList(dom.catalogsList, ...rows);
   }
 
   function groupRow(label: string, group: string, count: number, live: number, vod: number): HTMLElement {
@@ -4233,7 +4471,7 @@ export function start(): void {
       more.append(button);
       children.push(more);
     }
-    dom.catalogsEntries.replaceChildren(...children);
+    replaceList(dom.catalogsEntries, ...children);
   }
 
   /** Ask the server to put it on, then play whatever it answers with. */
@@ -4360,7 +4598,7 @@ export function start(): void {
   });
 
   const loadServers = async (): Promise<void> => {
-    dom.serversList.replaceChildren();
+    replaceList(dom.serversList, );
     try {
       const answer = await fetch("/api/v1/servers");
       if (!answer.ok) {
@@ -4458,7 +4696,7 @@ export function start(): void {
   };
 
   const loadFollowing = async (): Promise<void> => {
-    dom.followingList.replaceChildren();
+    replaceList(dom.followingList, );
     try {
       const answer = await fetch("/api/v1/follows");
       if (!answer.ok) {
@@ -4718,7 +4956,6 @@ export function start(): void {
       if (dom.notifySms.checked && !dom.notifyPhone.value.trim()) {
         dom.notifyPhoneNote.textContent = "Add a phone number first.";
         dom.notifySms.checked = false;
-        dom.notifyPhone.focus();
         return;
       }
       await saveNotify({ wantsSms: dom.notifySms.checked });
@@ -4737,7 +4974,7 @@ export function start(): void {
   // than remembering an answer that may have expired.
   let creating = false;
   /** The signed-in account, so the directory knows whose stream is whose. */
-  let meId = "";
+
   /** Whether this nixamp keeps accounts at all: nixamp.com does, a laptop does not. */
   let keepsAccounts = false;
 
@@ -4761,6 +4998,9 @@ export function start(): void {
 
   const showAccount = (email: string | null): void => {
     const signedIn = email !== null;
+    voiceOptionsKey = ""; voiceGrant = null;
+    if (!signedIn) { captureWanted = false; dom.transcriptAudio.checked = false; liveVoice.disable(); stopCapture(); releaseTab(); }
+    drawTranscript();
     // Following and notifications belong to an account; there is nowhere to
     // notify a stranger.
     dom.notifyPanel.hidden = !signedIn;
@@ -4771,7 +5011,7 @@ export function start(): void {
     } else {
       dom.serversPanel.hidden = true;
       dom.followingNote.hidden = true;
-      dom.followingList.replaceChildren();
+      replaceList(dom.followingList, );
       dom.recentNote.hidden = true;
       dom.recentList.replaceChildren();
     }
@@ -5180,12 +5420,15 @@ export function start(): void {
   }
   function setCollapsed(panel: HTMLElement, on: boolean): void {
     panel.toggleAttribute("data-collapsed", on);
+    panel.querySelector(".panel-tools [aria-expanded]")?.setAttribute("aria-expanded", String(!on));
     layout.collapsed = toggled(layout.collapsed, panel.id, on);
     saveLayout();
     drawPanelsList();
   }
   function setClosed(panel: HTMLElement, on: boolean): void {
+    const heldFocus = panel.contains(document.activeElement);
     panel.toggleAttribute("data-closed", on);
+    if (on && heldFocus) dom.panelsToggle.focus({ preventScroll: true });
     layout.closed = toggled(layout.closed, panel.id, on);
     saveLayout();
     drawPanelsList();
@@ -5221,10 +5464,22 @@ export function start(): void {
   /** The grip, the shade and the close, on every panel, once. */
   function decoratePanels(): void {
     for (const panel of movablePanels()) {
+      const name = panelTitle(panel);
+      panel.setAttribute("aria-label", name);
+      let heading = panel.querySelector<HTMLHeadingElement>(":scope > .panel-heading");
+      if (!heading) { heading = document.createElement("h2"); heading.className = "panel-heading"; panel.prepend(heading); }
+      if (heading.textContent !== name) heading.textContent = name;
       if (panel.querySelector(":scope > .panel-tools")) continue;
       const tools = document.createElement("span");
       tools.className = "panel-tools";
-      const grip = smallButton("≡", `Move ${panelTitle(panel)}: drag it to where it should go`, () => undefined);
+      const grip = smallButton("≡", `Move ${panelTitle(panel)}: Alt plus Up or Down, or drag`, () => undefined);
+      grip.addEventListener("keydown", event => {
+        if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault(); event.stopPropagation();
+        const siblings = movablePanels().filter(one => zoneOf(one) === zoneOf(panel) && colOf(one) === colOf(panel));
+        const other = siblings[siblings.indexOf(panel) + (event.key === "ArrowUp" ? -1 : 1)];
+        if (other) { snapTo(panel, other, event.key === "ArrowDown"); grip.focus({ preventScroll: true }); }
+      });
       grip.classList.add("grip");
       grip.draggable = true;
       grip.addEventListener("dragstart", (event) => {
@@ -5239,6 +5494,7 @@ export function start(): void {
         clearDropMarks();
       });
       const shade = smallButton("▁", `Shade ${panelTitle(panel)} to its title`, () => setCollapsed(panel, !panel.hasAttribute("data-collapsed")));
+      shade.setAttribute("aria-expanded", String(!panel.hasAttribute("data-collapsed")));
       const close = smallButton("✕", `Hide ${panelTitle(panel)}; the Panels list turns it back on`, () => setClosed(panel, true));
       tools.append(grip, shade, close);
       panel.prepend(tools);
@@ -5268,7 +5524,7 @@ export function start(): void {
    * puzzle, and the answer to "where did it go" is one checkbox.
    */
   function drawPanelsList(): void {
-    if (dom.panelsPanel.hidden) return;
+    if (dom.panelsPanel.hidden || dom.panelsList.contains(document.activeElement)) return;
     const rows = movablePanels().filter((one) => one !== dom.panelsPanel).map((panel) => {
       const item = document.createElement("li");
       const off = panel.hasAttribute("data-closed");
@@ -5329,6 +5585,7 @@ export function start(): void {
   dom.panelsToggle.addEventListener("click", () => {
     const open = dom.panelsPanel.hidden;
     dom.panelsPanel.hidden = !open;
+    dom.panelsToggle.setAttribute("aria-expanded", String(open));
     if (open) {
       // Asked for by name: it is not closed, whatever the list said before.
       if (dom.panelsPanel.hasAttribute("data-closed")) setClosed(dom.panelsPanel, false);
@@ -5338,7 +5595,7 @@ export function start(): void {
   });
   dom.panelsReset.addEventListener("click", resetLayout);
   // A title that changes -- "Playlist (3)", "Files on dev" -- changes the list.
-  new MutationObserver(() => drawPanelsList()).observe(document.body, { attributes: true, attributeFilter: ["data-title", "hidden"], subtree: true });
+  new MutationObserver(() => { decoratePanels(); drawPanelsList(); }).observe(document.body, { attributes: true, attributeFilter: ["data-title", "hidden"], subtree: true });
   decoratePanels();
   applyLayout();
 
@@ -5676,7 +5933,7 @@ export function start(): void {
           : undefined,
       }));
     }
-    dom.onairList.replaceChildren(...rows);
+    replaceList(dom.onairList, ...rows);
   }
 
   /**
@@ -6202,7 +6459,9 @@ export function start(): void {
 
   document.addEventListener("keydown", (event) => {
     const target = event.target as HTMLElement | null;
-    if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (target?.closest("input, textarea, select, button, a, [contenteditable], [role=button]")) return;
+    if (target !== dom.transport) return;
     switch (event.key) {
       case " ": event.preventDefault(); void toggle(); return;
       case "s": void halt(); return;

@@ -124,3 +124,20 @@ test("warming loads what it is told and says when it could not; a failed load is
   await assert.rejects(() => slow.translate(["x"], "en", "de"), /too much is being translated/);
   assert.equal((await Promise.all(pending)).length, QUEUE_LIMIT);
 });
+
+test('Spanish to German stays direct from the native transcript', () => {
+  assert.deepEqual(route('es', 'de'), [['es', 'de']]);
+});
+
+test('expired live translation skips queued inference and rate-limited downloads cool down', async () => {
+  let now = 1, attempts = 0;
+  const translator = new Translator({ now: () => now, load: async () => {
+    attempts++; throw new Error('429 model download rate limited');
+  } });
+  await assert.rejects(translator.translate(['Hola'], 'es', 'en'), /429/);
+  await assert.rejects(translator.translate(['Hola'], 'es', 'en'), /retry in a minute/);
+  assert.equal(attempts, 1);
+  now = 70000;
+  await assert.rejects(translator.translate(['Hola'], 'es', 'en', { deadline: now - 1 }), /expired/);
+  assert.equal(attempts, 1);
+});

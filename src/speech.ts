@@ -40,6 +40,8 @@ export const SECONDS_PER_MINUTE = 300;
 /** How many may wait for the one CPU. Past this, the honest answer is "later". */
 export const QUEUE_LIMIT = 8;
 export const DEFAULT_MODEL = "onnx-community/whisper-base";
+/** Stored live lines from older recognition settings must be heard again. */
+export const NATIVE_REVISION = "native-v2";
 
 export class SpeechError extends Error {
   constructor(message: string, readonly status: number) {
@@ -215,6 +217,29 @@ export function tidy(text: string): string {
   return text.replace(/\[[A-Z_ ]+\]|\([A-Za-z ]+\)/g, " ").replace(/\s+/g, " ").trim();
 }
 
+/** Reject decoding loops, without removing normal emphasis like “no, no, no”. */
+export function reliableText(text: string, seconds: number): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean.length > Math.max(120, seconds * 55)) return "";
+  const words = clean.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+  for (let size = 1; size <= Math.min(20, Math.floor(words.length / 4)); size++) {
+    for (let start = 0; start + size * 4 <= words.length; start++) {
+      let repeated = true;
+      for (let i = size; i < size * 4; i++) {
+        if (words[start + i] !== words[start + i % size]) { repeated = false; break; }
+      }
+      if (repeated) return "";
+    }
+  }
+  return clean;
+}
+
+export function quietSamples(pcm: Float32Array): boolean {
+  let energy = 0;
+  for (const sample of pcm) energy += sample * sample;
+  return pcm.length === 0 || Math.sqrt(energy / pcm.length) < 0.004;
+}
+
 /** A two-letter language code, or nothing: Whisper guesses when not told. */
 export function languageOf(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -229,7 +254,7 @@ interface AsrOutput {
 }
 
 /** The pipeline, and the parts under it that language detection needs. */
-interface AsrPipeline {
+export interface AsrPipeline {
   (audio: Float32Array, options: Record<string, unknown>): Promise<AsrOutput | AsrOutput[]>;
   model: {
     (inputs: Record<string, unknown>): Promise<{ logits: { data: Float32Array | number[] } }>;
@@ -239,7 +264,7 @@ interface AsrPipeline {
 }
 
 /** The module, as much of it as this file touches. Typed here so the import can be by name. */
-interface Transformers {
+export interface Transformers {
   env: { cacheDir?: string; allowLocalModels?: boolean };
   Tensor: new (type: string, data: BigInt64Array, dims: number[]) => unknown;
   pipeline(task: "automatic-speech-recognition", model: string, options: { dtype: string }): Promise<AsrPipeline>;
@@ -296,13 +321,25 @@ async function loadWhisper(model: string, cacheDir: string): Promise<Recognizer>
   const transformers = await loadTransformers<Transformers>();
   transformers.env.cacheDir = cacheDir;
   const recognize = await transformers.pipeline("automatic-speech-recognition", model, { dtype: "q8" });
+  return whisperRecognizer(transformers, recognize);
+}
+
+/** Detection is from each recording, never from the caption translation selection. */
+export function whisperRecognizer(transformers: Transformers, recognize: AsrPipeline): Recognizer {
   return async (pcm, { language, timestamps }) => {
-    const spoken = language ?? (await detectLanguage(transformers, recognize, pcm));
+    const multilingual = recognize.model.generation_config.is_multilingual !== false;
+    const spoken = language ?? (multilingual ? await detectLanguage(transformers, recognize, pcm) : "en");
+    if (multilingual && !spoken) throw new SpeechError("could not detect the audio language; try another speech segment", 422);
     const heard = await recognize(pcm, {
       // Whisper hears thirty seconds at a time; longer is heard in overlapping pieces.
       chunk_length_s: 30,
       stride_length_s: 5,
-      ...(spoken ? { language: spoken, task: "transcribe" } : {}),
+      ...(multilingual ? { language: spoken, task: "transcribe" } : {}),
+      // A five-second clip used to be allowed hundreds of tokens of hallucinated loops.
+      max_new_tokens: Math.min(384, Math.max(32, Math.ceil(Math.min(30, pcm.length / RATE) * 10) + 16)),
+      do_sample: false,
+      num_beams: 1,
+      no_repeat_ngram_size: 6,
       ...(timestamps ? { return_timestamps: true } : {}),
     });
     const pieces = Array.isArray(heard) ? heard : [heard];
@@ -385,7 +422,7 @@ export class Speech {
    * The words in a WAV. Refuses what is not a WAV, or is too long, or more
    * than the account may have heard this minute, with a status.
    */
-  async transcribe(bytes: Uint8Array, options: { language?: string; timestamps?: boolean; by?: string } = {}): Promise<Heard> {
+  async transcribe(bytes: Uint8Array, options: { language?: string; timestamps?: boolean; by?: string; deadline?: number } = {}): Promise<Heard> {
     if (bytes.length > MAX_BYTES) throw new SpeechError(`that is too much sound: ${MAX_SECONDS} seconds at most`, 413);
     const wav = decodeWav(bytes);
     const seconds = wav.samples.length / wav.rate;
@@ -393,9 +430,11 @@ export class Speech {
     if (options.by) this.allow(options.by, seconds);
     if (wav.samples.length < wav.rate / 10) return { text: "", seconds };
     const pcm = resample(wav.samples, wav.rate, RATE);
+    if (quietSamples(pcm)) return { text: "", seconds };
     if (this.waiting >= QUEUE_LIMIT) throw new SpeechError("too many people are talking at once; try again in a moment", 503);
     this.waiting += 1;
     const turn = this.tail.then(async () => {
+      if (options.deadline && this.now() > options.deadline) throw new SpeechError("this live audio is too old; waiting for the next segment", 408);
       const recognize = await this.ear();
       return recognize(pcm, {
         ...(options.language ? { language: options.language } : {}),
@@ -407,10 +446,10 @@ export class Speech {
     try {
       const heard = await turn;
       const segments = heard.segments
-        ?.map((segment) => ({ start: segment.start, end: segment.end, text: tidy(segment.text) }))
+        ?.map((segment) => ({ start: segment.start, end: segment.end, text: reliableText(tidy(segment.text), segment.end - segment.start) }))
         .filter((segment) => segment.text !== "");
       return {
-        text: tidy(heard.text),
+        text: reliableText(tidy(heard.text), seconds),
         seconds,
         ...(heard.language ? { language: heard.language } : {}),
         ...(segments ? { segments } : {}),

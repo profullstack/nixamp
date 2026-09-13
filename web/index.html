@@ -19,7 +19,14 @@
     <meta property="og:type" content="website" />
   </head>
   <body>
-    <main id="app">
+    <nav class="skip-links" aria-label="Skip to a section">
+      <a href="#transport">Skip to playback controls</a>
+      <a href="#playlist-panel">Skip to playlist</a>
+      <a href="#transcript-panel">Skip to transcript and translated audio</a>
+    </nav>
+    <div id="sr-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+    <main id="app" aria-label="Nixamp player">
+      <h1 class="sr-only">Nixamp audio and video player</h1>
       <header class="bar">
         <span class="brand"><img class="brand-mark" src="/logo.png" alt="" width="20" height="20" decoding="async" />NIXAMP</span>
         <span id="status" class="status" data-playing="false">■ STOPPED</span>
@@ -32,7 +39,7 @@
         <!-- The panels themselves: which are on screen and in what order.
              Winamp's windows were dragged about and snapped into place; the
              grip on each panel does that here, and this lists them all. -->
-        <button id="panels-toggle" type="button" class="ghost" title="Panels: show, hide, and reorder the panels on this page">Panels</button>
+        <button id="panels-toggle" type="button" class="ghost" aria-controls="panels-panel" aria-expanded="false" title="Panels: show, hide, and reorder the panels on this page">Panels</button>
         <button id="install" type="button" class="ghost" hidden>Install</button>
       </header>
 
@@ -41,7 +48,7 @@
            accounts live (nixamp.com), only signed out, and only until hidden.
            On your own server you already know what this is. -->
       <section class="panel welcome player-only" data-title="What this is" id="welcome" hidden>
-        <h1 class="welcome-title">Launch your own live radio, TV and film network in one command.</h1>
+        <h2 class="welcome-title">Launch your own live radio, TV and film network in one command.</h2>
         <p class="welcome-lead">
           nixamp is the open source streaming platform that turns a folder on your
           computer into a live radio station, a TV channel or a film night anyone can
@@ -74,7 +81,8 @@
         </div>
       </section>
 
-      <section class="panel player-only" data-title="Now Playing">
+      <section class="panel player-only" data-title="Now Playing" aria-label="Now Playing">
+        <h2 class="panel-heading">Now Playing</h2>
         <video id="video" playsinline hidden></video>
         <!-- What the picture is saying, on the picture: the current caption
              line, held until this page's sound has got there. -->
@@ -142,7 +150,7 @@
       <div class="split" id="zone-top">
         <section class="panel player-only" data-title="Spectrum Analyser" id="spectrum-panel">
           <canvas id="spectrum" aria-hidden="true"></canvas>
-          <div class="meters">
+          <div class="meters" aria-hidden="true">
             <span id="glyphs" class="glyphs"></span>
             <span id="levels" class="levelmeter">L······ R······</span>
           </div>
@@ -151,15 +159,15 @@
         <!-- Connected to a server: its files to browse, and what is live on
              it. The two things a visitor came for, beside the analyser,
              before anything about accounts or sharing. -->
-          <section class="panel" id="playlist-panel" data-title="Playlist (0)">
+          <section class="panel" id="playlist-panel" data-title="Playlist (0)" tabindex="-1">
             <input id="filter" type="search" class="filter" placeholder="Filter these files"
                    aria-label="Filter the playlist" />
-            <nav id="crumbs" class="crumbs" hidden></nav>
-            <ol id="playlist" class="playlist"></ol>
+            <nav id="crumbs" class="crumbs" aria-label="Playlist folders" hidden></nav>
+            <ol id="playlist" class="playlist" aria-label="Tracks and folders"></ol>
             <!-- A page at a time. A television cannot scroll a box inside the
                  page, and a folder of two hundred files is a list nobody
                  wants in one go anyway. -->
-            <nav id="playlist-pager" class="pager" hidden></nav>
+            <nav id="playlist-pager" class="pager" aria-label="Playlist pages" hidden></nav>
           </section>
 
           <!-- What is on, on the server you are connected to: its own stream,
@@ -185,7 +193,7 @@
                      aria-label="What to call it" />
               <button type="submit" class="button">Add catalog</button>
             </form>
-            <nav id="catalogs-crumbs" class="crumbs" hidden></nav>
+            <nav id="catalogs-crumbs" class="crumbs" aria-label="Catalog folders" hidden></nav>
             <ul id="catalogs-list" class="directory-list"></ul>
             <input id="catalogs-filter" type="search" class="filter" placeholder="Filter these entries"
                    aria-label="Filter the entries" hidden />
@@ -193,7 +201,7 @@
           </section>
       </div>
 
-      <section class="transport">
+      <section class="transport" id="transport" role="group" aria-label="Playback controls" aria-describedby="keyboard-help" tabindex="0">
         <button id="prev" type="button" aria-label="Previous">|◀◀</button>
         <button id="play-pause" type="button" class="primary" aria-label="Play">▶</button>
         <!-- For whoever administers the server: Play plays it for you; this
@@ -217,7 +225,7 @@
 
       <div class="split" id="zone-main">
         <section class="panel player-only col-a" data-title="Files" id="files-panel">
-          <p class="hint">Nothing is uploaded. The browser decodes your files where they are.</p>
+          <p class="hint">Files play on this device. Live captions and translated audio send short audio clips only after you enable them.</p>
           <div class="picker">
             <label class="button">
               Open files
@@ -334,12 +342,12 @@
              went by. Hide it from the Panels list if it is noise. -->
         <section class="panel col-b" data-title="Log" id="log-panel">
           <p class="hint">What this page has said, newest first.</p>
-          <ul id="log-list" class="log-list" aria-live="off"></ul>
+          <ul id="log-list" tabindex="0" aria-label="Activity log" class="log-list" aria-live="off"></ul>
         </section>
 
         <section class="panel col-b" data-title="Trollbox" id="trollbox-panel" hidden>
           <p class="hint" id="trollbox-note">Join a live and the room's chat is here.</p>
-          <ul id="trollbox-list" class="trollbox-list" aria-live="polite" aria-label="The room's chat"></ul>
+          <ul id="trollbox-list" tabindex="0" class="trollbox-list" aria-live="off" aria-label="The room's chat"></ul>
           <form id="trollbox-form" class="picker" hidden>
             <input id="trollbox-input" type="text" maxlength="500" autocomplete="off"
                    placeholder="Say something to the room…" aria-label="A line for the trollbox" />
@@ -363,13 +371,25 @@
              held here until your own sound gets there. On by default; the
              switch turns it off for this device, and the Panels list hides the
              panel. -->
-        <section class="panel col-b" data-title="Transcript" id="transcript-panel" hidden>
-          <p class="hint" id="transcript-note">Join a live and what it says is written here.</p>
+        <section class="panel col-b" data-title="Transcript" id="transcript-panel" tabindex="-1" hidden>
+          <p class="hint" id="transcript-note">Movies, shows, sports, courses, podcasts, and live audio in your language.</p>
           <label class="transcript-switch"><input type="checkbox" id="transcript-on" checked /> Captions</label>
           <!-- In which language: as spoken, or translated on nixamp.com as each
                line is said. Filled by the page; remembered per device. -->
-          <label class="transcript-switch">in <select id="transcript-language" class="transcript-language" aria-label="Caption language"></select></label>
-          <ul id="transcript-list" class="transcript-list" aria-live="off" aria-label="What is being said"></ul>
+          <label class="transcript-switch">Language <select id="transcript-language" class="transcript-language" aria-label="Caption language"></select></label>
+          <div class="transcript-actions">
+            <button type="button" id="transcript-capture">Start player captions</button>
+            <button type="button" id="transcript-tab">Translate another tab</button>
+            <button type="button" id="transcript-stop" hidden>Stop listening</button>
+          </div>
+          <div class="transcript-audio">
+            <p class="hint">Player captions use nixamp.com. Translated audio also sends short audio clips and translated words to ElevenLabs.</p>
+            <label class="transcript-switch"><input type="checkbox" id="transcript-audio" disabled /> Play translated audio</label>
+            <label class="transcript-switch">Voice <select id="transcript-voice" aria-label="Translated voice" disabled><option value="auto">Match each speaker (approximate)</option></select></label>
+            <p class="hint" id="transcript-audio-note">Choose a translation language to hear it spoken while the video continues.</p>
+          </div>
+          <div id="transcript-speakers" role="group" aria-label="Speaker voices"></div>
+          <ul id="transcript-list" tabindex="0" class="transcript-list" aria-live="off" aria-label="What is being said"></ul>
         </section>
 
         <!-- What to send somebody who is not technical: one link, one number,
@@ -422,7 +442,7 @@
         <!-- The panels: shown, hidden, reordered, from a list, for a keyboard,
              a phone, or putting everything back where it started. -->
         <section class="panel col-b" data-title="Panels" id="panels-panel" hidden>
-          <p class="hint">Every panel, on or off. Off hides it; nothing is ever deleted. On a panel: ≡ drags it into place, ▁ shades it to its title bar, ✕ hides it.</p>
+          <p class="hint">Every panel, on or off. Move a panel by dragging its ≡ handle, or focus that handle and press Alt + Up or Down. ▁ shades it to its title bar; ✕ hides it.</p>
           <ul id="panels-list" class="directory-list panels-list"></ul>
           <div class="picker">
             <button id="panels-reset" type="button" class="ghost" title="Every panel back where the page puts it">Reset layout</button>
@@ -464,7 +484,7 @@
       <p id="note" class="note" hidden></p>
 
       <footer class="statusbar">
-        <span><b>Space</b> Play</span>
+        <span id="keyboard-help">With playback controls focused: <b>Space</b> Play</span>
         <span><b>↑↓</b> Select</span>
         <span><b>n/p</b> Next/Prev</span>
         <span><b>s</b> Stop</span>

@@ -12,7 +12,7 @@
 
 export const CAPTIONS_KEY = "nixamp.captions";
 /** The language this device wants its captions in; "" is as spoken. */
-export const CAPTIONS_LANGUAGE_KEY = "nixamp.captions.language";
+export const CAPTIONS_LANGUAGE_KEY = "nixamp.captions.native-v2.language";
 
 export interface Caption {
   channel: string;
@@ -24,15 +24,18 @@ export interface Caption {
   language?: string;
   /** What was heard, when this line is a translation of it. */
   original?: string;
+  sourceLanguage?: string;
+  voiceProfile?: "lower" | "higher" | "unknown";
+  speaker?: string;
 }
 
 /**
- * The languages the picker offers: the ones nixamp.com has a model into
- * from English, which every other language reaches through. "" is what
- * the channel is saying, untranslated.
+ * Translation targets served by nixamp.com. Direct pairs are preferred;
+ * a pair without its own model may use an English pivot. "" always preserves
+ * the detected source language without running translation.
  */
 export const LANGUAGE_CHOICES: { code: string; label: string }[] = [
-  { code: "", label: "As spoken" },
+  { code: "", label: "Original (auto-detect)" },
   { code: "en", label: "English" },
   { code: "de", label: "Deutsch" },
   { code: "sv", label: "Svenska" },
