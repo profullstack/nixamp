@@ -169,6 +169,17 @@ http://p.test/series/u/p/3.mkv
   const entries = parseCatalog(plain, "http://p.test/playlist/u/p/m3u");
   assert.deepEqual(entries.map((e) => [e.group, e.live]), [["Live TV", true], ["Movies", false], ["Series", false]]);
 
+  // A podcast list writes each entry's picture on an #EXTIMG line; a
+  // tvg-logo on the #EXTINF line wins where both are given, and a picture
+  // that is not a web address is no picture.
+  const pictured = parseCatalog(
+    "#EXTM3U\n#EXTINF:10,One\n#EXTIMG:https://cdn.example/one.jpg\nhttps://cdn.example/1.mp3\n"
+    + "#EXTINF:10 tvg-logo=\"https://cdn.example/logo.png\",Two\n#EXTIMG:https://cdn.example/two.jpg\nhttps://cdn.example/2.mp3\n"
+    + "#EXTINF:10,Three\n#EXTIMG:javascript:alert(1)\nhttps://cdn.example/3.mp3\n",
+    "https://cdn.example/list.m3u",
+  );
+  assert.deepEqual(pictured.map((e) => e.logo), ["https://cdn.example/one.jpg", "https://cdn.example/logo.png", ""]);
+
   // The panel serves the richer form: it is used, and the given address kept.
   const asked: string[] = [];
   const send = (async (url: string | URL) => {

@@ -3666,6 +3666,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       links.set(link, resolved);
+      // A channel already on -- put back by a restart, which forgets where
+      // it came from -- learns its picture and its line from the link pasted
+      // again, rather than waiting to be taken off and put on.
+      const already = options.channels.info(channelId);
+      if (already) {
+        if (!already.art && resolved.thumbnail) already.art = resolved.thumbnail;
+        if (!already.about && resolved.about) already.about = resolved.about;
+        if (already.art || already.about) options.rememberChannels?.(rememberedNow(options.channels));
+      }
       if (!options.channels.has(channelId)) {
         // Asked of the site first, once, with the headers yt-dlp said to
         // send. A media address that answers nothing is a site refusing

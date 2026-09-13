@@ -145,13 +145,15 @@ export const PLAYLIST_FETCH_TIMEOUT_MS = 15_000;
  * all -- a segment list with #EXT-X- tags -- and those are one stream for
  * ffmpeg to read as it is, not a list of streams.
  */
-export function playlistFrom(text: string, base: string): { hls: boolean; sources: string[] } {
-  if (/^#EXT-X-/m.test(text)) return { hls: true, sources: [] };
-  const sources = parseCatalog(text, base)
-    .map((entry) => entry.source)
-    .filter((source) => /^(https?|rtmps?):\/\//i.test(source))
+export function playlistFrom(text: string, base: string): { hls: boolean; sources: string[]; image: string } {
+  if (/^#EXT-X-/m.test(text)) return { hls: true, sources: [], image: "" };
+  const entries = parseCatalog(text, base)
+    .filter((entry) => /^(https?|rtmps?):\/\//i.test(entry.source))
     .slice(0, PLAYLIST_MAX_ENTRIES);
-  return { hls: false, sources };
+  // The picture of the list is the first picture in it: a podcast's episodes
+  // all wear the show's art, and the newest is first.
+  const image = entries.map((entry) => pictureUrl(entry.logo)).find((one) => one !== "") ?? "";
+  return { hls: false, sources: entries.map((entry) => entry.source), image };
 }
 
 /**
@@ -195,7 +197,7 @@ export async function resolvePlaylist(
     extractor: "playlist",
     ext: "",
     page: url,
-    thumbnail: "",
+    thumbnail: list.image,
     about: "",
     playlist: list.sources,
   };

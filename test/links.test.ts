@@ -286,7 +286,14 @@ test("a playlist's entries come back in order, resolved against where the list l
     "https://x.example/other/ep3.mp3",
   ]);
   // A segment list wearing the wrong extension is HLS after all.
-  assert.deepEqual(playlistFrom("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\nseg0.ts\n", "https://x.example/a.m3u"), { hls: true, sources: [] });
+  assert.deepEqual(playlistFrom("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\nseg0.ts\n", "https://x.example/a.m3u"), { hls: true, sources: [], image: "" });
+  // The list's picture is the first picture in it, as p0dcasters writes them.
+  const pictured = playlistFrom(
+    "#EXTM3U\n#PLAYLIST:Inspiring Founders Podcast\n#EXTINF:1660,Ep 12\n#EXTIMG:https://cdn.example/ep12.jpg\nhttps://cdn.example/ep12.mp3\n#EXTINF:2582,Ep 11\n#EXTIMG:https://cdn.example/ep11.jpg\nhttps://cdn.example/ep11.mp3\n",
+    "https://p0dcasters.com/podcast/x/playlist.m3u",
+  );
+  assert.equal(pictured.image, "https://cdn.example/ep12.jpg");
+  assert.equal(list.image, "");
 });
 
 test("a pasted playlist resolves to a station: the first entry probed, every entry kept, no end", async () => {
@@ -303,6 +310,11 @@ test("a pasted playlist resolves to a station: the first entry probed, every ent
     fetcher: served(200, "#EXTM3U\n#PLAYLIST:Off Protocol\n#EXTINF:10,One\nhttps://cdn.example/ep1.mp3\n"),
   });
   assert.ok(!("error" in named) && named.title === "Off Protocol");
+  const pictured = await resolvePlaylist("https://p0dcasters.com/podcast/x/playlist.m3u", {
+    fetcher: served(200, "#EXTM3U\n#EXTINF:10,One\n#EXTIMG:https://cdn.example/one.jpg\nhttps://cdn.example/ep1.mp3\n"),
+  });
+  assert.ok(!("error" in pictured) && pictured.thumbnail === "https://cdn.example/one.jpg", "the list's picture is the station's");
+  assert.ok(!("error" in list) && list.thumbnail === "");
   assert.equal(playlistNameOf("https://p0dcasters.com/podcast/off-protocol/playlist.m3u"), "off protocol");
   assert.equal(playlistNameOf("https://x.example/mixes/late_night-sets.m3u"), "late night sets");
   assert.equal(playlistNameOf("https://x.example/playlist.m3u"), "x.example");
