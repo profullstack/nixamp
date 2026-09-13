@@ -2771,8 +2771,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
      * The trollbox: the chat for one live room, keyed by the server and
      * the channel so every viewer of a stream is in the same box whichever
      * page they came from. Reading is open; a line needs a nixamp.com
-     * account and is signed with its public handle; taking one down is the
-     * author's, or the listing owner's.
+     * account and is signed with its public handle; and once sent it is
+     * public record, so there is no DELETE here for anybody.
      */
     if ((path === "/api/v1/trollbox" || path.startsWith("/api/v1/trollbox/")) && options.trollbox && options.accounts) {
       const trollbox = options.trollbox;
@@ -2819,30 +2819,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           json(response, 201, { message: { id: line.id, handle: line.handle, body: line.body, createdAt: line.createdAt, mine: true } });
           return;
         }
-        if (request.method === "DELETE" && child !== "") {
-          const who = await options.accounts.whoIs(tokenFrom(request.headers));
-          if (who === null) {
-            json(response, 401, { error: "sign in to nixamp.com first" });
-            return;
-          }
-          const where = roomFor(url.searchParams.get("server"), url.searchParams.get("channel"));
-          if (!where) {
-            json(response, 400, { error: "a room is a server address and a channel" });
-            return;
-          }
-          // The listing owner moderates their own server's rooms.
-          const moderator = (options.directory?.list() ?? []).some((listing) => {
-            try {
-              return listing.ownerId === who.id && new URL(listing.url).origin === where.server;
-            } catch {
-              return false;
-            }
-          });
-          const removed = await trollbox.remove(where.room, child, who.id, moderator);
-          json(response, removed ? 200 : 404, removed ? { ok: true } : { error: "not your line, or already gone" });
-          return;
-        }
-        json(response, 405, { error: "GET, POST or DELETE" });
+        json(response, 405, { error: "GET or POST" });
       } catch (error) {
         if (error instanceof TrollboxError) json(response, error.status, { error: error.message });
         else throw error;

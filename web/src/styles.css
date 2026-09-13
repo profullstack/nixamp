@@ -250,7 +250,6 @@ body {
 .trollbox-list .who { color: var(--accent); flex: 0 0 auto; }
 .trollbox-list .who::after { content: ":"; }
 .trollbox-list .line { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.trollbox-list .icon-btn { font-size: 11px; padding: 0 4px; }
 /* The mic: a button until it is listening, then a red light with the seconds on it. */
 .button.mic { min-width: 44px; }
 .button.mic[aria-pressed="true"] { color: #ff6b6b; border-color: #ff6b6b; animation: listening 1.2s ease-in-out infinite; }
