@@ -88,6 +88,7 @@ import { Rooms } from "./rooms.ts";
 import { Trollbox, TrollboxError, fallbackHandle, roomFor } from "./trollbox.ts";
 import { MAX_BYTES as SPEECH_BYTES, Speech, SpeechError, isWav, languageOf } from "./speech.ts";
 import { Captions } from "./captions.ts";
+import { Outro } from "./outro.ts";
 import { Profiles, Voices, spokenLine, spokenVoiceFor } from "./voices.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
@@ -3394,6 +3395,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // A picture of it, and a line about it, where there is one.
           art: artOf(one),
           about: one.about ?? "",
+          // Over, with the outro playing: the page says so rather than "LIVE".
+          ...(one.ended ? { ended: one.ended } : {}),
         })),
         // Anything re-streamed into this server is a live stream too, and was
         // sitting in the middle of the playlist among the files -- which is
@@ -5354,8 +5357,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 
   // The pictures of channels, taken once each and kept while the channel is on.
   const art = new ArtCache();
+  // What a channel plays once its show is over: drawn here, once, by the
+  // same ffmpeg that carries the channels. No ffmpeg, no outro, and a show
+  // that ends closes its channel as before.
+  const outro = new Outro({ ffmpeg: tools.ffmpeg, dir: join(stateDir(), "outro"), onEvent: (message) => console.log(message) });
   const channels = new Channels({
     ffmpeg: tools.ffmpeg,
+    ...(tools.carries ? { outro: (kind) => outro.clip(kind) } : {}),
+    onOutro: (info) => console.log(`  "${info.id}" has ended; the outro plays for an hour.`),
     onStart: (info) =>
       console.log(`  ${info.name} is publishing to "${info.id}" (${info.format} over ${info.via}).`),
     onEnd: (info) => {

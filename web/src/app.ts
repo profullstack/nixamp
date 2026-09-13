@@ -456,6 +456,8 @@ export function start(): void {
   } | null = null;
   /** The last answer to "what is on", so the meta line can say who is watching. */
   let lastAir: OnAir | null = null;
+  /** Which channel the page has already said has ended, so it says so once. */
+  let endedSaid = "";
   /**
    * A pasted link playing here, in this browser: by its site's own player
    * in a frame, or by the page's own player from a file. Not a channel and
@@ -1051,9 +1053,15 @@ export function start(): void {
     /** A game: two teams and a score, on a row above the chips. */
     let score: ReturnType<typeof scoreLine> | null = null;
     const channel = channelOn ? lastAir?.channels.find((one) => one.id === channelOn?.id) : undefined;
+    // A show that is over says so in words as well as on the picture, once.
+    if (channelOn && channel?.ended && endedSaid !== channelOn.id) {
+      endedSaid = channelOn.id;
+      logMessage(`${channelOn.name} has ended. What is playing is its outro; the room stays open for an hour, then the channel closes.`);
+    }
     const nothing = player.source === "" && !channelOn && !(remoteDrives() && snapshot.tracks[at()]);
     if (!nothing) {
-      if (channelOn) chips.push(nowMeta?.entry?.live === false ? "ON DEMAND · LIVE CHANNEL" : "LIVE");
+      if (channelOn && channel?.ended) chips.push("ENDED");
+      else if (channelOn) chips.push(nowMeta?.entry?.live === false ? "ON DEMAND · LIVE CHANNEL" : "LIVE");
       else if (nowMeta?.kind === "vod") chips.push("ON DEMAND");
       else if (nowMeta?.kind === "live") chips.push("LIVE");
       else if (mode === "remote" && remoteDrives()) chips.push("ON THE SERVER");
@@ -5422,6 +5430,8 @@ export function start(): void {
       /** A picture of it -- a site's thumbnail, or this server's art route -- and a line about it. */
       art?: string;
       about?: string;
+      /** When its show ended, while the outro plays: joined now, it says so. */
+      ended?: number;
     }[];
     restreams?: { name: string; at: number; tracks: number }[];
   }

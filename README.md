@@ -297,6 +297,18 @@ something else.
 Entries expire a few minutes after a stream stops renewing, so the list is
 always what is actually live.
 
+**A live that ends says so.** A film or a podcast that plays to its end, a
+list whose last entry did, or a publisher who stopped, used to start again
+from the top for ever. Now the channel plays its outro: five seconds of
+"THIS LIVE STREAM HAS ENDED" on the plate with the mark (a soft chime, on a
+channel with no picture), looped for an hour, so whoever joins late is told
+by the picture and by the page (an ENDED chip and a line in the Log), and
+the room's trollbox stays open. Then the channel closes on its own. The
+clip is drawn by the server itself with its ffmpeg the first time it is
+needed and kept beside the keys; **Start over** on the channel brings the
+show back from its beginning. A live feed that drops mid-stream is still
+dialled again, as before: only a clean end is an end.
+
 ## The trollbox, and saying a line out loud
 
 Every live room has a trollbox: the chat for whoever has joined that stream,

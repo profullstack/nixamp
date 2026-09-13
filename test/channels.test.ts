@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  BACKLOG_SECONDS, BACKLOG_VIDEO, BACKLOG_VIDEO_MAX, Channels, REDIAL, cleanId, generatedId,
+  BACKLOG_SECONDS, BACKLOG_VIDEO, BACKLOG_VIDEO_MAX, Channels, REDIAL, STALL, cleanId, generatedId,
   rememberChannels, rememberedChannels, rememberedNow,
 } from "../src/channels.ts";
 import { needsAdmin } from "../src/owner.ts";
@@ -616,9 +616,11 @@ test("what a channel is and where it got to are remembered, and only for kept pu
   set.stopAll();
 });
 
-test("a channel playing a list moves to the next entry when one ends, and starts over at the last", async () => {
-  // "ffmpeg" here prints a byte and exits: an entry that played to its end.
-  const set = new Channels({ ffmpeg: ["sh", "-c", "printf x"] });
+test("a channel playing a list moves to the next entry when one ends, and is over after the last", async () => {
+  // "ffmpeg" here prints a byte, plays for a moment and exits: an entry that
+  // played to its end.
+  const ended: string[] = [];
+  const set = new Channels({ ffmpeg: ["sh", "-c", "printf x; sleep 0.08"], onEnd: (info) => ended.push(info.id) });
   const list = ["http://x.test/ep1.mp3", "http://x.test/ep2.mp3", "http://x.test/ep3.mp3"];
   const channel = set.pull("show", "A Show", list[0] as string, [], "audio", true, 30_000, [], "", { live: true, position: 0, playlist: list });
   assert.ok(channel);
@@ -626,14 +628,19 @@ test("a channel playing a list moves to the next entry when one ends, and starts
   assert.equal(channel.info.playlistAt, 0);
   // Entries end and the next is dialled at once, not after the redial wait.
   const seen = new Set<number>();
-  for (let i = 0; i < 40 && seen.size < 3; i++) {
+  for (let i = 0; i < 60 && seen.size < 3; i++) {
     seen.add(channel.info.playlistAt ?? -1);
-    await wait(25);
+    await wait(10);
   }
   assert.deepEqual([...seen].sort(), [0, 1, 2]);
   // An entry that ended is not a source that dropped: no redial counted, no error kept.
   assert.equal(channel.info.redials ?? 0, 0);
   assert.equal(channel.info.error, undefined);
+  // After the last entry the show is over. With no outro to play, the
+  // channel closes rather than starting again from the first.
+  await wait(200);
+  assert.deepEqual(ended, ["show"]);
+  assert.equal(set.count, 0);
   set.stopAll();
 });
 
@@ -655,4 +662,80 @@ test("a list is written down with where it had got to, and read back", () => {
   assert.deepEqual(now[0]?.playlist, ["http://x.test/ep1.mp3", "http://x.test/ep2.mp3"]);
   assert.equal(typeof now[0]?.playlistAt, "number");
   set.stopAll();
+});
+
+/**
+ * A fake ffmpeg for a show that ends: it prints an opening and one fragment
+ * and exits at once, like a file that played through. Asked to loop
+ * (`-stream_loop`, which is how the outro is dialled) it stays up instead.
+ */
+function fakeEndingFfmpeg(): string[] {
+  const bytes = Buffer.concat([
+    box("ftyp", "isom"), box("moov", "tracks"), box("moof", "one"), box("mdat", "picture"),
+  ]).toString("base64");
+  return ["sh", "-c", `case "$*" in *stream_loop*) printf %s ${bytes} | base64 -d; sleep 30;; *) printf %s ${bytes} | base64 -d;; esac`, "--"];
+}
+
+test("a show that plays to its end is followed by the outro, for a while, and then the channel closes", async () => {
+  const ended: string[] = [];
+  const outros: string[] = [];
+  const asked: string[] = [];
+  const set = new Channels({
+    ffmpeg: fakeEndingFfmpeg(),
+    outro: async (kind) => { asked.push(kind); return "/tmp/outro.mp4"; },
+    outroMs: 400,
+    onOutro: (info) => outros.push(info.id),
+    onEnd: (info) => ended.push(info.id),
+  });
+  const film = set.pull("film", "A Film", "/tmp/film.mp4", [], "video", true, STALL, [], "", { live: false, position: 0 });
+  assert.ok(film);
+  await new Promise((done) => setTimeout(done, 250));
+  // Over, but not gone: the outro is on, the channel is listed, and the page is told.
+  assert.equal(set.count, 1);
+  assert.deepEqual(asked, ["video"]);
+  assert.deepEqual(outros, ["film"]);
+  assert.equal(typeof set.info("film")?.ended, "number");
+  assert.equal(set.info("film")?.error, undefined);
+  assert.deepEqual(ended, []);
+  // A latecomer is handed the outro's opening, like any stream's.
+  const late = collector();
+  film?.listen(late);
+  assert.equal(Buffer.concat(late.chunks).toString("latin1", 4, 8), "ftyp");
+  // An hour later (here, less): closed on its own.
+  await new Promise((done) => setTimeout(done, 450));
+  assert.equal(set.count, 0);
+  assert.deepEqual(ended, ["film"]);
+});
+
+test("a list is over after its last entry, not back at its first; and a live feed that stops is dialled again, not ended", async () => {
+  const outros: string[] = [];
+  const set = new Channels({ ffmpeg: fakeEndingFfmpeg(), outro: async () => "/tmp/outro.mp3", outroMs: 5000, onOutro: (info) => outros.push(info.id) });
+  const show = set.pull("show", "A Show", "http://x.test/ep1.mp3", [], "audio", true, STALL, [], "", {
+    live: false, position: 0, playlist: ["http://x.test/ep1.mp3", "http://x.test/ep2.mp3"],
+  });
+  assert.ok(show);
+  await new Promise((done) => setTimeout(done, 400));
+  assert.deepEqual(outros, ["show"]);
+  assert.equal(set.info("show")?.playlistAt, 1, "it stopped on the last entry rather than wrapping");
+  assert.equal(typeof set.info("show")?.ended, "number");
+  // Started over from the outro: the show again, from its first entry.
+  assert.equal(set.restart("show"), true);
+  assert.equal(set.info("show")?.ended, undefined);
+  assert.equal(set.info("show")?.playlistAt, 0);
+
+  const live = set.pull("tv", "A Feed", "http://x.test/live.ts", [], "video", true, STALL, [], "", { live: true, position: 0 });
+  assert.ok(live);
+  await new Promise((done) => setTimeout(done, 300));
+  assert.equal(set.info("tv")?.ended, undefined, "a live feed that stopped is a feed that dropped");
+  assert.equal(set.count, 2);
+  set.stopAll();
+});
+
+test("without an outro a show that ends closes as it always did", async () => {
+  const ended: string[] = [];
+  const set = new Channels({ ffmpeg: fakeEndingFfmpeg(), onEnd: (info) => ended.push(info.id) });
+  set.pull("film", "A Film", "/tmp/film.mp4", [], "video", true, STALL, [], "", { live: false, position: 0 });
+  await new Promise((done) => setTimeout(done, 300));
+  assert.equal(set.count, 0);
+  assert.deepEqual(ended, ["film"]);
 });

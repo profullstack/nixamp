@@ -96,6 +96,12 @@ export interface ChannelInfo {
    */
   teed?: boolean;
   /**
+   * When its show ended, wall clock, while the outro plays. A channel with
+   * this set is still on the air -- the picture says the stream has ended
+   * -- and closes on its own an hour later. Absent while the show is on.
+   */
+  ended?: number;
+  /**
    * A picture of it from somewhere else: the thumbnail the site offered
    * for a pasted link, the logo a catalog gave a channel. A channel with
    * none may still have one of its own -- a sleeve in the file, a frame of
@@ -156,6 +162,13 @@ export const GIVE_UP = 5;
 export const STALL = 30_000;
 /** How long an on-demand channel stays up with nobody watching. */
 export const IDLE = 60_000;
+/** How long a channel plays its outro after the show, before it closes. */
+export const OUTRO_MS = 60 * 60 * 1000;
+/** The encode the outro is copied through: what a channel sends on the wire. */
+const OUTRO_ENCODE: Record<"audio" | "video", string[]> = {
+  video: ["-c", "copy", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof"],
+  audio: ["-c", "copy", "-f", "mp3"],
+};
 /** How much of what ffmpeg said to keep, for the last line when it dies. */
 const TAIL = 2000;
 /**
@@ -241,6 +254,16 @@ export interface ChannelOptions {
   ffmpeg: string[];
   onStart?: (info: ChannelInfo) => void;
   onEnd?: (info: ChannelInfo) => void;
+  /**
+   * The outro: the clip a channel plays once its show is over, by kind,
+   * encoded as the wire wants it (see outro.ts). Null, or absent, means a
+   * show that ends closes its channel as it always did.
+   */
+  outro?: (kind: "audio" | "video") => Promise<string | null>;
+  /** How long the outro plays before the channel closes. An hour. */
+  outroMs?: number;
+  /** Said once, when a show ends and the outro begins. */
+  onOutro?: (info: ChannelInfo) => void;
   /** How long an on-demand channel outlives its last viewer. Tests shorten it. */
   idleMs?: number;
   /** Unsent bytes a listener may hold before it is dropped. Tests shrink it. */
@@ -272,6 +295,11 @@ export class Channel {
   /** Fires when a pulled source has said nothing for STALL. */
   private watchdog: ReturnType<typeof setTimeout> | null = null;
   private stall = STALL;
+  /** Whether the outro is what is playing now: the show is over. */
+  private outroOn = false;
+  private outroTimer: ReturnType<typeof setTimeout> | null = null;
+  /** How the show was dialled, so a restart after the outro is the show again. */
+  private dialed: { source: string; encode: string[]; paced: boolean; stall: number; input: string[]; audio: string; resume: PullResume } | null = null;
   private stderr = "";
   /**
    * The last few seconds, for whoever joins next.
@@ -368,6 +396,7 @@ export class Channel {
     resume: PullResume = { live: true, position: 0 },
   ): void {
     this.stall = stall;
+    if (!this.outroOn) this.dialed = { source, encode, paced, stall, input: [...input], audio, resume };
     if (this.info.kind === "video") this.fragments = new Fragments();
     const [command, ...prefix] = this.options.ffmpeg as [string, ...string[]];
     this.info.live = resume.live;
@@ -382,9 +411,12 @@ export class Channel {
       this.info.playlistAt = at;
     }
     let current = list ? (list[at] as string) : source;
+    // The last entry is the end of the show, not a way back to the first:
+    // a list that played through is over, and says so with the outro.
     this.advance = list && list.length > 1
       ? () => {
-          at = (at + 1) % list.length;
+          if (at + 1 >= list.length) return false;
+          at += 1;
           this.info.playlistAt = at;
           current = list[at] as string;
           return true;
@@ -414,7 +446,8 @@ export class Channel {
       // policy set after the channel started applies at its next restart.
       this.throughAbort?.abort();
       this.throughAbort = null;
-      const through = this.options.through?.(this.info, from, input, audio) ?? null;
+      // The outro is a file read by ffmpeg itself: a pipe cannot loop.
+      const through = this.outroOn ? null : this.options.through?.(this.info, from, input, audio) ?? null;
       this.info.teed = through !== null;
       const child = spawn(
         command,
@@ -509,7 +542,43 @@ export class Channel {
 
     this.redial = dial;
     dial();
-    this.options.onStart?.(this.info);
+    if (!this.outroOn) this.options.onStart?.(this.info);
+  }
+
+  /**
+   * The show is over: the outro, then the end. A publisher's channel is
+   * told this when the publisher goes, so whoever joins in the next hour
+   * is shown that the stream has ended rather than nothing at all. Without
+   * an outro to play it is the same as close().
+   */
+  finish(): void {
+    if (this.closing || this.outroOn) return;
+    void this.endShow();
+  }
+
+  private async endShow(): Promise<void> {
+    const kind = this.info.kind ?? "audio";
+    const old = this.child;
+    this.child = null;
+    if (this.watchdog) clearTimeout(this.watchdog);
+    this.watchdog = null;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    old?.kill("SIGKILL");
+    const clip = this.options.outro ? await this.options.outro(kind).catch(() => null) : null;
+    if (this.closing) return;
+    if (!clip) {
+      this.close();
+      return;
+    }
+    this.outroOn = true;
+    this.info.ended = Date.now();
+    this.info.error = undefined;
+    this.startOver();
+    this.options.onOutro?.(this.info);
+    this.pull(clip, OUTRO_ENCODE[kind], true, this.stall, ["-stream_loop", "-1"], "", { live: true, position: 0 });
+    this.outroTimer = setTimeout(() => this.close(), this.options.outroMs ?? OUTRO_MS);
+    this.outroTimer.unref?.();
   }
 
   /**
@@ -522,8 +591,26 @@ export class Channel {
    * strikes a dead CDN ran up an hour ago.
    */
   restart(): boolean {
+    if (this.closing) return false;
+    // Started over from the outro: the show itself, from its beginning.
+    if (this.outroOn && this.dialed) {
+      this.outroOn = false;
+      delete this.info.ended;
+      if (this.outroTimer) clearTimeout(this.outroTimer);
+      this.outroTimer = null;
+      const old = this.child;
+      this.child = null;
+      old?.kill("SIGKILL");
+      this.failures = 0;
+      this.info.error = undefined;
+      this.info.playlistAt = 0;
+      this.startOver();
+      const show = this.dialed;
+      this.pull(show.source, show.encode, show.paced, show.stall, show.input, show.audio, { ...show.resume, position: 0 });
+      return true;
+    }
     const dial = this.redial;
-    if (!dial || this.closing) return false;
+    if (!dial) return false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     if (this.watchdog) clearTimeout(this.watchdog);
@@ -613,6 +700,11 @@ export class Channel {
    */
   private dropped(sent: boolean): void {
     if (this.closing || !this.redial) return;
+    // An outro that stopped is over; there is nothing after it.
+    if (this.outroOn) {
+      this.close();
+      return;
+    }
     this.child = null;
     if (this.watchdog) clearTimeout(this.watchdog);
     this.watchdog = null;
@@ -628,6 +720,15 @@ export class Channel {
     // gave nothing is skipped the same way, counted as the failure it was,
     // so a list of dead links gives up rather than cycling for ever.
     const moved = this.advance?.() ?? false;
+    // A show that ended: a film or a podcast that played to its end, a
+    // list whose last entry did. That is not a source that dropped, and it
+    // is not dialled again from the top; it is over, and the outro says
+    // so. A live feed that stopped is a feed that dropped, and is redialled.
+    const list = (this.info.playlist?.length ?? 0) > 0;
+    if (sent && !moved && (this.info.live === false || list)) {
+      void this.endShow();
+      return;
+    }
     const ended = moved && sent;
     if (ended) this.info.error = undefined;
     else this.info.redials = (this.info.redials ?? 0) + 1;
@@ -914,6 +1015,8 @@ export class Channel {
     this.watchdog = null;
     if (this.idle) clearTimeout(this.idle);
     this.idle = null;
+    if (this.outroTimer) clearTimeout(this.outroTimer);
+    this.outroTimer = null;
     const said = lastLine(this.stderr);
     if (said && !this.info.error) this.info.error = said;
     const child = this.child;
