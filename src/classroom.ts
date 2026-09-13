@@ -26,10 +26,11 @@ export function classroomBroadcast(value: unknown): { provider: "pairux" | "nixa
     return { provider: "pairux", url: `https://pairux.com/l/${code}`, embed: `https://pairux.com/embed/${code}`, join: `https://pairux.com/join/${code}` };
   }
   if (!url.port && (url.hostname === "nixamp.com" || url.hostname === "www.nixamp.com")) {
-    if (url.pathname !== "/" || !url.searchParams.get("play")) return null;
+    if (url.pathname !== "/") return null;
     // Never publish an admin credential in a classroom share link.
     const server = url.searchParams.get("url") || "";
-    const play = url.searchParams.get("play") || "";
+    // The server's Share panel supplies a viewer URL without a track selection.
+    const play = url.searchParams.get("play") || (server ? "live" : "");
     if (/\/admin\//i.test(server) || /\/admin\//i.test(play) || url.searchParams.has("key")) return null;
     if (server && !publicWebUrl(server)) return null;
     if (!/^(?:live|channel:[^\s]+|track:\d+)$/.test(play) && !publicWebUrl(play)) return null;

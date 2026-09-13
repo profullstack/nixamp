@@ -11,6 +11,9 @@ test("classroom links accept Pairux viewers and Nixamp video shares without arbi
   assert.deepEqual(classroomBroadcast("https://pairux.com/join/ABC123"), { provider: "pairux", url: "https://pairux.com/l/ABC123", embed: "https://pairux.com/embed/ABC123", join: "https://pairux.com/join/ABC123" });
   const share = "https://nixamp.com/?url=" + encodeURIComponent("https://server1.chovy.nixamp.com:4321/view/abc123") + "&play=channel:lesson";
   assert.equal(new URL(classroomBroadcast(share)!.embed).searchParams.get("embed"), "1");
+  const serverShare = classroomBroadcast("https://nixamp.com/?url=" + encodeURIComponent("https://server1.chovy.nixamp.com:4321/view/abc123"))!;
+  assert.equal(new URL(serverShare.embed).searchParams.get("play"), "live");
+  assert.equal(new URL(serverShare.embed).searchParams.get("url"), "https://server1.chovy.nixamp.com:4321/view/abc123");
   assert.ok(classroomBroadcast("https://server1.chovy.nixamp.com:4321/view/abc123"));
   assert.ok(classroomBroadcast("https://nixamp.com/?play=track:0"));
   assert.ok(classroomBroadcast("https://nixamp.com/?play=" + encodeURIComponent("https://media.example.com/lesson.mp4")));
