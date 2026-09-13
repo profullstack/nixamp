@@ -286,6 +286,14 @@ to Saturday.
 
 ## The directory
 
+Servers start with an **IPTV-org** catalog using its public
+[main playlist](https://github.com/iptv-org/iptv#playlists). It is added once
+alongside existing catalogs and fetched in the background. Removing it stays
+removed on restart; add `https://iptv-org.github.io/iptv/index.m3u` to restore it.
+Catalog browsing and file navigation apply immediately after a click. Group
+lists are cached until the provider refreshes, and playback updates reuse the
+existing file list without moving focus, scrolling, or the browsing page.
+
 [nixamp.com/directory](https://nixamp.com/directory) lists nixamps that agreed
 to be listed. In the PWA, **Browse the directory** next to the address field
 picks one without typing anything.
@@ -572,15 +580,24 @@ interpreter, not a promise of exact lip sync.
 
 Translated playback keeps an approximate version of the original background
 sound. FastEnhancer Web's Tiny model estimates speech locally in a dedicated
-browser worker; the player subtracts that estimate from the aligned source in
-each stereo channel and mixes the remainder with translated voices. Background
+browser worker. Mono and stereo sources have their speech estimate subtracted
+from the aligned source. Quad, 5.1, and 7.1 files retain their original surround
+channels while dialogue is removed from the front and centre channels; those
+parts are then mixed to stereo beside the translated voices. Background
 processing adds no API calls or provider charges. It stops with translation;
-recognition starts without waiting for it. If the device cannot keep up or load the model, that
-background branch is silenced while translated speech continues. Separation can
-leave some original speech or remove parts of music and crowd noise; disable
+recognition starts without waiting for it. Brief processing stalls drop stale
+frames and recover automatically, with bounded work and at most about 130 ms of
+background delay. A model or device failure silences that branch while translated
+speech continues. Separation of mixed dialogue and background is approximate;
+speech placed in a surround channel remains in that original track. Disable
 **Keep background sound** under **Audio options** when needed. This uses
 [FastEnhancer Web](https://github.com/ryyr-ry/fastenhancer-web), under the MIT
 license.
+
+**Background level**, in the same collapsed options, balances the separated
+sound from 0–200% (100% by default). It never mixes the original dialogue back
+in as a fallback. Increasing it also amplifies any speech the model fails to
+remove. This is an approximate local separator, not lossless dialogue removal.
 
 The account server needs `ELEVENLABS_API_KEY`; `NIXAMP_DUBBING=off` disables
 this feature. The key stays on the server. Sign-in is required for speaker

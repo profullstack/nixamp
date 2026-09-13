@@ -90,3 +90,22 @@ test("stopping or replacing a source clears its autoplay prompt", async () => {
   assert.equal(player.needsInteraction, false);
   assert.deepEqual(errors, []);
 });
+
+test('a permitted interaction resumes a shared stream, but never reverses an explicit pause or stop', async () => {
+  const { player, audio } = fixture();
+  await player.play();
+  audio.refusal = null;
+  await player.resumeAfterInteraction();
+  assert.equal(player.playing, true);
+  assert.equal(audio.attempts, 2);
+  player.pause();
+  await player.resumeAfterInteraction();
+  assert.equal(player.playing, false);
+  assert.equal(audio.attempts, 2);
+  audio.refusal = new DOMException('Click first', 'NotAllowedError');
+  await player.play();
+  player.stop(); audio.refusal = null;
+  await player.resumeAfterInteraction();
+  assert.equal(player.playing, false);
+  assert.equal(audio.attempts, 3);
+});

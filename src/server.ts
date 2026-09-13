@@ -5946,6 +5946,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // read are fetched in the background so browsing does not wait on a provider.
   const catalogs = new Catalogs(stateDir(), options.port);
   catalogs.load();
+  catalogs.ensureDefaults();
   void catalogs.warm().catch(() => undefined);
 
   const destinations = parseDestinations(options.rtmp);

@@ -7,7 +7,7 @@
  * here as well — the phone becomes the remote, or the speaker, or both.
  */
 import { displayName, formatTime } from "./format.ts";
-import { replaceList } from "./accessibility.ts";
+import { beginListNavigation, replaceList } from "./accessibility.ts";
 import { liveContext, liveTitle } from "./live-context.ts";
 import {
   BrowserPlayer, revoke, tracksFromFiles,
@@ -246,6 +246,8 @@ export function start(): void {
     transcriptAudio: need<HTMLInputElement>("transcript-audio"),
     transcriptVoiceSettings: need<HTMLDetailsElement>("transcript-voice-settings"),
     transcriptBackground: need<HTMLInputElement>("transcript-background"),
+    transcriptBackgroundLevel: need<HTMLInputElement>("transcript-background-level"),
+    transcriptBackgroundValue: need<HTMLOutputElement>("transcript-background-value"),
     transcriptAudioNote: need<HTMLParagraphElement>("transcript-audio-note"),
     transcriptSpeakers: need<HTMLDivElement>("transcript-speakers"),
     transcriptList: need<HTMLUListElement>("transcript-list"),
@@ -1351,6 +1353,7 @@ export function start(): void {
 
   /** Look somewhere else in the library, from its first page. */
   function lookAt(folder: string): void {
+    beginListNavigation(dom.playlist);
     openFolder = folder;
     listPage = 0;
     renderedFor = "";
@@ -1375,6 +1378,7 @@ export function start(): void {
       button.title = tip;
       button.disabled = to < 0 || to >= pages;
       button.addEventListener("click", () => {
+        beginListNavigation(dom.playlist);
         listPage = to;
         renderedFor = "";
         renderPlaylist();
@@ -1439,7 +1443,19 @@ export function start(): void {
     open.addEventListener("click", event => { event.stopPropagation(); lookAt(openFolder === "" ? name : `${openFolder}/${name}`); });
     return item;
   }
+  let playlistSource: unknown = null;
+  let playlistView = "";
   function renderPlaylist(): void {
+    // Meter ticks and playback clocks do not change the library. Avoid mapping,
+    // sorting and serializing thousands of tracks for every incoming frame.
+    const source = mode === "remote" ? snapshot.tracks : local;
+    const view = `${mode}:${openFolder}:${dom.filter.value}:${listPage}:${canGoLive()}:${dom.adminPanel.hidden}`;
+    if (renderedFor && playlistSource === source && playlistView === view) {
+      markPlaylistPlaying();
+      return;
+    }
+    playlistSource = source;
+    playlistView = view;
     // A row is a name, a length, where it sits, and which pile it is in.
     //
     // Where it sits is what turns a library into something you can look
@@ -1569,6 +1585,10 @@ export function start(): void {
       }
       replaceList(dom.playlist, ...children);
     }
+    markPlaylistPlaying();
+  }
+
+  function markPlaylistPlaying(): void {
     const active = at();
     const live = playing();
     for (const child of Array.from(dom.playlist.children)) {
@@ -1737,6 +1757,10 @@ export function start(): void {
   }
 
   // ---- wiring -------------------------------------------------------------
+
+  // Browsers that allow autoplay start shared links immediately. A fresh
+  // browser may require its first click; keep the loaded stream and room ready.
+  document.addEventListener("click", () => { void player.resumeAfterInteraction().catch(() => {}); });
 
   dom.filter.addEventListener("input", () => {
     // A new question starts from its first answer.
@@ -3301,6 +3325,22 @@ export function start(): void {
     backgroundFailed = true;
     if (translatedPlaying) dom.transcriptAudioNote.textContent = "Translated audio · background sound unavailable on this device";
   });
+  const drawBackgroundLevel = (): void => {
+    const value = Number(dom.transcriptBackgroundLevel.value);
+    background.setLevel(value / 100);
+    dom.transcriptBackgroundValue.value = `${value}%`;
+    dom.transcriptBackgroundLevel.setAttribute("aria-valuetext", `${value} percent`);
+    dom.transcriptBackgroundLevel.disabled = !dom.transcriptBackground.checked;
+  };
+  try {
+    const saved = localStorage.getItem("nixamp.backgroundLevel");
+    if (saved !== null && Number.isFinite(Number(saved))) dom.transcriptBackgroundLevel.value = saved;
+  } catch { /* default 100 percent */ }
+  drawBackgroundLevel();
+  dom.transcriptBackgroundLevel.addEventListener("input", () => {
+    drawBackgroundLevel();
+    try { localStorage.setItem("nixamp.backgroundLevel", dom.transcriptBackgroundLevel.value); } catch { /* device preference only */ }
+  });
   const liveVoice = new LiveVoicePlayer({
     playing: () => player.playing,
     volume: () => player.volume,
@@ -4037,6 +4077,7 @@ export function start(): void {
   }
 
   dom.transcriptBackground.addEventListener("change", () => {
+    drawBackgroundLevel();
     try { localStorage.setItem("nixamp.backgroundSound", dom.transcriptBackground.checked ? "on" : "off"); } catch { /* device preference only */ }
     background.stop(); backgroundFailed = false;
     if (dom.transcriptBackground.checked && dom.transcriptAudio.checked && player.playing) {
@@ -4144,6 +4185,25 @@ export function start(): void {
   let filterTimer: ReturnType<typeof setTimeout> | null = null;
   /** Answers that arrive after a newer request are not news. */
   let entriesRequest = 0;
+  let entriesAbort: AbortController | null = null;
+  let catalogsLoading: { url: string; promise: Promise<void> } | null = null;
+  type CatalogGroup = { name: string; count: number; live: number; vod: number };
+  const groupCache = new Map<string, Promise<CatalogGroup[]>>();
+
+  function navigateCatalog(catalog: CatalogSummary | null, group: string | null): void {
+    entriesRequest++;
+    entriesAbort?.abort();
+    if (filterTimer) clearTimeout(filterTimer);
+    filterTimer = null;
+    beginListNavigation(dom.catalogsList);
+    beginListNavigation(dom.catalogsEntries);
+    openCatalog = catalog; openGroup = group; entryQuery = "";
+    dom.catalogsFilter.value = "";
+    entriesShown = []; entriesTotal = 0;
+    dom.catalogsEntries.setAttribute("aria-busy", "false");
+    drawCatalogs();
+    if (catalog && group !== null) void loadEntries(0);
+  }
 
   /** "3 minutes ago", for a refresh time. Never, for a catalog never read. */
   function agoOf(at: number): string {
@@ -4157,18 +4217,29 @@ export function start(): void {
     return `${Math.round(hours / 24)} d ago`;
   }
 
-  async function loadCatalogs(): Promise<void> {
+  function loadCatalogs(): Promise<void> {
+    const url = remote.url("/api/catalogs");
+    if (catalogsLoading?.url === url) return catalogsLoading.promise;
+    const promise = fetchCatalogs(url).finally(() => {
+      if (catalogsLoading?.promise === promise) catalogsLoading = null;
+    });
+    catalogsLoading = { url, promise };
+    return promise;
+  }
+
+  async function fetchCatalogs(url: string): Promise<void> {
     if (mode !== "remote") {
       dom.catalogsPanel.hidden = true;
       return;
     }
     let answer: Response;
     try {
-      answer = await fetch(remote.url("/api/catalogs"));
+      answer = await fetch(url);
     } catch {
-      dom.catalogsPanel.hidden = true;
+      if (url === remote.url("/api/catalogs")) dom.catalogsPanel.hidden = true;
       return;
     }
+    if (mode !== "remote" || url !== remote.url("/api/catalogs")) return;
     // An older server has no catalogs to speak of, and a panel about a thing
     // the server has never heard of is worse than no panel.
     if (!answer.ok) {
@@ -4236,9 +4307,9 @@ export function start(): void {
       return span;
     };
     const children: HTMLElement[] = [
-      step("All catalogs", () => { openCatalog = null; openGroup = null; drawCatalogs(); }, false),
+      step("All catalogs", () => navigateCatalog(null, null), false),
       sep(),
-      step(openCatalog?.name ?? "", () => { openGroup = null; drawCatalogs(); }, openGroup === null),
+      step(openCatalog?.name ?? "", () => navigateCatalog(openCatalog, null), openGroup === null),
     ];
     if (openGroup !== null) {
       children.push(sep(), step(openGroup === "" ? "All groups" : openGroup, () => undefined, true));
@@ -4276,10 +4347,9 @@ export function start(): void {
     browse.type = "button";
     browse.className = "button";
     browse.textContent = "Browse";
+    browse.setAttribute("aria-label", `Browse ${catalog.name}`);
     browse.addEventListener("click", () => {
-      openCatalog = catalog;
-      openGroup = null;
-      drawCatalogs();
+      navigateCatalog(catalog, null);
     });
     item.append(label, browse);
 
@@ -4307,19 +4377,32 @@ export function start(): void {
   }
 
   async function drawGroups(catalog: CatalogSummary): Promise<void> {
-    replaceList(dom.catalogsList, );
-    let groups: { name: string; count: number; live: number; vod: number }[] = [];
+    const url = remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/groups`);
+    const key = `${url}:${catalog.refreshedAt}:${catalog.entries}`;
+    let groups: CatalogGroup[];
+    dom.catalogsList.setAttribute("aria-busy", "true");
     try {
-      const answer = await whileLoading(() => fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/groups`)));
-      if (!answer.ok) throw new Error(String(answer.status));
-      groups = ((await answer.json()) as { groups?: typeof groups }).groups ?? [];
+      let pending = groupCache.get(key);
+      if (!pending) {
+        if (groupCache.size >= 20) groupCache.delete(groupCache.keys().next().value!);
+        pending = fetch(url).then(async answer => {
+          if (!answer.ok) throw new Error(String(answer.status));
+          return ((await answer.json()) as { groups?: CatalogGroup[] }).groups ?? [];
+        });
+        groupCache.set(key, pending);
+      }
+      groups = await pending;
     } catch {
+      groupCache.delete(key);
+      if (openCatalog?.id !== catalog.id || openGroup !== null || url !== remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/groups`)) return;
+      dom.catalogsList.setAttribute("aria-busy", "false");
       note = `Could not read the groups in ${catalog.name}.`;
       draw();
       return;
     }
     // Still where we were? A click elsewhere while this was in flight wins.
-    if (openCatalog?.id !== catalog.id || openGroup !== null) return;
+    if (openCatalog?.id !== catalog.id || openGroup !== null || url !== remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/groups`)) return;
+    dom.catalogsList.setAttribute("aria-busy", "false");
 
     const rows: HTMLElement[] = [
       groupRow("All groups", "", catalog.entries, catalog.live, catalog.vod),
@@ -4343,14 +4426,9 @@ export function start(): void {
     open.type = "button";
     open.className = "button";
     open.textContent = "Open";
+    open.setAttribute("aria-label", `Open ${label}`);
     open.addEventListener("click", () => {
-      openGroup = group;
-      entryQuery = "";
-      dom.catalogsFilter.value = "";
-      entriesShown = [];
-      entriesTotal = 0;
-      drawCatalogs();
-      void loadEntries(0);
+      navigateCatalog(openCatalog, group);
     });
     item.append(text, open);
     return item;
@@ -4362,20 +4440,28 @@ export function start(): void {
     const group = openGroup;
     if (!catalog || group === null) return;
     const request = ++entriesRequest;
+    entriesAbort?.abort();
+    const controller = new AbortController(); entriesAbort = controller;
+    const origin = remote.url("/api/catalogs");
+    dom.catalogsEntries.setAttribute("aria-busy", "true");
     const params = new URLSearchParams({
       group, q: entryQuery, offset: String(offset), limit: String(CATALOG_PAGE),
     });
     let got: { total: number; entries: CatalogEntry[] };
     try {
-      const answer = await whileLoading(() => fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/entries?${params}`)));
+      const answer = await fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}/entries?${params}`), { signal: controller.signal });
       if (!answer.ok) throw new Error(String(answer.status));
       got = (await answer.json()) as typeof got;
     } catch {
+      if (controller.signal.aborted || request !== entriesRequest) return;
+      dom.catalogsEntries.setAttribute("aria-busy", "false");
       note = `Could not read ${catalog.name}.`;
+      drawEntries();
       draw();
       return;
     }
-    if (request !== entriesRequest) return;
+    if (request !== entriesRequest || openCatalog?.id !== catalog.id || openGroup !== group || origin !== remote.url("/api/catalogs")) return;
+    dom.catalogsEntries.setAttribute("aria-busy", "false");
     entriesTotal = got.total ?? 0;
     entriesShown = offset === 0 ? (got.entries ?? []) : [...entriesShown, ...(got.entries ?? [])];
     drawEntries();
@@ -4393,7 +4479,11 @@ export function start(): void {
       const tag = document.createElement("span");
       tag.className = entry.live ? "catalog-tag catalog-live" : "catalog-tag";
       tag.textContent = entry.live ? "LIVE" : (entry.duration > 0 ? formatTime(entry.duration) : "VOD");
-      item.append(name, tag);
+      const play = document.createElement("button");
+      play.type = "button"; play.className = "row-main";
+      play.setAttribute("aria-label", `Play ${entry.title}`);
+      play.append(name, tag); item.append(play);
+      play.addEventListener("click", () => { void playEntry(catalog, entry, item); });
       if (!entry.live) {
         // The film's own address, for VLC or another page. A live entry has
         // none until it is playing, and then it is a channel with its own.
@@ -4418,7 +4508,6 @@ export function start(): void {
           entry.title,
         ));
       }
-      item.addEventListener("click", () => { void playEntry(catalog, entry, item); });
       return item;
     });
 
@@ -4439,6 +4528,8 @@ export function start(): void {
       button.textContent = `Show more (${entriesShown.length.toLocaleString()} of ${entriesTotal.toLocaleString()})`;
       button.addEventListener("click", (event) => {
         event.stopPropagation();
+        beginListNavigation(dom.catalogsEntries, false);
+        button.disabled = true;
         void loadEntries(entriesShown.length);
       });
       more.append(button);
@@ -4562,6 +4653,8 @@ export function start(): void {
   // Typing narrows the entries after a pause, not on every keystroke: a
   // request per key against a thousand-line list is a request per key.
   dom.catalogsFilter.addEventListener("input", () => {
+    entriesRequest++;
+    entriesAbort?.abort();
     if (filterTimer) clearTimeout(filterTimer);
     filterTimer = setTimeout(() => {
       filterTimer = null;

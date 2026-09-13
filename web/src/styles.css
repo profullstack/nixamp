@@ -720,6 +720,11 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .catalog-live { color: var(--green); }
 /* The catalog panel's entry list scrolls like the playlist does. */
 #catalogs-entries { max-height: 320px; overflow-y: auto; }
+#catalogs-list { max-height: 240px; }
+#catalogs-list li { align-items: center; }
+#catalogs-list .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#catalogs-list .detail { font-size: 11px; opacity: 1; color: var(--muted); }
+#catalogs-list button { min-height: 24px; padding: 2px 8px; font-size: 12px; }
 
 /* A folder in the list. It is not a track, so it has no number and no time --
    what it has is how much is inside it. */
@@ -1307,8 +1312,9 @@ body.tv input, body.tv .filter { font-size: 1em; padding: 8px 10px; }
 .skip-links a { position: fixed; top: 8px; left: 8px; transform: translateY(-200%); z-index: 1000; background: var(--panel); color: var(--fg); padding: 12px; border: 2px solid var(--accent); }
 .skip-links a:focus { transform: none; }
 :where(button, a, input, select, textarea, [tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.row-main { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 0; background: transparent; color: inherit; border: 0; border-radius: 0; text-align: left; font: inherit; padding: 4px; cursor: pointer; }
+.row-main { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; min-height: 24px; background: transparent; color: inherit; border: 0; border-radius: 0; text-align: left; font: inherit; padding: 2px; cursor: pointer; }
 .row-main:focus-visible { outline-offset: -2px; }
+.row-main .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-copy:focus-visible, .row:focus-within .row-copy { opacity: 1; }
 .panel-tools button { min-width: 24px; min-height: 24px; }
 @media (prefers-reduced-motion: reduce) {
@@ -1328,3 +1334,6 @@ body.tv input, body.tv .filter { font-size: 1em; padding: 8px 10px; }
 .audio-translation > .hint { flex-basis: 100%; margin: 0; }
 .audio-translation details { flex-basis: 100%; }
 .audio-translation summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
+.background-level { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-top: 6px; }
+.background-level input { flex: 1; min-width: 0; max-width: 180px; }
+.background-level output { min-width: 4ch; }

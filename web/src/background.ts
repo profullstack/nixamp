@@ -9,6 +9,7 @@ export class BackgroundAudio {
   private pendingPort: MessagePort | null = null;
   private cancelStart: (() => void) | null = null;
   private on = false;
+  private level = 1;
   private static loaded = new WeakMap<AudioContext, Promise<void>>();
   constructor(private readonly failed: () => void) {}
 
@@ -46,19 +47,29 @@ export class BackgroundAudio {
       if (generation !== this.generation) return false;
       const fail = (): void => { if (generation === this.generation) { this.stop(); this.failed(); } };
       worker.onerror = fail; worker.onmessage = event => { if (event.data.error) fail(); };
-      const node = new AudioWorkletNode(context, "nixamp-background", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+      // Keep the source layout until dialogue is separated. Mixing a surround
+      // file into stereo first would mix its ambience into the speech estimate.
+      const node = new AudioWorkletNode(context, "nixamp-background", {
+        numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
+        channelCount: 8, channelCountMode: "clamped-max", channelInterpretation: "speakers",
+      });
       this.node = node;
       node.onprocessorerror = fail;
       node.port.onmessage = event => { if (event.data.error) fail(); };
       node.port.postMessage({ port: connection.port1 }, [connection.port1]);
       this.pendingPort = null;
-      const gain = context.createGain(); this.gain = gain; gain.gain.value = this.on ? 1 : 0;
+      const gain = context.createGain(); this.gain = gain; gain.gain.value = this.on ? this.level : 0;
       this.input = input; node.connect(gain); gain.connect(context.destination); input.connect(node);
       return true;
     } catch { if (generation === this.generation) { this.stop(); this.failed(); } }
     return false;
   }
-  active(on: boolean): void { this.on = on; if (this.gain) this.gain.gain.value = on ? 1 : 0; }
+  active(on: boolean): void { this.on = on; if (this.gain) this.gain.gain.value = on ? this.level : 0; }
+  setLevel(level: number): void {
+    if (!Number.isFinite(level)) return;
+    this.level = Math.max(0, Math.min(2, level));
+    if (this.gain) this.gain.gain.value = this.on ? this.level : 0;
+  }
   stop(): void {
     this.generation++; this.on = false;
     this.cancelStart?.(); this.cancelStart = null;

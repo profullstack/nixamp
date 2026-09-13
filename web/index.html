@@ -128,6 +128,7 @@
           <details id="transcript-voice-settings" hidden>
             <summary>Audio options</summary>
             <label class="transcript-switch"><input type="checkbox" id="transcript-background" checked /> Keep background sound</label>
+            <label class="background-level">Background level <input id="transcript-background-level" type="range" min="0" max="200" step="5" value="100" aria-valuetext="100 percent" /> <output id="transcript-background-value" for="transcript-background-level">100%</output></label>
             <p class="hint">Speech removal is approximate; turn this off if original voices bleed through.</p>
             <div id="transcript-speakers" role="group" aria-label="Speaker voices"></div>
           </details>

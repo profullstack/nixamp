@@ -207,3 +207,28 @@ http://p.test/series/u/p/3.mkv
   assert.equal(plainOne.entries, 3);
   assert.equal(plainOne.error, "");
 });
+
+test('IPTV-org is seeded once beside custom catalogs, warmed off the startup path, and may stay removed', async () => {
+  const { DEFAULT_CATALOG_SOURCE } = await import('../src/catalogs.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'nixamp-default-catalog-'));
+  const { send, asked } = provider();
+  const catalogs = new Catalogs(dir, 4321, send);
+  const custom = await catalogs.add('https://custom.test/list.m3u', 'My catalog');
+  catalogs.ensureDefaults(); catalogs.ensureDefaults();
+  assert.equal(asked.length, 1, 'seeding must not wait on the provider');
+  assert.equal(catalogs.list().length, 2);
+  const starter = catalogs.list().find(c => c.source === DEFAULT_CATALOG_SOURCE)!;
+  assert.equal(starter.name, 'IPTV-org');
+  await catalogs.warm();
+  assert.equal(catalogs.get(starter.id)?.entries, 4);
+  assert.equal(catalogs.get(custom.id)?.name, 'My catalog');
+  assert.equal(asked.length, 2);
+  catalogs.remove(starter.id);
+  const restart = new Catalogs(dir, 4321, send);
+  restart.load(); restart.ensureDefaults(); await restart.warm();
+  assert.equal(restart.get(starter.id), null, 'do not undo an intentional removal on restart');
+  assert.equal(restart.list().length, 1);
+  const otherPort = new Catalogs(dir, 4322, send);
+  otherPort.load(); otherPort.ensureDefaults();
+  assert.equal(otherPort.list()[0]?.name, 'IPTV-org');
+});
