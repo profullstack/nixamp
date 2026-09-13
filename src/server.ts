@@ -18,6 +18,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { Readable } from "node:stream";
 import { pipeline as pipeStream } from "node:stream/promises";
+import { SharedTranslations, type SharedEvent } from "./shared-translation.ts";
+import { TranslationPasses } from "./translation-passes.ts";
 import { LiveVoice, LIVE_VOICE_LANGUAGES, LIVE_VOICE_MODEL, type VoiceRequest } from "./live-voice.ts";
 import { Connections, type Kind } from "./connections.ts";
 import {
@@ -1762,6 +1764,8 @@ export interface HandlerOptions {
   /** Speech to text: a line said out loud, heard here. Needs the optional model. */
   speech?: Speech;
   liveVoice?: LiveVoice;
+  translationPasses?: TranslationPasses;
+  sharedTranslations?: SharedTranslations;
   /** Translation: texts in another language, by a model here. The same optional library. */
   translator?: Translator;
   /** The transcript store: what was heard, kept under the media's identity. Where the accounts are. */
@@ -2853,6 +2857,75 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       } catch (error) {
         if (error instanceof TrollboxError) json(response, error.status, { error: error.message });
         else throw error;
+      }
+      return;
+    }
+
+    if (path === "/api/v1/speech/shared" && request.method === "POST") {
+      try {
+        const service = options.sharedTranslations;
+        const who = await options.accounts?.whoIs(tokenFrom(request.headers));
+        if (!who) throw new SpeechError("Sign in to translate live audio.", 401);
+        if (!service) throw new SpeechError("Shared translation is unavailable.", 503);
+        const caller = callerOf(request.headers, request.socket.remoteAddress, options.behindProxy ?? false);
+        if (!guard.check(`shared-join:${who.id}`, { allowed: 10, windowMs: 60_000 }).ok || !guard.check(`shared-ip:${caller}`, { allowed: 30, windowMs: 60_000 }).ok) throw new SpeechError("Too many live translation joins.", 429);
+        if (!request.headers["content-type"]?.startsWith("application/json")) throw new SpeechError("Send a live source as JSON.", 415);
+        let body: { source?: unknown; language?: unknown };
+        try { body = JSON.parse(await readBody(request, 4096)); } catch { throw new SpeechError("Choose a live source and language.", 400); }
+        if (typeof body?.source !== "string" || typeof body.language !== "string") throw new SpeechError("Choose a live source and language.", 400);
+        const queued: SharedEvent[] = [];
+        let finished = false;
+        const send = (event: SharedEvent): void => {
+          if (!response.headersSent) { queued.push(event); return; }
+          if (response.destroyed || response.writableLength > 512_000) throw new Error("slow listener");
+          response.write(`data: ${JSON.stringify(event)}\n\n`);
+        };
+        const leave = await service.join(body.source, body.language, who.id, send, () => { finished = true; if (response.headersSent) response.end(); });
+        if (response.destroyed) { leave(); return; }
+        response.writeHead(200, { ...CORS, "content-type": "text/event-stream", "cache-control": "no-store", "x-accel-buffering": "no" });
+        for (const event of queued) send(event);
+        if (finished) { leave(); response.end(); return; }
+        const heartbeat = setInterval(() => { if (!response.destroyed) response.write(": listening\n\n"); }, 10_000);
+        response.once("close", () => { clearInterval(heartbeat); leave(); });
+      } catch (error) {
+        if (response.headersSent) response.end();
+        else json(response, error instanceof SpeechError ? error.status : 502, { error: error instanceof SpeechError ? error.message : "Shared translation is unavailable." });
+      }
+      return;
+    }
+
+    if (path === "/api/v1/translation-passes" || path.startsWith("/api/v1/translation-passes/")) {
+      response.setHeader("cache-control", "no-store");
+      try {
+        const caller = callerOf(request.headers, request.socket.remoteAddress, options.behindProxy ?? false);
+        if (!guard.check(`translation-pass-ip:${caller}`, { allowed: 120, windowMs: 60_000 }).ok) throw new SpeechError("Too many purchase requests.", 429);
+        const service = options.translationPasses;
+        if (!service || !options.accounts) {
+          if (path === "/api/v1/translation-passes" && request.method === "GET") json(response, 200, { required: false, available: false, balanceMicros: 0, expires: null, plans: [], coins: [], orders: [] });
+          else json(response, 503, { error: "Translation checkout is unavailable." });
+          return;
+        }
+        const who = await options.accounts.whoIs(tokenFrom(request.headers));
+        if (path === "/api/v1/translation-passes" && request.method === "GET") {
+          json(response, 200, await service.access(who?.id)); return;
+        }
+        if (!who) throw new SpeechError("Sign in to buy translated audio.", 401);
+        if (!guard.check(`translation-pass-account:${who.id}`, { allowed: 30, windowMs: 60_000 }).ok) throw new SpeechError("Too many purchase requests.", 429);
+        if (path === "/api/v1/translation-passes/checkout" && request.method === "POST") {
+          if (!request.headers["content-type"]?.startsWith("application/json")) throw new SpeechError("Send a purchase as JSON.", 415);
+          if (!guard.check(`translation-checkout-ip:${caller}`, { allowed: 10, windowMs: 3600_000 }).ok) throw new SpeechError("Too many new checkouts. Resume your pending purchase.", 429);
+          let body: Record<string, unknown>;
+          try { body = JSON.parse(await readBody(request, 1024)); } catch { throw new SpeechError("Choose a translation pass.", 400); }
+          if (!body || typeof body !== "object" || typeof body["plan"] !== "string" || typeof body["coin"] !== "string" || typeof body["requestKey"] !== "string") throw new SpeechError("Choose a translation pass and payment currency.", 400);
+          json(response, 200, await service.checkout(who.id, body["plan"], body["coin"], body["requestKey"])); return;
+        }
+        const order = path.match(/^\/api\/v1\/translation-passes\/orders\/([^/]+)$/);
+        if (order && request.method === "GET") {
+          json(response, 200, await service.check(who.id, order[1]!)); return;
+        }
+        json(response, 405, { error: "GET your balance or purchase status; POST a checkout." });
+      } catch (error) {
+        json(response, error instanceof SpeechError ? error.status : 502, { error: error instanceof SpeechError ? error.message : "Translation purchases are temporarily unavailable." });
       }
       return;
     }
@@ -6008,8 +6081,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // the first person to speak does not wait for the model to arrive; a box
   // without the optional model never says it is ready, and answers 503.
   const speech = accounts && process.env["NIXAMP_STT"] !== "off" ? new Speech() : undefined;
+  // Account servers meter paid providers by default, including when checkout
+  // is temporarily unconfigured. Self-hosters can explicitly sponsor usage.
+  const translationPasses = accounts && pool && process.env["NIXAMP_TRANSLATION_BILLING"] !== "off"
+    ? new TranslationPasses({ db: pool, key: process.env["COINPAY_X402_KEY"] ?? "", site: nixampSite }) : undefined;
+  if (translationPasses) void translationPasses.access().catch(() => console.error("nixamp: translation checkout could not warm; it will retry on demand"));
   const liveVoice = accounts && process.env["NIXAMP_DUBBING"] !== "off" ? new LiveVoice({
     ...(pool ? { db: pool } : {}),
+    ...(translationPasses ? { billing: translationPasses } : {}),
     dailyChars: Number(process.env["NIXAMP_DUB_DAILY_CHARS"] ?? 200_000),
     dailyAudioSeconds: Number(process.env["NIXAMP_DUB_DAILY_AUDIO_SECONDS"] ?? 86_400),
     userDailyChars: Number(process.env["NIXAMP_DUB_USER_DAILY_CHARS"] ?? 120_000),
@@ -6025,6 +6104,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // names pairs to load at boot (en-de,en-sv) so the first line does not
   // wait; NIXAMP_MT=off turns it off.
   const translator = accounts && process.env["NIXAMP_MT"] !== "off" ? new Translator() : undefined;
+  const sharedTranslations = liveVoice && translator ? new SharedTranslations({ voice: liveVoice, translator, ...(translationPasses ? { billing: translationPasses } : {}) }) : undefined;
   if (translator) {
     const warm = (process.env["NIXAMP_MT_WARM"] ?? "").split(",").map((one) => one.trim()).filter(Boolean);
     if (warm.length > 0) {
@@ -6508,6 +6588,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(trollbox ? { trollbox } : {}),
     ...(speech ? { speech } : {}),
     ...(liveVoice ? { liveVoice } : {}),
+    ...(translationPasses ? { translationPasses } : {}),
+    ...(sharedTranslations ? { sharedTranslations } : {}),
     ...(translator ? { translator } : {}),
     ...(transcripts ? { transcripts } : {}),
     ...(translations ? { translations } : {}),

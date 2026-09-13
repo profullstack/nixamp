@@ -4,6 +4,7 @@ import { SpeechError, decodeWav, encodeWav, quietSamples } from "./speech.ts";
 import { speakerTurns, type ScribeResult, type SpeakerTranscript } from "./speaker-turns.ts";
 import type { VoiceProfile } from "./voice-profile.ts";
 import { Guard } from "./guard.ts";
+import type { TranslationMeter } from "./translation-passes.ts";
 import type { Queryable } from "./follows.ts";
 
 export const LIVE_VOICE_MODEL = "eleven_flash_v2_5";
@@ -28,6 +29,7 @@ export class LiveVoice {
   private readonly grants = new Map<string, { by: string; channel: string; expires: number; remaining: number }>();
   private readonly activeBy = new Map<string, number>();
   private readonly db?: Queryable;
+  private readonly billing?: TranslationMeter;
   private schema: Promise<unknown> | null = null;
   private readonly dailyChars: number;
   private cleanupAt = 0;
@@ -36,7 +38,7 @@ export class LiveVoice {
   private readonly userDailyChars: number;
   private readonly userDailyAudioSeconds: number;
 
-  constructor(options: { apiKey?: string; fetcher?: typeof fetch; now?: () => number; charsPerMinute?: number; dailyChars?: number; dailyAudioSeconds?: number; userDailyChars?: number; userDailyAudioSeconds?: number; db?: Queryable } = {}) {
+  constructor(options: { apiKey?: string; fetcher?: typeof fetch; now?: () => number; charsPerMinute?: number; dailyChars?: number; dailyAudioSeconds?: number; userDailyChars?: number; userDailyAudioSeconds?: number; db?: Queryable; billing?: TranslationMeter } = {}) {
     this.key = options.apiKey ?? process.env["ELEVENLABS_API_KEY"] ?? "";
     this.fetcher = options.fetcher ?? fetch;
     this.now = options.now ?? Date.now;
@@ -47,6 +49,7 @@ export class LiveVoice {
     this.userDailyAudioSeconds = budget(options.userDailyAudioSeconds, 43_200);
     this.requests = new Guard(this.now);
     this.db = options.db;
+    this.billing = options.billing;
   }
 
   available(): boolean { return this.key !== ""; }
@@ -54,8 +57,9 @@ export class LiveVoice {
   /** Optional diarization, billed only while a signed-in listener requests it.
    * Rolling audio is bounded to 15 seconds, including overlap. Every second
    * submitted (also repeated context) consumes the persistent provider budget. */
-  async hear(bytes: Uint8Array, by: string, signal?: AbortSignal): Promise<SpeakerTranscript> {
+  async hear(bytes: Uint8Array, by: string, signal?: AbortSignal, meter = this.billing): Promise<SpeakerTranscript> {
     if (!this.available()) throw new SpeechError("speaker voices are unavailable", 503);
+    await meter?.require(by);
     const wav = decodeWav(bytes);
     const seconds = wav.samples.length / wav.rate;
     if (wav.rate !== 16000 || wav.channels !== 1 || seconds < 0.2 || seconds > 15.1) throw new SpeechError("send up to 15 seconds of mono 16 kHz WAV", 400);
@@ -64,6 +68,8 @@ export class LiveVoice {
     if (quietSamples(wav.samples)) return { language: "", seconds, turns: [] };
     if (this.hearing.has(by) || this.hearing.size >= 4) throw new SpeechError("speaker transcription is busy", 429);
     this.hearing.add(by);
+    let reservation: string | undefined;
+    let accepted = false;
     try {
       const billed = Math.ceil(seconds);
       await this.reserve(`scribe:user:${by}`, billed, 300, 60_000);
@@ -80,12 +86,18 @@ export class LiveVoice {
       form.set("tag_audio_events", "false");
       form.set("timestamps_granularity", "word");
       // No language_code: preserve the source language, including Spanish.
+      reservation = await meter?.reserve(by, "transcription", wav.samples.length);
       const answer = await this.fetcher("https://api.elevenlabs.io/v1/speech-to-text", {
         method: "POST", headers: { "xi-api-key": this.key }, body: form,
         signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
       });
       if (!answer.ok) throw new SpeechError("speaker transcription could not run; check provider quota and permissions", answer.status === 429 ? 429 : 502);
+      accepted = true;
+      if (reservation) await meter!.commit(reservation);
       return speakerTurns(await answer.json() as ScribeResult, wav);
+    } catch (error) {
+      if (reservation && !accepted) await meter!.refund(reservation);
+      throw error;
     } finally { this.hearing.delete(by); }
   }
 
@@ -110,6 +122,7 @@ export class LiveVoice {
   async grant(by: string, channel: string): Promise<{ token: string; expires: number }> {
     if (!/^[\w-]{1,80}$/.test(channel)) throw new SpeechError("choose a playback session or live channel", 400);
     if (!this.requests.check(`grant:${by}`, { allowed: 10, windowMs: 60_000 }).ok) throw new SpeechError("too many audio authorization requests", 429);
+    await this.billing?.require(by);
     for (const [token, grant] of this.grants) if (grant.expires <= this.now()) this.grants.delete(token);
     if (this.grants.size >= 5000) throw new SpeechError("audio authorization is busy", 503);
     const token = `nxd_${randomBytes(32).toString("base64url")}`;
@@ -185,8 +198,9 @@ export class LiveVoice {
   }
 
   /** Stream the first request immediately; concurrent listeners share its cached result. */
-  async stream(ask: VoiceRequest, by: string, signal?: AbortSignal): Promise<Response> {
+  async stream(ask: VoiceRequest, by: string, signal?: AbortSignal, meter = this.billing): Promise<Response> {
     this.checkRequest(by);
+    await meter?.require(by);
     const text = typeof ask.text === "string" ? ask.text.trim() : "";
     if (!text || text.length > 600) throw new SpeechError("translated audio needs a caption of 1–600 characters", 400);
     if (!LIVE_VOICE_LANGUAGES.has(ask.language)) throw new SpeechError("this language is not supported by Flash voices", 400);
@@ -202,9 +216,14 @@ export class LiveVoice {
     const id = createHash("sha256").update(JSON.stringify([LIVE_VOICE_MODEL, voice.id, ask.language, text])).digest("hex");
     for (const [key, item] of this.cache) if (item.until < this.now()) this.cache.delete(key);
     const cached = this.cache.get(id);
-    if (cached) return new Response(new Uint8Array(cached.bytes), { headers: HEADERS });
     const pending = this.pending.get(id);
-    if (pending) return new Response(new Uint8Array(await pending), { headers: HEADERS });
+    if (cached || pending) {
+      const bytes = cached?.bytes ?? await pending!;
+      signal?.throwIfAborted();
+      const paid = await meter?.reserve(by, "voice", text.length);
+      if (paid) await meter!.commit(paid);
+      return new Response(new Uint8Array(bytes), { headers: HEADERS });
+    }
     if (this.pending.size >= 4) throw new SpeechError("translated audio is busy; waiting for the next caption", 429);
     if ((this.activeBy.get(by) ?? 0) >= 2) throw new SpeechError("two voice requests are already active for this account", 429);
     // Register before the first provider await, so identical requests cannot both bill.
@@ -215,9 +234,12 @@ export class LiveVoice {
     this.activeBy.set(by, (this.activeBy.get(by) ?? 0) + 1);
     const release = (): void => { this.pending.delete(id); this.activeBy.set(by, Math.max(0, (this.activeBy.get(by) ?? 1) - 1)); if (!this.activeBy.get(by)) this.activeBy.delete(by); };
     void finished.catch(() => undefined);
+    let reservation: string | undefined;
+    let accepted = false;
     try {
       await this.charge(by, ask.channel ?? "direct", text.length);
       signal?.throwIfAborted();
+      reservation = await meter?.reserve(by, "voice", text.length);
       const response = await this.fetcher(`https://api.elevenlabs.io/v1/text-to-speech/${voice.id}/stream?output_format=pcm_16000`, {
         method: "POST",
         headers: { "xi-api-key": this.key, "content-type": "application/json" },
@@ -225,6 +247,9 @@ export class LiveVoice {
         signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
       });
       if (!response.ok || !response.body) throw new SpeechError(response.status === 429 ? "ElevenLabs audio quota is temporarily exhausted" : "ElevenLabs could not generate audio; check the server key and quota", response.status === 429 ? 429 : 502);
+      // Once the provider accepts, aborting playback cannot refund heard audio.
+      accepted = true;
+      if (reservation) await meter!.commit(reservation);
       const [play, keep] = response.body.tee();
       void (async () => {
         const reader = keep.getReader();
@@ -251,7 +276,9 @@ export class LiveVoice {
       })();
       return new Response(play, { headers: HEADERS });
     } catch (error) {
-      fail(error); release(); throw error;
+      fail(error); release();
+      if (reservation && !accepted) await meter!.refund(reservation);
+      throw error;
     }
   }
 }

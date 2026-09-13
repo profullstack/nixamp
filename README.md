@@ -557,6 +557,61 @@ uses its direct model; it does not first translate the audio into English.
 
 ### Hear it in your language
 
+**Buy translated audio** (`$` in the player or Transcript title bar) offers
+prepaid, account-bound passes: **$5 / 24 hours**, **$25 / 7 days**, or **$100 /
+30 days**. Each purchase provides that many dollars of usage credit, not
+unlimited listening. There is no automatic renewal. Credit expires; buying
+before expiry adds the credit and keeps the later expiry. At 1,000 translated
+characters/minute with normal recognition overlap, the passes provide about
+16, 81, or 327 minutes respectively. Actual speech density changes the allowance.
+
+Paid access is **5× base speech API cost (400% markup)**: $0.25 per 1,000 Flash
+characters and $1.10 per submitted Scribe audio hour. Recognition includes
+repeated context, normally three submitted hours per listening hour. The price
+is the same for every listener, including reused audio; reuse reduces provider
+spending. Captions and self-hosted text translation retain their existing free
+access and throttles.
+
+CoinPay hosts crypto checkout with the merchant's configured currencies. Network
+fees are shown separately at checkout. Nixamp creates fixed-price orders on the
+server and verifies the stored payment ID, confirmed status, USD currency, and
+exact price before crediting the account. Returning from checkout or sending a
+client-side `paid` flag never unlocks access. Pending purchases can be resumed
+from the panel on another device signed into the same account.
+
+PostgreSQL atomically reserves usage credit before paid calls, refunds rejected
+provider requests, and credits a confirmed payment once across concurrent checks.
+Accepted speech is charged even if playback is canceled. Money is stored as
+integer micro-USD. The ledger uses base cost rounded up to a micro-dollar, then
+multiplied by five. Credentials and balances never travel in checkout URLs.
+New checkout creation is capped at five per account and fifty per account server
+per UTC day, plus IP and request throttles; retries reuse the original invoice.
+
+Account servers require a paid pass by default. Configure `COINPAY_X402_KEY`
+with `payments:create` permission and at least one business wallet; the scoped
+key supplies the merchant identity. Existing credit still works during a
+checkout outage. A self-hosted operator explicitly sponsoring API usage may set
+`NIXAMP_TRANSLATION_BILLING=off`.
+
+Live Nixamp channels share **one recognition, translation, and voice pipeline
+per source and target language** on the account server. Every listening account
+pays the same access rate; joining adds no extra recognition or voice generation.
+The pipeline persists while anyone remains and closes its source and pending
+work when the last listener leaves. Disconnecting one viewer does not stop the
+others. Two connections per account, four active source/language pipelines, and
+1,000 connections per pipeline bound resource use. A slow or unfunded listener
+is disconnected independently. Background sound stays local and independently
+switchable. Public source addresses are resolved and pinned before fetching;
+redirects and ffmpeg network/file fetches are disabled.
+
+Live pipeline sharing currently runs within one account-server process (as
+nixamp.com's deployment does). Multiple replicas need stream affinity before
+scaling this path; the payment ledger already works across replicas. Files and
+individually timed browser media retain local capture, because viewers can be
+at different playback positions. Shared live streams use the same speaker voices
+for everyone; individual playback retains voice overrides.
+
+
 Use **Translate audio** beside the player's language menu to hear whatever
 Nixamp is playing in your language. One click starts translation; it selects
 your preferred supported language if the menu is still on Original. Turn it off
@@ -586,7 +641,7 @@ recognition. Native captions never translate to English as
 an intermediate recognition step.
 
 Recognition, text translation, and streaming voice playback run as separate
-stages. Each stage has at most one active request per listener. Overlapping
+stages. Each stage has at most one active request per shared pipeline or individual playback session. Overlapping
 recognition windows recover unprocessed words; unfinished phrases briefly stay
 in context instead of translating every two-second fragment separately. The
 voice player preserves pending speaker turns and fetches the next phrase with
@@ -597,8 +652,9 @@ queued speech; errors restore the original audio. This is a delayed live
 interpreter, not a promise of exact lip sync or word-by-word streaming captions.
 
 OpenStream currently compresses server-to-server relays, not this browser
-translation path. The browser uploads bounded mono 16 kHz WAV clips and plays
-streaming PCM speech. Ordinary media playback already uses its audio/video
+translation path. Individual playback uploads bounded mono 16 kHz WAV clips. Shared live channels
+are decoded on the account server and distribute the generated PCM over one
+authenticated event stream per viewer. Ordinary media playback already uses its audio/video
 codecs. The short-window overlap ratio and audio-second spending limits remain
 unchanged; smaller windows do not increase the steady-state audio submitted.
 
@@ -638,8 +694,8 @@ limits, and cached duplicate voice generation. Native speech and local
 translation retain their existing account and queue limits.
 
 Postgres stores atomic usage reservations and hashed grants, so the feature's
-budgets survive restarts and are shared between replicas. Provider failures
-still consume reservations conservatively. The configurable daily limits are:
+budgets survive restarts and are shared between replicas. Provider failures still consume the abuse budgets conservatively;
+the separate paid balance refunds requests rejected before provider acceptance. The configurable daily limits are:
 
 | Setting | Default | Counts |
 | --- | ---: | --- |
@@ -660,7 +716,11 @@ unlimited fallback provider.
 
 ```
 GET  /api/v1/speech/voices       authenticated stock voices and supported audio languages
-POST /api/v1/speech/speakers     authenticated, bounded mono 16 kHz WAV -> native speaker turns
+POST /api/v1/speech/shared       paid {source: liveChannelUrl, language} -> shared captions and PCM events
+GET  /api/v1/translation-passes  plans, balance and pending purchases
+POST /api/v1/translation-passes/checkout  authenticated {plan, coin, requestKey} -> hosted checkout
+GET  /api/v1/translation-passes/orders/:id  authenticated owner payment verification
+POST /api/v1/speech/speakers     paid, bounded mono 16 kHz WAV -> native speaker turns
 POST /api/v1/speech/grant        authenticated {channel: playbackScope} -> short-lived grant
 POST /api/v1/speech/synthesize   scoped grant + {channel, text, language, voice, profile} -> streaming PCM
 ```

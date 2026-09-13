@@ -29,6 +29,8 @@ import { CAPTIONS_KEY, CAPTIONS_LANGUAGE_KEY, LANGUAGE_CHOICES, type Caption, ca
 import { LiveVoicePlayer, type VoiceOptions } from "./live-voice.ts";
 import { AudioCapture } from "./audio-capture.ts";
 import { BackgroundAudio } from "./background.ts";
+import { SharedAudio } from "./shared-translation.ts";
+import { TranslationPurchase } from "./translation-pass.ts";
 import { Interpreter } from "./interpreter.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
@@ -3343,13 +3345,23 @@ export function start(): void {
     drawBackgroundLevel();
     try { localStorage.setItem("nixamp.backgroundLevel", dom.transcriptBackgroundLevel.value); } catch { /* device preference only */ }
   });
+  const purchase = new TranslationPurchase({ account: () => trollboxSite === "" ? meId : "", changed: () => undefined });
+  need<HTMLElement>("translation-buy-tools").append(purchase.button());
+  void purchase.refresh();
+  const sharedAudio = new SharedAudio({
+    line: (line, url) => { captionsLag = 0; captionsHeld.push(line); revealCaptions(); liveVoice.push(line, url, 0); },
+    status: text => { dom.transcriptAudioNote.textContent = text; },
+    failed: error => { captureError = error; voiceError = error; captureWanted = false; dom.transcriptAudio.checked = false; liveVoice.disable(); stopCapture(); dom.transcriptAudioNote.textContent = `${error} Original audio restored.`; void purchase.refresh(); },
+  });
   const liveVoice = new LiveVoicePlayer({
+    fetcher: ((url, init) => String(url).startsWith("nixamp-shared:") ? Promise.resolve(sharedAudio.audio(String(url))) : fetch(url, init)) as typeof fetch,
     playing: () => player.playing,
     volume: () => player.volume,
     active: (on) => { translatedAudioOn = on; player.translatedAudio(on); background.active(on && player.playing && dom.transcriptBackground.checked); },
     status: (text) => { dom.transcriptAudioNote.textContent = text + (backgroundFailed && translatedAudioOn ? " · background unavailable" : ""); },
     failed: () => { voiceError = dom.transcriptAudioNote.textContent || "Translated audio stopped."; captureWanted = false; dom.transcriptAudio.checked = false; stopCapture(); },
     authorization: async (signal, line) => {
+      if (line.channel.startsWith("dub-")) return new Headers();
       if (!meId || trollboxSite !== "") throw new Error("Sign in on nixamp.com to enable translated audio.");
       if (!voiceGrant || voiceGrant.channel !== line.channel || voiceGrant.expires < Date.now() + 20_000 || voiceGrant.remaining < line.text.length) {
         const response = await fetch("/api/v1/speech/grant", {
@@ -3385,7 +3397,7 @@ export function start(): void {
   const capture = new AudioCapture(window => { if (capturing && player.playing) interpreter.push(window); });
   function stopCapture(): void {
     captureGeneration++; capturing = false; captureStarting = false; captureMedia = "";
-    capture.stop(); interpreter.reset(); background.stop();
+    capture.stop(); interpreter.reset(); sharedAudio.stop(); background.stop();
     liveVoice.reset();
     replaceList(dom.transcriptSpeakers);
   }
@@ -3403,7 +3415,11 @@ export function start(): void {
       if (dom.transcriptAudio.checked && dom.transcriptBackground.checked) {
         void background.start(input.context, input.node).then(ready => { if (ready && generation === captureGeneration) background.active(translatedAudioOn && player.playing && dom.transcriptBackground.checked); });
       }
-      await capture.start(input.context, input.node, dom.transcriptAudio.checked ? 2 : 5);
+      // Live channel viewers share server-produced speech. Files and browser
+      // media keep the local capture path because their playback times differ.
+      if (dom.transcriptAudio.checked && mode === "remote" && channelOn) {
+        await sharedAudio.start(playableNow(), captionsIn);
+      } else await capture.start(input.context, input.node, dom.transcriptAudio.checked ? 2 : 5);
       if (generation !== captureGeneration) return;
       capturing = true; captureWanted = true;
       captionsLag = 0;
@@ -4100,6 +4116,9 @@ export function start(): void {
   dom.transcriptAudio.addEventListener("change", () => {
     captureError = ""; voiceError = "";
     captionsSpeakable.clear();
+    if (dom.transcriptAudio.checked && !purchase.ready()) {
+      dom.transcriptAudio.checked = false; purchase.open(dom.transcriptAudio); return;
+    }
     if (dom.transcriptAudio.checked) {
       captionsIn = preferredAudioLanguage();
       try { localStorage.setItem(CAPTIONS_LANGUAGE_KEY, captionsIn); } catch { /* device preference only */ }
@@ -5074,6 +5093,7 @@ export function start(): void {
 
   const showAccount = (email: string | null): void => {
     const signedIn = email !== null;
+    void purchase.refresh();
     voiceOptionsKey = ""; voiceGrant = null;
     if (!signedIn) { captureWanted = false; dom.transcriptAudio.checked = false; liveVoice.disable(); stopCapture(); }
     drawTranscript();
@@ -5572,6 +5592,7 @@ export function start(): void {
       const shade = smallButton("▁", `Shade ${panelTitle(panel)} to its title`, () => setCollapsed(panel, !panel.hasAttribute("data-collapsed")));
       shade.setAttribute("aria-expanded", String(!panel.hasAttribute("data-collapsed")));
       const close = smallButton("✕", `Hide ${panelTitle(panel)}; the Panels list turns it back on`, () => setClosed(panel, true));
+      if (panel.id === "transcript-panel") tools.append(purchase.button());
       tools.append(grip, shade, close);
       panel.prepend(tools);
       // A drop target: above or below the middle decides before or after.
