@@ -140,7 +140,12 @@ DATABASE_URL=postgres://user:pass@host/nixamp NIXAMP_JWT_SECRET=… nixamp serve
 Accounts live where the directory lives and nowhere else: a nixamp on a laptop
 has nobody to be an account of.
 
-## Watch parties, and signing in with nixamp
+## Parties, and signing in with nixamp
+
+The web app uses **Join party** for joining a stream or a party on a connected
+site. In the **Parties** panel, enter an **Invite code** and select **Join party**
+to open its room. A listed party's **Join party** link opens the film on the
+site hosting it; **Open room** opens its nixamp room.
 
 A watch party lives on the site that has the film. bittorrented.com has them:
 a six-character code, a host, and everybody at the same second. nixamp has

@@ -872,6 +872,9 @@ button.golive:disabled { opacity: 0.5; cursor: progress; }
 
 .picker { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
+#party-form label { flex-basis: 100%; color: var(--muted); }
+#party-code { flex: 1 1 12ch; min-width: 0; }
+
 /* The paste-a-link box under the player: the field takes the width. */
 .link-form { margin-top: 8px; }
 .link-form input { flex: 1 1 240px; min-width: 0; }

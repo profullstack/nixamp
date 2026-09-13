@@ -126,7 +126,7 @@
           <select id="link-server" aria-label="Which server goes live with it" title="Which server goes live with it" hidden></select>
           <button type="submit" class="button" title="Play it here, in this browser, where the browser can">Play link</button>
           <!-- The one Go live for a link: the server fetches it and puts it on
-               the air for everyone, listed with Join live. A file, an .m3u
+               the air for everyone, listed with Join party. A file, an .m3u
                playlist played entry by entry, an IPTV feed, a page yt-dlp
                reads. -->
           <button id="link-go-live" type="button" class="button golive"
@@ -166,7 +166,7 @@
                and anybody publishing into it. Two different things that were
                only ever visible in two different places, so "what is on here?"
                had no answer. -->
-          <section class="panel player-only" data-title="Live on this server" id="onair-panel" hidden>
+          <section class="panel player-only" data-title="Parties on this server" id="onair-panel" hidden>
             <p class="hint" id="onair-note"></p>
             <ul id="onair-list" class="directory-list"></ul>
           </section>
@@ -243,14 +243,15 @@
           <ul id="favorites-list" class="directory-list"></ul>
         </section>
 
-        <section class="panel col-b" data-title="Watch parties" id="parties-panel" hidden>
-          <p class="hint" id="parties-note">Parties on now. Open one to watch it where the film is; the room is here.</p>
+        <section class="panel col-b" data-title="Parties" id="parties-panel" hidden>
+          <p class="hint" id="parties-note">Join a party, or enter an invite code.</p>
           <ul id="parties-list" class="directory-list"></ul>
           <form id="party-form" class="picker">
+            <label for="party-code">Invite code</label>
             <input id="party-code" type="text" inputmode="latin" autocomplete="off"
                    autocapitalize="characters" spellcheck="false"
-                   placeholder="Have a code? ABC123" aria-label="Watch party code" />
-            <button type="submit" class="button">Join</button>
+                   placeholder="ABC123" />
+            <button id="party-join" type="submit" class="button" title="Join live">Join party</button>
           </form>
         </section>
 
