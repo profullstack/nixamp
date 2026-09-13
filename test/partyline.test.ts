@@ -178,6 +178,33 @@ test("the first caller opens the room and the second lands in it", async () => {
   assert.equal(party.list()[0]?.callers, 2);
 });
 
+test("a line is read into a room only while somebody is on the phone in it, in the voice asked for", async () => {
+  const { calls, fetch } = recorder(conferenceReplies("conf-482917"));
+  const party = line(fetch);
+  // Nobody has called: nothing to read to, and Telnyx is not asked.
+  assert.equal(party.hasCallers("482917"), false);
+  assert.equal(await party.say("482917", "chovy says: hello", "Telnyx.KokoroTTS.am_adam"), false);
+  assert.equal(calls.filter((c) => c.path.endsWith("/actions/speak")).length, 0);
+
+  await party.handle(keyed("leg-1", "482917"));
+  assert.equal(party.hasCallers("482917"), true);
+  const before = calls.filter((c) => c.path.endsWith("/actions/speak")).length;
+  assert.equal(await party.say("482917", "  chovy says:   hello   room  ", "Telnyx.KokoroTTS.am_adam"), true);
+  const spoken = calls.filter((c) => c.path === "/conferences/conf-482917/actions/speak").slice(before);
+  const said = spoken.find((c) => c.body["payload"] === "chovy says: hello room");
+  assert.ok(said, "the line is spoken into the conference, tidied");
+  assert.equal(said?.body["voice"], "Telnyx.KokoroTTS.am_adam");
+  // To the whole room, not one leg: a trollbox line is for everybody there.
+  assert.equal(said?.body["call_control_ids"], undefined);
+  // An empty line is not worth a call.
+  assert.equal(await party.say("482917", "   ", "female"), false);
+  // No voice given: the room's own.
+  await party.say("482917", "again", "");
+  const last = calls.filter((c) => c.path === "/conferences/conf-482917/actions/speak").pop();
+  assert.equal(typeof last?.body["voice"], "string");
+  assert.notEqual(last?.body["voice"], "");
+});
+
 test("the listing publishes the code, because a listing you cannot dial is nothing", async () => {
   const { calls, fetch } = recorder(conferenceReplies());
   const party = line(fetch);

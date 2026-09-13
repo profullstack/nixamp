@@ -22,7 +22,46 @@ const SCHEMA = `
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
   CREATE UNIQUE INDEX IF NOT EXISTS ${TABLE}_lower ON ${TABLE} (lower(handle));
+  ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS voice TEXT NOT NULL DEFAULT '';
+  ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS profile TEXT NOT NULL DEFAULT '';
 `;
+
+/** What the room knows about somebody: the name, how they sound, where the rest is written. */
+export interface Persona {
+  handle: string;
+  /** female, male, "" for whichever, or a provider voice id they named. */
+  voice: string;
+  /** The URL of their OpenProfile.md, or "". */
+  profile: string;
+}
+
+/** A voice as it may be kept: a sex, nothing, or a provider's voice id. */
+export function cleanVoice(value: unknown): { voice: string; error: string } {
+  if (value === undefined || value === null) return { voice: "", error: "" };
+  if (typeof value !== "string") return { voice: "", error: "a voice is a word" };
+  const word = value.trim();
+  if (word === "" || word === "any") return { voice: "", error: "" };
+  const lower = word.toLowerCase();
+  if (lower === "female" || lower === "male") return { voice: lower, error: "" };
+  if (/^[A-Za-z][A-Za-z0-9_.-]{2,80}$/.test(word) && word.includes(".")) return { voice: word, error: "" };
+  return { voice: "", error: "female, male, any, or a voice id like Telnyx.KokoroTTS.am_adam" };
+}
+
+/** An OpenProfile address as it may be kept: an http(s) URL, or nothing. */
+export function cleanProfile(value: unknown): { profile: string; error: string } {
+  if (value === undefined || value === null) return { profile: "", error: "" };
+  if (typeof value !== "string") return { profile: "", error: "a profile is a URL" };
+  const text = value.trim();
+  if (text === "") return { profile: "", error: "" };
+  try {
+    const url = new URL(text);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return { profile: "", error: "a profile is an http(s) URL" };
+    if (url.href.length > 500) return { profile: "", error: "that URL is too long" };
+    return { profile: url.href, error: "" };
+  } catch {
+    return { profile: "", error: "a profile is a URL, like https://you.example/.well-known/openprofile.md" };
+  }
+}
 
 /**
  * What a handle may be.
@@ -85,6 +124,39 @@ export class Handles {
     await this.ensure();
     const { rows } = await this.db.query(`SELECT handle FROM ${TABLE} WHERE user_id = $1`, [userId]);
     return rows[0] ? String(rows[0]["handle"] ?? "") : "";
+  }
+
+  /** Everything the room knows about somebody. Empty strings for whatever they never said. */
+  async persona(userId: string): Promise<Persona> {
+    await this.ensure();
+    const { rows } = await this.db.query(`SELECT handle, voice, profile FROM ${TABLE} WHERE user_id = $1`, [userId]);
+    const row = rows[0];
+    return {
+      handle: row ? String(row["handle"] ?? "") : "",
+      voice: row ? String(row["voice"] ?? "") : "",
+      profile: row ? String(row["profile"] ?? "") : "",
+    };
+  }
+
+  /**
+   * How somebody sounds, and where their profile is. Either may be given
+   * alone; what is not given is kept. A row exists only once a handle does,
+   * so somebody who never picked one is given the fallback handle first.
+   */
+  async describe(userId: string, fallbackHandle: string, wanted: { voice?: unknown; profile?: unknown }): Promise<{ persona: Persona | null; error: string }> {
+    const voice = wanted.voice === undefined ? null : cleanVoice(wanted.voice);
+    if (voice?.error) return { persona: null, error: voice.error };
+    const profile = wanted.profile === undefined ? null : cleanProfile(wanted.profile);
+    if (profile?.error) return { persona: null, error: profile.error };
+    await this.ensure();
+    const had = await this.persona(userId);
+    const handle = had.handle || cleanHandle(fallbackHandle) || fallbackHandle;
+    await this.db.query(
+      `INSERT INTO ${TABLE} (user_id, handle, voice, profile) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id) DO UPDATE SET voice = EXCLUDED.voice, profile = EXCLUDED.profile, updated_at = NOW()`,
+      [userId, handle, voice ? voice.voice : had.voice, profile ? profile.profile : had.profile],
+    );
+    return { persona: await this.persona(userId), error: "" };
   }
 
   /**

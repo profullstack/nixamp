@@ -88,6 +88,7 @@ import { Rooms } from "./rooms.ts";
 import { Trollbox, TrollboxError, fallbackHandle, roomFor } from "./trollbox.ts";
 import { MAX_BYTES as SPEECH_BYTES, Speech, SpeechError, isWav, languageOf } from "./speech.ts";
 import { Captions } from "./captions.ts";
+import { Profiles, spokenLine, telnyxVoiceFor, voicesFromEnv } from "./voices.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
   applyRemoteConfig,
@@ -1733,6 +1734,8 @@ export interface HandlerOptions {
   trollbox?: Trollbox;
   /** Speech to text: a line said out loud, heard here. Needs the optional model. */
   speech?: Speech;
+  /** Other people's OpenProfiles, for the voice their lines are read in. */
+  profiles?: Profiles;
   /** Tickets: a paid pass to one event's room. Absent means every show is free. */
   tickets?: Tickets;
   /**
@@ -2703,6 +2706,33 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // Separate from the address on purpose. The address is a credential and
     // a way to reach somebody; publishing it in a directory listing or an
     // invite would be publishing what they log in with.
+    /**
+     * A trollbox line, read aloud to whoever is on the phone in that room.
+     * The room's code comes from the directory (one per channel, one for
+     * the server's own stream), the voice from the author's account or
+     * OpenProfile. Never awaited by the poster: the phone is a side effect
+     * of the chat, and a slow Telnyx must not slow the box.
+     */
+    const readOnThePhone = (where: { server: string; channel: string }, authorId: string, handle: string, body: string): void => {
+      const partyLine = options.partyLine;
+      const listing = (options.directory?.list() ?? []).find((one) => {
+        try {
+          return new URL(one.url).origin === where.server;
+        } catch {
+          return false;
+        }
+      });
+      if (!partyLine || !listing) return;
+      const code = where.channel === "live" || where.channel === "main" ? listing.code : listing.channelCodes[where.channel] ?? "";
+      if (!code || !partyLine.hasCallers(code)) return;
+      void (async () => {
+        const persona = (await options.handles?.persona(authorId)) ?? { handle, voice: "", profile: "" };
+        const profile = persona.profile && options.profiles ? await options.profiles.voiceOf(persona.profile) : null;
+        const voice = telnyxVoiceFor({ userId: authorId, voice: persona.voice, profile }, voicesFromEnv());
+        await partyLine.say(code, spokenLine(handle, body), voice);
+      })().catch(() => undefined);
+    };
+
     /*
      * The trollbox: the chat for one live room, keyed by the server and
      * the channel so every viewer of a stream is in the same box whichever
@@ -2751,6 +2781,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           }
           const handle = (await options.handles?.of(who.id)) || fallbackHandle(who.id);
           const line = await trollbox.post(where, who.id, handle, body.body);
+          readOnThePhone(where, who.id, line.handle, line.body);
           json(response, 201, { message: { id: line.id, handle: line.handle, body: line.body, createdAt: line.createdAt, mine: true } });
           return;
         }
@@ -2819,6 +2850,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         if (where && options.trollbox && heard.text !== "") {
           const handle = (await options.handles?.of(who.id)) || fallbackHandle(who.id);
           const line = await options.trollbox.post(where, who.id, handle, heard.text);
+          readOnThePhone(where, who.id, line.handle, line.body);
           json(response, 201, {
             text: heard.text, seconds: heard.seconds, model: speech.model,
             message: { id: line.id, handle: line.handle, body: line.body, createdAt: line.createdAt, mine: true },
@@ -2841,24 +2873,38 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
 
+      // The handle, and since 0.23.4 the voice a line is read in on the
+      // phone and the OpenProfile it may be read from. Any of the three may
+      // be sent alone; what is not sent is kept.
       if (request.method === "GET") {
-        json(response, 200, { handle: await handles.of(who.id) });
+        const persona = await handles.persona(who.id);
+        json(response, 200, { ...persona, handle: persona.handle || fallbackHandle(who.id), chosen: persona.handle !== "" });
         return;
       }
       if (request.method === "PUT" || request.method === "POST") {
-        let body: { handle?: unknown };
+        let body: { handle?: unknown; voice?: unknown; profile?: unknown };
         try {
           body = JSON.parse(await readBody(request)) as typeof body;
         } catch {
           json(response, 400, { error: "bad JSON" });
           return;
         }
-        const claimed = await handles.claim(who.id, body.handle);
-        if (claimed.error) {
-          json(response, 409, { error: claimed.error });
-          return;
+        if (body.handle !== undefined) {
+          const claimed = await handles.claim(who.id, body.handle);
+          if (claimed.error) {
+            json(response, 409, { error: claimed.error });
+            return;
+          }
         }
-        json(response, 200, { handle: claimed.handle });
+        if (body.voice !== undefined || body.profile !== undefined) {
+          const described = await handles.describe(who.id, fallbackHandle(who.id), { voice: body.voice, profile: body.profile });
+          if (described.error) {
+            json(response, 422, { error: described.error });
+            return;
+          }
+        }
+        const persona = await handles.persona(who.id);
+        json(response, 200, { ...persona, handle: persona.handle || fallbackHandle(who.id), chosen: persona.handle !== "" });
         return;
       }
       json(response, 405, { error: "GET or PUT" });
@@ -5824,6 +5870,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(rooms ? { rooms } : {}),
     ...(trollbox ? { trollbox } : {}),
     ...(speech ? { speech } : {}),
+    // Other people's OpenProfiles, read for the voice a line is spoken in.
+    ...(accounts ? { profiles: new Profiles() } : {}),
     ...(tickets ? { tickets } : {}),
     ...(authServer ? { authServer } : {}),
     ...(parties ? { parties } : {}),

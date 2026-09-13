@@ -703,6 +703,30 @@ export class PartyLine {
   }
 
   /**
+   * A line said into a room, to everybody on the phone in it. What the
+   * trollbox becomes on the party line: the handle and the words, in the
+   * voice of whoever typed them. False when nobody is on the phone there,
+   * which is most of the time and costs nothing.
+   */
+  async say(code: string, text: string, voice: string): Promise<boolean> {
+    const room = this.rooms.get(code);
+    if (!room || room.conferenceId === null || room.callers === 0) return false;
+    const said = text.replace(/\s+/g, " ").trim().slice(0, 500);
+    if (said === "") return false;
+    const answer = await this.request(`/conferences/${encodeURIComponent(room.conferenceId)}/actions/speak`, {
+      payload: said,
+      voice: voice || this.voice,
+    });
+    return answer !== null;
+  }
+
+  /** Whether anybody is on the phone in a room, before a line is worth reading. */
+  hasCallers(code: string): boolean {
+    const room = this.rooms.get(code);
+    return room !== undefined && room.conferenceId !== null && room.callers > 0;
+  }
+
+  /**
    * How many people are on the phone for a stream.
    *
    * The room's own count, now that a stream's code is a room like any other.

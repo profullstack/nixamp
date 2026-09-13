@@ -309,8 +309,19 @@ A line can be said rather than typed. The microphone button beside the box
 is tap, talk, tap: the page records, brings the sound to 16 kHz mono itself,
 and sends nixamp.com a small WAV with the room's name on it; the ear posts
 the words to the room in the same request, and the line appears. Said is
-sent. A line you would rather see first is typed; a wrong one is taken down
+sent, unless the **Edit before sending** switch under the box is on, in
+which case the words wait in the box for Send. A wrong line is taken down
 with its ✕.
+
+**On the phone, too.** Every live room has a six-digit code on the party
+line (see below), and when anybody is on the phone in a room, each trollbox
+line is read aloud to them: "chovy says: …", in a voice that is theirs as
+far as a machine can manage. The Account panel sets it: a woman's voice, a
+man's, any, or a provider voice id; or an OpenProfile URL, whose `Voice`,
+`Gender` or `Pronouns` decide. Nothing set picks one from the account, so
+the same person is always the same voice. The voices are Telnyx's Kokoro
+ones, open weights, no bill beyond the call; `NIXAMP_VOICE_FEMALE` and
+`NIXAMP_VOICE_MALE` swap in others (an ElevenLabs id, say).
 The ear is [Whisper](https://github.com/openai/whisper) run through
 [Transformers.js](https://github.com/huggingface/transformers.js), an
 Apache-2.0 library carrying MIT-licensed models, on nixamp.com's own CPU.

@@ -163,6 +163,11 @@ export function start(): void {
     welcomeHide: need<HTMLButtonElement>("welcome-hide"),
     accountSignOut: need<HTMLButtonElement>("account-signout"),
     accountNote: need<HTMLParagraphElement>("account-note"),
+    personaForm: need<HTMLFormElement>("persona-form"),
+    personaHandle: need<HTMLInputElement>("persona-handle"),
+    personaVoice: need<HTMLSelectElement>("persona-voice"),
+    personaProfile: need<HTMLInputElement>("persona-profile"),
+    personaNote: need<HTMLParagraphElement>("persona-note"),
     adminPanel: need<HTMLElement>("admin-panel"),
     adminNote: need<HTMLParagraphElement>("admin-note"),
     adminSaid: need<HTMLParagraphElement>("admin-said"),
@@ -225,6 +230,8 @@ export function start(): void {
     trollboxForm: need<HTMLFormElement>("trollbox-form"),
     trollboxInput: need<HTMLInputElement>("trollbox-input"),
     trollboxMic: need<HTMLButtonElement>("trollbox-mic"),
+    trollboxEdit: need<HTMLInputElement>("trollbox-edit"),
+    trollboxEditLabel: need<HTMLLabelElement>("trollbox-edit-label"),
     transcriptPanel: need<HTMLElement>("transcript-panel"),
     transcriptNote: need<HTMLParagraphElement>("transcript-note"),
     transcriptOn: need<HTMLInputElement>("transcript-on"),
@@ -3329,6 +3336,7 @@ export function start(): void {
       const you = body.you ?? "";
       trollboxYou = you;
       dom.trollboxForm.hidden = you === "";
+      dom.trollboxEditLabel.hidden = you === "" || !canRecord;
       if (you === "") stopListening(false);
       dom.trollboxNote.textContent = you !== ""
         ? `You are ${you} in the room for ${currentName() || room.channel}.`
@@ -3492,8 +3500,11 @@ export function start(): void {
       source.start();
       const mono = (await offline.startRendering()).getChannelData(0);
       const wav = encodeWav(mono, DICTATE_RATE);
-      // The room rides along, so the ear posts the words itself.
-      const query = new URLSearchParams({ server: room.server, channel: room.channel });
+      // The room rides along, so the ear posts the words itself; unless this
+      // device asked to read a line over first, in which case only the words
+      // come back and land in the box for Send.
+      const editFirst = dom.trollboxEdit.checked;
+      const query = new URLSearchParams(editFirst ? {} : { server: room.server, channel: room.channel });
       const language = navigator.language.slice(0, 2).toLowerCase();
       if (/^[a-z]{2}$/.test(language)) query.set("language", language);
       const answer = await fetch(`${trollboxSite}/api/v1/speech/transcribe?${query.toString()}`, {
@@ -3510,8 +3521,16 @@ export function start(): void {
         return;
       }
       const heard = (body.text ?? "").trim();
-      if (heard === "" || !body.message) {
+      if (heard === "") {
         trollboxSay("Heard nothing. Try again, closer to the mic.");
+        return;
+      }
+      if (editFirst || !body.message) {
+        const typed = dom.trollboxInput.value.trimEnd();
+        dom.trollboxInput.value = (typed === "" ? heard : `${typed} ${heard}`).slice(0, 500);
+        dom.trollboxInput.focus();
+        dom.trollboxInput.setSelectionRange(dom.trollboxInput.value.length, dom.trollboxInput.value.length);
+        trollboxSay(`Heard: “${heard}”. Send it, or fix it first.`);
         return;
       }
       // Posted by the ear; shown here at once rather than on the next poll.
@@ -3534,6 +3553,77 @@ export function start(): void {
   dom.trollboxMic.addEventListener("click", () => {
     if (listening) stopListening(true);
     else void startListening();
+  });
+  // Edit mode is this device's habit, off until it says otherwise.
+  try {
+    dom.trollboxEdit.checked = localStorage.getItem("nixamp.dictate.edit") === "on";
+  } catch {
+    // Nothing remembered: straight to the room.
+  }
+  dom.trollboxEdit.addEventListener("change", () => {
+    try {
+      localStorage.setItem("nixamp.dictate.edit", dom.trollboxEdit.checked ? "on" : "off");
+    } catch {
+      // A device that remembers nothing still gets this once.
+    }
+    trollboxSay(dom.trollboxEdit.checked
+      ? "A line you say will wait in the box for Send."
+      : "A line you say goes straight to the room.");
+  });
+
+  // ---- who the rooms know you as -----------------------------------------
+  //
+  // The handle on every line, the voice a line is read in when somebody is
+  // on the phone in the room, and the OpenProfile that voice may be read
+  // from (its Voice, Gender or Pronouns). Kept at nixamp.com on the account.
+  async function loadPersona(): Promise<void> {
+    try {
+      const answer = await fetch(`${trollboxSite}/api/v1/me/handle`);
+      const body = (await answer.json().catch(() => ({}))) as { handle?: string; voice?: string; profile?: string; chosen?: boolean; error?: string };
+      if (!answer.ok) {
+        dom.personaNote.textContent = body.error ?? "Could not read your profile.";
+        return;
+      }
+      dom.personaHandle.value = body.chosen ? (body.handle ?? "") : "";
+      dom.personaHandle.placeholder = body.handle || "handle";
+      dom.personaVoice.value = body.voice === "female" || body.voice === "male" ? body.voice : "";
+      dom.personaProfile.value = body.profile ?? "";
+      dom.personaNote.textContent = body.chosen
+        ? `You are ${body.handle} in every room. On the phone your lines are read ${voiceWords(body.voice ?? "")}.`
+        : `Rooms call you ${body.handle} until you pick a handle. On the phone your lines are read ${voiceWords(body.voice ?? "")}.`;
+    } catch {
+      dom.personaNote.textContent = "Could not reach nixamp.com for your profile.";
+    }
+  }
+  function voiceWords(voice: string): string {
+    if (voice === "female") return "in a woman's voice";
+    if (voice === "male") return "in a man's voice";
+    if (voice.includes(".")) return `in the voice ${voice}`;
+    return "in whichever voice your profile says, or one picked for you";
+  }
+  dom.personaForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const handle = dom.personaHandle.value.trim();
+    const wanted: Record<string, string> = { voice: dom.personaVoice.value, profile: dom.personaProfile.value.trim() };
+    if (handle !== "") wanted["handle"] = handle;
+    dom.personaNote.textContent = "Saving…";
+    void (async () => {
+      try {
+        const answer = await fetch(`${trollboxSite}/api/v1/me/handle`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(wanted),
+        });
+        const body = (await answer.json().catch(() => ({}))) as { error?: string };
+        if (!answer.ok) {
+          dom.personaNote.textContent = body.error ?? "that did not save";
+          return;
+        }
+        await loadPersona();
+      } catch {
+        dom.personaNote.textContent = "Could not reach nixamp.com.";
+      }
+    })();
   });
   // A form that hides itself under a recording takes the microphone with it.
   document.addEventListener("visibilitychange", () => {
@@ -4614,6 +4704,9 @@ export function start(): void {
     dom.accountForm.hidden = signedIn;
     dom.accountProviders.hidden = signedIn || dom.accountProviders.childElementCount === 0;
     dom.accountSignOut.hidden = !signedIn;
+    dom.personaForm.hidden = !signedIn;
+    dom.personaNote.hidden = !signedIn;
+    if (signedIn) void loadPersona();
     dom.accountNote.textContent = signedIn
       ? `Signed in as ${email}.`
       : creating

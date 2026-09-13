@@ -44,6 +44,7 @@ function fakeDb() {
   const tokens = new Map<string, Record<string, unknown>>();
   const identities = new Map<string, Record<string, unknown>>();
   const handles = new Map<string, string>();
+  const personas = new Map<string, { voice: string; profile: string }>();
   const servers = new Map<string, Record<string, unknown>>();
   const seen: string[] = [];
 
@@ -118,6 +119,11 @@ function fakeDb() {
       const row = handles.get(String(values[0]));
       return { rows: row ? [{ handle: row }] : [] };
     }
+    if (sql.startsWith("SELECT handle, voice, profile FROM nixamp_handles")) {
+      const row = handles.get(String(values[0]));
+      const persona = personas.get(String(values[0])) ?? { voice: "", profile: "" };
+      return { rows: row ? [{ handle: row, ...persona }] : [] };
+    }
     if (sql.startsWith("SELECT user_id FROM nixamp_handles")) {
       for (const [user, handle] of handles) {
         if (handle.toLowerCase() === String(values[0])) return { rows: [{ user_id: user }] };
@@ -132,6 +138,8 @@ function fakeDb() {
     }
     if (sql.startsWith("INSERT INTO nixamp_handles")) {
       handles.set(String(values[0]), String(values[1]));
+      // The four-value form carries the voice and the profile too.
+      if (values.length >= 4) personas.set(String(values[0]), { voice: String(values[2] ?? ""), profile: String(values[3] ?? "") });
       return { rows: [] };
     }
 
@@ -1117,6 +1125,19 @@ test("the account's own routes are reachable, which they were not", async () => 
     });
     assert.equal(claimed.status, 200);
     assert.equal((await claimed.json()).handle, "chovy");
+    // The voice a line is read in, and the OpenProfile it may come from, ride on the same route.
+    const described = await fetch(`${base}/api/v1/me/handle`, {
+      method: "PUT",
+      headers: auth,
+      body: JSON.stringify({ voice: "male", profile: "https://ada.example/.well-known/openprofile.md" }),
+    });
+    assert.equal(described.status, 200);
+    const persona = (await described.json()) as { handle: string; voice: string; profile: string; chosen: boolean };
+    assert.deepEqual(persona, { handle: "chovy", voice: "male", profile: "https://ada.example/.well-known/openprofile.md", chosen: true });
+    const read = (await (await fetch(`${base}/api/v1/me/handle`, { headers: auth })).json()) as { voice: string };
+    assert.equal(read.voice, "male");
+    const odd = await fetch(`${base}/api/v1/me/handle`, { method: "PUT", headers: auth, body: JSON.stringify({ voice: "loud" }) });
+    assert.equal(odd.status, 422);
 
     const list = await fetch(`${base}/api/v1/servers`, { headers: auth });
     assert.equal(list.status, 200, "GET /api/v1/servers");
