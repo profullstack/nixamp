@@ -84,6 +84,7 @@ import { Tickets, needsTicket, ticketFrom, ticketsFromEnv } from "./tickets.ts";
 import { Layouts } from "./layouts.ts";
 import { Rooms } from "./rooms.ts";
 import { Trollbox, TrollboxError, fallbackHandle, roomFor } from "./trollbox.ts";
+import { MAX_BYTES as SPEECH_BYTES, Speech, SpeechError, isWav, languageOf } from "./speech.ts";
 import { confirm, DEFAULT_DIRECTORY, Publisher } from "./publish.ts";
 import {
   applyRemoteConfig,
@@ -1430,6 +1431,19 @@ async function readBody(request: IncomingMessage, limit = 64 * 1024): Promise<st
   return Buffer.concat(chunks).toString("utf8");
 }
 
+/** The body as bytes: sound, not text. */
+async function readBytes(request: IncomingMessage, limit: number): Promise<Uint8Array> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = chunk as Buffer;
+    size += buffer.length;
+    if (size > limit) throw new SpeechError("that is too much sound", 413);
+    chunks.push(buffer);
+  }
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
 export interface HandlerOptions {
   web: string | null;
   media: boolean;
@@ -1584,6 +1598,8 @@ export interface HandlerOptions {
   rooms?: Rooms;
   /** The trollbox: a chat per live room, kept at nixamp.com. */
   trollbox?: Trollbox;
+  /** Speech to text: a line said out loud, heard here. Needs the optional model. */
+  speech?: Speech;
   /** Tickets: a paid pass to one event's room. Absent means every show is free. */
   tickets?: Tickets;
   /**
@@ -2606,6 +2622,55 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 405, { error: "GET, POST or DELETE" });
       } catch (error) {
         if (error instanceof TrollboxError) json(response, error.status, { error: error.message });
+        else throw error;
+      }
+      return;
+    }
+
+    /*
+     * Speech to text: a WAV in, the words out. Signed in only -- the ear
+     * costs CPU and a trollbox line needs a name anyway -- and, given a
+     * room, the words go straight into that room's trollbox as a line by
+     * whoever spoke them. The page, the CLI and the MCP tools all come here.
+     */
+    if (path === "/api/v1/speech/transcribe" && options.speech && options.accounts) {
+      const speech = options.speech;
+      try {
+        if (request.method !== "POST") {
+          json(response, 405, { error: "POST a WAV" });
+          return;
+        }
+        const who = await options.accounts.whoIs(tokenFrom(request.headers));
+        if (who === null) {
+          json(response, 401, { error: "sign in to nixamp.com to dictate" });
+          return;
+        }
+        speech.allow(who.id);
+        const bytes = await readBytes(request, SPEECH_BYTES);
+        if (!isWav(bytes)) {
+          json(response, 415, { error: "send a WAV: 16-bit PCM, mono, 16 kHz is ideal" });
+          return;
+        }
+        // A room named is a line posted, by the same rules as typing it.
+        const roomAsked = url.searchParams.has("server") || url.searchParams.has("channel");
+        const where = roomAsked ? roomFor(url.searchParams.get("server"), url.searchParams.get("channel")) : null;
+        if (roomAsked && !where) {
+          json(response, 400, { error: "a room is a server address and a channel" });
+          return;
+        }
+        const heard = await speech.transcribe(bytes, { language: languageOf(url.searchParams.get("language")) });
+        if (where && options.trollbox && heard.text !== "") {
+          const handle = (await options.handles?.of(who.id)) || fallbackHandle(who.id);
+          const line = await options.trollbox.post(where, who.id, handle, heard.text);
+          json(response, 201, {
+            text: heard.text, seconds: heard.seconds, model: speech.model,
+            message: { id: line.id, handle: line.handle, body: line.body, createdAt: line.createdAt, mine: true },
+          });
+          return;
+        }
+        json(response, 200, { text: heard.text, seconds: heard.seconds, model: speech.model });
+      } catch (error) {
+        if (error instanceof SpeechError || error instanceof TrollboxError) json(response, error.status, { error: error.message });
         else throw error;
       }
       return;
@@ -5051,6 +5116,15 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
           secret: process.env["NIXAMP_JWT_SECRET"] ?? "",
         })
       : undefined;
+  // The ear lives where the accounts live. Loaded now, in the background, so
+  // the first person to speak does not wait for the model to arrive; a box
+  // without the optional model never says it is ready, and answers 503.
+  const speech = accounts && process.env["NIXAMP_STT"] !== "off" ? new Speech() : undefined;
+  if (speech) {
+    void speech.warm().then((ready) => {
+      if (ready) console.error(`nixamp: hearing with ${speech.model}`);
+    });
+  }
 
   // nixamp as an OAuth 2.1 authorization server, and the watch parties a
   // client site bridges through it. Both need the same three things -- a
@@ -5440,6 +5514,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(layouts ? { layouts } : {}),
     ...(rooms ? { rooms } : {}),
     ...(trollbox ? { trollbox } : {}),
+    ...(speech ? { speech } : {}),
     ...(tickets ? { tickets } : {}),
     ...(authServer ? { authServer } : {}),
     ...(parties ? { parties } : {}),

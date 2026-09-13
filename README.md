@@ -293,6 +293,55 @@ something else.
 Entries expire a few minutes after a stream stops renewing, so the list is
 always what is actually live.
 
+## The trollbox, and saying a line out loud
+
+Every live room has a trollbox: the chat for whoever has joined that stream,
+kept at nixamp.com and keyed by the server and the channel, so everybody
+watching one stream is in the same box whichever page they came from.
+Reading it needs nobody. A line needs a nixamp.com sign-in, and is signed
+with the account's public handle, never its address.
+
+A line can be said rather than typed. The microphone button beside the box
+is tap, talk, tap: the page records, brings the sound to 16 kHz mono itself,
+and sends nixamp.com a small WAV; the words come back into the box, and
+**Send** is still yours, so a misheard word is fixed before the room sees it.
+The ear is [Whisper](https://github.com/openai/whisper) run through
+[Transformers.js](https://github.com/huggingface/transformers.js), an
+Apache-2.0 library carrying MIT-licensed models, on nixamp.com's own CPU.
+Nothing is sent to a speech vendor and nothing is billed. It works in the
+PWA, the desktop app and on a phone, wherever the browser can record; the
+button only appears where a line can be sent from, which is signed in on
+nixamp.com.
+
+The same ear is one route, for anything else that has a recording:
+
+```
+POST /api/v1/speech/transcribe            a WAV in (16-bit PCM; 16 kHz mono is ideal), {text} out
+POST /api/v1/speech/transcribe?server=URL&channel=ID   and the words posted to that room
+```
+
+Signed in only, up to a minute at a time, twelve asks a minute per account,
+`?language=de` when Whisper should not guess. The CLI and the MCP server
+front the same route:
+
+```
+nixamp transcribe clip.m4a                        the words in a recording
+nixamp transcribe clip.m4a --say https://server1.chovy.nixamp.com:4321
+nixamp transcribe clip.m4a --say URL --channel cat-1
+```
+
+Anything ffmpeg can read is converted here first; a WAV needs no ffmpeg.
+`nixamp mcp` offers `transcribe_audio` (with the same optional room),
+`trollbox_say` and `trollbox_read`.
+
+The model is an optional dependency, because it is hundreds of megabytes
+with the ONNX runtime under it and the CLI tarball is pure JavaScript. A
+`nixamp serve` on a laptop answers 503 to this route and every client asks
+nixamp.com instead. `NIXAMP_STT_MODEL` picks another Whisper
+(`onnx-community/whisper-base` by default; `whisper-small` hears better and
+takes twice as long), `NIXAMP_STT_CACHE` says where its files are kept, and
+`NIXAMP_STT=off` leaves the ear out of a deployment altogether.
+
 ## Several streams at once
 
 A channel is one publisher and everybody listening to them. Two or three devices
