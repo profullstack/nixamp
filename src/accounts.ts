@@ -19,7 +19,8 @@
  * terminal better than either -- OAuth 2.0 reached through the device grant in
  * device.ts -- and what it ends with is a token from tokens.ts.
  */
-import { createAuthSystem, PostgresAdapter } from "@profullstack/auth-system";
+import { createAuthSystem, createPasswordUtils, PostgresAdapter } from "@profullstack/auth-system";
+import { PasswordResets } from "./password-reset.ts";
 import { Identities, type Identity, type Users } from "./oauth.ts";
 import type { Queryable } from "./follows.ts";
 import { type IssuedToken, looksLikeToken, type TokenKind, type TokenRecord, Tokens } from "./tokens.ts";
@@ -129,6 +130,7 @@ export class Accounts {
   private readonly system: AuthLike;
   /** Null only where a test injected an auth system and no storage. */
   readonly tokens: Tokens | null;
+  readonly passwordResets: PasswordResets | null;
   private readonly identities: Identities | null;
 
   constructor(options: AccountsOptions) {
@@ -151,6 +153,8 @@ export class Accounts {
         passwordOptions: { ...PASSWORD_RULES },
       }) as AuthLike);
     this.tokens = adapter ? new Tokens(adapter) : null;
+    this.passwordResets = adapter && this.tokens
+      ? new PasswordResets(adapter, this.tokens, createPasswordUtils({ ...PASSWORD_RULES })) : null;
     this.identities = adapter ? new Identities(adapter, adapter) : null;
   }
 
@@ -216,7 +220,9 @@ export class Accounts {
       }
     }
     try {
-      return readClaims(await this.system.validateToken(token));
+      const account = readClaims(await this.system.validateToken(token));
+      if (account && this.passwordResets && !(await this.passwordResets.acceptsLegacyToken(account.id, token))) return null;
+      return account;
     } catch {
       return null;
     }

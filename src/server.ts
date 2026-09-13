@@ -37,6 +37,8 @@ import {
 } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
+import { RESET_INVALID, RESET_MESSAGE, resendPasswordReset, type ResetMail } from "./password-reset.ts";
+import { passwordResetPage } from "./password-reset-page.ts";
 import { anonymousHandle, Handles } from "./handles.ts";
 import { OpenDirs } from "./opendirs.ts";
 import { Servers } from "./servers.ts";
@@ -1717,6 +1719,8 @@ export interface HandlerOptions {
   publishUrls?: () => { id: string; url: string }[];
   /** Accounts, on the instance that keeps them. Only nixamp.com passes this. */
   accounts?: Accounts;
+  /** Transactional password recovery mail, separate from follow notifications. */
+  resetMail?: ResetMail;
   /** Providers to sign in with, and the terminals waiting to be connected. */
   signIn?: SignIn;
   /** The servers each account runs, on the instance that keeps accounts. */
@@ -1852,6 +1856,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     const webSite = options.webSites?.get((request.headers.host ?? "").toLowerCase());
     const web = webSite?.web ?? options.web;
     const eventSite = webSite?.site ?? options.invites?.site;
+    const accountSite = eventSite ?? options.site ?? "https://nixamp.com";
     const key = options.key ?? null;
     const behindProxy = options.behindProxy ?? false;
     const listenKey = options.listenKey ?? null;
@@ -2460,6 +2465,20 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    if (path === "/reset-password" && options.accounts?.passwordResets) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        json(response, 405, { error: "GET only" }); return;
+      }
+      const nonce = randomBytes(18).toString("base64");
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8", "cache-control": "no-store",
+        "referrer-policy": "no-referrer", "x-robots-tag": "noindex, nofollow",
+        "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
+      });
+      response.end(request.method === "HEAD" ? undefined : passwordResetPage(accountSite, nonce));
+      return;
+    }
+
     // --- accounts ---------------------------------------------------------
     //
     // Before the share-key check, because signing in is how somebody without a
@@ -2468,6 +2487,46 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     if (path.startsWith("/api/v1/auth/") && options.accounts) {
       const accounts = options.accounts;
       const secure = options.secureCookies ?? false;
+
+      if (path === "/api/v1/auth/password-reset/request" || path === "/api/v1/auth/password-reset/confirm") {
+        if (request.method !== "POST") { json(response, 405, { error: "POST only" }); return; }
+        const confirming = path.endsWith("/confirm");
+        if (!accounts.passwordResets || (!confirming && !options.resetMail)) {
+          json(response, 503, { error: "Password reset email is temporarily unavailable. Please try again later." }); return;
+        }
+        const who = callerOf(request.headers, request.socket.remoteAddress, behindProxy);
+        const limit = guard.check(`password-reset:${confirming ? "confirm" : "request"}:${who}`, { allowed: confirming ? 15 : 10, windowMs: 15 * 60_000 });
+        if (!limit.ok) {
+          response.setHeader("retry-after", String(limit.retryAfter));
+          json(response, 429, { error: "Too many attempts. Please try again in 15 minutes." }); return;
+        }
+        try {
+          const input: unknown = JSON.parse(await readBody(request, 4096));
+          if (!input || typeof input !== "object" || Array.isArray(input)) {
+            json(response, 400, { error: "Provide a JSON object." }); return;
+          }
+          const body = input as Record<string, unknown>;
+          if (confirming) {
+            const error = await accounts.passwordResets.confirm(body["token"], body["password"]);
+            if (error) { json(response, error === RESET_INVALID ? 400 : 422, { error }); return; }
+            response.setHeader("set-cookie", clearedCookie());
+            json(response, 200, { message: "Your password has been changed. Sign in with your new password." });
+          } else {
+            const email = typeof body["email"] === "string" ? body["email"].trim().toLowerCase() : "";
+            if (email.length > 320 || !/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(email)) {
+              json(response, 422, { error: "Enter a valid email address." }); return;
+            }
+            // Count every address, including nonexistent ones, identically.
+            const address = guard.check(`password-reset:email:${email}`, { allowed: 3, windowMs: 15 * 60_000 });
+            if (address.ok) await accounts.passwordResets.request(email, accountSite, options.resetMail!);
+            json(response, 200, { message: RESET_MESSAGE });
+          }
+        } catch (error) {
+          const malformed = error instanceof SyntaxError || (error as Error).message === "body too large";
+          json(response, malformed ? 400 : 503, { error: malformed ? "Provide a valid JSON request." : "Password reset is temporarily unavailable. Please try again." });
+        }
+        return;
+      }
 
       if (path === "/api/v1/auth/me") {
         const who = await accounts.whoIs(tokenFrom(request.headers));
@@ -6595,6 +6654,12 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(translations ? { translations } : {}),
     ...(records ? { records } : {}),
     site: nixampSite,
+    ...(accounts && process.env["RESEND_API_KEY"] ? {
+      resetMail: resendPasswordReset({
+        apiKey: process.env["RESEND_API_KEY"],
+        from: process.env["NIXAMP_MAIL_FROM"] ?? "nixamp <notifications@nixamp.com>",
+      }),
+    } : {}),
     // Other people's OpenProfiles, read for the voice a line is spoken in,
     // and the voices to speak in: ElevenLabs when the Telnyx account holds
     // the key for it (an integration secret named "elevenlabs"), Kokoro

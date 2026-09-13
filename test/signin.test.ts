@@ -52,6 +52,7 @@ function fakeDb() {
     const sql = text.trim().replace(/\s+/g, " ");
     seen.push(sql);
     if (sql.startsWith("CREATE TABLE")) return { rows: [] };
+    if (sql.startsWith("SELECT reset_at FROM nixamp_password_resets")) return { rows: [] };
 
     if (sql.startsWith("INSERT INTO nixamp_tokens")) {
       const [id, user_id, email, kind, name, secret_hash, created_at, expires_at] = values;

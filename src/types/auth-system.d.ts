@@ -8,6 +8,16 @@
  * than smoothed over.
  */
 declare module "@profullstack/auth-system" {
+  export function createPasswordUtils(options?: {
+    minLength?: number;
+    requireUppercase?: boolean;
+    requireLowercase?: boolean;
+    requireNumbers?: boolean;
+    requireSpecialChars?: boolean;
+  }): {
+    hashPassword(password: string): Promise<string>;
+    validatePassword(password: string): { valid: boolean; message: string };
+  };
   export interface AuthUser {
     id: string;
     email: string;

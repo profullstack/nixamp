@@ -152,6 +152,9 @@ export class Tokens {
     await this.ready;
   }
 
+  /** Recovery revokes this table in the same transaction as the password update. */
+  async initialize(): Promise<void> { await this.ensure(); }
+
   async issue(options: IssueOptions): Promise<IssuedToken> {
     await this.ensure();
     const { id, secret, token } = mintToken();

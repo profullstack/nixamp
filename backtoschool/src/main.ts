@@ -103,6 +103,7 @@ function drawAccountMode(): void {
     ? "One NixAmp account works here and everywhere NixAmp goes."
     : "Sign in to host, chat, or raise your hand.";
   accountMode.textContent = creatingAccount ? "Already have an account? Sign in" : "New here? Create an account";
+  document.querySelector<HTMLElement>("#account-forgot")!.hidden = creatingAccount;
   const password = accountForm.elements.namedItem("password") as HTMLInputElement;
   password.autocomplete = creatingAccount ? "new-password" : "current-password";
   accountForm.querySelector<HTMLButtonElement>('button[type="submit"]')!.textContent = creatingAccount ? "Create account" : "Sign in";
