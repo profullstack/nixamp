@@ -3322,7 +3322,8 @@ export function start(): void {
     dom.trollboxNote.textContent = `The room for ${currentName() || room.channel}. Loading…`;
     void pollTrollbox();
   }
-  function trollboxLine(message: { id: string; handle: string; body: string; createdAt: string; mine?: boolean }): HTMLElement {
+  /** One line of the room. Once sent it is public record, so a line carries no control to take it down. */
+  function trollboxLine(message: { id: string; handle: string; body: string; createdAt: string }): HTMLElement {
     const item = document.createElement("li");
     item.dataset["id"] = message.id;
     const when = document.createElement("time");
@@ -3338,16 +3339,6 @@ export function start(): void {
     body.className = "line";
     body.textContent = message.body;
     item.append(when, who, body);
-    if (message.mine === true || isAdmin()) {
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "icon-btn";
-      remove.textContent = "✕";
-      remove.title = message.mine === true ? "Take your line down" : "Take this line down";
-      remove.setAttribute("aria-label", remove.title);
-      remove.addEventListener("click", () => { void removeTrollboxLine(message.id, item); });
-      item.append(remove);
-    }
     return item;
   }
   async function pollTrollbox(): Promise<void> {
@@ -3360,7 +3351,7 @@ export function start(): void {
       const answer = await fetch(trollboxUrl(room, trollboxAfter));
       const body = (await answer.json().catch(() => ({}))) as {
         you?: string; error?: string;
-        messages?: { id: string; handle: string; body: string; createdAt: string; mine?: boolean }[];
+        messages?: { id: string; handle: string; body: string; createdAt: string }[];
       };
       if (key !== trollboxKey) return;
       if (!answer.ok) {
@@ -3398,17 +3389,6 @@ export function start(): void {
       }
     }
   }
-  async function removeTrollboxLine(id: string, item: HTMLElement): Promise<void> {
-    const room = trollboxRoom();
-    if (!room) return;
-    try {
-      const answer = await fetch(`${trollboxSite}/api/v1/trollbox/${encodeURIComponent(id)}?${new URLSearchParams(room).toString()}`, { method: "DELETE" });
-      if (answer.ok) item.remove();
-      else dom.trollboxNote.textContent = ((await answer.json().catch(() => ({}))) as { error?: string }).error ?? "that did not work";
-    } catch {
-      dom.trollboxNote.textContent = "The trollbox is not answering.";
-    }
-  }
   dom.trollboxForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const room = trollboxRoom();
@@ -3423,7 +3403,7 @@ export function start(): void {
           body: JSON.stringify({ server: room.server, channel: room.channel, body: line }),
         });
         const body = (await answer.json().catch(() => ({}))) as {
-          error?: string; message?: { id: string; handle: string; body: string; createdAt: string; mine?: boolean };
+          error?: string; message?: { id: string; handle: string; body: string; createdAt: string };
         };
         if (!answer.ok || !body.message) {
           dom.trollboxNote.textContent = body.error ?? "that did not send";
@@ -3557,7 +3537,7 @@ export function start(): void {
       });
       const body = (await answer.json().catch(() => ({}))) as {
         text?: string; error?: string;
-        message?: { id: string; handle: string; body: string; createdAt: string; mine?: boolean };
+        message?: { id: string; handle: string; body: string; createdAt: string };
       };
       if (!answer.ok) {
         trollboxSay(body.error ?? "nixamp.com could not hear that.");

@@ -337,8 +337,9 @@ is tap, talk, tap: the page records, brings the sound to 16 kHz mono itself,
 and sends nixamp.com a small WAV with the room's name on it; the ear posts
 the words to the room in the same request, and the line appears. Said is
 sent, unless the **Edit before sending** switch under the box is on, in
-which case the words wait in the box for Send. A wrong line is taken down
-with its ✕.
+which case the words wait in the box for Send. A line, once sent, is public
+record: there is no taking it down, not by its author and not by the
+server's owner.
 
 **On the phone, too.** Every live room has a six-digit code on the party
 line (see below), and only when somebody is on the phone in a room, each
