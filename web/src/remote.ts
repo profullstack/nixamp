@@ -200,6 +200,23 @@ export interface RemoteHandlers {
   onStatus: (status: Status, detail?: string) => void;
 }
 
+/**
+ * Whether an address is on the server at `base`.
+ *
+ * By origin, not by prefix: a channel's stream, a file, the live feed and the
+ * HLS playlist are all doors on the same host, and the host is what answers
+ * access-control-allow-origin: *. Nothing is on a server while there is no
+ * server, and an address that does not parse is on none.
+ */
+export function onServer(base: string, url: string): boolean {
+  if (base === "") return false;
+  try {
+    return new URL(url).origin === new URL(base).origin;
+  } catch {
+    return false;
+  }
+}
+
 export class RemoteClient {
   private source: EventSource | null = null;
   private base = "";
@@ -220,6 +237,11 @@ export class RemoteClient {
 
   get address(): string {
     return this.base;
+  }
+
+  /** Whether an address is on the server this client is connected to. */
+  owns(url: string): boolean {
+    return onServer(this.base, url);
   }
 
   /** Any endpoint on the connected server, with the key -- and the session, on another origin -- already on it. */

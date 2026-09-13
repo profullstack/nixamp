@@ -114,6 +114,17 @@ export interface PlayerHandlers {
    * STOPPED, which reads as broken. This is what lets it say LOADING instead.
    */
   onBusy?: (busy: boolean) => void;
+  /**
+   * Whether an address on another origin may be read all the same.
+   *
+   * The analyser may only look at media the site lets it look at, and the
+   * page cannot tell that from an address alone. Same origin is known here;
+   * a nixamp server is not the page's origin -- nixamp.com plays a channel
+   * from someone's own machine -- but it answers every request with
+   * access-control-allow-origin: *, so it is as readable as the page itself.
+   * The app knows which server it is connected to, so the app answers.
+   */
+  readable?: (url: string) => boolean;
 }
 
 /** How many analyser bins we ask for. 2048 samples, as in the terminal app. */
@@ -171,8 +182,8 @@ export class BrowserPlayer {
    * read it (crossOrigin) makes it fail to load at all, and routing it through
    * a MediaElementSource without that permission plays silence. So its sound
    * goes straight to the speakers, and the spectrum sits still for it. A
-   * podcast on a plain CDN is exactly this; a nixamp stream is a same-origin
-   * blob and is fine.
+   * podcast on a plain CDN is exactly this; a nixamp server allows every
+   * origin, and the app says so through `readable`.
    */
   private analysable = true;
 
@@ -297,12 +308,17 @@ export class BrowserPlayer {
     // What it is, said by whoever knew: the list, for a picked file whose
     // name has already been read; the address, for anything with one.
     const kind = track.kind ?? (track.objectUrl ? (track.video ? "mp4" : "audio") : detectKind({ src: track.url }));
-    // Ask to read it only when reading it can work: a blob or a same-origin
-    // file. A cross-origin file with crossOrigin set fails to load, so for
-    // that one the attribute is cleared and it plays without the analyser.
+    // Ask to read it only when reading it can work: a blob, a same-origin
+    // file, or an address the app vouches for -- the server it is connected
+    // to, which allows every origin. A cross-origin file with crossOrigin
+    // set fails to load, so for that one the attribute is cleared and it
+    // plays without the analyser. Getting this wrong the other way is worse:
+    // a channel on a chovy server, watched from nixamp.com, was cleared too,
+    // and an unreadable element wired into the analyser plays silence -- the
+    // clock ran and nothing was heard.
     // Set before the source is assigned, since the attribute is read then.
     const wanted = needsVideoElement(track.video, kind) ? this.elements.video : this.elements.audio;
-    const cors = track.objectUrl || isSameOrigin(track.url);
+    const cors = track.objectUrl || isSameOrigin(track.url) || (this.handlers.readable?.(track.url) ?? false);
     wanted.crossOrigin = cors ? "anonymous" : null;
     if (wanted !== this.active) {
       this.active.pause();
