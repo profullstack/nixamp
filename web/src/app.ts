@@ -3579,7 +3579,7 @@ export function start(): void {
   async function loadPersona(): Promise<void> {
     try {
       const answer = await fetch(`${trollboxSite}/api/v1/me/handle`);
-      const body = (await answer.json().catch(() => ({}))) as { handle?: string; voice?: string; profile?: string; chosen?: boolean; error?: string };
+      const body = (await answer.json().catch(() => ({}))) as { handle?: string; voice?: string; profile?: string; chosen?: boolean; spoken?: string; error?: string };
       if (!answer.ok) {
         dom.personaNote.textContent = body.error ?? "Could not read your profile.";
         return;
@@ -3588,9 +3588,11 @@ export function start(): void {
       dom.personaHandle.placeholder = body.handle || "handle";
       dom.personaVoice.value = body.voice === "female" || body.voice === "male" ? body.voice : "";
       dom.personaProfile.value = body.profile ?? "";
+      // The voice named by id, so two people can see they differ.
+      const spoken = body.spoken ? ` (${body.spoken.replace(/^Telnyx\.KokoroTTS\./, "Kokoro ").replace(/^ElevenLabs\./, "ElevenLabs ")})` : "";
       dom.personaNote.textContent = body.chosen
-        ? `You are ${body.handle} in every room. On the phone your lines are read ${voiceWords(body.voice ?? "")}.`
-        : `Rooms call you ${body.handle} until you pick a handle. On the phone your lines are read ${voiceWords(body.voice ?? "")}.`;
+        ? `You are ${body.handle} in every room. On the phone your lines are read ${voiceWords(body.voice ?? "")}${spoken}.`
+        : `Rooms call you ${body.handle} until you pick a handle. On the phone your lines are read ${voiceWords(body.voice ?? "")}${spoken}.`;
     } catch {
       dom.personaNote.textContent = "Could not reach nixamp.com for your profile.";
     }

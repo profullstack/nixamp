@@ -708,7 +708,7 @@ export class PartyLine {
    * voice of whoever typed them. False when nobody is on the phone there,
    * which is most of the time and costs nothing.
    */
-  async say(code: string, text: string, voice: string): Promise<boolean> {
+  async say(code: string, text: string, voice: string, settings?: { api_key_ref: string }): Promise<boolean> {
     const room = this.rooms.get(code);
     if (!room || room.conferenceId === null || room.callers === 0) return false;
     const said = text.replace(/\s+/g, " ").trim().slice(0, 500);
@@ -716,6 +716,8 @@ export class PartyLine {
     const answer = await this.request(`/conferences/${encodeURIComponent(room.conferenceId)}/actions/speak`, {
       payload: said,
       voice: voice || this.voice,
+      // An ElevenLabs voice needs the key Telnyx holds for it, by name.
+      ...(settings ? { voice_settings: settings } : {}),
     });
     return answer !== null;
   }

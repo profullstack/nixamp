@@ -86,6 +86,8 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp mcp                     speak Model Context Protocol on stdin, for an agent
   nixamp transcribe FILE [--say SERVER]  the words in a recording, and into a trollbox
   nixamp transcript --channel ID [--follow]  what a channel is saying, as it says it
+  nixamp profile [--handle H] [--voice V] [--profile URL]  who the rooms know you as
+  nixamp voices                  the voices a line is read in on the phone
   nixamp opendir list|add|remove  folders found on the web, published for everyone
   nixamp update [version]        re-run the installer, keeping your choices
   nixamp uninstall [--yes]       remove everything the installer created
@@ -268,7 +270,8 @@ It offers the watch party tools: list them, read one, put one on the air,
 say where playback is, end it. And the room tools: transcribe a recording
 (transcribe_audio, which can post the words straight into a trollbox), say a
 line in a room (trollbox_say), read a room (trollbox_read), read what a
-channel is saying (transcript_read). It acts as
+channel is saying (transcript_read), and who you are in the rooms and how
+you sound on the phone (profile_get, profile_set, voices_list). It acts as
 whoever this machine is signed in as, so \`nixamp login\` (or NIXAMP_TOKEN)
 comes first.
 
@@ -289,6 +292,20 @@ sign-in (\`nixamp login\`) and nothing else. Up to a minute at a time.
 
 The same ear is behind the microphone button in every nixamp.com trollbox,
 and behind the transcribe_audio tool of \`nixamp mcp\`.
+`,
+  profile: `nixamp profile — who the rooms know you as.
+
+  nixamp profile                       your handle, voice and OpenProfile
+  nixamp profile --handle chovy        the name on every line you say
+  nixamp profile --voice female        the voice your lines are read in on the phone:
+                                       female, male, any, or a voice id (see \`nixamp voices\`)
+  nixamp profile --profile URL         your OpenProfile.md; its Voice, Gender or Pronouns
+                                       decide the voice when you set none here
+  nixamp voices                        the voices this nixamp.com reads lines in
+
+When somebody is on the phone in a live room, every trollbox line is read to
+them in the author's voice: the one set here, else the OpenProfile's, else
+one picked for the account and kept. Two people in a room are two voices.
 `,
   transcript: `nixamp transcript — what a channel is saying, written down.
 
@@ -500,6 +517,16 @@ export async function main(): Promise<void> {
   if (first === "party" || first === "parties" || first === "watch-party") {
     const { party } = await import("./party.ts");
     process.exitCode = await party(rest);
+    return;
+  }
+  if (first === "profile" || first === "persona") {
+    const { profile } = await import("./profile.ts");
+    process.exitCode = await profile(rest);
+    return;
+  }
+  if (first === "voices") {
+    const { voices } = await import("./profile.ts");
+    process.exitCode = await voices(rest);
     return;
   }
   if (first === "transcript" || first === "captions") {
