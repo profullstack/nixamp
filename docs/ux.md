@@ -53,7 +53,9 @@ Keep translated playback in the player: one opt-in beside the existing language
 menu replaces that player's original audio. Turning it off restores the source.
 Do not add tab-sharing, microphone-source, or separate capture start/stop controls
 to this interface. Keep optional background settings and speaker overrides
-collapsed. Stock-voice choices must not be presented as detected speaker gender.
+collapsed. Keep background gain steady across translated phrases and gaps;
+never duck or fade it in response to synthesized speech. Temporary connection
+recovery must keep original commentary muted. Stock-voice choices must not be presented as detected speaker gender.
 
 ## Paid panels and upgrades
 

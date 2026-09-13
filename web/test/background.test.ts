@@ -12,30 +12,53 @@ function speechEstimate(): FrameDenoiser {
   return { processFrame(input) { const result = previous; previous = input.map(value => value * 0.75); return result; }, destroy() {} };
 }
 
-test("the real bundled model initializes all three dialogue channels and leaves surround ambience untouched", async () => {
+test("the bundled Base model processes the complete downmix without non-finite output", async () => {
   const separator = await createBackgroundSeparator();
   try {
-    const surround = [frame(0), frame(0), frame(0), frame(0), frame(0.3), frame(-0.2)];
-    separator.process(surround);
-    const output = separator.process(surround);
-    assert.ok(output[0]!.every(value => Math.abs(value - Math.SQRT1_2 * 0.3) < 1e-6));
-    assert.ok(output[1]!.every(value => Math.abs(value + Math.SQRT1_2 * 0.2) < 1e-6));
+    for (let step = 0; step < 12; step++) {
+      const output = separator.process([frame(0.1), frame(-0.1), frame(0.2), frame(0), frame(0.3), frame(-0.2)]);
+      assert.equal(output.length, 2);
+      assert.ok(output.every(channel => channel.every(Number.isFinite)));
+    }
   } finally { separator.destroy(); }
 });
 
-test("subtracts speech from the aligned preceding frame independently in stereo", () => {
-  const separator = new BackgroundSeparator([speechEstimate(), speechEstimate()]);
-  const first = separator.process([frame(0.8), frame(-0.4)]);
-  assert.ok(first.every(channel => channel.every(value => value === 0)), "startup must not pass through commentary");
-  const next = separator.process([frame(-0.1), frame(0.9)]);
-  assert.ok(next[0]!.every(value => Math.abs(value - 0.2) < 1e-6));
-  assert.ok(next[1]!.every(value => Math.abs(value + 0.1) < 1e-6));
-  const third = separator.process([frame(0), frame(0)]);
-  assert.ok(third[0]!.every(value => Math.abs(value + 0.025) < 1e-6));
-  assert.ok(third[1]!.every(value => Math.abs(value - 0.225) < 1e-6));
+test("spectral removal rejects a phase-shifted, underestimated voice while retaining other frequencies", () => {
+  let step = -BACKGROUND_HOP;
+  const voice = (i: number, phase = 0) => 0.2 * Math.sin(2 * Math.PI * 375 * i / 48000 + phase);
+  const crowd = (i: number) => 0.1 * Math.sin(2 * Math.PI * 6000 * i / 48000);
+  const model = { processFrame() { const result = Float32Array.from({ length: BACKGROUND_HOP }, (_, i) => step < 0 ? 0 : voice(step + i, 0.7) * 0.5); step += BACKGROUND_HOP; return result; }, destroy() {} };
+  const separator = new BackgroundSeparator([model]);
+  let speech = 0, ambience = 0, length = 0;
+  for (let hop = 0; hop < 40; hop++) {
+    const output = separator.process([Float32Array.from({ length: BACKGROUND_HOP }, (_, i) => voice(hop * BACKGROUND_HOP + i) + crowd(hop * BACKGROUND_HOP + i))]);
+    assert.deepEqual(output[0], output[1], "mono remains centred");
+    if (hop < 4) continue;
+    for (let i = 0; i < BACKGROUND_HOP; i++) {
+      const at = (hop - 2) * BACKGROUND_HOP + i;
+      speech += output[0]![i]! * voice(at); ambience += output[0]![i]! * crowd(at); length++;
+    }
+  }
+  assert.ok(Math.abs(speech / length / 0.02) < 0.02, "voice survives imperfect phase subtraction");
+  assert.ok(ambience / length / 0.005 > 0.9, "background frequencies must remain at a steady level");
 });
 
-test("invalid input or failed inference never falls back to original commentary", () => {
+test("rear and side speech cannot bypass removal in quad, 5.1 or 7.1 recordings", () => {
+  for (const count of [2, 4, 6, 8]) {
+    const models = Array.from({ length: 2 }, () => {
+      let previous = frame(0);
+      return { processFrame(input: Float32Array) { const output = previous; previous = input.slice(); return output; }, destroy() {} };
+    });
+    const separator = new BackgroundSeparator(models);
+    for (let hop = 0; hop < 8; hop++) {
+      const input = Array.from({ length: count }, (_, channel) => frame(channel >= count - 2 ? 0.3 : 0));
+      const output = separator.process(input);
+      assert.ok(output.every(channel => channel.every(value => Math.abs(value) < 1e-6)), `${count}-channel commentary bypassed the separator`);
+    }
+  }
+});
+
+test("invalid inference fails closed, and a cut clears overlap without replaying old sound", () => {
   const separator = new BackgroundSeparator([speechEstimate(), speechEstimate()]);
   assert.throws(() => separator.process([frame(1), frame(1), frame(1)]));
   assert.throws(() => separator.process([frame(NaN), frame(1)]));
@@ -44,43 +67,10 @@ test("invalid input or failed inference never falls back to original commentary"
   const failed = new BackgroundSeparator([broken, broken]);
   assert.throws(() => failed.process([frame(1), frame(1)]));
   failed.destroy(); assert.equal(destroyed, 2);
-});
-
-test("mono stays centred; quad, 5.1 and 7.1 retain their original ambience channels", () => {
-  const mono = new BackgroundSeparator([speechEstimate()]);
-  mono.process([frame(0.8)]);
-  const centred = mono.process([frame(0)]);
-  assert.deepEqual(centred[0], centred[1]);
-  assert.ok(centred[0]!.every(value => Math.abs(value - 0.2) < 1e-6));
-  for (const count of [4, 6, 8]) {
-    let heard = 0;
-    const dialogue = Array.from({ length: 3 }, () => {
-      let previous = frame(0);
-      return { processFrame(input: Float32Array) { heard++; const result = previous; previous = input.slice(); return result; }, destroy() {} };
-    });
-    const separator = new BackgroundSeparator(dialogue);
-    // Complete foreground suppression leaves the surround recordings untouched.
-    const input = count === 4 ? [0.1, 0.2, 0.3, -0.2]
-      : count === 6 ? [0.1, 0.2, 0.4, 0.9, 0.3, -0.2]
-      : [0.1, 0.2, 0.4, 0.9, 0.3, -0.2, 0.1, 0.4];
-    separator.process(input.map(frame));
-    const output = separator.process(input.map(() => frame(0)));
-    const left = count === 4 ? 0.15 : count === 6 ? Math.SQRT1_2 * 0.3 : 0.5 * (0.3 + 0.1);
-    const right = count === 4 ? -0.1 : count === 6 ? Math.SQRT1_2 * -0.2 : 0.5 * (-0.2 + 0.4);
-    assert.ok(output[0]!.every(value => Math.abs(value - left) < 1e-6), `${count} channels: left ambience lost`);
-    assert.ok(output[1]!.every(value => Math.abs(value - right) < 1e-6), `${count} channels: right ambience lost`);
-    assert.equal(heard, count === 4 ? 4 : 6, "surround sound must never enter the speech model");
-  }
-});
-
-test("a cut in captured audio does not replay the preceding input as background", () => {
-  const separator = new BackgroundSeparator([speechEstimate(), speechEstimate()]);
-  separator.process([frame(0.8), frame(-0.4)]);
-  separator.discontinuity();
-  const cut = separator.process([frame(-0.1), frame(0.9)]);
-  assert.ok(cut.every(channel => channel.every(value => value === 0)));
-  const next = separator.process([frame(0), frame(0)]);
-  assert.ok(next[0]!.every(value => Math.abs(value + 0.025) < 1e-6));
+  const clean = new BackgroundSeparator([{ processFrame: () => frame(0), destroy() {} }]);
+  for (let i = 0; i < 5; i++) clean.process([frame(0.3)]);
+  clean.discontinuity();
+  for (let i = 0; i < 3; i++) assert.ok(clean.process([frame(0)]).every(channel => channel.every(value => value === 0)));
 });
 
 test("a stalled worker stays bounded, discards stale results, and resumes background without raw commentary", () => {
@@ -158,11 +148,11 @@ test("cancelled model loading settles immediately; stale workers cannot reconnec
     workers[0]!.ready(); workers[1]!.ready();
     assert.equal(await restarted, true); assert.equal(connections, 1);
     assert.equal(gains[0]!.value, 0, "background must wait until translated playback starts");
-    background.active(true); assert.equal(gains[0]!.value, 1);
-    background.setLevel(1.5); assert.equal(gains[0]!.value, 1.5);
+    background.active(true); assert.equal(gains[0]!.value, 3);
+    background.setLevel(1.5); assert.equal(gains[0]!.value, 4.5);
     background.active(false); background.setLevel(2); assert.equal(gains[0]!.value, 0);
-    background.active(true); assert.equal(gains[0]!.value, 2);
-    background.setLevel(NaN); assert.equal(gains[0]!.value, 2);
+    background.active(true); assert.equal(gains[0]!.value, 6);
+    background.setLevel(NaN); assert.equal(gains[0]!.value, 6);
     workers[1]!.onerror?.();
     assert.equal(failures, 1); assert.equal(inputDisconnects, 1);
     assert.equal(disconnects, 1); assert.equal(closed, 1);

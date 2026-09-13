@@ -1,3 +1,4 @@
+import { audioError, transientAudioError } from "../../src/live-recovery.ts";
 import type { Caption } from "./captions.ts";
 
 export interface VoiceChoice { id: string; name: string; gender: string; language: string; }
@@ -17,6 +18,7 @@ export class LiveVoicePlayer {
   private next: { line: Caption; url: string; lag: number; init?: RequestInit }[] = [];
   private sources = new Set<AudioBufferSourceNode>();
   private scheduledUntil = 0;
+  private failures = 0;
   private seen = new Set<string>();
 
   constructor(private readonly options: {
@@ -57,7 +59,7 @@ export class LiveVoicePlayer {
     this.controller = null;
     this.next = [];
     this.running = null;
-    this.seen.clear();
+    this.seen.clear(); this.failures = 0;
     for (const source of this.sources) { try { source.stop(); } catch { /* Already ended. */ } }
     this.sources.clear();
     this.scheduledUntil = 0;
@@ -115,10 +117,11 @@ export class LiveVoicePlayer {
           new Headers(await this.options.authorization?.(controller.signal, item.line)).forEach((value, key) => headers.set(key, value));
           if (generation !== this.generation) return;
           const response = await (this.options.fetcher ?? fetch)(item.url, { ...item.init, signal: controller.signal, headers });
+          clearTimeout(timeout);
           if (generation !== this.generation) { await response.body?.cancel(); return; }
           if (!response.ok) {
             const body = await response.json().catch(() => ({})) as { error?: string };
-            throw new Error(body.error || "Translated audio is unavailable.");
+            throw audioError(body.error || "Translated audio is unavailable.", response.status);
           }
           if (!response.body || !response.headers.get("content-type")?.startsWith("audio/pcm")) throw new Error("The server returned no voice audio.");
           const reader = response.body.getReader();
@@ -126,7 +129,15 @@ export class LiveVoicePlayer {
           let received = 0;
           try {
             while (true) {
-              const { done, value } = await reader.read();
+              // Limit network inactivity, not time spent waiting for already
+              // buffered audio to play. A longer phrase is not a dead request.
+              let idle!: ReturnType<typeof setTimeout>;
+              const { done, value } = await Promise.race([reader.read(), new Promise<never>((_resolve, reject) => {
+                idle = setTimeout(() => {
+                  controller.abort(); void reader.cancel().catch(() => {});
+                  reject(new DOMException("Voice connection timed out", "TimeoutError"));
+                }, 12_000);
+              })]).finally(() => clearTimeout(idle));
               if (generation !== this.generation) { await reader.cancel(); return; }
               if (done) break;
               const bytes = new Uint8Array(remainder.length + value.length);
@@ -144,7 +155,12 @@ export class LiveVoicePlayer {
               }
             }
           } finally { reader.releaseLock(); }
-          if (!received || remainder.length) throw new Error("The voice audio was interrupted.");
+          if (!received || remainder.length) throw audioError("The voice audio was interrupted.", 502);
+          this.failures = 0;
+        } catch (error) {
+          if (generation !== this.generation) return;
+          if (!transientAudioError(error) || ++this.failures >= 3) throw error;
+          this.options.status("Voice interrupted · waiting for the next translated phrase…");
         } finally { clearTimeout(timeout); }
       }
     } catch (error) {

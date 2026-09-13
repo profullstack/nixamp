@@ -13,8 +13,8 @@ self.onmessage = async (event: MessageEvent<{ port: MessagePort }>) => {
         if (!Number.isSafeInteger(id) || id <= previous) throw new Error("Invalid background audio order");
         if (id !== previous + 1) separator.discontinuity();
         const channels = separator.process(message.data.channels);
-        // Subtraction returns the preceding input frame, not this one's sound.
-        port.postMessage({ id: previous, channels }, channels.map(channel => channel.buffer as ArrayBuffer));
+        // Model alignment plus overlap-add delays output by two input hops.
+        port.postMessage({ id: id - 2, channels }, channels.map(channel => channel.buffer as ArrayBuffer));
         previous = id;
       } catch {
         failed = true; separator.destroy();

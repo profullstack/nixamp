@@ -130,3 +130,17 @@ test('fetches the next voice while audio plays, preserves queued turns across ba
   assert.deepEqual(requested, ['/voice/1', '/voice/2', '/voice/3', '/voice/4']);
   player.disable();
 });
+
+test('a transient voice failure preserves output ownership and plays the next phrase', async () => {
+  const sound = context(), active: boolean[] = [];
+  let requests = 0;
+  const player = new LiveVoicePlayer({ audioContext: () => sound.audio, now: () => 7000, volume: () => 1, playing: () => true,
+    active: on => active.push(on), failed: () => assert.fail('unexpected failure'), status() {},
+    fetcher: (async () => ++requests === 1 ? Response.json({ error: 'Temporary outage' }, { status: 502 })
+      : new Response(new Uint8Array([0, 64]), { headers: { 'content-type': 'audio/pcm' } })) as typeof fetch });
+  try {
+    await player.enable(); player.pushBatch([1, 2].map(id => ({ line: { ...line, at: id }, url: '/voice', lag: 0 })));
+    await settle(); assert.equal(requests, 2); assert.equal(sound.samples.length, 1);
+    assert.ok(active.every(Boolean), 'transient recovery must never restore native announcers');
+  } finally { player.disable(); }
+});

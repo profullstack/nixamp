@@ -3358,6 +3358,7 @@ export function start(): void {
   need<HTMLElement>("translation-buy-tools").append(purchase.button());
   void purchase.refresh();
   const sharedAudio = new SharedAudio({
+    reconnecting: () => liveVoice.reset(),
     line: (line, url) => { captionsLag = 0; captionsHeld.push(line); revealCaptions(); liveVoice.push(line, url, 0); },
     status: text => { dom.transcriptAudioNote.textContent = text; },
     failed: error => { captureError = error; voiceError = error; captureWanted = false; dom.transcriptAudio.checked = false; liveVoice.disable(); stopCapture(); dom.transcriptAudioNote.textContent = `${error} Original audio restored.`; void purchase.refresh(); },
