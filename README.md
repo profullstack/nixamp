@@ -147,6 +147,12 @@ site. In the **Parties** panel, enter an **Invite code** and select **Join party
 to open its room. A listed party's **Join party** link opens the film on the
 site hosting it; **Open room** opens its nixamp room.
 
+A live party also shows the current file's source and folder path, so a course
+can read **Course › Section › Lecture**, with its position in that folder's
+playlist. Numbered download filenames become readable lecture titles. Share
+sheets, browser tabs and device media information follow the current lecture;
+course names come from the server's metadata, never a guess from the filename.
+
 A watch party lives on the site that has the film. bittorrented.com has them:
 a six-character code, a host, and everybody at the same second. nixamp has
 rooms, chat, invitations, a directory, and five clients that can already open

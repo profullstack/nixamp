@@ -332,6 +332,7 @@ body.tv .subtitle { font-size: 28px; }
 }
 .directory-list li.onair:last-child { border-bottom: 0; }
 .directory-list li.onair > .recent-label { flex: none; }
+.directory-list li.onair .detail { white-space: normal; overflow-wrap: anywhere; }
 .onair-actions {
   display: flex;
   align-items: center;
@@ -433,6 +434,13 @@ body.tv .subtitle { font-size: 28px; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A course breadcrumb must remain readable from a television or phone. */
+.track-title.with-context,
+.track-sub.with-context {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* On a live stream: whose it is, what is on, and the number to call. */
