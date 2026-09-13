@@ -24,17 +24,25 @@ export function installAccessibility(): void {
 }
 
 const deferred = new WeakMap<HTMLElement, (Node | string)[]>();
+/** Only a requested navigation may retire the focused row. Keep keyboard
+ * position at the list while its next page loads, without scrolling to it. */
+export function beginListNavigation(element: HTMLElement, clear = true): void {
+  const focused = element.contains(document.activeElement);
+  deferred.delete(element);
+  if (clear) element.replaceChildren();
+  if (focused) { element.tabIndex = -1; element.focus({ preventScroll: true }); }
+}
 /** Polling must not remove the control someone is using. Keep the latest
  * replacement until focus leaves the list, without moving focus ourselves. */
 export function replaceList(element: HTMLElement, ...children: (Node | string)[]): void {
-  if (!element.contains(document.activeElement)) { deferred.delete(element); element.replaceChildren(...children); return; }
+  if (document.activeElement === element || !element.contains(document.activeElement)) { deferred.delete(element); element.replaceChildren(...children); return; }
   const waiting = deferred.has(element);
   deferred.set(element, children);
   if (waiting) return;
   const commit = (): void => {
     const latest = deferred.get(element);
     if (!latest) return;
-    if (element.contains(document.activeElement)) { element.addEventListener("focusout", leave, { once: true }); return; }
+    if (document.activeElement !== element && element.contains(document.activeElement)) { element.addEventListener("focusout", leave, { once: true }); return; }
     deferred.delete(element); element.replaceChildren(...latest);
   };
   const leave = (): void => { setTimeout(commit, 0); };

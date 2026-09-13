@@ -1,23 +1,21 @@
-import { loadModel } from "fastenhancer-web";
-import { BackgroundSeparator, BACKGROUND_HOP } from "./background-core.ts";
+import { createBackgroundSeparator } from "./background-model.ts";
 
 /** Model inference stays off the page and audio-rendering threads. */
 self.onmessage = async (event: MessageEvent<{ port: MessagePort }>) => {
   const port = event.data.port;
   try {
-    const model = await loadModel("tiny");
-    if (model.sampleRate !== 48000 || model.hopSize !== BACKGROUND_HOP) throw new Error("Unsupported separation format");
-    const left = await model.createDenoiser(), right = await model.createDenoiser();
-    left.agcEnabled = right.agcEnabled = false;
-    left.hpfEnabled = right.hpfEnabled = false;
-    const separator = new BackgroundSeparator([left, right]);
-    let next = 0, failed = false;
+    const separator = await createBackgroundSeparator();
+    let previous = -1, failed = false;
     port.onmessage = (message: MessageEvent<{ id: number; channels: Float32Array[] }>) => {
       if (failed) return;
       try {
-        if (message.data.id !== next++) throw new Error("Background audio fell behind");
+        const id = message.data.id;
+        if (!Number.isSafeInteger(id) || id <= previous) throw new Error("Invalid background audio order");
+        if (id !== previous + 1) separator.discontinuity();
         const channels = separator.process(message.data.channels);
-        port.postMessage({ channels }, channels.map(channel => channel.buffer as ArrayBuffer));
+        // Subtraction returns the preceding input frame, not this one's sound.
+        port.postMessage({ id: previous, channels }, channels.map(channel => channel.buffer as ArrayBuffer));
+        previous = id;
       } catch {
         failed = true; separator.destroy();
         self.postMessage({ error: true });
@@ -25,5 +23,5 @@ self.onmessage = async (event: MessageEvent<{ port: MessagePort }>) => {
     };
     port.start();
     self.postMessage({ ready: true });
-  } catch { self.postMessage({ error: true }); }
+  } catch (error) { self.postMessage({ error: true, reason: error instanceof Error ? error.message : "Background model unavailable" }); }
 };

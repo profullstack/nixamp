@@ -403,7 +403,15 @@ export class BrowserPlayer {
   }
 
   pause(): void {
+    this.playBlocked = false;
     this.active.pause();
+  }
+
+  /** A shared link already requested playback. Retry when the browser grants
+   * user activation; an explicit pause/stop cancels that pending request. */
+  async resumeAfterInteraction(): Promise<void> {
+    if (this.playBlocked) await this.play();
+    else if (this.playing && this.context?.state === "suspended") await this.context.resume();
   }
 
   stop(): void {
