@@ -19,10 +19,26 @@ RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build && bun run web:build
 
+# The runtime's dependencies, installed once here rather than by bun's
+# auto-install at first boot: auto-install reads `dependencies` only, and
+# the ear (@huggingface/transformers, see src/speech.ts) is an OPTIONAL
+# dependency so the CLI tarball stays pure JavaScript. Without this stage
+# nixamp.com answered every transcribe with "cannot hear". --production
+# leaves the compilers and bundlers out; the optional ones come along.
+FROM oven/bun:1 AS deps
+WORKDIR /app
+ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
+COPY package.json bun.lock ./
+COPY web/package.json web/package.json
+COPY desktop/package.json desktop/package.json
+COPY backtoschool/package.json backtoschool/package.json
+RUN bun install --frozen-lockfile --production
+
 FROM oven/bun:1-slim
 WORKDIR /app
 ENV NODE_ENV=production
 
+COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/web/dist ./web/dist
 COPY --from=build /app/package.json ./package.json
