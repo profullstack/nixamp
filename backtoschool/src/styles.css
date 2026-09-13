@@ -391,7 +391,7 @@ button[aria-disabled="true"] { opacity: .65; cursor: default; }
 .class-update .form-note { margin: 0 0 8px; }
 .class-update button + button { margin-left: 18px; }
 .ai-writer { padding: 16px; border: 1px solid var(--line); border-radius: 12px; }
-.ai-writer-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; }
+.ai-writer-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); align-items: center; gap: 14px; }
 .ai-writer-status { height: 5em; overflow: auto; line-height: 1.4; margin: 10px 0 0; }
 #event-ai-preview { margin-top: 12px; }
 #event-ai-preview textarea { resize: vertical; }
