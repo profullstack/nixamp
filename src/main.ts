@@ -80,6 +80,7 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp token create|list|revoke  tokens for a machine that cannot sign in
   nixamp dns [set|rm]           names under your handle, for your servers
   nixamp library [folder]       where the media is; the daemon serves this and nothing outside it
+  nixamp sync [save|load|status] your settings on every machine, against your account (--force, --dry-run)
   nixamp server list|add|remove  the machines you run, kept against your account
   nixamp party list|join|host   watch parties, here and on the sites nixamp is connected to
   nixamp mcp                     speak Model Context Protocol on stdin, for an agent
@@ -524,6 +525,11 @@ export async function main(): Promise<void> {
   if (first === "dns") {
     const { dns } = await import("./session.ts");
     process.exitCode = await dns(rest);
+    return;
+  }
+  if (first === "sync") {
+    const { syncCommand } = await import("./sync.ts");
+    process.exitCode = await syncCommand(rest);
     return;
   }
   if (first === "library") {

@@ -1,6 +1,6 @@
 {
   "name": "nixamp",
-  "version": "0.22.1",
+  "version": "0.23.0",
   "description": "It really whips the terminal's ass. A Winamp-shaped audio player for your terminal.",
   "license": "MIT",
   "type": "module",
@@ -46,6 +46,7 @@
   "dependencies": {
     "@profullstack/auth-system": "^0.6.0",
     "@profullstack/hqtui": "^0.5.0",
+    "@profullstack/synconfig": "^0.1.2",
     "@profullstack/throttle": "0.2.2",
     "@profullstack/x402-gateway": "0.6.0",
     "acme-client": "5.4.0",
