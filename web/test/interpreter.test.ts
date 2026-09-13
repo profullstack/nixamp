@@ -140,3 +140,40 @@ test('long translations are divided without dropping words or speaker metadata',
   assert.ok(lines.every(line => line.text.length <= 600 && line.speaker === 'speaker-2'));
   assert.ok(lines.every((line, i) => i === 0 || line.at > lines[i-1]!.at));
 });
+
+test('a transient recognition or text failure skips a phrase and recovers without disabling translation', async () => {
+  for (const stage of ['recognition', 'translation']) {
+    let requests = 0, texts = 0;
+    const emitted: Caption[] = [];
+    const interpreter = new Interpreter({ language: () => 'de', speakers: () => true, voices: () => voices, channel: () => 'local',
+      lines: lines => emitted.push(...lines), status() {}, failed: message => assert.fail(message),
+      fetcher: (async url => {
+        if (String(url).includes('/speakers')) {
+          if (++requests === 1 && stage === 'recognition') return Response.json({ error: 'Temporary outage' }, { status: 503 });
+          return Response.json({ language: 'es', turns: [turn('a', .1, 1.5)] });
+        }
+        if (++texts === 1 && stage === 'translation') return Response.json({ error: 'Temporary outage' }, { status: 502 });
+        return Response.json({ texts: ['Die nächste Aussage.'] });
+      }) as typeof fetch });
+    try {
+      const now = Date.now();
+      for (let i = 0; i < 2; i++) { interpreter.push({ at: now - 4000 + i * 2000, until: now - 2000 + i * 2000, freshAt: now - 4000 + i * 2000, samples: new Float32Array(32000) }); await settle(); }
+      assert.equal(emitted.length, 1); assert.equal(emitted[0]!.text, 'Die nächste Aussage.');
+    } finally { interpreter.reset(); }
+  }
+});
+
+test('recognition recovery stops after three consecutive failures and never retries access or budget errors', async () => {
+  for (const status of [503, 401, 402, 429]) {
+    const failures: string[] = [];
+    let requests = 0;
+    const interpreter = new Interpreter({ language: () => 'de', speakers: () => true, voices: () => voices, channel: () => 'local',
+      lines() {}, status() {}, failed: message => failures.push(message),
+      fetcher: (async () => { requests++; return Response.json({ error: `Failure ${status}` }, { status }); }) as typeof fetch });
+    try {
+      const attempts = status === 503 ? 3 : 1;
+      for (let i = 0; i < attempts; i++) { const now = Date.now(); interpreter.push({ at: now - 2000, until: now, freshAt: now - 2000, samples: new Float32Array(32000) }); await settle(); }
+      assert.equal(requests, attempts); assert.deepEqual(failures, [`Failure ${status}`]);
+    } finally { interpreter.reset(); }
+  }
+});

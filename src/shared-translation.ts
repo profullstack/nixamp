@@ -1,5 +1,6 @@
 /** One live source/language pipeline, paid access for every listening account.
  * Browsers receive the same PCM, never upload a replacement for a public feed. */
+import { transientAudioError } from "./live-recovery.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
@@ -58,9 +59,9 @@ export function liveInput(ffmpeg: string[] = ["ffmpeg"]): OpenLiveInput {
   };
 }
 
-export type SharedEvent = { type: "status"; listeners: number } | { type: "line"; id: string; line: Caption } | { type: "audio"; id: string; data: string } | { type: "end"; id: string } | { type: "error"; error: string };
+export type SharedEvent = { type: "status"; listeners: number } | { type: "line"; id: string; line: Caption } | { type: "audio"; id: string; data: string } | { type: "end"; id: string } | { type: "error"; error: string; retryable?: boolean };
 type Member = { by: string; send: (event: SharedEvent) => void; close: () => void };
-interface Feed { id: string; source: URL; language: string; members: Set<Member>; controller: AbortController; input?: LiveInput; interpreter: Interpreter; meter: TranslationMeter; reservations: Map<string, string[]>; queue: Caption[]; speaking: boolean; previous: Buffer; pending: Buffer; until: number; heartbeat?: ReturnType<typeof setInterval>; }
+interface Feed { id: string; source: URL; language: string; members: Set<Member>; controller: AbortController; input?: LiveInput; interpreter: Interpreter; meter: TranslationMeter; reservations: Map<string, string[]>; queue: Caption[]; speaking: boolean; voiceFailures: number; previous: Buffer; pending: Buffer; until: number; heartbeat?: ReturnType<typeof setInterval>; }
 
 export class SharedTranslations {
   private readonly feeds = new Map<string, Feed>();
@@ -123,12 +124,12 @@ export class SharedTranslations {
       try { member.send(event); } catch { this.leave(feed, member); member.close(); }
     }
   }
-  private stop(feed: Feed, error: string): void {
-    this.broadcast(feed, { type: "error", error });
+  private stop(feed: Feed, error: string, retryable = false): void {
+    this.broadcast(feed, { type: "error", error, retryable });
     for (const member of [...feed.members]) { this.leave(feed, member); member.close(); }
   }
   private make(id: string, source: URL, language: string): Feed {
-    const feed = { id, source, language, members: new Set<Member>(), controller: new AbortController(), reservations: new Map<string, string[]>(), queue: [], speaking: false, previous: Buffer.alloc(0), pending: Buffer.alloc(0), until: Date.now() } as unknown as Feed;
+    const feed = { id, source, language, members: new Set<Member>(), controller: new AbortController(), reservations: new Map<string, string[]>(), queue: [], speaking: false, voiceFailures: 0, previous: Buffer.alloc(0), pending: Buffer.alloc(0), until: Date.now() } as unknown as Feed;
     // Each account uses free access first, then the same published credit rate.
     // Additional listeners do not trigger recognition or synthesis.
     feed.meter = {
@@ -163,10 +164,10 @@ export class SharedTranslations {
     feed.interpreter = new Interpreter({
       language: () => language, speakers: () => true, voices: () => voices, channel: () => id,
       status: text => { if (!feed.controller.signal.aborted && !feed.members.size) this.stop(feed, text); },
-      failed: () => this.stop(feed, "Live translation stopped. Enable it again to retry."),
+      failed: message => this.stop(feed, message),
       lines: lines => {
         feed.queue.push(...lines);
-        if (feed.queue.length > 24) { this.stop(feed, "Live translation fell behind. Enable it again to retry."); return; }
+        feed.queue = feed.queue.filter(line => Date.now() - line.until <= 12_000).slice(-24);
         if (!feed.speaking) void this.speak(feed);
       },
       fetcher: (async (url, init) => {
@@ -196,7 +197,7 @@ export class SharedTranslations {
           for (let index = 0; index < samples.length; index++) samples[index] = pcm.readInt16LE(index * 2) / 32768;
           feed.interpreter.push({ samples, at: feed.until - samples.length / 16, until: feed.until, freshAt: feed.until - 2000 });
         }
-      }, () => this.stop(feed, "The live source stopped. Enable translated audio again when playback resumes."), feed.controller.signal);
+      }, () => this.stop(feed, "The live source disconnected.", true), feed.controller.signal);
       if (feed.controller.signal.aborted) input.stop(); else feed.input = input;
     } catch (error) { this.stop(feed, error instanceof SpeechError ? error.message : "The live source could not be opened."); }
   }
@@ -205,18 +206,25 @@ export class SharedTranslations {
     try {
       while (feed.queue.length && !feed.controller.signal.aborted) {
         const line = feed.queue.shift()!;
-        if (Date.now() - line.until > 12_000) throw new SpeechError("Live translation fell behind. Enable it again to retry.", 503);
-        const response = await this.options.voice.stream({ text: line.text, language: feed.language, channel: feed.id, speaker: line.speaker, voice: feed.interpreter.tracker.speakers.get(line.speaker ?? "")?.voice }, feed.id, feed.controller.signal, feed.meter);
-        const id = randomUUID();
-        this.broadcast(feed, { type: "line", id, line });
-        const reader = response.body!.getReader();
+        if (Date.now() - line.until > 12_000) continue;
         try {
-          while (true) {
-            const { done, value } = await reader.read(); if (done) break;
-            for (let at = 0; at < value.length; at += 16_384) this.broadcast(feed, { type: "audio", id, data: Buffer.from(value.subarray(at, at + 16_384)).toString("base64") });
-          }
-        } finally { reader.releaseLock(); }
-        this.broadcast(feed, { type: "end", id });
+          const response = await this.options.voice.stream({ text: line.text, language: feed.language, channel: feed.id, speaker: line.speaker, voice: feed.interpreter.tracker.speakers.get(line.speaker ?? "")?.voice }, feed.id, feed.controller.signal, feed.meter);
+          const id = randomUUID();
+          this.broadcast(feed, { type: "line", id, line });
+          const reader = response.body!.getReader();
+          try {
+            while (true) {
+              const { done, value } = await reader.read(); if (done) break;
+              for (let at = 0; at < value.length; at += 16_384) this.broadcast(feed, { type: "audio", id, data: Buffer.from(value.subarray(at, at + 16_384)).toString("base64") });
+            }
+          } finally { reader.releaseLock(); this.broadcast(feed, { type: "end", id }); }
+          feed.voiceFailures = 0;
+        } catch (error) {
+          if (feed.controller.signal.aborted) return;
+          if (!transientAudioError(error) || ++feed.voiceFailures >= 3) throw error;
+          // A provider failure skips this phrase; the source and other listeners
+          // remain connected. Never replay partial speech or retry a charge.
+        }
       }
     } catch (error) { if (!feed.controller.signal.aborted) this.stop(feed, error instanceof SpeechError ? error.message : "Translated audio was interrupted."); }
     finally { feed.speaking = false; }

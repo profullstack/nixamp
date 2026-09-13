@@ -47,6 +47,7 @@
       "dependencies": {
         "@profullstack/player": "^0.7.0",
         "fastenhancer-web": "^0.1.1",
+        "fft.js": "4.0.4",
       },
       "devDependencies": {
         "@types/node": "^26",
@@ -506,6 +507,8 @@
     "fastenhancer-web": ["fastenhancer-web@0.1.1", "", { "peerDependencies": { "react": ">=18.0.0" }, "optionalPeers": ["react"] }, "sha512-58kCJlrc6o070DTr3wPMvv7VOS4X/S7g87kCPn1q7BJD3NXno5MI4iB7hAU3BFHHsjQC/tnkpWyZwsGSqrRFpg=="],
 
     "fdir": ["fdir@6.5.0", "", { "peerDependencies": { "picomatch": "^3 || ^4" }, "optionalPeers": ["picomatch"] }, "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="],
+
+    "fft.js": ["fft.js@4.0.4", "", {}, "sha512-f9c00hphOgeQTlDyavwTtu6RiK8AIFjD6+jvXkNkpeQ7rirK3uFWVpalkoS4LAwbdX7mfZ8aoBfFVQX1Re/8aw=="],
 
     "filelist": ["filelist@1.0.6", "", { "dependencies": { "minimatch": "^5.0.1" } }, "sha512-5giy2PkLYY1cP39p17Ech+2xlpTRL9HLspOfEgm0L6CwBXBTgsK5ou0JtzYuepxkaQ/tvhCFIJ5uXo0OrM2DxA=="],
 

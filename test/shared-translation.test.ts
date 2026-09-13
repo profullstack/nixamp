@@ -42,3 +42,27 @@ test("N+1 live listeners share recognition and PCM; remaining listeners keep the
   b();assert.equal(shared.size,0);assert.equal(stops,1);
   pcm(fresh);await pause();assert.equal(heard,2,"no provider work after last departure");
 });
+
+test("a rejected voice phrase does not stop the shared source or charge a retry", async () => {
+  let pcm!: (bytes: Buffer) => void, opened = 0, spoken = 0, stopped = 0;
+  const events: SharedEvent[] = [];
+  const voice = {
+    available: () => true, voices: async () => [],
+    hear: async (bytes: Uint8Array) => {
+      const seconds = decodeWav(bytes).samples.length / 16000;
+      return { language: "es", turns: [{ speaker: "a", profile: "lower", start: seconds - 1.5, end: seconds - 0.4,
+        words: [{ text: "La pelea sigue.", start: seconds - 1.5, end: seconds - 0.4 }] }] };
+    },
+    stream: async () => { if (++spoken === 1) throw new SpeechError("Temporary voice outage", 502); return new Response(new Uint8Array([0, 64])); },
+  } as unknown as LiveVoice;
+  const shared = new SharedTranslations({ voice, translator: { translate: async texts => ({ texts, from: "es", to: "de", model: "test" }) },
+    open: async (_source, take) => { opened++; pcm = take; return { stop() { stopped++; } }; } });
+  const leave = await shared.join("https://example.com/api/channels/nfl", "de", "alice", event => events.push(event), () => {});
+  try {
+    await pause(); pcm(Buffer.alloc(64000)); await pause(); assert.equal(spoken, 1); assert.equal(shared.size, 1);
+    await new Promise(resolve => setTimeout(resolve, 2050)); pcm(Buffer.alloc(64000)); await pause();
+    assert.equal(spoken, 2); assert.equal(opened, 1); assert.equal(stopped, 0);
+    assert.equal(events.filter(event => event.type === "audio").length, 1);
+    assert.equal(events.filter(event => event.type === "error").length, 0);
+  } finally { leave(); }
+});

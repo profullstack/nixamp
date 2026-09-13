@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@profullstack/player": "^0.7.0",
-    "fastenhancer-web": "^0.1.1"
+    "fastenhancer-web": "^0.1.1",
+    "fft.js": "4.0.4"
   }
 }

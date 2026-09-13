@@ -675,7 +675,11 @@ voice player preserves pending speaker turns and fetches the next phrase with
 up to three seconds of audio still queued. Speech queues and decoded audio are
 bounded. Old transcript history
 is never spoken. Pause, seek, source changes, and disabling the feature cancel
-queued speech; errors restore the original audio. This is a delayed live
+queued speech. Temporary connection and provider failures recover automatically
+without restoring original speech. Stale phrases are discarded so playback can
+catch up; three consecutive provider failures or an access/budget error end
+the session with a visible message. Network reconnection is limited to five
+attempts with backoff, reusing the active free session where available. This is a delayed live
 interpreter, not a promise of exact lip sync or word-by-word streaming captions.
 
 OpenStream currently compresses server-to-server relays, not this browser
@@ -686,23 +690,25 @@ codecs. The short-window overlap ratio and audio-second spending limits remain
 unchanged; smaller windows do not increase the steady-state audio submitted.
 
 Translated playback keeps an approximate version of the original background
-sound. FastEnhancer Web's Tiny model estimates speech locally in a dedicated
-browser worker. Mono and stereo sources have their speech estimate subtracted
-from the aligned source. Quad, 5.1, and 7.1 files retain their original surround
-channels while dialogue is removed from the front and centre channels; those
-parts are then mixed to stereo beside the translated voices. Background
-processing adds no API calls or provider charges. It stops with translation;
-recognition starts without waiting for it. Brief processing stalls drop stale
-frames and recover automatically, with bounded work and at most about 130 ms of
-background delay. A model or device failure silences that branch while translated
-speech continues. Separation of mixed dialogue and background is approximate;
-speech placed in a surround channel remains in that original track. Disable
-**Keep background sound** under **Audio options** when needed. This uses
-[FastEnhancer Web](https://github.com/ryyr-ry/fastenhancer-web), under the MIT
-license.
+sound. FastEnhancer Web's Base model estimates speech locally in a dedicated
+browser worker. Every audible channel, including rear and side channels, enters
+the speech estimate. A complementary spectral mask removes estimated voice
+frequencies independently from the left and right source channels, preserving
+their stereo phase. One speech model serves both channels to leave processing
+capacity for video playback. Background processing adds no API calls or provider
+charges. It stops with translation; recognition starts without waiting for it.
+Brief processing stalls drop stale frames and recover automatically, with
+bounded work and at most about 130 ms of background delay. A model or device
+failure silences that branch while translated speech continues. Separation of
+mixed dialogue and background remains approximate. Disable **Keep background
+sound** under **Audio options** when needed. This uses
+[FastEnhancer Web](https://github.com/ryyr-ry/fastenhancer-web) and
+[FFT.js](https://github.com/indutny/fft.js), under the MIT license.
 
 **Background level**, in the same collapsed options, balances the separated
-sound from 0–200% (100% by default). It never mixes the original dialogue back
+sound from 0–200% (100% by default), with a fixed +9.5 dB makeup gain after
+separation. There is no automatic gain control, fade, or ducking triggered by
+translated voices. It never mixes the original dialogue back
 in as a fallback. Increasing it also amplifies any speech the model fails to
 remove. This is an approximate local separator, not lossless dialogue removal.
 
