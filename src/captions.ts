@@ -33,7 +33,7 @@
 import { spawn } from "node:child_process";
 import type { Listener } from "./channels.ts";
 import { RATE } from "./speech.ts";
-import { fetchTranscript, keepLines, translateTexts } from "./transcript-client.ts";
+import { fetchTranscript, keepLines, keepMedia, translateTexts, type MediaToKeep } from "./transcript-client.ts";
 import { covered, lineAt, transcriptIdOf, type TranscriptLine } from "./transcripts.ts";
 
 export interface CaptionLine {
@@ -69,6 +69,12 @@ export interface ChannelMedia {
   startedAt: number;
   /** How many seconds behind the live edge a new listener's sound starts. */
   backlog: number;
+  /**
+   * The file itself, described for the record at nixamp.com/hash/<id>:
+   * its SHA-256 and what is known about it. Absent for anything that is
+   * not a file on this machine. Asked once when the captioner starts.
+   */
+  describe?: () => Promise<{ id: string; keep: MediaToKeep } | null>;
 }
 
 export interface CaptionsOptions {
@@ -220,6 +226,8 @@ export interface CaptionStatus {
   known: number;
   /** The languages lines are being given in besides the original. */
   languages: string[];
+  /** The file's SHA-256, once it has been described for nixamp.com/hash/<id>; "" until then, or for a live. */
+  hash: string;
 }
 
 class Captioner {
@@ -232,6 +240,8 @@ class Captioner {
   error = "";
   /** What the ear says the sound is in, or the store said it was; "" until one of them has. */
   language = "";
+  /** The file's SHA-256, once described. */
+  hash = "";
   private model = "";
   private decoder: Decoder | null = null;
   private detach: (() => void) | null = null;
@@ -288,7 +298,26 @@ class Captioner {
       return false;
     }
     void this.consult("");
+    void this.record();
     return true;
+  }
+
+  /** Tell nixamp.com about the file itself, once: its hash and what this server knows of it. */
+  private async record(): Promise<void> {
+    const describe = this.media?.describe;
+    if (!describe) return;
+    const session = this.options.session();
+    if (session === null) return;
+    try {
+      const described = await describe();
+      if (!described || this.stopped) return;
+      this.hash = described.id;
+      const got = await keepMedia(session, described.id, described.keep, this.options.fetcher ?? fetch);
+      if (!got.ok) this.complain(`the record was not kept: ${got.error}`);
+      else this.options.onEvent?.(`captions for "${this.id}": nixamp.com/hash/${described.id.slice(0, 12)}… knows this file`);
+    } catch (error) {
+      this.complain(`could not describe the file: ${(error as Error).message}`);
+    }
   }
 
   /** Ask the store what it already knows of this media in a language, once. */
@@ -512,6 +541,7 @@ class Captioner {
       language: this.language,
       known: this.known.get("")?.length ?? 0,
       languages: [...this.linesBy.keys()],
+      hash: this.hash,
     };
   }
 
@@ -572,7 +602,7 @@ export class Captions {
   /** Whether a channel is being captioned, and what last went wrong if the lines are not coming. */
   status(id: string): CaptionStatus {
     const captioner = this.running.get(id);
-    return captioner ? captioner.status() : { on: false, lines: 0, error: "", language: "", known: 0, languages: [] };
+    return captioner ? captioner.status() : { on: false, lines: 0, error: "", language: "", known: 0, languages: [], hash: "" };
   }
 
   stopAll(): void {

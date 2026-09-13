@@ -23,7 +23,11 @@ import { clock, type PartyRow } from "./party.ts";
 import { readSession } from "./session.ts";
 import { askToHear, awaitTranscript, hearWhole, rendered, wavOf, type Window } from "./transcribe.ts";
 import { readTranscript } from "./transcript.ts";
-import { fetchTranscript, listTranscripts, translateTexts, type StoredTranscript } from "./transcript-client.ts";
+import { fetchMedia, fetchTranscript, listTranscripts, translateTexts, type StoredTranscript } from "./transcript-client.ts";
+import { detectTools } from "./audio.ts";
+import { Enricher } from "./enrich.ts";
+import { describeRecord } from "./hash.ts";
+import { describeFile, keepFile, type Described } from "./media-local.ts";
 import { fileFingerprint, idFrom, languageCode, mediaOfUrl, transcriptIdOf } from "./transcripts.ts";
 import { personaLines, readPersona, readVoices, writePersona } from "./profile.ts";
 
@@ -133,6 +137,24 @@ export const TOOLS: ToolDefinition[] = [
       },
       required: ["media"],
     },
+  },
+  {
+    name: "media_hash",
+    description:
+      "One address for a file on this machine: its SHA-256 and nixamp.com/hash/<sha256>, kept there with what this machine knows (size, type, when it changed, what is inside, what nichedb says it is). The same file anywhere is the same page.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { ...STRING, description: "The file's path on this machine." },
+        keep: { type: "boolean", description: "Tell nixamp.com about it (default true)." },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "media_get",
+    description: "What nixamp.com knows about a file, by its SHA-256 (with or without sha256:), its transcript fingerprint, or a transcript id: the OpenFile record with nixamp's facts, holders and transcripts.",
+    inputSchema: { type: "object", properties: { id: { ...STRING, description: "The hash, fingerprint or transcript id." } }, required: ["id"] },
   },
   {
     name: "transcripts_list",
@@ -245,6 +267,8 @@ export interface McpOptions {
   sleep?: (ms: number) => Promise<void>;
   /** How many times a translation is asked about before answering with its progress. */
   polls?: number;
+  /** How a file is described for its record; the tests hand in a fake. */
+  describe?: (path: string) => Promise<Described>;
   say?: (line: string) => void;
 }
 
@@ -437,6 +461,30 @@ export async function callTool(name: string, args: Record<string, unknown>, opti
         return text(`Still being translated to ${language}: ${got.body.translating.done} of ${got.body.translating.total} lines. Ask again in a moment.`);
       }
       return text(transcriptText(got.body, typeof args["format"] === "string" ? args["format"] : "lines"));
+    }
+
+    if (name === "media_hash") {
+      const path = typeof args["path"] === "string" ? args["path"] : "";
+      if (!path) return failed("Which file? Pass its path.");
+      let described: Described;
+      try {
+        described = await (options.describe ?? ((file: string) => describeFile(file, { tools: detectTools(), enricher: new Enricher() })))(path);
+      } catch (error) {
+        return failed(`${path}: ${(error as Error).message}`);
+      }
+      if (args["keep"] !== false) {
+        const refused = await keepFile({ site, token: session.token }, path, described, { fetcher: send });
+        if (refused) return failed(`hashed, but not kept: ${refused}`);
+      }
+      return text(`sha256:${described.id}\n${site}/hash/${described.id}${args["keep"] === false ? "\n(not kept)" : ""}`);
+    }
+
+    if (name === "media_get") {
+      const id = typeof args["id"] === "string" ? args["id"].trim() : "";
+      if (!id) return failed("Which file? Pass its hash, fingerprint or transcript id.");
+      const got = await fetchMedia(site, id, send);
+      if (!got.ok) return failed(got.error);
+      return text(describeRecord(got.body));
     }
 
     if (name === "transcripts_list") {

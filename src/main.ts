@@ -87,6 +87,7 @@ const HELP = `nixamp — it really whips the terminal's ass.
   nixamp transcribe FILE [--translate sv]  a recording or a whole film written down, kept, and in other languages
   nixamp transcript --channel ID [--follow]  what a channel is saying, as it says it; --kept for what nixamp.com keeps
   nixamp translate --to sv TEXT  say it in another language
+  nixamp hash FILE               one address for a file: nixamp.com/hash/<sha256>, with all that is known
   nixamp profile [--handle H] [--voice V] [--profile URL]  who the rooms know you as
   nixamp voices                  the voices a line is read in on the phone
   nixamp opendir list|add|remove  folders found on the web, published for everyone
@@ -274,9 +275,10 @@ posted straight into a trollbox), say a line in a room (trollbox_say), read
 a room (trollbox_read), read what a channel is saying (transcript_read, in
 any language). The transcript tools: a kept transcript by its id or its
 media (transcript_get), what this account has had written down
-(transcripts_list), and text in another language (translate_text). And who
-you are in the rooms and how you sound on the phone (profile_get,
-profile_set, voices_list). It acts as whoever this machine is signed in as,
+(transcripts_list), and text in another language (translate_text). The file
+tools: one address for a file (media_hash) and what nixamp.com knows about
+one (media_get). And who you are in the rooms and how you sound on the
+phone (profile_get, profile_set, voices_list). It acts as whoever this machine is signed in as,
 so \`nixamp login\` (or NIXAMP_TOKEN) comes first.
 
 Point an MCP client at it as a stdio server running \`nixamp mcp\`. The same
@@ -309,6 +311,23 @@ with an open-source model (OPUS-MT), and kept beside the original.
 
 The same ear is behind the microphone button in every nixamp.com trollbox,
 and behind the transcribe_audio tool of \`nixamp mcp\`.
+`,
+  hash: `nixamp hash — one address for a file.
+
+  nixamp hash FILE [FILE...]        sha256, and nixamp.com/hash/<sha256>, kept there with what is known
+  nixamp hash FILE --no-keep        the hash and the address only; nothing sent
+  nixamp hash FILE --json           the record as nixamp.com keeps it
+  nixamp hash --get ID              what nixamp.com knows about a file, by hash or fingerprint
+
+The address is the SHA-256 of the file's bytes, the way OpenFile
+(logicsrc.com/docs/openfile) names a file, so the same file on two machines
+is one page. The page, and /hash/<id>.openfile.json beside it, carry the
+size, the type, when the file last changed, what ffprobe found inside, what
+nichedb.dev says it is, which servers have carried it, and its transcripts
+in every language, as .srt, .vtt or text. \`nixamp transcribe\` and a server
+captioning a file keep the same record. The daemon looks at a kept file
+again on a schedule set by how recently it changed, and a changed file
+gets a new address that points back at the old one.
 `,
   translate: `nixamp translate — say it in another language.
 
@@ -586,6 +605,11 @@ export async function main(): Promise<void> {
   if (first === "translate") {
     const { translate } = await import("./translate-cli.ts");
     process.exitCode = await translate(rest);
+    return;
+  }
+  if (first === "hash") {
+    const { hash } = await import("./hash.ts");
+    process.exitCode = await hash(rest);
     return;
   }
   if (first === "token" || first === "tokens") {

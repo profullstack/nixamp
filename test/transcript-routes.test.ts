@@ -6,6 +6,33 @@ import type { Queryable } from "../src/follows.ts";
 import { Transcripts, transcriptIdOf, type TranscriptLine } from "../src/transcripts.ts";
 import { Translator } from "../src/translate.ts";
 import { StoredTranslations } from "../src/translate-jobs.ts";
+import { Media } from "../src/media.ts";
+
+/** The media table, in memory, behaving as the SQL in media.ts does. */
+function memoryMediaDb(): Queryable {
+  const rows = new Map<string, Record<string, unknown>>();
+  return {
+    async query(text, values = []) {
+      if (text.includes("INSERT INTO media")) {
+        const had = rows.get(values[0] as string);
+        const row = {
+          id: values[0], fingerprint: values[1] || had?.["fingerprint"] || "", name: values[2] || had?.["name"] || "", size: values[3] || had?.["size"] || 0,
+          content_type: values[4] || had?.["content_type"] || "", updated: values[5] ?? had?.["updated"] ?? null, facts: JSON.parse(values[6] as string), holders: JSON.parse(values[7] as string),
+          by_account: had?.["by_account"] ?? values[8], created_at: had?.["created_at"] ?? new Date("2026-09-13T09:00:00.000Z"), updated_at: new Date("2026-09-13T10:00:00.000Z"),
+        };
+        rows.set(values[0] as string, row);
+        return { rows: [row] };
+      }
+      if (text.includes("FROM media WHERE id = $1")) {
+        const row = rows.get(values[0] as string);
+        return { rows: row ? [row] : [] };
+      }
+      if (text.includes("WHERE fingerprint = $1")) return { rows: [...rows.values()].filter((row) => row["fingerprint"] === values[0]) };
+      if (text.includes("FROM media ORDER BY updated_at DESC")) return { rows: [...rows.values()] };
+      return { rows: [] };
+    },
+  };
+}
 
 /** The transcripts table, in memory, behaving as the SQL in transcripts.ts does. */
 function memoryDb() {
@@ -83,6 +110,7 @@ async function withSite(body: (base: string, rows: Map<string, Record<string, un
     transcripts: store,
     translations: new StoredTranslations(store, translator),
     translator,
+    records: new Media(memoryMediaDb()),
     site: "https://nixamp.test",
     authServer: {} as never,
   });
@@ -201,6 +229,74 @@ test("translation over the API: which languages, and texts in another one; signe
       method: "POST", headers: { ...mine, "content-type": "application/json" }, body: JSON.stringify({ text: "Hello", from: "en", to: "sv" }),
     });
     assert.deepEqual(((await one.json()) as { texts: string[] }).texts, ["en-sv:Hello"]);
+  });
+});
+
+test("one address per file: a record kept by PUT, read as a page, as JSON, as OpenFile, by hash, fingerprint or transcript id, its subtitles without a token, and the listing", async () => {
+  await withSite(async (base) => {
+    const HEX = "ab".repeat(32);
+    const FP = "file:v1:" + "cd".repeat(32);
+    assert.equal((await fetch(`${base}/api/v1/media/${HEX}`, { method: "PUT", body: "{}" })).status, 401);
+    assert.equal((await fetch(`${base}/api/v1/media/nope`, { method: "PUT", headers: mine, body: "{}" })).status, 400);
+    assert.equal((await fetch(`${base}/hash/${HEX}`)).status, 404);
+    assert.equal((await fetch(`${base}/hash/${HEX}.doc`)).status, 404);
+
+    const kept = await fetch(`${base}/api/v1/media/sha256:${HEX}`, {
+      method: "PUT", headers: { ...mine, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "A.Film.2019.mkv", size: 1500000000, contentType: "video/x-matroska", updated: "2026-09-01T00:00:00Z",
+        facts: { fingerprint: FP, duration: 5400, width: 1920, height: 1080, codecs: { video: "h264", audio: "aac" }, enrichment: { title: "A Film", year: 2019, summary: "About things." } },
+        holder: { url: "https://server1.test:4321/view/K", channel: "file-1", name: "server1" },
+      }),
+    });
+    assert.equal(kept.status, 200);
+    const record = (await kept.json()) as { id: string; url: string; descriptor: string; holders: unknown[]; nixamp: { transcripts: unknown[] } };
+    assert.equal(record.id, `sha256:${HEX}`);
+    assert.equal(record.url, `https://nixamp.test/hash/${HEX}`);
+    assert.equal(record.holders.length, 1);
+    assert.equal(record.nixamp.transcripts.length, 0);
+
+    // A transcript under the fingerprint joins the record.
+    const TID = transcriptIdOf(FP);
+    assert.equal((await fetch(`${base}/api/v1/transcripts/${TID}/lines`, {
+      method: "POST", headers: { ...mine, "content-type": "application/json" },
+      body: JSON.stringify({ media: FP, language: "en", complete: true, lines: [{ start: 0, end: 5, text: "first" }, { start: 5, end: 10, text: "second" }] }),
+    })).status, 200);
+
+    const page = await fetch(`${base}/hash/${HEX}`);
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get("content-type") ?? "", /text\/html/);
+    const body = await page.text();
+    assert.match(body, /<title>A Film · nixamp<\/title>/);
+    assert.match(body, /server1<\/a> as <code>file-1<\/code>/);
+    assert.match(body, /<span>first<\/span>/);
+    assert.match(body, /1:30:00/);
+    assert.match(body, new RegExp(`rel="openfile" href="https://nixamp.test/hash/${HEX}.openfile.json"`));
+
+    const asJson = (await (await fetch(`${base}/hash/${HEX}.json`)).json()) as { id: string; nixamp: { transcripts: { url: string; language: string }[] } };
+    assert.equal(asJson.id, `sha256:${HEX}`);
+    assert.equal(asJson.nixamp.transcripts[0]?.url, `https://nixamp.test/hash/${HEX}.srt?language=en`);
+    const negotiated = await fetch(`${base}/hash/${HEX}`, { headers: { accept: "application/json" } });
+    assert.match(negotiated.headers.get("content-type") ?? "", /application\/json/);
+    assert.equal(((await (await fetch(`${base}/hash/${HEX}.openfile.json`)).json()) as { encryption: string }).encryption, "none");
+    for (const named of [`sha256:${HEX}`, FP, TID]) {
+      const found = await fetch(`${base}/hash/${encodeURIComponent(named)}.json`);
+      assert.equal(found.status, 200, named);
+      assert.equal(((await found.json()) as { id: string }).id, `sha256:${HEX}`);
+    }
+    assert.equal(((await (await fetch(`${base}/api/v1/media/${HEX}`)).json()) as { id: string }).id, `sha256:${HEX}`);
+
+    // Subtitles by hash need no token: whoever has the hash has the file.
+    const srt = await fetch(`${base}/hash/${HEX}.srt`);
+    assert.equal(srt.status, 200);
+    assert.match(srt.headers.get("content-disposition") ?? "", /A\.Film\.2019\.en\.srt/);
+    assert.match(await srt.text(), /^1\n00:00:00,000 --> 00:00:05,000\nfirst\n/);
+    assert.equal((await fetch(`${base}/hash/${HEX}.vtt?language=sv`)).status, 404);
+    assert.equal((await fetch(`${base}/hash/${HEX}.txt?language=nope`)).status, 400);
+
+    const listing = (await (await fetch(`${base}/.well-known/openfile.json`)).json()) as { publisher: { name: string }; files: { id: string }[] };
+    assert.equal(listing.publisher.name, "nixamp");
+    assert.equal(listing.files[0]?.id, `sha256:${HEX}`);
   });
 });
 
