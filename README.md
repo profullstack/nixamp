@@ -219,6 +219,18 @@ BackToSchool.help is a branded, mobile-first client for NixAmp live events. It
 uses the same NixAmp accounts, PostgreSQL data, rooms, invitations, layouts, and
 channel transport as the main app; it has no separate backend or user store.
 
+The production Docker image builds both clients and serves the BackToSchool
+client for `backtoschool.help` and `www.backtoschool.help`. Attach both domains
+to the existing NixAmp service and point their DNS at the hosting provider's
+targets. Accounts, event APIs, and live audio stay in that same process. FFmpeg
+is installed in the image so hosts can broadcast from their browser.
+
+`NIXAMP_WEB_SITES` maps public origins to built client directories, for example
+`{"https://backtoschool.help":"/app/backtoschool/dist"}`. The configured origin
+also supplies event metadata and invitation links. Other hosts use `--web`.
+An invalid mapping or missing build stops startup rather than serving the wrong
+client. `NIXAMP_SITE` continues to identify the shared NixAmp account service.
+
 Build the server and both web clients from the repository root:
 
 ```

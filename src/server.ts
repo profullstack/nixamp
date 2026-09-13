@@ -1599,6 +1599,8 @@ async function readBytes(request: IncomingMessage, limit: number): Promise<Uint8
 
 export interface HandlerOptions {
   web: string | null;
+  /** Branded clients on this same backend, keyed by an explicitly configured host. */
+  webSites?: ReadonlyMap<string, import("./web-sites.ts").WebSite>;
   media: boolean;
   version: string;
   /** The key from the share link, or null to serve to anyone who can connect. */
@@ -1843,6 +1845,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
   return async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://localhost");
     const path = url.pathname;
+    const webSite = options.webSites?.get((request.headers.host ?? "").toLowerCase());
+    const web = webSite?.web ?? options.web;
+    const eventSite = webSite?.site ?? options.invites?.site;
     const key = options.key ?? null;
     const behindProxy = options.behindProxy ?? false;
     const listenKey = options.listenKey ?? null;
@@ -1934,7 +1939,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       ...(options.layouts ? { layouts: options.layouts } : {}),
       ...(options.rooms ? { rooms: options.rooms } : {}),
       ...(options.tickets ? { tickets: options.tickets } : {}),
-      ...(options.invites?.site ? { site: options.invites.site } : {}),
+      ...(eventSite ? { site: eventSite } : {}),
       ...(options.invites?.email ? { email: options.invites.email } : {}),
     })) return;
 
@@ -5358,8 +5363,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
-    if (options.web !== null) {
-      const direct = safeJoin(options.web, path);
+    if (web !== null) {
+      const direct = safeJoin(web, path);
       if (direct === null) {
         json(response, 400, { error: "bad path" });
         return;
@@ -5368,7 +5373,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       if (isFile(direct)) file = direct;
       else if (isFile(join(direct, "index.html"))) file = join(direct, "index.html");
       // A single-page app: any unknown path is the shell, and the client routes.
-      else if (isFile(join(options.web, "index.html"))) file = join(options.web, "index.html");
+      else if (isFile(join(web, "index.html"))) file = join(web, "index.html");
       if (file !== null) {
         if (file.endsWith("index.html") && path.startsWith("/live/") && options.events) {
           try {
@@ -5381,7 +5386,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
             if (event && (await options.events.canAccess(event, account?.id) || invited)) {
               const shell = readIfPossible(file);
               if (shell !== null) {
-                html(response, 200, eventDocument(shell, event, options.invites?.site ?? "https://backtoschool.help"));
+                html(response, 200, eventDocument(shell, event, eventSite ?? "https://backtoschool.help"));
                 return;
               }
             }
@@ -5391,7 +5396,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           const subject = joinSubject(url, options);
           const shell = subject ? readIfPossible(file) : null;
           if (subject && shell !== null) {
-            html(response, 200, joinDocument(shell, subject, options.invites?.site ?? "https://nixamp.com"));
+            html(response, 200, joinDocument(shell, subject, eventSite ?? "https://nixamp.com"));
             return;
           }
         }
@@ -5832,6 +5837,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   if (!options.noJingle) playJingle(tools);
 
   const web = options.web !== null ? resolve(options.web) : defaultWebDir();
+  const { webSitesFromEnv } = await import("./web-sites.ts");
+  const webSites = webSitesFromEnv();
   // The same keys this port used last time, so a link somebody was given
   // still works after a restart -- and a server is restarted to pick up a new
   // version, which is to say often. `--new-key` mints a fresh pair and forgets
@@ -6414,6 +6421,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
 
   const server = createServer(engine, {
     web,
+    webSites,
     media: options.media,
     owner,
     channels,

@@ -1,8 +1,7 @@
 # The hosted nixamp: the PWA, served by nixamp's own server.
 #
-# Nothing about this image needs ffmpeg. The deployment has no library to play
-# — it hands out the player, and the player either opens your files in the
-# browser or points itself at the nixamp on your own machine.
+# The same backend serves BackToSchool.help and carries its live microphone
+# audio. FFmpeg is required even though the hosted library starts empty.
 FROM oven/bun:1 AS build
 WORKDIR /app
 
@@ -14,10 +13,11 @@ ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 COPY package.json bun.lock ./
 COPY web/package.json web/package.json
 COPY desktop/package.json desktop/package.json
+COPY backtoschool/package.json backtoschool/package.json
 RUN bun install --frozen-lockfile
 
 COPY . .
-RUN bun run build && bun run web:build
+RUN bun run build && bun run web:build && bun run backtoschool:build
 
 # The runtime's dependencies, installed once here rather than by bun's
 # auto-install at first boot: auto-install reads `dependencies` only, and
@@ -49,7 +49,9 @@ RUN bun dist/warm.js
 
 FROM oven/bun:1-slim
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
+ENV NIXAMP_WEB_SITES='{"https://backtoschool.help":"/app/backtoschool/dist","https://www.backtoschool.help":"/app/backtoschool/dist"}'
 # Where the models are: the ones baked in above, and anything asked for later.
 ENV NIXAMP_STT_CACHE=/app/models
 
@@ -57,6 +59,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=models /app/models ./models
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/web/dist ./web/dist
+COPY --from=build /app/backtoschool/dist ./backtoschool/dist
 COPY --from=build /app/package.json ./package.json
 
 # An empty library on purpose: /app/library holds nothing unless a volume is
