@@ -1997,7 +1997,7 @@ export function start(): void {
     const here = mode === "remote" ? remote.address : "";
     const others = directoryServers.filter((one) => serverOrigin(one.url) !== serverOrigin(here));
     const signature = JSON.stringify({ here, name: serverName, carries: serverCarries, others });
-    if (signature === drawnLinkServers) return;
+    if (signature === drawnLinkServers || document.activeElement === dom.linkServer) return;
     drawnLinkServers = signature;
     const options: HTMLOptionElement[] = [];
     // The connected server is where a link goes live, when it can carry
@@ -2634,7 +2634,7 @@ export function start(): void {
     drawnPublish = key;
 
     if (entries.length === 0) {
-      dom.publishList.replaceChildren();
+      replaceList(dom.publishList, );
       return;
     }
     const free = entries.length - busy.length;
@@ -2642,7 +2642,7 @@ export function start(): void {
       `Point OBS, Larix or ffmpeg at one of these. One publisher per URL — ` +
       `${entries.length} at once, ${free} free right now.`;
 
-    dom.publishList.replaceChildren(...entries.map((entry) => {
+    replaceList(dom.publishList, ...entries.map((entry) => {
       const inUse = busy.includes(entry.id);
       const item = document.createElement("li");
       if (inUse) item.className = "in-use";
@@ -2886,10 +2886,10 @@ export function start(): void {
    * following useless exactly when it was most useful.
    */
   const showRecent = (recent: RecentStream[]): void => {
-    dom.recentList.replaceChildren();
+    const items: HTMLElement[] = [];
     const followable = meId ? recent.filter((r) => r.ownerId && r.ownerId !== meId) : [];
     dom.recentNote.hidden = followable.length === 0;
-    if (followable.length === 0) return;
+    if (followable.length === 0) { replaceList(dom.recentList); return; }
 
     for (const stream of followable) {
       const item = document.createElement("li");
@@ -2908,8 +2908,9 @@ export function start(): void {
 
       label.append(name, detail);
       item.append(label, followButton(stream.ownerId, stream.name));
-      dom.recentList.append(item);
+      items.push(item);
     }
+    replaceList(dom.recentList, ...items);
   };
 
   /**
@@ -3367,7 +3368,9 @@ export function start(): void {
     }
   }
   function drawSpeakerVoices(): void {
-    for (const speaker of interpreter.tracker.speakers.values()) {
+    const recent = [...interpreter.tracker.speakers.values()].slice(-32);
+    const ids = new Set(recent.map(speaker => speaker.id));
+    for (const speaker of recent) {
       if (dom.transcriptSpeakers.querySelector(`[data-speaker="${speaker.id}"]`)) continue;
       const label = document.createElement("label"); label.className = "transcript-switch"; label.dataset["speaker"] = speaker.id;
       label.append(`Speaker ${speaker.id.split("-")[1]} `);
@@ -3378,7 +3381,9 @@ export function start(): void {
       select.addEventListener("change", () => { speaker.voice = select.value; liveVoice.reset(); });
       label.append(select); dom.transcriptSpeakers.append(label);
     }
-    while (dom.transcriptSpeakers.children.length > 32) dom.transcriptSpeakers.firstElementChild?.remove();
+    for (const label of dom.transcriptSpeakers.querySelectorAll<HTMLElement>("[data-speaker]")) {
+      if (!ids.has(label.dataset["speaker"] ?? "") && !label.contains(document.activeElement)) label.remove();
+    }
   }
   for (const media of [dom.audio, dom.video]) {
     for (const event of ["pause", "ended", "seeking", "emptied"]) media.addEventListener(event, () => { if (!tabAudio) stopCapture(); });
