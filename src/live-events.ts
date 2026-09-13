@@ -1,3 +1,4 @@
+import { classroomBroadcast, publicWebUrl, type ClassroomSettings } from "./classroom.ts";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Queryable } from "./follows.ts";
 
@@ -37,7 +38,7 @@ export type LiveEventKind = (typeof LIVE_EVENT_KINDS)[number];
 export type InvitationRole = (typeof INVITATION_ROLES)[number];
 export type InvitationState = (typeof INVITATION_STATES)[number];
 
-export interface LiveEvent {
+export interface LiveEvent extends ClassroomSettings {
   id: string;
   slug: string;
   ownerId: string;
@@ -94,6 +95,11 @@ export interface CreatedInvitation extends EventInvitation {
 
 export interface CreateLiveEventInput {
   title: unknown;
+  broadcastUrl?: unknown;
+  hostName?: unknown;
+  homepageUrl?: unknown;
+  avatarUrl?: unknown;
+  recurrence?: unknown;
   description?: unknown;
   topic?: unknown;
   kind?: unknown;
@@ -187,6 +193,7 @@ const EVENT_SCHEMA = `
   ALTER TABLE live_events ADD COLUMN IF NOT EXISTS ticket_currency    TEXT    NOT NULL DEFAULT 'USD';
   ALTER TABLE live_events ADD COLUMN IF NOT EXISTS ticket_minutes     INTEGER NOT NULL DEFAULT 1440;
   ALTER TABLE live_events ADD COLUMN IF NOT EXISTS pay_to             TEXT;
+  ALTER TABLE live_events ADD COLUMN IF NOT EXISTS classroom JSONB NOT NULL DEFAULT '{}'::jsonb;
   CREATE INDEX IF NOT EXISTS live_events_kind
     ON live_events (kind, status, starts_at);
 
@@ -203,7 +210,7 @@ const EVENT_SCHEMA = `
     END LOOP;
     FOR stale IN
       SELECT conname FROM pg_constraint
-      WHERE conrelid = 'live_event_invitations'::regclass AND contype = 'c'
+      WHERE conrelid = to_regclass('live_event_invitations') AND contype = 'c'
         AND conname <> 'live_event_invitations_role_allowed'
         AND pg_get_constraintdef(oid) LIKE '%moderator%'
     LOOP
@@ -292,6 +299,37 @@ function text(value: unknown, name: string, limit: number, required = false): st
   return cleaned;
 }
 
+function classroomSettings(input: CreateLiveEventInput | UpdateLiveEventInput, current: ClassroomSettings = {}): ClassroomSettings {
+  const settings: ClassroomSettings = {};
+  for (const key of ["hostName", "homepageUrl", "avatarUrl", "broadcastUrl"] as const) {
+    const value = input[key] === undefined ? current[key] ?? "" : text(input[key], key, key === "hostName" ? 100 : 2048);
+    if (!value) continue;
+    if (key === "hostName") settings[key] = value;
+    else if (key === "broadcastUrl") {
+      const broadcast = classroomBroadcast(value);
+      if (!broadcast) throw new LiveEventError("Use a Pairux live/join link or a Nixamp Share link with a stream selected. Admin links cannot be shared.", 422);
+      settings[key] = broadcast.url;
+    } else {
+      const safe = publicWebUrl(value);
+      if (!safe) throw new LiveEventError(`${key} must be an HTTPS link without credentials`, 422);
+      settings[key] = safe;
+    }
+  }
+  const recurrence = input.recurrence === undefined ? current.recurrence ?? "none" : input.recurrence;
+  if (recurrence !== "none" && recurrence !== "daily" && recurrence !== "weekly") {
+    throw new LiveEventError("recurrence must be none, daily, or weekly", 422);
+  }
+  if (recurrence !== "none") settings.recurrence = recurrence;
+  return settings;
+}
+
+function classroomTimezone(value: unknown): string {
+  const zone = text(value, "timezone", 100, true);
+  try { new Intl.DateTimeFormat("en", { timeZone: zone }).format(); }
+  catch { throw new LiveEventError("timezone must be a valid time zone", 422); }
+  return zone;
+}
+
 function timestamp(value: unknown, name: string): string | null {
   if (value === undefined || value === null || value === "") return null;
   if (typeof value !== "string") throw new LiveEventError(`${name} must be an ISO timestamp`, 422);
@@ -374,6 +412,7 @@ export function payToAddress(value: unknown, name = "payTo"): string {
 
 function eventFrom(row: Record<string, unknown>): LiveEvent {
   return {
+    ...((row["classroom"] && typeof row["classroom"] === "object") ? row["classroom"] as ClassroomSettings : {}),
     id: String(row["id"] ?? ""),
     slug: String(row["slug"] ?? ""),
     ownerId: String(row["owner_id"] ?? ""),
@@ -544,6 +583,8 @@ export class LiveEvents {
     if (ticketPriceCents > 0 && !payTo) {
       throw new LiveEventError("a ticketed event needs a payTo address", 422);
     }
+    const classroom = classroomSettings(input);
+    if (classroom.recurrence && !startsAt) throw new LiveEventError("a recurring class needs a start time", 422);
     const baseSlug = eventSlug(title);
     const values = [
       id,
@@ -560,7 +601,7 @@ export class LiveEvents {
       payTo,
       startsAt,
       endsAt,
-      text(input.timezone ?? "UTC", "timezone", 100, true),
+      classroomTimezone(input.timezone ?? "UTC"),
       optionalInteger(input.expectedDurationMinutes, "expectedDurationMinutes"),
       startsAt ? "scheduled" : "draft",
       enumValue(input.visibility, LIVE_EVENT_VISIBILITIES, "public", "visibility"),
@@ -569,6 +610,7 @@ export class LiveEvents {
       boolean(input.handRaiseEnabled, true, "handRaiseEnabled"),
       boolean(input.recordingEnabled, false, "recordingEnabled"),
       text(input.layoutId, "layoutId", 100),
+      JSON.stringify(classroom),
     ];
     await this.ensure();
     let rows: Record<string, unknown>[];
@@ -579,10 +621,10 @@ export class LiveEvents {
           ticket_price_cents, ticket_currency, ticket_minutes, pay_to,
           starts_at, ends_at, timezone,
           expected_duration_minutes, status, visibility, room_id, chat_enabled,
-          hand_raise_enabled, recording_enabled, layout_id
+          hand_raise_enabled, recording_enabled, layout_id, classroom
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, ''), $13, $14, $15,
-          $16, $17, $18, $19, $20, $21, $22, NULLIF($23, '')
+          $16, $17, $18, $19, $20, $21, $22, NULLIF($23, ''), $24::jsonb
         ) RETURNING *`,
         values,
       ));
@@ -595,10 +637,10 @@ export class LiveEvents {
           ticket_price_cents, ticket_currency, ticket_minutes, pay_to,
           starts_at, ends_at, timezone,
           expected_duration_minutes, status, visibility, room_id, chat_enabled,
-          hand_raise_enabled, recording_enabled, layout_id
+          hand_raise_enabled, recording_enabled, layout_id, classroom
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, ''), $13, $14, $15,
-          $16, $17, $18, $19, $20, $21, $22, NULLIF($23, '')
+          $16, $17, $18, $19, $20, $21, $22, NULLIF($23, ''), $24::jsonb
         ) RETURNING *`,
         values,
       ));
@@ -722,9 +764,9 @@ export class LiveEvents {
     }
 
     const title = input.title === undefined ? current.title : text(input.title, "title", 160, true);
-    const startsAt = input.startsAt === undefined ? current.startsAt ?? null : timestamp(input.startsAt, "startsAt");
-    const endsAt = input.endsAt === undefined ? current.endsAt ?? null : timestamp(input.endsAt, "endsAt");
-    const doorsOpenAt = input.doorsOpenAt === undefined
+    let startsAt = input.startsAt === undefined ? current.startsAt ?? null : timestamp(input.startsAt, "startsAt");
+    let endsAt = input.endsAt === undefined ? current.endsAt ?? null : timestamp(input.endsAt, "endsAt");
+    let doorsOpenAt = input.doorsOpenAt === undefined
       ? current.doorsOpenAt ?? null
       : timestamp(input.doorsOpenAt, "doorsOpenAt");
     if (startsAt && endsAt && endsAt <= startsAt) {
@@ -738,12 +780,36 @@ export class LiveEvents {
     if (ticketPriceCents > 0 && !payTo) {
       throw new LiveEventError("a ticketed event needs a payTo address", 422);
     }
-    const nextStatus = enumValue(input.status, LIVE_EVENT_STATUSES, current.status, "status");
+    let nextStatus = enumValue(input.status, LIVE_EVENT_STATUSES, current.status, "status");
     if (!canTransition(current.status, nextStatus)) {
       throw new LiveEventError(`an event cannot move from ${current.status} to ${nextStatus}`, 409);
     }
     if (nextStatus === "scheduled" && !startsAt) {
       throw new LiveEventError("a scheduled event needs startsAt", 422);
+    }
+
+    const classroom = classroomSettings(input, current);
+    const timezone = input.timezone === undefined ? current.timezone : classroomTimezone(input.timezone);
+    if (classroom.recurrence && !startsAt) throw new LiveEventError("a recurring class needs a start time", 422);
+    let recurringNext = false;
+    if (nextStatus === "ended" && classroom.recurrence && startsAt) {
+      // Calendar arithmetic in Postgres preserves the host's local time over DST.
+      // Consider only the next three candidates, even if many sessions were missed.
+      const days = classroom.recurrence === "daily" ? 1 : 7;
+      const next = await this.db.query(`WITH anchor AS (
+        SELECT $1::timestamptz AT TIME ZONE $2 AS local_start
+      ), candidates AS (
+        SELECT (local_start + n * $3::int * interval '1 day') AT TIME ZONE $2 AS starts_at
+        FROM anchor CROSS JOIN LATERAL generate_series(
+          GREATEST(1, ((now() AT TIME ZONE $2)::date - local_start::date) / $3::int),
+          GREATEST(1, ((now() AT TIME ZONE $2)::date - local_start::date) / $3::int) + 2
+        ) n
+      ) SELECT starts_at FROM candidates
+        WHERE starts_at > GREATEST(now(), $1::timestamptz) ORDER BY starts_at LIMIT 1`, [startsAt, timezone, days]);
+      const nextStart = iso(next.rows[0]?.["starts_at"]);
+      if (!nextStart) throw new LiveEventError("could not schedule the next class", 503);
+      startsAt = nextStart; endsAt = null; doorsOpenAt = null;
+      nextStatus = "scheduled"; recurringNext = true;
     }
 
     const { rows } = await this.db.query(
@@ -768,6 +834,7 @@ export class LiveEvents {
         ticket_currency = $21,
         ticket_minutes = $22,
         pay_to = NULLIF($23, ''),
+        classroom = $24::jsonb,
         version = version + 1,
         updated_at = now()
        WHERE (id = $1 OR slug = $1) AND owner_id = $2 AND version = $3
@@ -781,7 +848,7 @@ export class LiveEvents {
         input.topic === undefined ? current.topic ?? "" : text(input.topic, "topic", 100),
         startsAt,
         endsAt,
-        input.timezone === undefined ? current.timezone : text(input.timezone, "timezone", 100, true),
+        timezone,
         input.expectedDurationMinutes === undefined
           ? current.expectedDurationMinutes ?? null
           : optionalInteger(input.expectedDurationMinutes, "expectedDurationMinutes"),
@@ -790,7 +857,7 @@ export class LiveEvents {
         boolean(input.chatEnabled, current.chatEnabled, "chatEnabled"),
         boolean(input.handRaiseEnabled, current.handRaiseEnabled, "handRaiseEnabled"),
         boolean(input.recordingEnabled, current.recordingEnabled, "recordingEnabled"),
-        input.recordingId === undefined ? current.recordingId ?? null : text(input.recordingId, "recordingId", 160) || null,
+        recurringNext ? null : input.recordingId === undefined ? current.recordingId ?? null : text(input.recordingId, "recordingId", 160) || null,
         input.layoutId === undefined ? current.layoutId ?? null : text(input.layoutId, "layoutId", 100) || null,
         enumValue(input.kind, LIVE_EVENT_KINDS, current.kind, "kind"),
         doorsOpenAt,
@@ -800,6 +867,7 @@ export class LiveEvents {
           : text(input.ticketCurrency, "ticketCurrency", 8, true).toUpperCase(),
         minutes(input.ticketMinutes, current.ticketMinutes, "ticketMinutes"),
         payTo,
+        JSON.stringify(classroom),
       ],
     );
     const row = rows[0];

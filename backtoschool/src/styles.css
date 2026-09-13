@@ -363,3 +363,30 @@ main { flex: 1; outline: none; }
   .join-line .button, .share-box .button, .inline-form .button { width: 100%; }
   .region-secondary, .region-sidebar, .region-bottom, .region-drawer { grid-template-columns: 1fr; }
 }
+
+.broadcast-options { border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 0; min-width: 0; }
+.broadcast-options legend { font-weight: 700; padding-inline: 6px; }
+.broadcast-options p { color: var(--muted); line-height: 1.5; font-size: .9rem; }
+.broadcast-options label + label { margin-top: 14px; }
+.broadcast-links { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+.broadcast-links .button { font-size: .8rem; padding: 12px; }
+.classroom-video { aspect-ratio: 16 / 11; background: #101015; border-radius: 12px; overflow: hidden; }
+.classroom-video iframe { width: 100%; height: 100%; border: 0; }
+.broadcast-caption { margin-bottom: 0; }
+.host-avatar { object-fit: cover; }
+.host-line a { display: block; font-size: .85rem; margin-top: 5px; }
+button[aria-disabled="true"] { opacity: .65; cursor: default; }
+.event-panel h2.panel-title { font-size: .7rem; }
+@media (max-width: 640px) { .classroom-video { aspect-ratio: 3 / 4; } }
+@media (forced-colors: active) { .button, .event-panel, .broadcast-options { border: 1px solid CanvasText; } }
+.event-toolbar { display: flex; gap: 16px; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.event-toolbar .back-link { margin: 0; }
+.site-nav { min-width: 0; }
+.wordmark { flex-shrink: 0; }
+#account-button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-heading .status-pill { background: #eee8ff; color: var(--purple); }
+.event-heading .status-pill.status-live { background: #ffe1db; color: #a42d25; }
+@media (max-width: 640px) { .site-header { gap: 12px; } }
+.class-update { position: fixed; right: 12px; bottom: 12px; z-index: 20; width: min(430px, calc(100% - 24px)); padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--cream, #f7f3e9); box-shadow: 0 6px 24px #34246d22; }
+.class-update .form-note { margin: 0 0 8px; }
+.class-update button + button { margin-left: 18px; }
