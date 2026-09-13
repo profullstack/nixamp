@@ -7,6 +7,7 @@
       "dependencies": {
         "@profullstack/auth-system": "^0.6.0",
         "@profullstack/hqtui": "^0.5.0",
+        "@profullstack/synconfig": "^0.1.2",
         "@profullstack/throttle": "0.2.2",
         "@profullstack/x402-gateway": "0.6.0",
         "acme-client": "5.4.0",
@@ -34,7 +35,7 @@
     },
     "desktop": {
       "name": "@nixamp/desktop",
-      "version": "0.21.5",
+      "version": "0.22.1",
       "devDependencies": {
         "electron": "^44.2.0",
         "electron-builder": "^26.15.3",
@@ -188,6 +189,8 @@
     "@profullstack/hqtui": ["@profullstack/hqtui@0.5.0", "", { "bin": { "hqtui": "bin/hqtui.mjs" } }, "sha512-jDwILBmdQx8pQA0ao/tzzty8u5nFNS4XhvU9xXhZvdIaMeiF3HBJIVtP6cS6kigS4lXmHR7sztbb9QJpaWwhig=="],
 
     "@profullstack/player": ["@profullstack/player@0.7.0", "", { "dependencies": { "hls.js": "^1.7.1", "mpegts.js": "^1.8.2" }, "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-DmshIcHTrWVl0A2p4DpuV7kI5hXPdaSL7zHesJVszA93cGyucaYppvvRm8S1eCC7GgyA8X0iRFKFdcF0P3LUrw=="],
+
+    "@profullstack/synconfig": ["@profullstack/synconfig@0.1.2", "", {}, "sha512-t1Pdms+k/+A7tgFCAcNx8Dry0kwboPEue9Pw2pbn/chXSMfp1dxrcFz672zWkDgvcB7YBmYpIjnvW4NkNkE4Rg=="],
 
     "@profullstack/throttle": ["@profullstack/throttle@0.2.2", "", { "dependencies": { "@profullstack/x402-gateway": "^0.6.0" } }, "sha512-qpb9yKE7frwTP29YILx+QePqyEPWGVZxPYve7ITqSfARzOl0ZKhfjeizxPKZUgYhFQfNk6kWCa6/53RVoj304g=="],
 

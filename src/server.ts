@@ -68,6 +68,7 @@ import { CALL_IN_NUMBER, OPT_IN_PATH, optInPage } from "./optin.ts";
 import pg from "pg";
 import { Follows, phoneFrom } from "./follows.ts";
 import { Favorites, favoriteUrl } from "./favorites.ts";
+import { SettingsSync, SETTINGS_BODY_LIMIT } from "./settings-sync.ts";
 import { Catalogs, shownCatalog, shownEntry } from "./catalogs.ts";
 import { Porkbun, isIPv4, isIPv6, type DnsZone } from "./dns.ts";
 import { NameError, Names } from "./names.ts";
@@ -1593,6 +1594,8 @@ export interface HandlerOptions {
   follows?: Follows;
   /** The servers an account hearted. nixamp.com only, like follows. */
   favorites?: Favorites;
+  /** Settings sync, on the directory: a member's settings under revisions, reached by the same session. */
+  settingsSync?: SettingsSync;
   /** Scheduled and live sessions, kept by NixAmp and shared by branded clients. */
   events?: LiveEvents;
   /** Versioned panel layouts, including event and user overrides. */
@@ -2010,6 +2013,31 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       json(response, 405, { error: "GET, PUT or DELETE" });
+      return;
+    }
+
+    // --- settings sync: your settings on every machine, against the account ----
+    //
+    // The compression policy and the remembered channels, as one snapshot
+    // under a revision (@profullstack/synconfig). The directory stores what
+    // the client sent and hands it back; it never reads the files inside.
+    if ((path === "/api/v1/settings" || path === "/api/v1/settings/revisions") && options.settingsSync && options.accounts) {
+      const me = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (me === null) {
+        json(response, 401, { error: "sign in to sync settings" });
+        return;
+      }
+      let body: unknown;
+      if (request.method === "PUT") {
+        try {
+          body = JSON.parse(await readBody(request, SETTINGS_BODY_LIMIT)) as unknown;
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+      }
+      const reply = await options.settingsSync.handle(request.method ?? "GET", path, me.id, body);
+      json(response, reply.status, reply.body);
       return;
     }
 
@@ -5156,6 +5184,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       : undefined;
   const follows = pool ? new Follows(pool) : undefined;
   const favorites = pool ? new Favorites(pool) : undefined;
+  const settingsSync = pool ? new SettingsSync(pool) : undefined;
   const nixampSite = (process.env["NIXAMP_SITE"] ?? DEFAULT_DIRECTORY).replace(/\/+$/, "");
   const events = pool ? new LiveEvents(pool) : undefined;
   const layouts = pool ? new Layouts(pool) : undefined;
@@ -5587,6 +5616,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(directory ? { directory } : {}),
     ...(follows ? { follows, vapidPublicKey } : {}),
     ...(favorites ? { favorites } : {}),
+    ...(settingsSync ? { settingsSync } : {}),
     ...(events ? { events } : {}),
     ...(layouts ? { layouts } : {}),
     ...(rooms ? { rooms } : {}),
