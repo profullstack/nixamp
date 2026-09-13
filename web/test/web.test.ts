@@ -9,7 +9,7 @@ import { clamp, displayName, formatTime, isVideoFile, titleFromFilename } from "
 import { bandEdges, bands, decay, holdPeaks } from "../src/spectrum.ts";
 import {
   apiUrl, blockedAsMixedContent, canPlayHevc, mediaUrl, needsAName, normalizeBase, parseSnapshot,
-  probeServer, refusesUs, sentToPlay, splitShareLink,
+  onServer, probeServer, refusesUs, sentToPlay, splitShareLink,
 } from "../src/remote.ts";
 import { byName, isPlayable, isSameOrigin, isTransportFile, needsVideoElement } from "../src/player.ts";
 import { isTelevision, pageSize, pageWindow } from "../src/tv.ts";
@@ -1352,4 +1352,27 @@ test("a cross-origin file plays without the analyser, so a podcast is not silenc
   assert.match(player, /wanted\.crossOrigin = cors \? "anonymous" : null;/);
   // The analyser is wired only when the source may be read.
   assert.match(player, /if \(this\.analysable\) this\.ensureGraph\(this\.active\);/);
+});
+
+test("a channel on the connected server is read by the analyser, even from nixamp.com", () => {
+  // The server is another origin from the page and allows every origin, so
+  // it is readable; cleared like a CDN podcast, an element wired into the
+  // analyser played silence while the clock ran.
+  const player = readFileSync(join(webDir, "src/player.ts"), "utf8");
+  assert.match(player, /const cors = track\.objectUrl \|\| isSameOrigin\(track\.url\) \|\| \(this\.handlers\.readable\?\.\(track\.url\) \?\? false\);/);
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  assert.match(app, /readable: \(url\) => remote\.owns\(url\),/);
+
+  const remote = readFileSync(join(webDir, "src/remote.ts"), "utf8");
+  assert.match(remote, /owns\(url: string\): boolean \{\s*return onServer\(this\.base, url\);/);
+
+  // Not connected: nothing is on the server.
+  assert.equal(onServer("", "https://server1.chovy.nixamp.com:4321/api/live?k=K"), false);
+  const base = splitShareLink("https://server1.chovy.nixamp.com:4321/view/JV5m_XbnQFD0K9_JEnGEXw").base;
+  assert.equal(onServer(base, "https://server1.chovy.nixamp.com:4321/api/channels/url-931338d81c76?k=K"), true);
+  assert.equal(onServer(base, "https://server1.chovy.nixamp.com:4321/api/live?k=K&session=S"), true);
+  assert.equal(onServer(base, "https://media.atproto.com/off-protocol/ep.mp3"), false);
+  assert.equal(onServer(base, "https://server2.chovy.nixamp.com:4321/api/live?k=K"), false);
+  assert.equal(onServer(base, "http://server1.chovy.nixamp.com:4321/api/live?k=K"), false);
+  assert.equal(onServer(base, "not a url"), false);
 });

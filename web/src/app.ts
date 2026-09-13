@@ -713,6 +713,10 @@ export function start(): void {
   }
 
   const player = new BrowserPlayer({ audio: dom.audio, video: dom.video }, {
+    // The connected server allows every origin, so the analyser may read what
+    // it sends even though nixamp.com is not its origin. Asked at load time,
+    // never during setup, so `remote` below has been made by then.
+    readable: (url) => remote.owns(url),
     onTime: (_at, of) => {
       // A picked file has no duration until the browser has looked at it.
       const track = local[index];
