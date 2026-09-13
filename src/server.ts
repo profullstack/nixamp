@@ -2777,8 +2777,14 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     if ((path === "/api/v1/trollbox" || path.startsWith("/api/v1/trollbox/")) && options.trollbox && options.accounts) {
       const trollbox = options.trollbox;
       const child = path.startsWith("/api/v1/trollbox/") ? path.slice("/api/v1/trollbox/".length) : "";
+      // Nothing lives under a line's id: a sent line is public record, so
+      // there is no line to address, whatever the method.
+      if (child !== "") {
+        json(response, 404, { error: "no such endpoint" });
+        return;
+      }
       try {
-        if (request.method === "GET" && child === "") {
+        if (request.method === "GET") {
           const where = roomFor(url.searchParams.get("server"), url.searchParams.get("channel"));
           if (!where) {
             json(response, 400, { error: "a room is a server address and a channel" });
@@ -2789,13 +2795,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           json(response, 200, {
             room: where.room,
             you: who ? ((await options.handles?.of(who.id)) || fallbackHandle(who.id)) : "",
-            messages: lines.map((one) => ({
-              id: one.id, handle: one.handle, body: one.body, createdAt: one.createdAt, mine: who !== null && one.authorId === who.id,
-            })),
+            messages: lines.map((one) => ({ id: one.id, handle: one.handle, body: one.body, createdAt: one.createdAt })),
           });
           return;
         }
-        if (request.method === "POST" && child === "") {
+        if (request.method === "POST") {
           const who = await options.accounts.whoIs(tokenFrom(request.headers));
           if (who === null) {
             json(response, 401, { error: "sign in to nixamp.com to chat" });
@@ -2816,7 +2820,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           const handle = (await options.handles?.of(who.id)) || fallbackHandle(who.id);
           const line = await trollbox.post(where, who.id, handle, body.body);
           readOnThePhone(where, who.id, line.handle, line.body);
-          json(response, 201, { message: { id: line.id, handle: line.handle, body: line.body, createdAt: line.createdAt, mine: true } });
+          json(response, 201, { message: { id: line.id, handle: line.handle, body: line.body, createdAt: line.createdAt } });
           return;
         }
         json(response, 405, { error: "GET or POST" });
@@ -2876,7 +2880,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           readOnThePhone(where, who.id, line.handle, line.body);
           json(response, 201, {
             ...said,
-            message: { id: line.id, handle: line.handle, body: line.body, createdAt: line.createdAt, mine: true },
+            message: { id: line.id, handle: line.handle, body: line.body, createdAt: line.createdAt },
           });
           return;
         }

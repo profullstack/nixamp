@@ -1244,6 +1244,7 @@ test("the trollbox follows the live you joined: one room per server and channel,
   // A sent line is public record: no control on a line takes it down, and nothing asks nixamp.com to.
   assert.doesNotMatch(body, /Take (?:your|this) line down|removeTrollboxLine/);
   assert.doesNotMatch(body, /api\/v1\/trollbox\/\$\{/);
+  assert.doesNotMatch(body, /method: "DELETE"/);
 });
 
 test("a playlist by address plays here, entry after entry, without a server", () => {
