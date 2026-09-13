@@ -3317,13 +3317,15 @@ export function start(): void {
   let captureWanted = false;
   let captureError = "";
   let capturing = false;
+  let captureStarting = false;
+  let captureMedia = "";
   let captureGeneration = 0;
-  let translatedPlaying = false;
+  let translatedAudioOn = false;
   let backgroundFailed = false;
   try { dom.transcriptBackground.checked = localStorage.getItem("nixamp.backgroundSound") !== "off"; } catch { /* default on */ }
   const background = new BackgroundAudio(() => {
     backgroundFailed = true;
-    if (translatedPlaying) dom.transcriptAudioNote.textContent = "Translated audio · background sound unavailable on this device";
+    if (translatedAudioOn) dom.transcriptAudioNote.textContent = "Translated audio · background sound unavailable on this device";
   });
   const drawBackgroundLevel = (): void => {
     const value = Number(dom.transcriptBackgroundLevel.value);
@@ -3344,8 +3346,8 @@ export function start(): void {
   const liveVoice = new LiveVoicePlayer({
     playing: () => player.playing,
     volume: () => player.volume,
-    active: (on) => { translatedPlaying = on; player.translatedAudio(on); background.active(on && dom.transcriptBackground.checked); },
-    status: (text) => { dom.transcriptAudioNote.textContent = text + (backgroundFailed && translatedPlaying ? " · background unavailable" : ""); },
+    active: (on) => { translatedAudioOn = on; player.translatedAudio(on); background.active(on && player.playing && dom.transcriptBackground.checked); },
+    status: (text) => { dom.transcriptAudioNote.textContent = text + (backgroundFailed && translatedAudioOn ? " · background unavailable" : ""); },
     failed: () => { voiceError = dom.transcriptAudioNote.textContent || "Translated audio stopped."; captureWanted = false; dom.transcriptAudio.checked = false; stopCapture(); },
     authorization: async (signal, line) => {
       if (!meId || trollboxSite !== "") throw new Error("Sign in on nixamp.com to enable translated audio.");
@@ -3382,19 +3384,24 @@ export function start(): void {
   });
   const capture = new AudioCapture(window => { if (capturing && player.playing) interpreter.push(window); });
   function stopCapture(): void {
-    captureGeneration++; capturing = false; capture.stop(); interpreter.reset(); background.stop();
-    liveVoice.reset(); player.translatedAudio(false);
+    captureGeneration++; capturing = false; captureStarting = false; captureMedia = "";
+    capture.stop(); interpreter.reset(); background.stop();
+    liveVoice.reset();
     replaceList(dom.transcriptSpeakers);
   }
   async function startCapture(): Promise<void> {
+    // `playing` fires again after ordinary buffering. It is not a new source,
+    // and restarting here would throw away each accumulated speech window.
+    if ((capturing || captureStarting) && captureMedia === player.mediaKey) return;
     stopCapture();
     const generation = captureGeneration;
+    captureStarting = true; captureMedia = player.mediaKey;
     try {
       if (!meId || trollboxSite !== "") throw new Error("Sign in on nixamp.com to transcribe or translate this audio.");
       const input = player.audioInput();
       backgroundFailed = false;
       if (dom.transcriptAudio.checked && dom.transcriptBackground.checked) {
-        void background.start(input.context, input.node).then(ready => { if (ready && generation === captureGeneration) background.active(translatedPlaying && dom.transcriptBackground.checked); });
+        void background.start(input.context, input.node).then(ready => { if (ready && generation === captureGeneration) background.active(translatedAudioOn && player.playing && dom.transcriptBackground.checked); });
       }
       await capture.start(input.context, input.node);
       if (generation !== captureGeneration) return;
@@ -3408,7 +3415,7 @@ export function start(): void {
       captureWanted = false; dom.transcriptAudio.checked = false; liveVoice.disable(); stopCapture();
       captureError = error instanceof Error ? error.message : "This audio could not be captured.";
       dom.transcriptNote.textContent = captureError;
-    }
+    } finally { if (generation === captureGeneration) captureStarting = false; }
   }
   function drawSpeakerVoices(): void {
     const recent = [...interpreter.tracker.speakers.values()].slice(-32);
@@ -3424,14 +3431,17 @@ export function start(): void {
       select.addEventListener("change", () => { speaker.voice = select.value; liveVoice.reset(); });
       label.append(select); dom.transcriptSpeakers.append(label);
     }
-    dom.transcriptVoiceSettings.hidden = !dom.transcriptAudio.checked || !recent.length;
+    dom.transcriptVoiceSettings.hidden = !dom.transcriptAudio.checked;
     for (const label of dom.transcriptSpeakers.querySelectorAll<HTMLElement>("[data-speaker]")) {
       if (!ids.has(label.dataset["speaker"] ?? "") && !label.contains(document.activeElement)) label.remove();
     }
   }
   for (const media of [dom.audio, dom.video]) {
-    for (const event of ["pause", "ended", "seeking", "emptied"]) media.addEventListener(event, () => { stopCapture(); });
+    for (const event of ["pause", "ended", "seeking", "emptied"]) media.addEventListener(event, () => {
+      if (media === (player.showingVideo ? dom.video : dom.audio)) stopCapture();
+    });
     for (const event of ["playing", "seeked"]) media.addEventListener(event, () => {
+      if (media !== (player.showingVideo ? dom.video : dom.audio)) return;
       if (captureWanted && captionsOn && player.playing) void startCapture();
     });
     media.addEventListener("volumechange", () => { liveVoice.setVolume(); });
@@ -4042,7 +4052,7 @@ export function start(): void {
     const signedIn = meId !== "" && trollboxSite === "";
     const supported = signedIn && !!transcriptRoom() && !!voiceOptions?.languages.includes(preferredAudioLanguage());
     dom.transcriptAudio.disabled = !supported;
-    if (!dom.transcriptVoiceSettings.contains(document.activeElement)) dom.transcriptVoiceSettings.hidden = !dom.transcriptAudio.checked || !dom.transcriptSpeakers.children.length;
+    if (!dom.transcriptVoiceSettings.contains(document.activeElement)) dom.transcriptVoiceSettings.hidden = !dom.transcriptAudio.checked;
     if (!supported) {
       dom.transcriptAudio.checked = false;
       liveVoice.disable();
@@ -4083,7 +4093,7 @@ export function start(): void {
     if (dom.transcriptBackground.checked && dom.transcriptAudio.checked && player.playing) {
       const generation = captureGeneration;
       const input = player.audioInput();
-      void background.start(input.context, input.node).then(ready => { if (ready && generation === captureGeneration) background.active(translatedPlaying && dom.transcriptBackground.checked); });
+      void background.start(input.context, input.node).then(ready => { if (ready && generation === captureGeneration) background.active(translatedAudioOn && player.playing && dom.transcriptBackground.checked); });
     }
   });
 

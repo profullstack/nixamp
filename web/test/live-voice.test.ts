@@ -80,3 +80,22 @@ test('a window with multiple speakers plays each turn with its own request body'
   assert.deepEqual(bodies.map(body => JSON.parse(body).voice), ['one', 'two']);
   assert.equal(sound.samples.length, 2); player.disable();
 });
+
+test('translation owns the output through initial wait, silent gaps and resets until the session is disabled', async () => {
+  const sound = context(), active: boolean[] = [];
+  const player = new LiveVoicePlayer({
+    audioContext: () => sound.audio, now: () => 7000, volume: () => 1, playing: () => true,
+    active: on => active.push(on), failed: () => assert.fail('unexpected failure'), status: () => {},
+    fetcher: (async () => new Response(new Uint8Array([0, 64]), { headers: { 'content-type': 'audio/pcm' } })) as typeof fetch,
+  });
+  await player.enable();
+  assert.deepEqual(active, [true], 'mute native audio before the first translated line arrives');
+  await settle();
+  player.push(line, '/voice', 0); await settle();
+  player.reset(); // Seeking, changing speaker or resuming capture cannot restore native voices.
+  await settle();
+  player.push({ ...line, at: 2000 }, '/voice', 0); await settle();
+  assert.ok(active.every(Boolean), 'never switch to original sound between utterances or resets');
+  assert.equal(sound.samples.length, 2);
+  player.disable(); assert.equal(active.at(-1), false);
+});

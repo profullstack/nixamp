@@ -175,6 +175,7 @@ export class BrowserPlayer {
   private context: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private output: GainNode | null = null;
+  private translated = false;
   private readonly wired = new WeakSet<HTMLMediaElement>();
   private active: HTMLMediaElement;
   private frequencies = new Uint8Array(0);
@@ -265,6 +266,7 @@ export class BrowserPlayer {
       this.analyser.fftSize = FFT_SIZE;
       this.analyser.smoothingTimeConstant = 0.6;
       this.output = this.context.createGain();
+      this.output.gain.value = this.translated ? 0 : 1;
       this.analyser.connect(this.output);
       this.output.connect(this.context.destination);
       this.frequencies = new Uint8Array(this.analyser.frequencyBinCount);
@@ -291,7 +293,10 @@ export class BrowserPlayer {
     return { context: this.context, node: this.analyser };
   }
 
-  translatedAudio(active: boolean): void { if (this.output) this.output.gain.value = active ? 0 : 1; }
+  translatedAudio(active: boolean): void {
+    this.translated = active;
+    if (this.output) this.output.gain.value = active ? 0 : 1;
+  }
 
   get mediaKey(): string { return this.active.currentSrc || this.active.src; }
 

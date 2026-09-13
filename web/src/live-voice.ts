@@ -33,6 +33,9 @@ export class LiveVoicePlayer {
 
   async enable(): Promise<void> {
     this.enabled = true;
+    // Own the output for the whole translation session, including the wait
+    // for the first line, gaps, speaker changes and capture restarts.
+    this.options.active(true);
     try {
       this.context ??= this.options.audioContext?.() ?? new AudioContext();
       if (!this.gain) {
@@ -58,7 +61,7 @@ export class LiveVoicePlayer {
     for (const source of this.sources) { try { source.stop(); } catch { /* Already ended. */ } }
     this.sources.clear();
     this.scheduledUntil = 0;
-    this.options.active(false);
+    this.options.active(this.enabled);
   }
 
   setVolume(): void { if (this.gain) this.gain.gain.value = Math.max(0, Math.min(1, this.options.volume())); }
@@ -163,7 +166,6 @@ export class LiveVoicePlayer {
     source.onended = () => { this.sources.delete(source); source.disconnect(); };
     source.start(start);
     this.scheduledUntil = start + buffer.duration;
-    this.options.active(true);
     this.options.status("Playing translated audio · a few seconds behind the video");
   }
 }

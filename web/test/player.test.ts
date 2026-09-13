@@ -109,3 +109,27 @@ test('a permitted interaction resumes a shared stream, but never reverses an exp
   assert.equal(player.playing, false);
   assert.equal(audio.attempts, 3);
 });
+
+test('a translation session mutes even an audio graph created after the session starts', async () => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, 'AudioContext');
+  const gains: { value: number }[] = [];
+  class Context {
+    destination = {};
+    createAnalyser() { return { connect() {}, frequencyBinCount: 1024 }; }
+    createGain() { const gain = { value: 1 }; gains.push(gain); return { gain, connect() {} }; }
+    createMediaElementSource() { return { connect() {} }; }
+    async resume() {}
+  }
+  Object.defineProperty(globalThis, 'AudioContext', { value: Context, configurable: true });
+  try {
+    const { player, audio } = fixture();
+    player.translatedAudio(true); audio.refusal = null;
+    await player.play();
+    assert.equal(gains[0]?.value, 0);
+    player.translatedAudio(false);
+    assert.equal(gains[0]?.value, 1);
+  } finally {
+    if (saved) Object.defineProperty(globalThis, 'AudioContext', saved);
+    else Reflect.deleteProperty(globalThis, 'AudioContext');
+  }
+});
