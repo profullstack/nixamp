@@ -1179,7 +1179,7 @@ test("every panel has a grip, a shade and a close, snaps where it is dropped, an
   assert.match(body, /panel\.toggleAttribute\("data-collapsed", on\)/);
   assert.match(body, /panel\.toggleAttribute\("data-closed", on\)/);
   assert.doesNotMatch(body, /\.hidden = (true|false|on|!on)/);
-  assert.match(css, /\.panel\[data-collapsed\] > :not\(\.panel-tools\) \{ display: none !important; \}/);
+  assert.match(css, /\.panel\[data-collapsed\] > :not\(\.panel-tools\):not\(\.panel-heading\) \{ display: none !important; \}/);
   assert.match(css, /\.panel\[data-closed\] \{ display: none !important; \}/);
   // Stacked in columns, each panel as tall as it is: grid-lanes where a
   // browser has it, CSS columns everywhere else, and never a grid row that
@@ -1200,7 +1200,8 @@ test("every panel has a grip, a shade and a close, snaps where it is dropped, an
   assert.match(body, /check\.addEventListener\("change", \(\) => setClosed\(panel, !check\.checked\)\)/);
   assert.doesNotMatch(body, /nudge\(/);
   assert.match(body, /`Hide \$\{panelTitle\(panel\)\}; the Panels list turns it back on`/);
-  assert.ok(html.includes("nothing is ever deleted"));
+  assert.ok(html.includes('aria-controls="panels-panel"'));
+  assert.match(body, /shade\.setAttribute\("aria-expanded", String\(!panel\.hasAttribute\("data-collapsed"\)\)\)/);
   assert.match(body, /dom\.panelsReset\.addEventListener\("click", resetLayout\)/);
   // The frame is drawn inside the box, so the title and the buttons are never
   // clipped at the start of a column.
@@ -1303,8 +1304,8 @@ test("what just happened is said under the link box and kept in the Log, in word
   assert.match(body, /dom\.logList\.prepend\(item\)/);
   assert.match(body, /text\.textContent = message/);
   assert.doesNotMatch(body, /innerHTML/);
-  // Go live with nowhere to go puts the cursor on the thing that is missing.
-  assert.match(app, /if \(directoryServers\.length > 0\) dom\.linkServer\.focus\(\);/);
+  // An asynchronous server lookup must preserve the reader's focus.
+  assert.doesNotMatch(app, /dom\.linkServer\.focus\(/);
 });
 
 test("the Server panel says how servers work now: the directory, a link, or one command to run your own", () => {

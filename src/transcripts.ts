@@ -30,6 +30,11 @@ export interface TranscriptLine {
   start: number;
   end: number;
   text: string;
+  /** Live transcripts may change language within one programme. */
+  language?: string;
+  revision?: string;
+  original?: string;
+  voiceProfile?: "lower" | "higher" | "unknown";
 }
 
 export type MediaKind = "file" | "url" | "live";
@@ -159,12 +164,17 @@ export function linesFrom(value: unknown): TranscriptLine[] {
   const lines: TranscriptLine[] = [];
   for (const one of parsed) {
     if (!one || typeof one !== "object") continue;
-    const { start, end, text } = one as Record<string, unknown>;
+    const { start, end, text, language, revision, original, voiceProfile } = one as Record<string, unknown>;
     if (typeof text !== "string" || typeof start !== "number" || !Number.isFinite(start) || start < 0) continue;
     const words = text.replace(/\s+/g, " ").trim().slice(0, MAX_LINE_CHARS);
     if (words === "") continue;
     const until = typeof end === "number" && Number.isFinite(end) && end > start ? end : start;
-    lines.push({ start: round(start), end: round(until), text: words });
+    lines.push({ start: round(start), end: round(until), text: words,
+      ...(typeof language === "string" && /^[a-z]{2,3}$/.test(language) ? { language } : {}),
+      ...(typeof revision === "string" ? { revision: revision.slice(0, 32) } : {}),
+      ...(typeof original === "string" ? { original: original.slice(0, MAX_LINE_CHARS) } : {}),
+      ...(voiceProfile === "lower" || voiceProfile === "higher" || voiceProfile === "unknown" ? { voiceProfile } : {}),
+    });
   }
   return lines;
 }
@@ -371,7 +381,7 @@ export class Transcripts {
     const { rows } = language === ""
       ? await this.db.query(
           `SELECT * FROM transcripts WHERE id = $1 AND translated_from IS NULL
-           ORDER BY complete DESC, updated_at DESC LIMIT 1`,
+           ORDER BY (language = '') DESC, complete DESC, updated_at DESC LIMIT 1`,
           [id],
         )
       : await this.db.query("SELECT * FROM transcripts WHERE id = $1 AND language = $2 LIMIT 1", [id, language]);

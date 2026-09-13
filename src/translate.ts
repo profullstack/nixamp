@@ -164,6 +164,7 @@ export class Translator {
   private readonly keep: number;
   private readonly pairs: ReadonlySet<string>;
   private readonly loaded = new Map<string, { pair: Promise<Pair>; usedAt: number }>();
+  private readonly downloadCooldown = new Map<string, number>();
   private tail: Promise<unknown> = Promise.resolve();
   private waiting = 0;
   private readonly asked = new Map<string, { minute: number; chars: number }>();
@@ -189,6 +190,7 @@ export class Translator {
 
   private pair(from: string, to: string): Promise<Pair> {
     const model = modelFor(from, to);
+    if ((this.downloadCooldown.get(model) ?? 0) > this.now()) return Promise.reject(new SpeechError("the translation model download was rate limited; retry in a minute", 503));
     const held = this.loaded.get(model);
     if (held) {
       held.usedAt = this.now();
@@ -197,6 +199,7 @@ export class Translator {
     const pair = this.load(model, this.cacheDir).catch((error: unknown) => {
       // A failed load is tried again next time, not remembered forever.
       this.loaded.delete(model);
+      if (/\b429\b|rate.?limit/i.test(String(error))) this.downloadCooldown.set(model, this.now() + 60_000);
       throw error;
     });
     this.loaded.set(model, { pair, usedAt: this.now() });
@@ -255,7 +258,7 @@ export class Translator {
    * one account, or too many waiting, each with a status. Empty texts come
    * back empty and cost nothing.
    */
-  async translate(texts: string[], from: string, to: string, options: { by?: string } = {}): Promise<Translated> {
+  async translate(texts: string[], from: string, to: string, options: { by?: string; deadline?: number } = {}): Promise<Translated> {
     const hops = route(from, to, this.pairs);
     if (hops === null) {
       const known = Object.keys(LANGUAGES).includes(from) && Object.keys(LANGUAGES).includes(to);
@@ -268,12 +271,15 @@ export class Translator {
     if (this.waiting >= QUEUE_LIMIT) throw new SpeechError("too much is being translated at once; try again in a moment", 503);
     this.waiting += 1;
     const turn = this.tail.then(async () => {
+      const fresh = (): void => { if (options.deadline && this.now() > options.deadline) throw new SpeechError("live translation expired while waiting; try the next line", 503); };
+      fresh();
       // Only the lines with something in them go to the model; the rest keep their place.
       const spoken = texts.map((text) => text.trim());
       const which = spoken.map((text, i) => (text === "" ? -1 : i)).filter((i) => i >= 0);
       let current = which.map((i) => spoken[i] as string);
       for (const [a, b] of hops) {
         const pair = await this.pair(a, b);
+        fresh();
         current = await pair.translate(current);
       }
       const out = [...spoken];

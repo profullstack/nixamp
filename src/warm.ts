@@ -7,15 +7,15 @@
  * ask after each one, and the first person to speak waited for it. The
  * models land in NIXAMP_STT_CACHE and the image keeps them.
  *
- * NIXAMP_MT_WARM names the pairs (en-de,en-sv,de-en,sv-en by default):
- * German and Swedish both ways, which are the two that were asked for.
+ * NIXAMP_MT_WARM names the pairs: German and Swedish both ways with
+ * English, and Spanish both ways with English and German by default.
  * Exits non-zero when anything could not be fetched, so a build does not
  * quietly ship without its ear.
  */
 import { Speech } from "./speech.ts";
 import { Translator } from "./translate.ts";
 
-const DEFAULT_PAIRS = "en-de,en-sv,de-en,sv-en";
+const DEFAULT_PAIRS = "en-de,en-sv,de-en,sv-en,es-en,en-es,es-de,de-es";
 
 async function main(): Promise<number> {
   const speech = new Speech();

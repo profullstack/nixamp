@@ -16,6 +16,9 @@ import { randomBytes } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { Readable } from "node:stream";
+import { pipeline as pipeStream } from "node:stream/promises";
+import { LiveVoice, LIVE_VOICE_LANGUAGES, LIVE_VOICE_MODEL, type VoiceRequest } from "./live-voice.ts";
 import { Connections, type Kind } from "./connections.ts";
 import {
   Broadcaster,
@@ -86,7 +89,7 @@ import { Tickets, needsTicket, ticketFrom, ticketsFromEnv } from "./tickets.ts";
 import { Layouts } from "./layouts.ts";
 import { Rooms } from "./rooms.ts";
 import { Trollbox, TrollboxError, fallbackHandle, roomFor } from "./trollbox.ts";
-import { MAX_BYTES as SPEECH_BYTES, Speech, SpeechError, isWav, languageOf } from "./speech.ts";
+import { MAX_BYTES as SPEECH_BYTES, NATIVE_REVISION, Speech, SpeechError, isWav, languageOf } from "./speech.ts";
 import { Captions } from "./captions.ts";
 import { LANGUAGES, Translator } from "./translate.ts";
 import { StoredTranslations } from "./translate-jobs.ts";
@@ -1350,7 +1353,7 @@ const CORS: Record<string, string> = {
   // paths and takes six commands; binding to 127.0.0.1 is what keeps it shut.
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "access-control-allow-headers": "content-type",
+  "access-control-allow-headers": "content-type, authorization",
   "access-control-max-age": "86400",
 };
 
@@ -1548,6 +1551,7 @@ export function joinDocument(shell: string, subject: JoinSubject, site: string):
 }
 
 function json(response: ServerResponse, code: number, body: unknown): void {
+  if (code === 429) response.setHeader("retry-after", "60");
   const text = JSON.stringify(body);
   response.writeHead(code, {
     ...CORS,
@@ -1556,6 +1560,16 @@ function json(response: ServerResponse, code: number, body: unknown): void {
     "cache-control": "no-store",
   });
   response.end(text);
+}
+
+/** Stream PCM without waiting for a complete utterance, respecting browser backpressure. */
+async function voiceResponse(response: ServerResponse, upstream: Response): Promise<void> {
+  response.writeHead(upstream.status, {
+    ...CORS, "content-type": upstream.headers.get("content-type") ?? "application/json",
+    "cache-control": "no-store", "x-accel-buffering": "no",
+  });
+  if (!upstream.body) { response.end(); return; }
+  await pipeStream(Readable.fromWeb(upstream.body as import("node:stream/web").ReadableStream), response);
 }
 
 async function readBody(request: IncomingMessage, limit = 64 * 1024): Promise<string> {
@@ -1745,6 +1759,7 @@ export interface HandlerOptions {
   trollbox?: Trollbox;
   /** Speech to text: a line said out loud, heard here. Needs the optional model. */
   speech?: Speech;
+  liveVoice?: LiveVoice;
   /** Translation: texts in another language, by a model here. The same optional library. */
   translator?: Translator;
   /** The transcript store: what was heard, kept under the media's identity. Where the accounts are. */
@@ -2843,6 +2858,45 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
      * room, the words go straight into that room's trollbox as a line by
      * whoever spoke them. The page, the CLI and the MCP tools all come here.
      */
+    if (["/api/v1/speech/voices", "/api/v1/speech/grant", "/api/v1/speech/synthesize", "/api/v1/speech/speakers"].includes(path) && options.accounts) {
+      const controller = new AbortController();
+      response.once("close", () => controller.abort());
+      try {
+        const caller = callerOf(request.headers, request.socket.remoteAddress, options.behindProxy ?? false);
+        if (!guard.check(`voice-ip:${caller}`, { allowed: 600, windowMs: 60_000 }).ok) { json(response, 429, { error: "too many voice requests" }); return; }
+        const service = options.liveVoice;
+        if (!service?.available()) { json(response, 503, { error: "translated audio needs ELEVENLABS_API_KEY on the account server" }); return; }
+        if (path.endsWith("/synthesize") && request.method === "POST") {
+          let body: VoiceRequest;
+          try { body = JSON.parse(await readBody(request, 4096)) as VoiceRequest; }
+          catch { json(response, 400, { error: "send a caption as JSON" }); return; }
+          if (!body || typeof body !== "object") { json(response, 400, { error: "send a caption as JSON" }); return; }
+          const by = await service.authorize(tokenFrom(request.headers), body.channel ?? "", typeof body.text === "string" ? body.text.length : 0);
+          await voiceResponse(response, await service.stream(body, by, controller.signal));
+        } else {
+          const who = await options.accounts.whoIs(tokenFrom(request.headers));
+          if (!who) { json(response, 401, { error: "sign in to use translated audio" }); return; }
+          if (path.endsWith("/voices") && request.method === "GET") {
+            json(response, 200, { voices: await service.voices(), model: LIVE_VOICE_MODEL, languages: [...LIVE_VOICE_LANGUAGES] });
+          } else if (path.endsWith("/speakers") && request.method === "POST") {
+            if (!request.headers["content-type"]?.startsWith("audio/wav")) { json(response, 415, { error: "send a mono 16 kHz WAV" }); return; }
+            const bytes = await readBytes(request, 484_000);
+            json(response, 200, await service.hear(bytes, who.id, controller.signal));
+          } else if (path.endsWith("/grant") && request.method === "POST") {
+            if (!request.headers["content-type"]?.startsWith("application/json")) { json(response, 415, { error: "send JSON" }); return; }
+            let body: { channel?: unknown };
+            try { body = JSON.parse(await readBody(request, 1024)) as typeof body; }
+            catch { json(response, 400, { error: "send a channel as JSON" }); return; }
+            json(response, 200, await service.grant(who.id, typeof body?.channel === "string" ? body.channel : ""));
+          } else json(response, 405, { error: "GET voices or POST an audio request" });
+        }
+      } catch (error) {
+        if (response.headersSent) response.destroy();
+        else json(response, error instanceof SpeechError ? error.status : 502, { error: error instanceof SpeechError ? error.message : "translated audio is unavailable" });
+      }
+      return;
+    }
+
     if (path === "/api/v1/speech/transcribe" && options.speech && options.accounts) {
       const speech = options.speech;
       try {
@@ -2872,6 +2926,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // Pieces with their timing, for a whole file being written down.
           timestamps: url.searchParams.get("timestamps") === "1",
           by: who.id,
+          ...(url.searchParams.get("live") === "1" ? { deadline: Date.now() + 10_000 } : {}),
         });
         // The language travels back: as told, or as the ear guessed it, so
         // a captioner can say it next time and a transcript can be kept as it.
@@ -3082,7 +3137,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       try {
-        json(response, 200, await translator.translate(texts, from, to, { by: who.id }));
+        json(response, 200, await translator.translate(texts, from, to, { by: who.id, ...(url.searchParams.get("live") === "1" ? { deadline: Date.now() + 10_000 } : {}) }));
       } catch (error) {
         if (error instanceof SpeechError) json(response, error.status, { error: error.message });
         else throw error;
@@ -3134,6 +3189,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           }
           if (format === null) {
             json(response, 400, { error: "format is json, srt, vtt or txt" });
+            return;
+          }
+          // Joining a live must not start translating an entire old transcript.
+          if (url.searchParams.get("cached") === "1") {
+            const saved = await store.get(id, language);
+            json(response, saved ? 200 : 404, saved ? wire(saved) : { error: "no cached transcript" });
             return;
           }
           const answer = await options.translations.get(id, language, who.id);
@@ -4486,6 +4547,31 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
        * started by the first person asking. `captions` is the live stream
        * of lines; `transcript` is the recent ones as JSON, for a poll.
        */
+      if ((action === "voice" || action === "voice-options") && request.method === "GET") {
+        const controller = new AbortController();
+        response.once("close", () => controller.abort());
+        const timeout = setTimeout(() => controller.abort(), 12_000);
+        try {
+          const caller = callerOf(request.headers, request.socket.remoteAddress, options.behindProxy ?? false);
+          if (!guard.check(`channel-voice-ip:${caller}`, { allowed: 60, windowMs: 60_000 }).ok || !guard.check(`channel-voice:${id}`, { allowed: 240, windowMs: 60_000 }).ok) {
+            json(response, 429, { error: "too many translated audio requests" }); return;
+          }
+          if (!channels.has(id)) { json(response, 404, { error: "nothing is playing on that channel" }); return; }
+          if (!options.captions) { json(response, 503, { error: "this server cannot caption" }); return; }
+          const at = action === "voice-options" ? null : Number(url.searchParams.get("at"));
+          const language = languageCode(url.searchParams.get("language"));
+          if ((at !== null && (!url.searchParams.has("at") || !Number.isFinite(at))) || language === null) {
+            json(response, 400, { error: "audio needs a caption time and language" }); return;
+          }
+          const upstream = await options.captions.voiceRequest(id, at, language, url.searchParams.get("voice") ?? "auto", controller.signal, tokenFrom(request.headers));
+          await voiceResponse(response, upstream);
+        } catch (error) {
+          if (response.headersSent) response.destroy();
+          else json(response, error instanceof SpeechError ? error.status : 502, { error: error instanceof SpeechError ? error.message : "translated audio is unavailable" });
+        } finally { clearTimeout(timeout); }
+        return;
+      }
+
       if ((action === "captions" || action === "transcript") && request.method === "GET") {
         const captions = options.captions;
         if (!captions) {
@@ -4494,6 +4580,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         }
         if (!captions.available()) {
           json(response, 503, { error: "this server is not signed in to nixamp.com, so it cannot caption; run `nixamp login` on it" });
+          return;
+        }
+        const caller = callerOf(request.headers, request.socket.remoteAddress, options.behindProxy ?? false);
+        if (!guard.check(`captions:${caller}`, { allowed: 120, windowMs: 60_000 }).ok || !captions.capacity(id)) {
+          json(response, 429, { error: "captioning is at capacity; try again in a moment" });
           return;
         }
         if (!channels.has(id)) {
@@ -4514,7 +4605,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // Asking keeps the captioner up: it stops a minute after the last ask.
           captions.subscribe(id, () => undefined, wanted)?.();
           json(response, 200, {
-            channel: id, backlog: BACKLOG_SECONDS, now: Date.now(), wanted, ...captions.status(id), lines: captions.recent(id, after, wanted),
+            channel: id, recognitionRevision: NATIVE_REVISION, backlog: BACKLOG_SECONDS, now: Date.now(), wanted, ...captions.status(id), lines: captions.recent(id, after, wanted),
           });
           return;
         }
@@ -4535,7 +4626,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         }
         // How far behind the live edge a newcomer's playback starts, so the
         // page can hold each line until its own sound gets there.
-        write("hello", { channel: id, backlog: BACKLOG_SECONDS, now: Date.now(), wanted, ...captions.status(id), lines: captions.recent(id, after, wanted) });
+        write("hello", { channel: id, recognitionRevision: NATIVE_REVISION, backlog: BACKLOG_SECONDS, now: Date.now(), wanted, ...captions.status(id), lines: captions.recent(id, after, wanted) });
         const beat = setInterval(() => response.write(": beat\n\n"), 20_000);
         beat.unref?.();
         const done = (): void => {
@@ -5909,6 +6000,13 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // the first person to speak does not wait for the model to arrive; a box
   // without the optional model never says it is ready, and answers 503.
   const speech = accounts && process.env["NIXAMP_STT"] !== "off" ? new Speech() : undefined;
+  const liveVoice = accounts && process.env["NIXAMP_DUBBING"] !== "off" ? new LiveVoice({
+    ...(pool ? { db: pool } : {}),
+    dailyChars: Number(process.env["NIXAMP_DUB_DAILY_CHARS"] ?? 200_000),
+    dailyAudioSeconds: Number(process.env["NIXAMP_DUB_DAILY_AUDIO_SECONDS"] ?? 86_400),
+    userDailyChars: Number(process.env["NIXAMP_DUB_USER_DAILY_CHARS"] ?? 120_000),
+    userDailyAudioSeconds: Number(process.env["NIXAMP_DUB_USER_DAILY_AUDIO_SECONDS"] ?? 43_200),
+  }) : undefined;
   if (speech) {
     void speech.warm().then((ready) => {
       console.error(ready ? `nixamp: hearing with ${speech.model}` : `nixamp: not hearing: ${speech.lastFailure}`);
@@ -6400,6 +6498,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(rooms ? { rooms } : {}),
     ...(trollbox ? { trollbox } : {}),
     ...(speech ? { speech } : {}),
+    ...(liveVoice ? { liveVoice } : {}),
     ...(translator ? { translator } : {}),
     ...(transcripts ? { transcripts } : {}),
     ...(translations ? { translations } : {}),

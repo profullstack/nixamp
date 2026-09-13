@@ -36,7 +36,7 @@ RUN bun install --frozen-lockfile --production
 
 # The models, fetched once here rather than at the first ask after every
 # deploy: the filesystem is thrown away each time, and the ear (80 MB) plus
-# the German and Swedish translation pairs (about 100 MB each) are what a
+# the German, Swedish, and Spanish translation pairs (about 100 MB each) are what a
 # caption, a dictated line and a translated transcript wait for. See
 # src/warm.ts; NIXAMP_MT_WARM names the pairs.
 FROM oven/bun:1 AS models

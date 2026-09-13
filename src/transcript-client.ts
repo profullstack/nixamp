@@ -53,9 +53,11 @@ export async function fetchTranscript(
   id: string,
   language = "",
   fetcher: typeof fetch = fetch,
+  cachedOnly = false,
 ): Promise<Got<StoredTranscript>> {
   const url = new URL(`${base(signed.site)}/api/v1/transcripts/${encodeURIComponent(id)}`);
   if (language) url.searchParams.set("language", language);
+  if (cachedOnly) url.searchParams.set("cached", "1");
   try {
     const response = await fetcher(url.toString(), { headers: { authorization: `Bearer ${signed.token}` } });
     return await asJson<StoredTranscript>(response);
@@ -107,12 +109,14 @@ export async function translateTexts(
   from: string,
   to: string,
   fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<Got<Translated>> {
   try {
     const response = await fetcher(`${base(signed.site)}/api/v1/translate`, {
       method: "POST",
       headers: { authorization: `Bearer ${signed.token}`, "content-type": "application/json" },
       body: JSON.stringify({ texts, from, to }),
+      signal,
     });
     return await asJson<Translated>(response);
   } catch (error) {

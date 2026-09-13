@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Captions, WINDOW_MS, lineAt, mediaSpan, type CaptionLine, type ChannelMedia, type Decoder } from "../src/captions.ts";
-import { RATE } from "../src/speech.ts";
+import { NATIVE_REVISION, RATE } from "../src/speech.ts";
 import type { Listener } from "../src/channels.ts";
 import { transcriptIdOf } from "../src/transcripts.ts";
 
@@ -20,7 +20,7 @@ const LIVE = "live:box.test:4321/live@1000000";
  * (two lines, and one of them in German), and a translator that wraps
  * whatever it is given.
  */
-function storeWorld() {
+function storeWorld(legacy = false) {
   const listeners = new Map<string, Listener>();
   const heard: { language: string | null }[] = [];
   const kept: Record<string, unknown>[] = [];
@@ -52,13 +52,13 @@ function storeWorld() {
         return json(200, {
           id: FILM_ID, media: FILM, kind: "file", language: "en", translatedFrom: null, model: "whisper-test", complete: false, title: "A film",
           seconds: 10, updatedAt: "", languages: [],
-          lines: [{ start: 0, end: 5, text: "stored one" }, { start: 5, end: 10, text: "stored two" }],
+          lines: [{ start: 0, end: 5, text: "stored one", language: "en", ...(legacy ? {} : { revision: NATIVE_REVISION }) }, { start: 5, end: 10, text: "stored two", language: "en", ...(legacy ? {} : { revision: NATIVE_REVISION }) }],
         });
       }
       if (language === "de") {
         return json(200, {
           id: FILM_ID, media: FILM, kind: "file", language: "de", translatedFrom: "en", model: "opus-test", complete: false, title: "A film",
-          seconds: 5, updatedAt: "", languages: [], lines: [{ start: 0, end: 5, text: "eins" }],
+          seconds: 5, updatedAt: "", languages: [], lines: [{ start: 0, end: 5, text: "eins", original: "stored one", revision: NATIVE_REVISION }],
         });
       }
       return json(404, { error: "nothing written down" });
@@ -126,7 +126,7 @@ test("a film the store knows is read out of the store, and what the ear hears be
   assert.deepEqual(world.fetched, [""]);
   assert.match(world.events.find((one) => one.includes("store knows")) ?? "", /2 lines/);
   assert.equal(world.captions.status("film").known, 2);
-  assert.equal(world.captions.status("film").language, "en");
+  assert.equal(world.captions.status("film").language, "");
 
   // The first two windows are moments the store has been through: no ask, the stored words, stamped for this playback.
   world.tick(5000);
@@ -146,13 +146,13 @@ test("a film the store knows is read out of the store, and what the ear hears be
   world.tick(5000);
   world.feed("film", window(true));
   await world.settle();
-  assert.deepEqual(world.heard, [{ language: "en" }]);
+  assert.deepEqual(world.heard, [{ language: null }]);
   assert.equal(got[2]?.text, "heard 1");
   await world.settle(30);
   assert.equal(world.kept.length, 1);
   assert.deepEqual(world.kept[0], {
-    media: FILM, title: "A film", language: "en", model: "whisper-test",
-    lines: [{ start: 10, end: 15, text: "heard 1" }],
+    media: FILM, title: "A film", language: "", model: "whisper-test",
+    lines: [{ start: 10, end: 15, text: "heard 1", language: "en", voiceProfile: "higher", revision: NATIVE_REVISION }],
   });
   assert.deepEqual(world.captions.recent("film").map((line) => line.text), ["stored one", "stored two", "heard 1"]);
   off();
@@ -196,9 +196,9 @@ test("a listener who wants German gets each line translated once, from the store
   assert.deepEqual(german[2]?.text, "de(heard 1)");
   await world.settle(30);
   const languages = world.kept.map((batch) => `${batch["language"]}<${batch["translatedFrom"] ?? ""}`).sort();
-  assert.deepEqual(languages, ["de<en", "en<"]);
+  assert.deepEqual(languages, ["<", "de<en"]);
   const kept = world.kept.find((batch) => batch["language"] === "de");
-  assert.deepEqual(kept?.["lines"], [{ start: 5, end: 10, text: "de(stored two)" }, { start: 10, end: 15, text: "de(heard 1)" }]);
+  assert.deepEqual(kept?.["lines"], [{ start: 5, end: 10, text: "de(stored two)", original: "stored two", revision: NATIVE_REVISION }, { start: 10, end: 15, text: "de(heard 1)", original: "heard 1", revision: NATIVE_REVISION }]);
   offDe();
   offEn();
 });
@@ -254,7 +254,21 @@ test("a live is kept as the broadcast it is, in seconds from when it began", asy
   assert.equal(got[0]?.text, "heard 1");
   await world.settle(30);
   assert.equal(world.kept.length, 1);
-  assert.deepEqual(world.kept[0]?.["lines"], [{ start: 25, end: 30, text: "heard 1" }]);
+  assert.deepEqual(world.kept[0]?.["lines"], [{ start: 25, end: 30, text: "heard 1", language: "en", voiceProfile: "higher", revision: NATIVE_REVISION }]);
   assert.equal(world.kept[0]?.["media"], LIVE);
   off();
 });
+
+ test("legacy English cache cannot override native audio detection", async () => {
+ const world = storeWorld(true);
+ const got: CaptionLine[] = [];
+ world.captions.subscribe("film", line => got.push(line));
+ await world.settle();
+ assert.equal(world.captions.status("film").known, 0);
+ assert.equal(world.captions.status("film").language, "");
+ world.tick(5000); world.feed("film", window(true));
+ await world.settle();
+ assert.deepEqual(world.heard, [{ language: null }]);
+ assert.equal(got[0]?.text, "heard 1");
+ world.captions.stopAll();
+ });

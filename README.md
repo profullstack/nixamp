@@ -421,11 +421,18 @@ nixamp.com instead. `NIXAMP_STT_MODEL` picks another Whisper
 takes twice as long), `NIXAMP_STT_CACHE` says where its files are kept, and
 `NIXAMP_STT=off` leaves the ear out of a deployment altogether.
 
-The ear tells which language it heard: one pass over the first thirty
-seconds, the way whisper.cpp does it, before the words are read. Without
-that a Swedish channel came back as three English words repeated to the end
-of the window. A captioner learns the language from its first line and says
-it on every ask after that.
+Captions default to **Original (auto-detect)**. Each audio window detects its
+own language and explicitly transcribes it. A language selected in the menu
+only affects translation; neither it nor a cached transcript can force the
+recognizer into English. Short windows have a decoding limit, and silent
+audio and repetitive hallucinations are discarded. Language is stored on
+each line, so an interview can switch languages. Legacy live-caption cache
+entries are heard again instead of replaying their incorrect words.
+
+At most four channels are captioned per server, with two recognition requests
+per channel in flight. Live work expires after twelve seconds. Translation
+keeps one active request and the latest pending line per target; joining a
+live reads cached translations without starting a whole-transcript job.
 
 ### Kept: written down once, for everybody
 
@@ -523,8 +530,89 @@ The page has the same choice beside the Captions switch, remembered per
 device; a translated line is marked with its language and shows what was
 heard under the pointer. An agent has `translate_text`. `NIXAMP_MT_WARM`
 names pairs to load at boot (`en-de,en-sv`), `NIXAMP_MT=off` leaves
-translation out, and the Docker image bakes the ear and the German and
-Swedish pairs in so a deploy never downloads them again.
+translation out. The Docker image includes the ear, German/Swedish pairs
+with English, and Spanish pairs with English and German. Spanish-to-German
+uses its direct model; it does not first translate the audio into English.
+
+
+### Hear it in your language
+
+The browser's Transcript panel works with movies, shows, sports, courses,
+podcasts, live channels, and rooms. Choose a language and enable **Play
+translated audio**. This is a listener preference: the video and the room's
+shared playback clock keep running. Turn it off to restore the original sound.
+**Start player captions** transcribes other playback in its detected source
+language. Files are played locally; these explicit controls opt into sending
+short audio clips for processing. Ordinary playback uploads no audio.
+
+**Translate another tab** opens the browser's audio-sharing chooser, so a
+watch party or video hosted on another site can be interpreted too. Select a
+browser tab with **Share audio** enabled; **Stop listening** releases sharing.
+Only audio is sent, even though the browser requires a video track to select
+its source. Sharing support depends on the browser and the source's permissions;
+protected media and sources whose audio cannot be captured remain unavailable.
+The control requests suppression of the source tab's local sound. If a browser
+ignores that option, mute the source tab to avoid hearing both languages.
+
+Native captions use local Whisper Base through Transformers.js. Optional
+speaker-aware audio uses ElevenLabs **Scribe v2** for native transcription with
+speaker turns, local **OPUS-MT** for the selected translation, and ElevenLabs
+**Flash v2.5** HTTP streaming for natural stock voices. The application sends
+short audio clips and translated text to ElevenLabs only for this optional
+feature. This uses the direct API; it does not need an MCP server or clone voices.
+Supported translation pairs come from `/api/v1/translate`; voice languages are
+also checked before enabling the audio toggle.
+
+A rolling 15-second audio window advances every 5 seconds. Speaker labels are
+reconciled using overlapping timestamps, with different voices assigned to
+separate speakers. Lower/higher pitch suggests a male/female stock voice;
+ambiguous audio uses a default. Each speaker's voice can be changed in the
+panel. Pitch is not gender identity, and a speaker returning after leaving the
+rolling context may receive a new label. Simultaneous speech and noisy crowds
+can still confuse recognition. Native captions never translate to English as
+an intermediate recognition step.
+
+Processing has one active request and only the latest pending window per
+listener; speech queues and response sizes are bounded. Old transcript history
+is never spoken. Pause, seek, source changes, and disabling the feature cancel
+queued speech; errors restore the original audio. This is a delayed live
+interpreter, not a promise of exact lip sync or background-music separation.
+
+The account server needs `ELEVENLABS_API_KEY`; `NIXAMP_DUBBING=off` disables
+this feature. The key stays on the server. Sign-in is required for speaker
+analysis, voice selection, and short-lived playback grants. Grants expire after
+90 seconds, authorize at most 2,000 characters, and are scoped to one playback
+session or channel. Provider requests also have account/IP throttles, concurrency
+limits, and cached duplicate voice generation. Native speech and local
+translation retain their existing account and queue limits.
+
+Postgres stores atomic usage reservations and hashed grants, so the feature's
+budgets survive restarts and are shared between replicas. Provider failures
+still consume reservations conservatively. The configurable daily limits are:
+
+| Setting | Default | Counts |
+| --- | ---: | --- |
+| `NIXAMP_DUB_DAILY_CHARS` | 200,000 | New voice characters across this server |
+| `NIXAMP_DUB_USER_DAILY_CHARS` | 120,000 | New voice characters per account |
+| `NIXAMP_DUB_DAILY_AUDIO_SECONDS` | 86,400 | Scribe audio seconds across this server |
+| `NIXAMP_DUB_USER_DAILY_AUDIO_SECONDS` | 43,200 | Scribe audio seconds per account |
+
+Audio limits count overlapping context too: a continuous hour of speaker-aware
+listening submits about three hours of Scribe audio. At the [published API
+rates](https://elevenlabs.io/pricing/api) of $0.05 per 1,000 Flash characters and
+$0.22 per Scribe audio hour, a listener producing 1,000 translated characters
+per minute costs about $3.66/hour, before plan minimums or discounts. These default
+server quotas limit this feature to about $15.28/day at those rates; they do not
+cover other applications using the same provider key. Set a daily limit to zero
+to block new use of that resource. Limits return 429 and never trigger an
+unlimited fallback provider.
+
+```
+GET  /api/v1/speech/voices       authenticated stock voices and supported audio languages
+POST /api/v1/speech/speakers     authenticated, bounded mono 16 kHz WAV -> native speaker turns
+POST /api/v1/speech/grant        authenticated {channel: playbackScope} -> short-lived grant
+POST /api/v1/speech/synthesize   scoped grant + {channel, text, language, voice, profile} -> streaming PCM
+```
 
 ## Several streams at once
 
@@ -908,3 +996,16 @@ make the name honest.
 ## Licence
 
 MIT
+
+### Accessibility and interaction
+
+Keyboard access, named controls, headings, skip links, visible focus, descriptive
+slider values, reduced motion, and concise screen-reader status announcements
+are built into the web player. Incoming transcripts, chat, and playback updates
+preserve scrolling, focus, caret, and the browsing page. The
+[UX and accessibility baseline](docs/ux.md) applies to all interface changes.
+
+When an older broadcaster still provides unversioned English-first captions,
+a signed-in listener uses native-language recognition of the playing audio
+instead of that stale transcript cache. Update the broadcaster for shared native
+captions; translated audio uses the listener's current audio and selected language.

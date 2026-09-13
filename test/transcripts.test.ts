@@ -205,7 +205,7 @@ test("reading: the original is the heard row, the whole one first; a language is
   assert.equal(original.kind, "file");
   // Duplicates in a row are merged on the way out too.
   assert.deepEqual(original.lines.map((line) => line.text), ["one again"]);
-  assert.match(world.asked[world.asked.length - 1]?.text ?? "", /ORDER BY complete DESC, updated_at DESC LIMIT 1/);
+  assert.match(world.asked[world.asked.length - 1]?.text ?? "", /ORDER BY \(language = ''\) DESC, complete DESC, updated_at DESC LIMIT 1/);
 
   const german = await store.get("a".repeat(64), "de");
   assert.ok(german);
