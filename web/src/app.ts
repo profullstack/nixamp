@@ -283,7 +283,8 @@ export function start(): void {
    * is an empty box in most monospace faces, which is what the icons were
    * on a machine without an emoji font. These are drawn, not typed.
    */
-  const ICONS: Record<"link" | "copy" | "restart" | "remove" | "rename" | "check" | "live" | "party" | "eye" | "gear", string> = {
+  const ICONS: Record<"play" | "link" | "copy" | "restart" | "remove" | "rename" | "check" | "live" | "party" | "eye" | "gear", string> = {
+    play: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>',
     party: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 21 4-12 8 8Z"/><path d="m7 9 8 8M12 7l1-3M16 10l4-1M16 5l2-2M20 14l1 1M8 4l-1-1"/><circle cx="21" cy="4" r=".5" fill="currentColor"/></svg>',
     rename: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
     // An eye is a viewer; a gear is an administrator. Both a size up from the
@@ -767,7 +768,7 @@ export function start(): void {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "row-copy row-live";
-    drawIcon(button, "live");
+    drawIcon(button, "link");
     button.title = `Go live with ${name}: on the air for everyone, listed, link copied`;
     button.setAttribute("aria-label", `Go live with ${name}`);
     button.addEventListener("click", (event) => {
@@ -1464,7 +1465,7 @@ export function start(): void {
       const play = document.createElement("button");
       play.type = "button";
       play.className = "row-copy";
-      drawIcon(play, "live");
+      drawIcon(play, "play");
       play.title = `Play all ${count} files in ${name}`;
       play.setAttribute("aria-label", `Play folder ${name}`);
       play.addEventListener("click", (event) => {
@@ -1477,7 +1478,7 @@ export function start(): void {
       const live = document.createElement("button");
       live.type = "button";
       live.className = "row-copy";
-      drawIcon(live, "live");
+      drawIcon(live, "link");
       live.title = `Go live with all ${count} files in ${name}`;
       live.setAttribute("aria-label", `Go live with folder ${name}`);
       live.addEventListener("click", (event) => {
