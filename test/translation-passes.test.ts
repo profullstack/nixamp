@@ -18,7 +18,7 @@ test("400% markup is five times the base cost; only exact, confirmed USD payment
   const payment = { id, status: "confirmed", currency: "USD", amount: "5.00000000" };
   assert.equal(verifyTranslationPayment(payment, id, 500), true);
   for (const change of [{id:randomUUID()}, {status:"pending"}, {status:"refunded"}, {amount:"5.001"}, {amount:4.99}, {amount:0}, {amount:"5e0"}, {currency:"USDC"}]) assert.equal(verifyTranslationPayment({...payment,...change}, id, 500), false);
-  assert.deepEqual(TRANSLATION_PLANS.map(plan => [plan.days, plan.priceCents]), [[1,500],[7,2500],[30,10000]]);
+  assert.deepEqual(TRANSLATION_PLANS.map(plan => [plan.days, plan.priceCents]), [[1,100],[30,500]]);
 });
 
 test("paid provider calls reserve before use, refund failures, and cached audio requires paid access", async () => {
