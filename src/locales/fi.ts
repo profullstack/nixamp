@@ -1,5 +1,8 @@
 import type { Catalogue } from "../i18n.ts";
 export default {
+  "No parties live right now.": "Yhtään katselubilettä ei ole nyt käynnissä.",
+  "Could not refresh parties.": "Katselubileitä ei voitu päivittää.",
+  "Pick a server in the directory, or paste its link here.": "Valitse palvelin hakemistosta tai liitä sen linkki tähän.",
   "Interface language": "Käyttöliittymän kieli",
   "Language": "Kieli",
   "Translation language": "Käännöskieli",

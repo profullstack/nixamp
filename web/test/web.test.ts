@@ -1164,6 +1164,20 @@ test("the panels' layout is a value: read tolerantly, ordered sensibly, and each
   assert.equal(PANELS_KEY, "nixamp.panels");
 });
 
+test("saved party panels merge without duplicate controls or losing the chosen placement", () => {
+  const combined = parseLayout(JSON.stringify({
+    order: ["onair-panel", "spectrum-panel", "parties-panel"],
+    placement: { "onair-panel": "zone-top:a", "parties-panel": "zone-main:b" },
+    collapsed: ["onair-panel"], closed: ["parties-panel", "onair-panel"],
+  }));
+  assert.deepEqual(combined, {
+    order: ["spectrum-panel", "parties-panel"], placement: { "parties-panel": "zone-main:b" },
+    collapsed: ["parties-panel"], closed: ["parties-panel"],
+  });
+  assert.deepEqual(parseLayout(serializeLayout(combined)), combined);
+  assert.deepEqual(parseLayout(JSON.stringify({ order: ["onair-panel"], placement: { "onair-panel": "zone-top:a" } })).placement, { "parties-panel": "zone-top:a" });
+});
+
 test("every panel has a grip, a shade and a close, snaps where it is dropped, and the Panels list does the same", () => {
   const html = readFileSync(join(webDir, "index.html"), "utf8");
   const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
@@ -1308,14 +1322,13 @@ test("what just happened is said under the link box and kept in the Log, in word
   assert.doesNotMatch(app, /dom\.linkServer\.focus\(/);
 });
 
-test("the Server panel says how servers work now: the directory, a link, or one command to run your own", () => {
+test("the Server panel connects through the directory or a link without setup instructions", () => {
   const html = readFileSync(join(webDir, "index.html"), "utf8");
   const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
   const panel = html.slice(html.indexOf('id="remote-panel"'), html.indexOf('id="remote-form"'));
   assert.ok(html.includes('data-title="Server" id="remote-panel"'));
-  assert.match(panel, /curl -fsSL https:\/\/nixamp\.com\/install\.sh \| sh/);
-  assert.match(panel, /nixamp login/);
-  assert.match(panel, /lists itself in the directory and on your account/);
+  assert.match(panel, /Pick a server in the directory, or paste its link here/);
+  assert.doesNotMatch(panel, /curl|nixamp login|nixamp serve/);
   // The old way in, an IP and --host, is not what a page tells people any more.
   assert.doesNotMatch(html, /--host 0\.0\.0\.0/);
   assert.doesNotMatch(html, /placeholder="192\.168/);

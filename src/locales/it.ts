@@ -1,5 +1,8 @@
 import type { Catalogue } from "../i18n.ts";
 export default {
+  "No parties live right now.": "Nessun party in diretta al momento.",
+  "Could not refresh parties.": "Impossibile aggiornare i party.",
+  "Pick a server in the directory, or paste its link here.": "Scegli un server dalla directory o incolla qui il suo link.",
   "Interface language": "Lingua dell’interfaccia",
   "Language": "Lingua",
   "Translation language": "Lingua di traduzione",

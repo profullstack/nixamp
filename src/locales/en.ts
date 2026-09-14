@@ -1,5 +1,8 @@
 /* Shared UI messages. English is both the default and the fallback. */
 export default {
+  "No parties live right now.": "No parties live right now.",
+  "Could not refresh parties.": "Could not refresh parties.",
+  "Pick a server in the directory, or paste its link here.": "Pick a server in the directory, or paste its link here.",
   "Interface language": "Interface language",
   "Language": "Language",
   "Translation language": "Translation language",

@@ -186,13 +186,20 @@
             <nav id="playlist-pager" class="pager" aria-label="Playlist pages" data-i18n-aria-label="Playlist pages" hidden></nav>
           </section>
 
-          <!-- What is on, on the server you are connected to: its own stream,
-               and anybody publishing into it. Two different things that were
-               only ever visible in two different places, so "what is on here?"
-               had no answer. -->
-          <section class="panel player-only" data-title="Parties on this server" data-i18n-data-title="Parties on this server" id="onair-panel" hidden>
-            <p class="hint" id="onair-note"></p>
-            <ul id="onair-list" class="directory-list"></ul>
+          <!-- One live list across servers and connected sites. -->
+          <section class="panel player-only" data-title="Parties" data-i18n-data-title="Parties" id="parties-panel">
+            <p class="hint" id="parties-note" data-i18n="Loading…">Loading…</p>
+            <ul id="parties-list" class="party-groups" aria-live="off"></ul>
+            <details class="party-invite">
+              <summary data-i18n="Invite code">Invite code</summary>
+          <form id="party-form" class="picker">
+            <label for="party-code" data-i18n="Invite code">Invite code</label>
+            <input id="party-code" type="text" inputmode="latin" autocomplete="off"
+                   autocapitalize="characters" spellcheck="false"
+                   placeholder="ABC123" />
+            <button id="party-join" type="submit" class="button" title="Join live" data-i18n-title="Join live" data-i18n="Join party">Join party</button>
+          </form>
+            </details>
           </section>
 
           <!-- The m3u catalogs a server keeps: IPTV lists of live channels and
@@ -267,17 +274,7 @@
           <ul id="favorites-list" class="directory-list"></ul>
         </section>
 
-        <section class="panel col-b" data-title="Parties" data-i18n-data-title="Parties" id="parties-panel" hidden>
-          <p class="hint" id="parties-note">Join a party, or enter an invite code.</p>
-          <ul id="parties-list" class="directory-list"></ul>
-          <form id="party-form" class="picker">
-            <label for="party-code" data-i18n="Invite code">Invite code</label>
-            <input id="party-code" type="text" inputmode="latin" autocomplete="off"
-                   autocapitalize="characters" spellcheck="false"
-                   placeholder="ABC123" />
-            <button id="party-join" type="submit" class="button" title="Join live" data-i18n-title="Join live" data-i18n="Join party">Join party</button>
-          </form>
-        </section>
+
 
         <section class="panel player-only col-a" data-title="Account" data-i18n-data-title="Account" id="account-panel">
           <p class="hint" id="account-note">Listening needs no account. Sign in to keep favourites, follow people, and publish.</p>
@@ -457,11 +454,7 @@
              lists itself. A host flag and an IP were how it worked before
              nixamp.com knew about servers at all. -->
         <section class="panel player-only col-a" data-title="Server" data-i18n-data-title="Server" id="remote-panel">
-          <p class="hint">
-            Pick a server in the directory, or paste a server's link here. To run your own:
-            <code>curl -fsSL https://nixamp.com/install.sh | sh</code>, then <code>nixamp login</code>
-            and <code>nixamp serve ~/Music</code>. It lists itself in the directory and on your account.
-          </p>
+          <p class="hint" data-i18n="Pick a server in the directory, or paste its link here.">Pick a server in the directory, or paste its link here.</p>
           <form id="remote-form" class="picker">
             <input id="remote-url" type="text" inputmode="url" placeholder="a server's link, https://…:4321/view/…" aria-label="A server's link" data-i18n-aria-label="A server's link" />
             <button type="submit" class="button" data-i18n="Connect">Connect</button>

@@ -1,5 +1,8 @@
 import type { Catalogue } from "../i18n.ts";
 export default {
+  "No parties live right now.": "Hiện không có buổi xem chung nào trực tiếp.",
+  "Could not refresh parties.": "Không thể cập nhật các buổi xem chung.",
+  "Pick a server in the directory, or paste its link here.": "Chọn máy chủ trong danh bạ hoặc dán liên kết vào đây.",
   "Interface language": "Ngôn ngữ giao diện",
   "Language": "Ngôn ngữ",
   "Translation language": "Ngôn ngữ dịch",
