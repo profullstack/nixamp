@@ -149,6 +149,8 @@ export interface Announcement {
 export interface LineupEntry {
   id: string;
   name: string;
+  /** Account that put this channel on the air, when known. */
+  startedBy?: string;
   kind: "audio" | "video";
   art: string;
   about: string;
@@ -247,6 +249,9 @@ export function parseLineupEntry(input: unknown): LineupEntry | null {
   return {
     id,
     name,
+    ...(typeof record["startedBy"] === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(record["startedBy"])
+      ? { startedBy: record["startedBy"] }
+      : {}),
     kind: record["kind"] === "video" ? "video" : "audio",
     // A picture is somewhere a crawler can go, or nothing: a data: URL is a
     // page in a tag, and javascript: is a page in a tag that runs.

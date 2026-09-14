@@ -1253,6 +1253,7 @@ export function lineupEntry(listenLink: string, info: ChannelInfo): LineupEntry 
   return {
     id: info.id,
     name: info.name,
+    ...(info.startedBy ? { startedBy: info.startedBy } : {}),
     kind: info.kind ?? "audio",
     art: absoluteArtOf(listenLink, info),
     about: info.about ?? "",
