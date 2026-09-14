@@ -140,6 +140,7 @@ export function start(): void {
     seek: need<HTMLInputElement>("seek"),
     fullscreen: need<HTMLButtonElement>("fullscreen"),
     copyNow: need<HTMLButtonElement>("copy-now"),
+    copyNixamp: need<HTMLButtonElement>("copy-nixamp"),
     canvas: need<HTMLCanvasElement>("spectrum"),
     glyphs: need<HTMLElement>("glyphs"),
     levels: need<HTMLElement>("levels"),
@@ -742,11 +743,11 @@ export function start(): void {
    * popper is decorative; the text names the action for everyone.
    */
   function joinPartyLabel(button: HTMLElement, text = "Join party"): void {
-    drawIcon(button, text === "Join party" ? "party" : "live");
+    drawIcon(button, /join/i.test(text) ? "party" : "live");
     const label = document.createTextNode("");
     uiText(label, () => ` ${uiMessage(text)}`);
     button.append(label);
-    uiAttribute(button, "title", () => uiMessage(text === "Join party" ? "Join live" : text));
+    uiAttribute(button, "title", () => uiMessage(/join/i.test(text) ? "Join live" : text));
   }
 
   joinPartyLabel(dom.partyJoin);
@@ -1282,6 +1283,7 @@ export function start(): void {
     // The address of what is playing, for another player. A picked file has
     // none, and nothing loaded has nothing to copy.
     dom.copyNow.hidden = player.source === "";
+    dom.copyNixamp.hidden = shareLinkNow() === "";
     // Share sits with the transport, for anything with an address safe to hand out.
     dom.shareNow.hidden = shareLinkNow() === "";
     // The trollbox follows whatever live is joined.
@@ -4313,6 +4315,11 @@ export function start(): void {
     void copyText(link, dom.shareNow, "Copied");
   });
 
+  dom.copyNixamp.addEventListener("click", () => {
+    const link = shareLinkNow();
+    if (link !== "") void copyText(link, dom.copyNixamp, "✓");
+  });
+
   dom.favHere.addEventListener("click", () => {
     // Kept as the view link, so opening a favourite later is watching it;
     // administering is what the directory's Admin button is for.
@@ -6087,13 +6094,9 @@ export function start(): void {
       //
       // With nothing running there is nothing to join, so somebody who can
       // drive this server is offered the thing that would fix that instead.
-      playLabel: running ? "Join party" : canDrive ? "Start the stream" : "Nothing playing",
+      playLabel: "Join party",
       onPlay: () => {
-        if (running) {
-          void joinLive(air.server.nowPlaying);
-          return;
-        }
-        if (canDrive) void startTheStream();
+        if (running) void joinLive(air.server.nowPlaying);
       },
       link: air.server.live ? air.server.url : "",
       ...(running ? { page: pageLinkFor("live") } : {}),
@@ -6152,7 +6155,7 @@ export function start(): void {
         // administering the server, so those are only there for somebody
         // who may. Restarting is for what this server fetches itself: a
         // publisher's stream restarts at the publisher's end.
-        onRestart: canDrive && channel.via === "pull"
+        onRestart: (canDrive || (memberHere && meId !== "" && channel.startedBy === meId)) && channel.via === "pull"
           ? () => { void restartChannel(channel.id, channel.name); }
           : undefined,
         // A member takes off, or renames, what they put on, and nothing else.

@@ -3926,14 +3926,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       if (!check.allowed) {
-        if (member !== "" && needsMember(path, request.method ?? "GET")) {
+        const ownedChannel = channelId === "" ? "" : options.channels?.info(channelId)?.startedBy ?? "";
+        const memberOwnsChannel = member !== "" && ownedChannel === member;
+        if (member !== "" && (needsMember(path, request.method ?? "GET") || memberOwnsChannel)) {
           // Metered per member, before anything is done: going live is a
           // decoder on this machine, and a script could ask for one a
           // second. Three a minute is a person; more is not.
-          const refused = await memberThrottle.handle(requestFor(request));
-          if (refused) {
-            await answerWith(response, refused);
-            return;
+          if (needsMember(path, request.method ?? "GET")) {
+            const refused = await memberThrottle.handle(requestFor(request));
+            if (refused) {
+              await answerWith(response, refused);
+              return;
+            }
           }
           liveBy = member;
         } else {
@@ -4858,7 +4862,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
 
-      if (action === undefined && request.method === "DELETE") {
+      if ((action === undefined && request.method === "DELETE") || (action === "stop" && request.method === "POST")) {
         // A member takes off what they put on, and nothing else.
         if (liveBy && channels.info(id)?.startedBy !== liveBy) {
           json(response, 403, { error: "that stream is not yours to take off" });
@@ -4898,13 +4902,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
        * take it off, put it back -- without having to know the source, which
        * a browser is never told.
        */
-      if (action === "restart") {
+      if (action === "start" || action === "restart") {
         if (!channels.has(id)) {
           json(response, 404, { error: "nothing is playing on that channel" });
           return;
         }
         if (!channels.pulled(id)) {
           json(response, 409, { error: "that channel is published into this server; restart it at the publisher" });
+          return;
+        }
+        if (liveBy && channels.info(id)?.startedBy !== liveBy) {
+          json(response, 403, { error: "that stream is not yours to restart" });
           return;
         }
         const restarted = channels.restart(id);
@@ -4927,6 +4935,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         // a member, counted and marked like anything else they put on.
         if (liveBy) {
           const info = channels.info(id);
+          if (info && info.startedBy && info.startedBy !== liveBy) {
+            json(response, 403, { error: "that stream is not yours to keep" });
+            return;
+          }
           if (info && !info.startedBy && !channels.isEphemeral(id)) {
             json(response, 403, { error: "that stream is the owner's" });
             return;
