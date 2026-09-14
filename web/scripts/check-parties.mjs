@@ -71,6 +71,7 @@ try {
 
   // Keeping focus inside one row must not freeze new rows or other servers.
   const marker = await page.evaluate(() => {
+    window.scrollTo(0, 240);
     const control = document.querySelector('#parties-list .party-row button');
     control.focus({ preventScroll: true }); window.__partyFocus = control;
     return { scroll: scrollY, panel: document.querySelector('#parties-list').scrollTop };

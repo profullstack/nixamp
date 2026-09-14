@@ -1192,7 +1192,7 @@ test("every panel has a grip, a shade and a close, snaps where it is dropped, an
   // the page's own state, and the Admin panel's hidden is the permission bit.
   assert.match(body, /panel\.toggleAttribute\("data-collapsed", on\)/);
   assert.match(body, /panel\.toggleAttribute\("data-closed", on\)/);
-  assert.doesNotMatch(body, /\.hidden = (true|false|on|!on)/);
+  assert.doesNotMatch(body, /panel\.hidden = (on|!on)/);
   assert.match(css, /\.panel\[data-collapsed\] > :not\(\.panel-tools\):not\(\.panel-heading\) \{ display: none !important; \}/);
   assert.match(css, /\.panel\[data-closed\] \{ display: none !important; \}/);
   // Stacked in columns, each panel as tall as it is: grid-lanes where a

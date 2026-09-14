@@ -39,7 +39,7 @@
         <!-- The panels themselves: which are on screen and in what order.
              Winamp's windows were dragged about and snapped into place; the
              grip on each panel does that here, and this lists them all. -->
-        <button id="panels-toggle" type="button" class="ghost" aria-controls="panels-panel" aria-expanded="false" title="Panels: show, hide, and reorder the panels on this page" data-i18n="Panels">Panels</button>
+        <button id="panels-toggle" type="button" class="ghost" popovertarget="panels-panel" aria-controls="panels-panel" aria-expanded="false" title="Panels: show, hide, and reorder the panels on this page" data-i18n="Panels">Panels</button>
         <label class="ui-language"><span data-i18n="Interface language">Interface language</span> <select data-ui-language class="transcript-language" aria-label="Interface language" data-i18n-aria-label="Interface language"></select></label>
         <button id="install" type="button" class="ghost" hidden data-i18n="Install">Install</button>
       </header>
@@ -439,7 +439,7 @@
 
         <!-- The panels: shown, hidden, reordered, from a list, for a keyboard,
              a phone, or putting everything back where it started. -->
-        <section class="panel col-b" data-title="Panels" data-i18n-data-title="Panels" id="panels-panel" hidden>
+        <section class="panel col-b" data-title="Panels" data-i18n-data-title="Panels" id="panels-panel" popover="auto" hidden>
           <p class="hint">Every panel, on or off. Move a panel by dragging its ≡ handle, or focus that handle and press Alt + Up or Down. ▁ shades it to its title bar; ✕ hides it.</p>
           <ul id="panels-list" class="directory-list panels-list"></ul>
           <div class="picker">

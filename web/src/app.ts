@@ -2330,7 +2330,6 @@ export function start(): void {
         recent?: RecentStream[];
       };
       streams = body.streams ?? [];
-      partyServers = streams; partiesLoaded = true; drawParties();
       directoryServers = streams.map((one) => ({ name: one.name, url: one.url }));
       drawLinkServers();
       // The same news is not news. Without the clock fields, which every
@@ -3048,8 +3047,10 @@ export function start(): void {
     const add = (key: string, name: string, rows: HTMLElement[]): void => {
       if (!rows.length) return;
       const group = groups.get(key);
-      if (group) group.rows.push(...rows);
-      else groups.set(key, { name, rows });
+      if (group) {
+        const known = new Set(group.rows.map(row => row.dataset["liveKey"]));
+        group.rows.push(...rows.filter(row => !known.has(row.dataset["liveKey"])));
+      } else groups.set(key, { name, rows });
     };
     const current = mode === "remote" && lastAir ? serverOrigin(remote.address) : "";
     for (const server of partyServers) {
@@ -5660,6 +5661,7 @@ export function start(): void {
   function setClosed(panel: HTMLElement, on: boolean): void {
     const heldFocus = panel.contains(document.activeElement);
     panel.toggleAttribute("data-closed", on);
+    if (panel === dom.panelsPanel && on) { panel.hidePopover?.(); panel.hidden = true; }
     if (panel === dom.panelsPanel) dom.panelsToggle.setAttribute("aria-expanded", String(!on && !panel.hidden && !panel.hasAttribute("data-collapsed")));
     if (panel === dom.partiesPanel && !on) void loadParties();
     if (on && heldFocus) dom.panelsToggle.focus({ preventScroll: true });
@@ -5817,7 +5819,8 @@ export function start(): void {
     dom.adminPanel.removeAttribute("data-collapsed");
     dom.adminPanel.removeAttribute("data-closed");
   }
-  dom.panelsToggle.addEventListener("click", () => {
+  dom.panelsToggle.addEventListener("click", event => {
+    event.preventDefault();
     const open = dom.panelsPanel.hidden || dom.panelsPanel.hasAttribute("data-closed") || dom.panelsPanel.hasAttribute("data-collapsed");
     dom.panelsPanel.hidden = !open;
     dom.panelsToggle.setAttribute("aria-expanded", String(open));
@@ -5826,8 +5829,19 @@ export function start(): void {
       if (dom.panelsPanel.hasAttribute("data-closed")) setClosed(dom.panelsPanel, false);
       if (dom.panelsPanel.hasAttribute("data-collapsed")) setCollapsed(dom.panelsPanel, false);
       drawPanelsList();
-      dom.panelsPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
+      dom.panelsPanel.showPopover?.();
+    } else dom.panelsPanel.hidePopover?.();
+  });
+  dom.panelsPanel.addEventListener("toggle", () => {
+    const open = dom.panelsPanel.matches(":popover-open");
+    dom.panelsToggle.setAttribute("aria-expanded", String(open && !dom.panelsPanel.hasAttribute("data-collapsed")));
+    if (!open) dom.panelsPanel.hidden = true;
+  });
+  dom.panelsPanel.addEventListener("keydown", event => {
+    if (event.key !== "Escape" || typeof dom.panelsPanel.hidePopover === "function") return;
+    dom.panelsPanel.hidden = true;
+    dom.panelsToggle.setAttribute("aria-expanded", "false");
+    dom.panelsToggle.focus({ preventScroll: true });
   });
   dom.panelsReset.addEventListener("click", resetLayout);
   // A title that changes -- "Playlist (3)", "Files on dev" -- changes the list.

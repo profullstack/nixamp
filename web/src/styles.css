@@ -295,6 +295,13 @@ body.tv .subtitle { font-size: 28px; }
 .panels-list li .name { flex: 1 1 auto; }
 .panels-list li.off .name { color: var(--muted); }
 .panels-list li .detail { color: var(--muted); font-size: 12px; white-space: nowrap; }
+#panels-panel {
+  position: fixed; inset: 4rem auto auto 50%; transform: translateX(-50%);
+  width: min(26rem, calc(100vw - 24px)); max-height: calc(100dvh - 5rem);
+  overflow-y: auto; margin: 0; z-index: 20; border: 1px solid var(--edge);
+  background: var(--panel); color: var(--fg); box-shadow: 0 8px 30px #0006;
+}
+#panels-panel::backdrop { background: transparent; }
 
 /* One compact live list. Updates stay inside its existing scroll area. */
 .party-groups, .party-rows { list-style: none; margin: 0; padding: 0; }

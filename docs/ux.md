@@ -62,7 +62,8 @@ reads on sign-out. New rows must appear while another row has focus. Preserve
 that focused row until it can safely update, rather than freezing the whole list.
 
 The Panels button must reopen the chooser on the first activation even when its
-saved layout has it closed or shaded. Keep its expanded state accurate.
+saved layout has it closed or shaded. Open the chooser in place without
+scrolling the page. Keep its expanded state accurate.
 
 ## Player translation controls
 
