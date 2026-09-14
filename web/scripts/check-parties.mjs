@@ -115,7 +115,7 @@ try {
   assert.equal(await page.locator('#parties-list h3').getByText('Beta server', { exact: true }).count(), 1, 'connected server was duplicated');
 
   // Signing out keeps public parties while dropping account-only reads.
-  await page.locator('#account-sign-out').evaluate(button => button.click());
+  await page.locator('#account-signout').evaluate(button => button.click());
   await page.waitForTimeout(2300);
   const requestsAfterSignOut = bridgeRequests;
   await page.waitForTimeout(2300);
