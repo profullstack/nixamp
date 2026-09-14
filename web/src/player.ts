@@ -178,6 +178,7 @@ export class BrowserPlayer {
   private translated = false;
   private readonly wired = new WeakSet<HTMLMediaElement>();
   private active: HTMLMediaElement;
+  private jingle: HTMLAudioElement | null = null;
   private frequencies = new Uint8Array(0);
   /**
    * Whether the thing now loaded may go through the analyser. A file served
@@ -230,6 +231,32 @@ export class BrowserPlayer {
 
   get playing(): boolean {
     return !this.active.paused && !this.active.ended;
+  }
+
+  get jinglePlaying(): boolean {
+    return !!this.jingle && !this.jingle.paused && !this.jingle.ended;
+  }
+
+  /** The intro shares the spectrum and output, without becoming a playlist track. */
+  async playJingle(jingle: HTMLAudioElement): Promise<void> {
+    if (this.jingle !== jingle) this.stopJingle();
+    this.jingle = jingle;
+    this.ensureGraph(jingle);
+    try {
+      await jingle.play();
+      // Media autoplay and Web Audio can have different permission states.
+      // Let the intro's existing gesture fallback retry a suspended graph.
+      if (this.context?.state === "suspended") throw new DOMException("Audio needs an interaction", "NotAllowedError");
+    } catch (error) {
+      jingle.pause();
+      jingle.currentTime = 0;
+      throw error;
+    }
+  }
+
+  private stopJingle(): void {
+    this.jingle?.pause();
+    this.jingle = null;
   }
 
   /** The browser needs a click before it will start the loaded source. */
@@ -332,6 +359,7 @@ export class BrowserPlayer {
    * play in the same commit fails permanently rather than loudly.
    */
   async load(track: LocalTrack, autoplay: boolean): Promise<void> {
+    this.stopJingle();
     this.playBlocked = false;
     // A picked file is a blob in this tab, which is no address at all.
     this.source = track.objectUrl ? "" : track.url;
@@ -387,6 +415,7 @@ export class BrowserPlayer {
   }
 
   async play(): Promise<void> {
+    this.stopJingle();
     // The analyser captures the element's sound, so wiring it to media that
     // cannot be read leaves the speakers silent. Such a source plays straight
     // through instead, with no spectrum. Everything else gets the bars.
@@ -408,6 +437,7 @@ export class BrowserPlayer {
   }
 
   pause(): void {
+    this.stopJingle();
     this.playBlocked = false;
     this.active.pause();
   }
@@ -420,6 +450,7 @@ export class BrowserPlayer {
   }
 
   stop(): void {
+    this.stopJingle();
     this.playBlocked = false;
     this.active.pause();
     this.active.currentTime = 0;

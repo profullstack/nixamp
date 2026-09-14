@@ -133,3 +133,34 @@ test('a translation session mutes even an audio graph created after the session 
     else Reflect.deleteProperty(globalThis, 'AudioContext');
   }
 });
+
+test('the intro retries a suspended graph once per media element and leaves the playlist untouched', async () => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, 'AudioContext');
+  const sources: unknown[] = [];
+  let allowed = false;
+  class Context {
+    state = 'suspended'; destination = {};
+    createAnalyser() { return { connect() {}, frequencyBinCount: 1024 }; }
+    createGain() { return { gain: { value: 1 }, connect() {} }; }
+    createMediaElementSource(element: unknown) { sources.push(element); return { connect() {} }; }
+    async resume() { if (allowed) this.state = 'running'; }
+  }
+  Object.defineProperty(globalThis, 'AudioContext', { value: Context, configurable: true });
+  try {
+    const { player, audio, errors, states } = fixture();
+    const intro = new MediaElement(); intro.refusal = null;
+    await assert.rejects(player.playJingle(intro as unknown as HTMLAudioElement), { name: 'NotAllowedError' });
+    assert.equal(intro.paused, true, 'a suspended audio graph must not consume a silent intro');
+    allowed = true;
+    await player.playJingle(intro as unknown as HTMLAudioElement);
+    assert.equal(player.jinglePlaying, true);
+    assert.equal(player.source, ''); assert.equal(player.playing, false); assert.deepEqual(states, []);
+    assert.equal(sources.filter(source => source === intro).length, 1, 'retry must not duplicate the audio source');
+    audio.refusal = null; await player.play();
+    assert.equal(intro.paused, true); assert.equal(player.jinglePlaying, false);
+    assert.equal(player.playing, true); assert.deepEqual(errors, []);
+  } finally {
+    if (saved) Object.defineProperty(globalThis, 'AudioContext', saved);
+    else Reflect.deleteProperty(globalThis, 'AudioContext');
+  }
+});

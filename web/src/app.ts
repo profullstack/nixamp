@@ -821,6 +821,7 @@ export function start(): void {
     },
   });
 
+  const remoteSpectrum = (): boolean => remoteDrives() && !player.jinglePlaying;
   const remote = new RemoteClient({
     onSnapshot: (next) => {
       // A frame without a track list has nothing new to say about it, which is
@@ -844,7 +845,7 @@ export function start(): void {
           });
         }
       }
-      if (remoteDrives()) {
+      if (remoteSpectrum()) {
         // The server is the one making the sound; mirror its analyser.
         bars = next.bars.length > 0 ? next.bars : bars;
         peaks = holdPeaks(peaks, bars);
@@ -1333,7 +1334,7 @@ export function start(): void {
 
     renderPlaylist();
     dom.glyphs.textContent = bars.map(glyph).join("");
-    const [l, r] = remoteDrives() ? snapshot.levels : player.levels();
+    const [l, r] = remoteSpectrum() ? snapshot.levels : player.levels();
     dom.levels.textContent =
       meter(l, r);
   }
@@ -1668,7 +1669,7 @@ export function start(): void {
     }
     const context = canvas.getContext("2d");
 
-    if (!remoteDrives()) {
+    if (!remoteSpectrum()) {
       const data = player.read();
       if (data.length > 0) {
         if (edges.length !== BAND_COUNT + 1) edges = bandEdges(BAND_COUNT, data.length);
@@ -1687,11 +1688,13 @@ export function start(): void {
         background: "transparent",
       });
     }
-    if (playing()) {
+    if (playing() || player.jinglePlaying) {
       dom.glyphs.textContent = bars.map(glyph).join("");
-      const [l, r] = remoteDrives() ? snapshot.levels : player.levels();
+      const [l, r] = remoteSpectrum() ? snapshot.levels : player.levels();
       dom.levels.textContent =
         meter(l, r);
+    }
+    if (playing()) {
       dom.elapsed.textContent = formatTime(position());
       const of = duration();
       if (!scrubbing && of > 0) dom.seek.value = String(Math.round((position() / of) * 1000));
@@ -6679,14 +6682,14 @@ export function start(): void {
       // Deferred a tick so the click has done its work before it is judged.
       setTimeout(() => {
         if (busy()) return;
-        void jingle.play().catch(() => {});
+        void player.playJingle(jingle).catch(() => {});
       }, 150);
     };
 
     void chosen().then((src) => {
       if (src === "" || busy()) return;
       jingle.src = src;
-      return jingle.play().then(
+      return player.playJingle(jingle).then(
         spend,
         () => {
           // Refused, which is ordinary. Wait for the first thing they do.
