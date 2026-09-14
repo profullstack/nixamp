@@ -2321,7 +2321,7 @@ export function start(): void {
       channelCodes?: Record<string, string>;
       channelCallers?: Record<string, number>;
       /** The same channels with a picture and a line each, from a server that sends them. */
-      lineup?: { id: string; name: string; kind: "audio" | "video"; art: string; about: string }[];
+      lineup?: { id: string; name: string; startedBy?: string; kind: "audio" | "video"; art: string; about: string }[];
       /** The control link, present only when this account owns the server. */
       admin?: string;
     }[];
@@ -2470,6 +2470,22 @@ export function start(): void {
           void copyText(rawUrl, raw, "✓");
         });
         row.append(dot, play, copy, raw);
+        // A server owner can administer the live channel from the same
+        // compact row; other viewers only get the three listening/share
+        // actions above.
+        if (entry?.startedBy && meId && entry.startedBy === meId && adminLink) {
+          const manage = document.createElement("button");
+          manage.type = "button";
+          manage.className = "icon";
+          drawIcon(manage, "gear");
+          manage.setAttribute("aria-label", `Administer ${channelName}`);
+          manage.title = `Administer ${channelName}`;
+          manage.addEventListener("click", (event) => {
+            event.stopPropagation();
+            open(false, `channel:${entry?.id ?? channelName}`);
+          });
+          row.append(manage);
+        }
         lives.append(row);
       }
       // The same eye and gear as everywhere else a server is shown.
