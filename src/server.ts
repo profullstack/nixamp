@@ -4015,7 +4015,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           redials: one.redials ?? 0,
           error: one.error ?? "",
           // For a list: how long it is, and which entry is on, from 0.
-          ...(one.playlist ? { entries: one.playlist.length, entry: one.playlistAt ?? 0 } : {}),
+          ...(one.playlist ? {
+            entries: one.playlist.length,
+            entry: one.playlistAt ?? 0,
+            playlist: one.playlist.map((source) => source.split(/[\\/]/).pop() || "Untitled"),
+            live: one.live !== false,
+          } : {}),
           // The member who put it on, when one did: theirs to take off.
           startedBy: one.startedBy ?? "",
           // A picture of it, and a line about it, where there is one.
