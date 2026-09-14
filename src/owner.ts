@@ -148,6 +148,7 @@ export function needsMember(path: string, method = "GET"): boolean {
   if (method === "POST" && /^\/api\/tracks\/\d+\/live$/.test(path)) return true;
   if (method === "POST" && /^\/api\/catalogs\/[^/]+\/entries\/[^/]+\/live$/.test(path)) return true;
   if (method === "POST" && /^\/api\/channels\/[^/]+\/keep$/.test(path)) return true;
+  if (method === "POST" && /^\/api\/channels\/[^/]+\/(?:start|stop|restart)$/.test(path)) return true;
   // A link -- a YouTube page, an IPTV feed, a file somewhere -- is the one
   // thing a member can go live with that needs nothing on the server first,
   // and it was the one thing they could not. Going live with one is the same

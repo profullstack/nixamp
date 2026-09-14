@@ -130,7 +130,9 @@ test("a member may go live, and take off what they put on, and nothing else that
   assert.equal(needsMember("/api/catalogs", "POST"), false);
   assert.equal(needsMember("/api/links/download", "GET"), false);
   assert.equal(needsMember("/api/links/play", "GET"), false);
-  assert.equal(needsMember("/api/channels/cat-e/restart", "POST"), false);
+  assert.equal(needsMember("/api/channels/cat-e/restart", "POST"), true);
+  assert.equal(needsMember("/api/channels/cat-e/start", "POST"), true);
+  assert.equal(needsMember("/api/channels/cat-e/stop", "POST"), true);
   assert.equal(needsMember("/api/channels/cat-e", "POST"), false);
   assert.equal(needsMember("/api/live/start", "POST"), false);
   // Everything a member may do is something that needs administering at all.
