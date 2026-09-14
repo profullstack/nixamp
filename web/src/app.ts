@@ -2404,6 +2404,7 @@ export function start(): void {
         askedToPlay = play;
         dom.remoteUrl.value = asViewer ? stream.url : (adminLink ?? stream.url);
         dom.directory.hidden = true;
+        document.body.classList.remove("route-directory");
         dom.remoteForm.requestSubmit();
       };
 
@@ -2491,7 +2492,7 @@ export function start(): void {
       // The same eye and gear as everywhere else a server is shown.
       const [connect, admin] = wayIn(
         { name: stream.name, view: stream.url, admin: adminLink },
-        () => { dom.directory.hidden = true; },
+        () => { dom.directory.hidden = true; document.body.classList.remove("route-directory"); },
       );
       item.append(label, connect, admin);
       // A heart, for somebody signed in: the way back to a server you liked.
