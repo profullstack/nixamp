@@ -1,3 +1,4 @@
+import { t as uiMessage } from "./i18n.ts";
 /**
  * `nixamp admin` — what the daemon is doing, and who is listening to it.
  *
@@ -261,7 +262,7 @@ export function draw(ui: Container, theme: Theme, view: View): void {
   const now = report?.now ?? Date.now();
 
   ui.row({ size: 7, gap: 1 }, (row) => {
-    row.panel({ title: "Server" }, (p) => {
+    row.panel({ title: uiMessage("Server") }, (p) => {
       p.text(view.url, { fg: theme.primary });
       p.label(snapshot?.root ?? "—");
       p.keyValues([
@@ -271,7 +272,7 @@ export function draw(ui: Container, theme: Theme, view: View): void {
       ]);
     });
 
-    row.panel({ title: "Now playing" }, (p) => {
+    row.panel({ title: uiMessage("Now playing") }, (p) => {
       const track = snapshot ? snapshot.tracks[snapshot.index] : undefined;
       p.text(track?.title ?? "nothing", { fg: theme.accent });
       p.label(track?.artist || "—");
@@ -368,9 +369,9 @@ export function draw(ui: Container, theme: Theme, view: View): void {
 
   ui.statusBar({
     items: [
-      { key: "a", label: "Add" },
+      { key: "a", label: uiMessage("Add") },
       { key: "r", label: "Replace" },
-      { key: "q", label: "Quit" },
+      { key: "q", label: uiMessage("Quit") },
     ],
     right: [{ key: "", label: report ? `${report.connections.length} seen` : "connecting" }],
   });

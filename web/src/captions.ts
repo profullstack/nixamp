@@ -1,3 +1,5 @@
+import { UI_LANGUAGES } from "../../src/ui-languages.ts";
+import { i18n } from "../../src/i18n.ts";
 /**
  * Captions in the page: the parts of it that are arithmetic.
  *
@@ -36,24 +38,7 @@ export interface Caption {
  */
 export const LANGUAGE_CHOICES: { code: string; label: string }[] = [
   { code: "", label: "Original (auto-detect)" },
-  { code: "en", label: "English" },
-  { code: "de", label: "Deutsch" },
-  { code: "sv", label: "Svenska" },
-  { code: "es", label: "Español" },
-  { code: "fr", label: "Français" },
-  { code: "it", label: "Italiano" },
-  { code: "nl", label: "Nederlands" },
-  { code: "da", label: "Dansk" },
-  { code: "fi", label: "Suomi" },
-  { code: "ru", label: "Русский" },
-  { code: "uk", label: "Українська" },
-  { code: "cs", label: "Čeština" },
-  { code: "hu", label: "Magyar" },
-  { code: "zh", label: "中文" },
-  { code: "ar", label: "العربية" },
-  { code: "hi", label: "हिन्दी" },
-  { code: "vi", label: "Tiếng Việt" },
-  { code: "id", label: "Bahasa Indonesia" },
+  ...UI_LANGUAGES,
 ];
 
 /** The language this device asked for, if it is one on offer; "" otherwise. */
@@ -118,5 +103,5 @@ export function captionsWanted(read: (key: string) => string | null): boolean {
 /** A line's time, as the list shows it. */
 export function whenLabel(at: number): string {
   const date = new Date(at);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }

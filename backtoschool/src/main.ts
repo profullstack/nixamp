@@ -1,3 +1,8 @@
+import { i18n } from "../../src/i18n.ts";
+import { uiText, uiAttribute } from "../../web/src/i18n.ts";
+import { t as uiMessage } from "../../src/i18n.ts";
+import { installI18n } from "../../web/src/i18n.ts";
+void installI18n();
 import "./styles.css";
 import { installEventWriter } from "./event-writer.ts";
 import type { LiveEvent } from "../../src/live-events.ts";
@@ -61,7 +66,7 @@ function inviteQuery(): string {
 
 function displayDate(value: string | undefined, options: Intl.DateTimeFormatOptions = {}): string {
   if (!value) return "Time to be announced";
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(i18n.language, {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -72,9 +77,9 @@ function displayDate(value: string | undefined, options: Intl.DateTimeFormatOpti
 }
 
 function relativeStart(event: LiveEvent): string {
-  if (event.status === "live") return "Live now";
-  if (event.status === "ended") return event.recordingId ? "Replay available" : "Event ended";
-  if (event.status === "cancelled") return "Cancelled";
+  if (event.status === "live") return uiMessage("Live now");
+  if (event.status === "ended") return event.recordingId ? uiMessage("Replay available") : uiMessage("Event ended");
+  if (event.status === "cancelled") return uiMessage("Cancelled");
   return displayDate(event.startsAt);
 }
 
@@ -83,7 +88,7 @@ function hasPermission(permission: string): boolean {
 }
 
 function updateAccountButton(): void {
-  accountButton.textContent = account ? account.email.split("@")[0] || "Account" : "Sign in";
+  uiText(accountButton, () => account ? account.email.split("@")[0] || uiMessage("Account") : uiMessage("Sign in"));
   accountButton.classList.toggle("signed-in", Boolean(account));
 }
 
@@ -99,7 +104,8 @@ async function readAccount(): Promise<void> {
 function openAccount(next?: () => void): void {
   if (account) {
     accountDialog.showModal();
-    accountTitle.textContent = `Signed in as ${account.email}`;
+    const email = account.email;
+    accountTitle.textContent = `Signed in as ${email}`;
     accountCopy.textContent = "Your BackToSchool identity is your NixAmp account.";
     accountForm.hidden = true;
     return;
@@ -112,15 +118,15 @@ function openAccount(next?: () => void): void {
 }
 
 function drawAccountMode(): void {
-  accountTitle.textContent = creatingAccount ? "Create your account" : "Welcome back";
+  uiText(accountTitle, () => creatingAccount ? uiMessage("Create your account") : uiMessage("Welcome back"));
   accountCopy.textContent = creatingAccount
     ? "One NixAmp account works here and everywhere NixAmp goes."
     : "Sign in to host, chat, or raise your hand.";
-  accountMode.textContent = creatingAccount ? "Already have an account? Sign in" : "New here? Create an account";
+  uiText(accountMode, () => creatingAccount ? uiMessage("Already have an account? Sign in") : uiMessage("New here? Create an account"));
   document.querySelector<HTMLElement>("#account-forgot")!.hidden = creatingAccount;
   const password = accountForm.elements.namedItem("password") as HTMLInputElement;
   password.autocomplete = creatingAccount ? "new-password" : "current-password";
-  accountForm.querySelector<HTMLButtonElement>('button[type="submit"]')!.textContent = creatingAccount ? "Create account" : "Sign in";
+  uiText(accountForm.querySelector<HTMLButtonElement>('button[type="submit"]')!, () => creatingAccount ? uiMessage("Create account") : uiMessage("Sign in"));
 }
 
 function localDateTime(value: string): string {
@@ -136,9 +142,9 @@ function openEventForm(mode: "live" | "scheduled", existing: LiveEvent | null = 
   eventForm.reset();
   scheduling = mode === "scheduled";
   scheduleFields.hidden = !scheduling;
-  eventFormTitle.textContent = existing ? "Edit event" : scheduling ? "Schedule a class" : "Go live";
-  eventKicker.textContent = existing ? "Your classroom" : "Teach something live";
-  eventSubmit.textContent = existing ? "Save changes" : scheduling ? "Schedule class" : "Create live";
+  uiText(eventFormTitle, () => existing ? uiMessage("Edit event") : scheduling ? uiMessage("Schedule a class") : uiMessage("Go live"));
+  uiText(eventKicker, () => existing ? uiMessage("Your classroom") : "Teach something live");
+  uiText(eventSubmit, () => existing ? uiMessage("Save changes") : scheduling ? uiMessage("Schedule class") : uiMessage("Create live"));
   eventError.textContent = "";
   const startsAt = eventForm.elements.namedItem("startsAt") as HTMLInputElement;
   startsAt.required = scheduling && (!existing || Boolean(existing.startsAt));
@@ -196,8 +202,8 @@ async function home(): Promise<void> {
         <h1>Learn something<br /><em>live.</em></h1>
         <p>Watch a live lesson, follow a screen share, and ask questions as you learn.</p>
         <div class="hero-actions">
-          <button class="button button-primary" type="button" data-event-mode="live"><span class="live-dot"></span> Go live</button>
-          <button class="button button-secondary" type="button" data-event-mode="scheduled">Schedule live</button>
+          <button class="button button-primary" type="button" data-event-mode="live"><span class="live-dot"></span><span data-i18n="Go live"> Go live</span></button>
+          <button class="button button-secondary" type="button" data-event-mode="scheduled" data-i18n="Schedule live">Schedule live</button>
         </div>
         <p class="hero-note">Watch classes and screen shares. No account required.</p>
       </div>
@@ -208,24 +214,24 @@ async function home(): Promise<void> {
         <span class="board-label">Today’s lesson</span>
         <strong>${escape(live[0]?.title ?? upcoming[0]?.title ?? "The best teachers are curious people")}</strong>
         <p>${live[0] ? "Happening right now" : upcoming[0] ? relativeStart(upcoming[0]) : "Host the first live conversation"}</p>
-        ${live[0] ? `<a href="${eventPath(live[0])}" data-link class="board-action">Watch now <span>↗</span></a>` : `<button type="button" data-event-mode="live" class="board-action">Start a room <span>↗</span></button>`}
+        ${live[0] ? `<a href="${eventPath(live[0])}" data-link class="board-action"><span data-i18n="Watch now">Watch now </span><span>↗</span></a>` : `<button type="button" data-event-mode="live" class="board-action"><span data-i18n="Start a room">Start a room </span><span>↗</span></button>`}
         <div class="board-doodles" aria-hidden="true"><span>?</span><span>✦</span><span>≈</span></div>
       </div>
     </section>
 
     <section class="event-section" id="live">
       <div class="section-heading">
-        <div><span class="eyebrow">Walk in anytime</span><h2>Live now</h2></div>
+        <div><span class="eyebrow">Walk in anytime</span><h2 data-i18n="Live now">Live now</h2></div>
         <span class="section-count">${live.length} ${live.length === 1 ? "room" : "rooms"}</span>
       </div>
       <div class="event-grid">
-        ${live.length ? live.map(eventCard).join("") : `<div class="empty-card"><span>☕</span><h3>The halls are quiet.</h3><p>Start a live and give people something worth dropping into.</p><button class="text-button" data-event-mode="live">Open a room →</button></div>`}
+        ${live.length ? live.map(eventCard).join("") : `<div class="empty-card"><span>☕</span><h3>The halls are quiet.</h3><p>Start a live and give people something worth dropping into.</p><button class="text-button" data-event-mode="live" data-i18n="Open a room →">Open a room →</button></div>`}
       </div>
     </section>
 
     <section class="event-section event-section-tint" id="upcoming">
       <div class="section-heading">
-        <div><span class="eyebrow">Save your seat</span><h2>Coming up</h2></div>
+        <div><span class="eyebrow">Save your seat</span><h2 data-i18n="Coming up">Coming up</h2></div>
       </div>
       <div class="upcoming-list">
         ${upcoming.length ? upcoming.map((event) => `
@@ -237,13 +243,13 @@ async function home(): Promise<void> {
       </div>
     </section>
 
-    ${recent.length ? `<section class="event-section"><div class="section-heading"><div><span class="eyebrow">Listen after class</span><h2>Recent replays</h2></div></div><div class="event-grid">${recent.map(eventCard).join("")}</div></section>` : ""}
+    ${recent.length ? `<section class="event-section"><div class="section-heading"><div><span class="eyebrow" data-i18n="Listen after class">Listen after class</span><h2 data-i18n="Recent replays">Recent replays</h2></div></div><div class="event-grid">${recent.map(eventCard).join("")}</div></section>` : ""}
 
     <section class="host-callout">
       <span class="eyebrow">Know a thing or two?</span>
       <h2>Someone wants to hear it.</h2>
       <p>You don’t need a studio or a syllabus. Bring an idea and start talking.</p>
-      <button class="button button-light" type="button" data-event-mode="scheduled">Plan a conversation</button>
+      <button class="button button-light" type="button" data-event-mode="scheduled" data-i18n="Plan a conversation">Plan a conversation</button>
     </section>`;
 }
 
@@ -260,7 +266,7 @@ function playerPanel(event: LiveEvent): string {
     <div class="listen-card ${available ? "" : "waiting"}">
       <div class="sound-orbit" aria-hidden="true"><span></span><span></span><span></span><b>▶</b></div>
       <div>
-        <span class="eyebrow">${event.status === "live" ? "On air now" : event.recordingId ? "Replay" : "The room opens soon"}</span>
+        <span class="eyebrow">${event.status === "live" ? "On air now" : event.recordingId ? uiMessage("Replay") : "The room opens soon"}</span>
         <h2>${available ? (event.status === "live" ? "Listen live" : "Listen again") : "We’ll see you here."}</h2>
         <p id="player-note">${available ? "Press play and you’re in. No sign-up, no setup." : escape(relativeStart(event))}</p>
         ${available ? `<button class="button button-primary listen-button" type="button" data-listen><span class="live-dot"></span> ${event.status === "live" ? "Listen live" : "Play replay"}</button><audio id="event-audio" preload="none" src="${escape(source)}" controls></audio>` : ""}
@@ -272,7 +278,7 @@ function chatPanel(event: LiveEvent): string {
   if (!event.chatEnabled) return `<div class="panel-empty">Chat is off for this event.</div>`;
   return `
     <div id="chat-messages" class="chat-messages"><p class="muted">Loading the conversation…</p></div>
-    ${account ? `<form id="chat-form" class="inline-form"><input name="body" maxlength="1000" placeholder="Add to the conversation" aria-label="Chat message" required /><button class="button button-small" type="submit">Send</button></form>` : `<button class="text-button" type="button" data-sign-in>Sign in to join the chat →</button>`}`;
+    ${account ? `<form id="chat-form" class="inline-form"><input name="body" maxlength="1000" placeholder="Add to the conversation" data-i18n-placeholder="Add to the conversation" aria-label="Chat message" data-i18n-aria-label="Chat message" required /><button class="button button-small" type="submit" data-i18n="Send">Send</button></form>` : `<button class="text-button" type="button" data-sign-in>Sign in to join the chat →</button>`}`;
 }
 
 function panelBody(type: string, event: LiveEvent): string | null {
@@ -280,24 +286,24 @@ function panelBody(type: string, event: LiveEvent): string | null {
     case "event-header":
       return `<div class="event-heading"><span class="status-pill ${event.status === "live" ? "status-live" : ""}">${escape(relativeStart(event))}</span>${event.topic ? `<span class="topic">${escape(event.topic)}</span>` : ""}<h1>${escape(event.title)}</h1><p>${escape(event.description || "A live conversation powered by NixAmp.")}</p></div>`;
     case "player": return playerPanel(event);
-    case "stage": return `<div class="stage-card"><span class="stage-avatar">${escape(event.title.slice(0, 1).toUpperCase())}</span><div><span class="eyebrow">Host stage</span><h2>${escape(event.title)}</h2><p id="broadcast-note">${event.status === "live" ? "This event is live." : "Start when you’re ready."}</p></div></div>`;
-    case "host": return `<div class="host-line">${event.avatarUrl ? `<img class="avatar host-avatar" src="${escape(event.avatarUrl)}" alt="" referrerpolicy="no-referrer" />` : `<span class="avatar">${escape((event.hostName || event.title).slice(0, 1))}</span>`}<div><small>Your host</small><strong>${escape(event.hostName || "Class host")}</strong>${event.homepageUrl ? `<a href="${escape(event.homepageUrl)}" target="_blank" rel="noopener noreferrer">Visit homepage ↗</a>` : ""}</div></div>`;
+    case "stage": return `<div class="stage-card"><span class="stage-avatar">${escape(event.title.slice(0, 1).toUpperCase())}</span><div><span class="eyebrow" data-i18n="Host stage">Host stage</span><h2>${escape(event.title)}</h2><p id="broadcast-note">${event.status === "live" ? "This event is live." : "Start when you’re ready."}</p></div></div>`;
+    case "host": return `<div class="host-line">${event.avatarUrl ? `<img class="avatar host-avatar" src="${escape(event.avatarUrl)}" alt="" referrerpolicy="no-referrer" />` : `<span class="avatar">${escape((event.hostName || event.title).slice(0, 1))}</span>`}<div><small data-i18n="Your host">Your host</small><strong>${escape(event.hostName || uiMessage("Class host"))}</strong>${event.homepageUrl ? `<a href="${escape(event.homepageUrl)}" target="_blank" rel="noopener noreferrer">Visit homepage ↗</a>` : ""}</div></div>`;
     case "about": return `<p class="reading-copy">${escape(event.description || "Come listen, learn, and ask a question live.")}</p>${event.topic ? `<span class="topic topic-large">${escape(event.topic)}</span>` : ""}`;
-    case "join": return account ? `<p class="panel-empty">You’re signed in and ready to participate.</p>` : `<div class="join-line"><div><strong>Want to ask something?</strong><p>Join with your NixAmp account.</p></div><button class="button button-secondary" type="button" data-sign-in>Join in</button></div>`;
+    case "join": return account ? `<p class="panel-empty">You’re signed in and ready to participate.</p>` : `<div class="join-line"><div><strong>Want to ask something?</strong><p>Join with your NixAmp account.</p></div><button class="button button-secondary" type="button" data-sign-in data-i18n="Join in">Join in</button></div>`;
     case "chat": return chatPanel(event);
     case "questions": return `<div class="panel-empty">Questions shared in chat can be brought onto the stage.</div>`;
     case "resources": return `<div class="panel-empty">The host hasn’t added resources yet.</div>`;
     case "participants": return `<div class="metric"><strong id="listener-count">—</strong><span>listening now</span></div>`;
-    case "speakers": return `<div class="people-row"><span class="avatar">H</span><span><strong>Host</strong><small>On stage</small></span></div>`;
-    case "raise-hand": return event.handRaiseEnabled ? `<div class="join-line"><div><strong>Have something to add?</strong><p>Let the host know you’d like to speak.</p></div><button class="button button-secondary" type="button" data-raise-hand>Raise hand</button></div>` : null;
+    case "speakers": return `<div class="people-row"><span class="avatar">H</span><span><strong data-i18n="Host">Host</strong><small>On stage</small></span></div>`;
+    case "raise-hand": return event.handRaiseEnabled ? `<div class="join-line"><div><strong>Have something to add?</strong><p>Let the host know you’d like to speak.</p></div><button class="button button-secondary" type="button" data-raise-hand data-i18n="Raise hand">Raise hand</button></div>` : null;
     case "hand-raises": return `<div id="hand-raises" class="hand-raises"><p class="muted">No hands raised.</p></div>`;
-    case "invite": return `<form id="invite-form" class="form-stack compact"><label>Email<input name="email" type="email" placeholder="someone@example.com" required /></label><label>Invite as<select name="role"><option value="listener">Listener</option><option value="speaker">Speaker</option><option value="moderator">Moderator</option></select></label><button class="button button-small" type="submit">Create invite</button><p id="invite-note" class="form-note"></p></form>`;
-    case "share": return `<div class="share-box"><input id="share-url" value="${escape(location.href)}" readonly aria-label="Event URL" /><button class="button button-small" type="button" data-copy>Copy link</button></div>`;
+    case "invite": return `<form id="invite-form" class="form-stack compact"><label><span data-i18n="Email">Email</span><input name="email" type="email" placeholder="someone@example.com" required /></label><label><span data-i18n="Invite as">Invite as</span><select name="role"><option value="listener" data-i18n="Listener">Listener</option><option value="speaker" data-i18n="Speaker">Speaker</option><option value="moderator" data-i18n="Moderator">Moderator</option></select></label><button class="button button-small" type="submit" data-i18n="Create invite">Create invite</button><p id="invite-note" class="form-note"></p></form>`;
+    case "share": return `<div class="share-box"><input id="share-url" value="${escape(location.href)}" readonly aria-label="Event URL" /><button class="button button-small" type="button" data-copy data-i18n="Copy link">Copy link</button></div>`;
     case "event-controls": return `<div class="control-stack">
-      <a href="https://pairux.com/dashboard" target="_blank" rel="noopener noreferrer">Screen share with Pairux ↗</a>
-      <a href="https://nixamp.com/#files-panel" target="_blank" rel="noopener noreferrer">Upload &amp; broadcast in Nixamp ↗</a>
-      ${["draft", "scheduled", "starting"].includes(event.status) ? `<button class="button button-primary" type="button" data-start-event>Start class</button>` : ""}
-      <button class="button button-danger" type="button" data-end-event ${event.status === "live" ? "" : "hidden"}>${event.recurrence ? "End session & schedule next" : "End event"}</button>
+      <a href="https://pairux.com/dashboard" target="_blank" rel="noopener noreferrer" data-i18n="Screen share with Pairux ↗">Screen share with Pairux ↗</a>
+      <a href="https://nixamp.com/#files-panel" target="_blank" rel="noopener noreferrer" data-i18n="Upload &amp; broadcast in Nixamp ↗">Upload &amp; broadcast in Nixamp ↗</a>
+      ${["draft", "scheduled", "starting"].includes(event.status) ? `<button class="button button-primary" type="button" data-start-event data-i18n="Start class">Start class</button>` : ""}
+      <button class="button button-danger" type="button" data-end-event ${event.status === "live" ? "" : "hidden"}>${event.recurrence ? "End session & schedule next" : uiMessage("End event")}</button>
       <p id="broadcast-note" class="form-note" role="status">${event.broadcastUrl ? "Start the broadcast in Pairux or Nixamp, then start the class here." : "Add your broadcast link with Edit event."}</p>
       </div>`;
     case "schedule": return `<div class="metric"><strong>${escape(displayDate(event.startsAt, {timeZone: event.timezone}))}</strong><span>${escape(event.timezone)}${event.recurrence ? ` · Repeats ${event.recurrence}` : ""}</span></div>`;
@@ -314,16 +320,16 @@ async function eventPage(slug: string): Promise<void> {
   document.title = `${event.title} — BackToSchool.help`;
   document.querySelector('meta[name="description"]')?.setAttribute("content", event.description || `Listen to ${event.title} live on BackToSchool.help.`);
   document.querySelector('meta[property="og:title"]')?.setAttribute("content", event.title);
-  document.querySelector('meta[property="og:description"]')?.setAttribute("content", event.description || "Learn something live.");
+  document.querySelector('meta[property="og:description"]')?.setAttribute("content", event.description || uiMessage("Learn something live."));
 
   const panel = (type: string, title: string) => `<section class="event-panel panel-${type}"><h2 class="panel-title">${title}</h2>${panelBody(type, event) ?? ""}</section>`;
   main.innerHTML = `
     <div class="event-shell">
-      <div class="event-toolbar"><a class="back-link" href="/" data-link>← Explore more lives</a>${account?.id === event.ownerId ? `<button class="button button-secondary" type="button" data-edit-event>Edit event</button>` : ""}</div>
+      <div class="event-toolbar"><a class="back-link" href="/" data-link>← Explore more lives</a>${account?.id === event.ownerId ? `<button class="button button-secondary" type="button" data-edit-event data-i18n="Edit event">Edit event</button>` : ""}</div>
       <div class="class-update" hidden><p id="event-update" role="status" class="form-note"></p><button class="text-button" data-refresh-event>Refresh class details</button><button class="text-button" data-dismiss-update>Dismiss</button></div>
       <div class="event-layout">
         <div class="region region-primary">${panel("event-header", "Live classroom")}${panel("player", "Watch class")}${panel("chat", "Class chat")}</div>
-        <aside class="region region-secondary">${panel("host", "Meet your host")}${panel("schedule", "Schedule")}${account?.id === event.ownerId ? panel("event-controls", "Host controls") : panel("join", "Join the class")}${account?.id === event.ownerId && event.visibility === "private" ? `<details class="event-panel"><summary>Invite students</summary>${panelBody("invite", event)}</details>` : ""}${panel("share", "Share class")}${account?.id === event.ownerId && event.handRaiseEnabled ? panel("hand-raises", "Raised hands") : event.handRaiseEnabled ? panel("raise-hand", "Ask a question") : ""}</aside>
+        <aside class="region region-secondary">${panel("host", "Meet your host")}${panel("schedule", uiMessage("Schedule"))}${account?.id === event.ownerId ? panel("event-controls", "Host controls") : panel("join", "Join the class")}${account?.id === event.ownerId && event.visibility === "private" ? `<details class="event-panel"><summary>Invite students</summary>${panelBody("invite", event)}</details>` : ""}${panel("share", "Share class")}${account?.id === event.ownerId && event.handRaiseEnabled ? panel("hand-raises", "Raised hands") : event.handRaiseEnabled ? panel("raise-hand", "Ask a question") : ""}</aside>
       </div>
     </div>`;
   bindEventPage(event);
@@ -335,7 +341,7 @@ function bindEventPage(event: LiveEvent): void {
     const audio = document.querySelector<HTMLAudioElement>("#event-audio");
     if (!audio) return;
     button.disabled = true;
-    button.textContent = "Connecting…";
+    uiText(button, () => uiMessage("Connecting…"));
     try {
       await audio.play();
       button.textContent = "You’re listening";
@@ -379,7 +385,7 @@ function bindEventPage(event: LiveEvent): void {
     const button = click.currentTarget as HTMLButtonElement;
     button.disabled = true;
     void send(`/api/v1/events/${encodeURIComponent(event.id)}/hand-raises`, {}).then(() => {
-      button.textContent = "Hand raised ✓";
+      uiText(button, () => uiMessage("Hand raised ✓"));
     }).catch((error) => {
       button.disabled = false;
       button.textContent = error instanceof ApiError && error.status === 401 ? "Sign in to raise hand" : "Try again";
@@ -393,7 +399,7 @@ function bindEventPage(event: LiveEvent): void {
   document.querySelector<HTMLButtonElement>("[data-end-event]")?.addEventListener("click", () => void endEvent());
   document.querySelector<HTMLButtonElement>("[data-copy]")?.addEventListener("click", async (click) => {
     await navigator.clipboard.writeText(location.href);
-    (click.currentTarget as HTMLButtonElement).textContent = "Copied ✓";
+    uiText((click.currentTarget as HTMLButtonElement), () => uiMessage("Copied ✓"));
   });
 
   let chatTimer = 0; let raiseTimer = 0;
@@ -437,7 +443,7 @@ async function loadHandRaises(event: LiveEvent): Promise<void> {
   try {
     const { handRaises } = await api<{ handRaises: Array<{ accountId: string; displayName: string; state: string; raisedAt: string }> }>(`/api/v1/events/${encodeURIComponent(event.id)}/hand-raises`);
     if (target.contains(document.activeElement)) return;
-    renderUpdate(target, handRaises.length ? handRaises.map((raise) => `<div class="raise-row"><span><strong>${escape(raise.displayName)}</strong><small>${escape(raise.state)}</small></span><div><button class="text-button" data-hand="${escape(raise.accountId)}" data-state="invited">Invite</button><button class="text-button" data-hand="${escape(raise.accountId)}" data-state="dismissed">Dismiss</button></div></div>`).join("") : `<p class="muted">No hands raised.</p>`);
+    renderUpdate(target, handRaises.length ? handRaises.map((raise) => `<div class="raise-row"><span><strong>${escape(raise.displayName)}</strong><small>${escape(raise.state)}</small></span><div><button class="text-button" data-hand="${escape(raise.accountId)}" data-state="invited"><span data-i18n="Invite">Invite</span></button><button class="text-button" data-hand="${escape(raise.accountId)}" data-state="dismissed">Dismiss</button></div></div>`).join("") : `<p class="muted">No hands raised.</p>`);
   } catch {
     if (!target.contains(document.activeElement)) target.innerHTML = `<p class="muted">Could not refresh hand raises.</p>`;
   }
@@ -466,7 +472,7 @@ async function startClass(): Promise<void> {
     if (button) button.textContent = "Class is live";
     document.querySelector<HTMLElement>("[data-end-event]")?.removeAttribute("hidden");
     const status = document.querySelector(".event-heading .status-pill");
-    if (status) { status.textContent = "Live now"; status.classList.add("status-live"); }
+    if (status) { uiText(status, () => uiMessage("Live now")); status.classList.add("status-live"); }
     if (note) note.textContent = "Your class is live. Viewers can join using this page.";
   } catch (error) { button?.removeAttribute("aria-disabled"); if (note) note.textContent = error instanceof Error ? error.message : "Could not start the class."; }
 }
@@ -489,7 +495,7 @@ async function endEvent(): Promise<void> {
     const note = document.querySelector<HTMLElement>("#broadcast-note");
     if (note) note.textContent = result.event.recurrence ? `Session ended. Next class: ${displayDate(result.event.startsAt)}. End the broadcast in Pairux or Nixamp too.` : "Event ended. End the broadcast in Pairux or Nixamp too.";
     const button = document.querySelector<HTMLButtonElement>("[data-end-event]");
-    if (button) { button.textContent = "Session ended"; button.setAttribute("aria-disabled", "true"); }
+    if (button) { uiText(button, () => uiMessage("Session ended")); button.setAttribute("aria-disabled", "true"); }
     showClassUpdate("This session has ended. Refresh to see the latest schedule.");
   } catch (error) {
     endButton?.removeAttribute("aria-disabled");

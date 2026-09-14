@@ -1,3 +1,4 @@
+import { i18n } from "../../src/i18n.ts";
 /**
  * A fixture, as one line: who is playing whom, the score, and where the game
  * has got to. nichedb's sports collection answers with both teams, their
@@ -63,8 +64,8 @@ export function kickoff(when: string | null | undefined, options: { now?: Date; 
   if (Number.isNaN(at.getTime())) return "";
   const now = options.now ?? new Date();
   const tz = options.timeZone ? { timeZone: options.timeZone } : {};
-  const sameDay = at.toLocaleDateString(options.locale, tz) === now.toLocaleDateString(options.locale, tz);
-  return at.toLocaleString(options.locale, {
+  const sameDay = at.toLocaleDateString(options.locale ?? i18n.language, tz) === now.toLocaleDateString(options.locale ?? i18n.language, tz);
+  return at.toLocaleString(options.locale ?? i18n.language, {
     ...tz,
     ...(sameDay ? {} : { weekday: "short" }),
     hour: "numeric",

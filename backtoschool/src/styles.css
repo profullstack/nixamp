@@ -396,3 +396,10 @@ button[aria-disabled="true"] { opacity: .65; cursor: default; }
 #event-ai-preview { margin-top: 12px; }
 #event-ai-preview textarea { resize: vertical; }
 #event-ai-preview input, #event-ai-preview textarea { background: #f7f3e9; }
+
+.ui-language { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; font-size: .8rem; }
+.ui-language select { color: var(--ink); background: #fff; border: 1px solid currentColor; border-radius: 6px; min-height: 32px; max-width: 12em; }
+.ui-language select:focus-visible { outline: 2px solid var(--purple); outline-offset: 3px; }
+.site-header, .site-nav { flex-wrap: wrap; }
+input[type="url"], input[type="email"], input[type="tel"], input[type="datetime-local"] { direction: ltr; }
+[dir="rtl"] .form-stack, [dir="rtl"] .event-panel { text-align: start; }

@@ -1,5 +1,7 @@
+import { i18n, t as uiMessage } from "../../src/i18n.ts";
+import { uiText, uiAttribute } from "./i18n.ts";
 import type { TranslationAccess } from "../../src/translation-passes.ts";
-const money = (micros: number): string => new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(micros / 1_000_000);
+const money = (micros: number): string => new Intl.NumberFormat(i18n.language, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(micros / 1_000_000);
 const element = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
 export class TranslationPurchase {
@@ -47,7 +49,7 @@ export class TranslationPurchase {
   }
   button(): HTMLButtonElement {
     const button = document.createElement("button"); button.type = "button"; button.textContent = "$";
-    button.title = "Buy translated audio"; button.setAttribute("aria-label", "Buy translated audio"); button.setAttribute("aria-haspopup", "dialog"); button.setAttribute("aria-controls", "translation-purchase"); button.dataset["translationBuy"] = "";
+    uiAttribute(button, "title", () => uiMessage("Buy translated audio")); uiAttribute(button, "aria-label", () => uiMessage("Buy translated audio")); button.setAttribute("aria-haspopup", "dialog"); button.setAttribute("aria-controls", "translation-purchase"); button.dataset["translationBuy"] = "";
     button.addEventListener("click", () => this.open(button)); return button;
   }
   open(opener: HTMLElement): void {
@@ -68,14 +70,21 @@ export class TranslationPurchase {
       const coins = this.access.coins ?? [];
       if ([...this.coin.options].map(option => option.value).join() !== coins.join() && document.activeElement !== this.coin) this.coin.replaceChildren(...coins.map(coin => new Option(coin.replaceAll("_", " · "), coin)));
       const plans = this.access.plans ?? [];
-      if (!this.plan.options.length) this.plan.replaceChildren(...plans.map(plan => new Option(`${plan.name} · ${money(plan.priceCents * 10000)}`, plan.id)));
+      if (!this.plan.options.length) this.plan.replaceChildren(...plans.map(plan => {
+        const option = new Option("", plan.id);
+        uiText(option, () => `${plan.name} · ${money(plan.priceCents * 10000)}`);
+        return option;
+      }));
       this.describe();
-      const balance = this.access.required ? `${money(this.access.balanceMicros)} audio credit${this.access.expires ? ` · expires ${new Date(this.access.expires).toLocaleString()}` : ""}` : "";
+      const access = this.access;
+      const balance = () => access.required ? `${uiMessage("Audio credit")}: ${money(access.balanceMicros)}${access.expires ? ` · ${new Date(access.expires).toLocaleString(i18n.language)}` : ""}` : "";
       const free = this.access.free;
-      const allowance = this.access.required && free ? `${free.remaining} of ${free.limit} free sessions left today${free.activeUntil ? " · free session active" : ""}` : "";
-      element("translation-balance").textContent = [allowance, balance].filter(Boolean).join(" · ");
-      element("translation-purchase-balance").textContent = [allowance, balance].filter(Boolean).join(" · ");
-      element("translation-free-description").textContent = free ? `Each account gets ${free.limit} free sessions a day, shared across paid panels and upgrades. Each lasts while you listen, within daily usage limits. Reconnect within ${free.reconnectSeconds} seconds to keep the same session. Resets at ${new Date(free.resets).toLocaleString()} (midnight UTC). Free time is used before purchased credit.` : "";
+      const allowance = () => access.required && free ? i18n.language === "en"
+        ? `${free.remaining} of ${free.limit} free sessions left today${free.activeUntil ? " · free session active" : ""}`
+        : `${uiMessage("Free sessions")}: ${i18n.number(free.remaining)}/${i18n.number(free.limit)}${free.activeUntil ? " · ✓" : ""}` : "";
+      uiText(element("translation-balance"), () => [allowance(), balance()].filter(Boolean).join(" · "));
+      uiText(element("translation-purchase-balance"), () => [allowance(), balance()].filter(Boolean).join(" · "));
+      uiText(element("translation-free-description"), () => free ? `Each account gets ${free.limit} free sessions a day, shared across paid panels and upgrades. Each lasts while you listen, within daily usage limits. Reconnect within ${free.reconnectSeconds} seconds to keep the same session. Resets at ${new Date(free.resets).toLocaleString(i18n.language)} (midnight UTC). Free time is used before purchased credit.` : "");
       element("translation-sign-in").hidden = !!account;
       this.buy.disabled = !account || !this.access.available || this.loading;
       if (!this.access.available && this.dialog.open) this.status(this.access.required ? "Checkout is temporarily unavailable. Free sessions and existing credit still work." : "This server sponsors translated audio; no purchase is required.");

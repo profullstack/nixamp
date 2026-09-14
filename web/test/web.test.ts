@@ -675,7 +675,7 @@ test("the top of the page says LOADING while something is on its way", () => {
   const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
   const player = readFileSync(join(webDir, "src/player.ts"), "utf8");
   const css = readFileSync(join(webDir, "src/styles.css"), "utf8");
-  assert.match(app, /wait \? "LOADING" : live \? "▶ PLAYING" : "■ STOPPED"/);
+  assert.match(app, /wait \? uiMessage\("LOADING"\) : live \? uiMessage\("▶ PLAYING"\) : uiMessage\("■ STOPPED"\)/);
   assert.match(app, /dataset\.playing = wait \? "loading"/);
   // The element says when it is waiting on bytes, and a request in flight
   // counts the same.

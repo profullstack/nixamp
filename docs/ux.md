@@ -75,3 +75,23 @@ Show the remaining daily allowance and purchased credit beside the upgrade.
 Use free access first and retain paid credit unchanged while it applies. Keep
 the purchase action available after free sessions run out. All normal account,
 IP, provider and concurrency limits continue to apply to free usage.
+
+## Interface language
+
+Use the saved interface-language choice first, then the first supported system
+language, then English. Keep this preference separate from the audio/caption
+translation target. Use the shared target list in `src/ui-languages.ts`.
+
+Interface text belongs in the bundled `src/locales` catalogs. Do not call a
+translation provider to render controls. Keep English as the fallback for
+missing messages. Update visible labels and accessible names together, use
+`Intl` for displayed dates, numbers and currency, and support Arabic RTL layout.
+Native language names stay readable in the selector in every locale.
+
+Changing language must update the existing controls without reloading playback,
+claiming another session, restarting translation, or resetting forms. Never
+localize user text, media titles, transcripts, chat, URLs, API property names,
+role identifiers or submitted values. Mark only application-owned copy. Use the
+shared DOM bindings for dynamic labels so changing language preserves node
+identity, focus, caret and scrolling. A manually updated element must not be
+replaced with an earlier bound message during a later language change.

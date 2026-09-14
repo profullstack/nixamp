@@ -1,3 +1,4 @@
+import { t as uiMessage, i18n, terminalUiLanguage, uiLanguage } from "./i18n.ts";
 /**
  * nixamp — it really whips the terminal's ass.
  *
@@ -143,6 +144,7 @@ Keys in the player:
   d     detach: hand the music to a daemon and get the terminal back
   q     quit
 
+      --ui-language CODE  interface language (default: system language; fallback: English)
   -v, --version    print the version
   -h, --help       print this. \`nixamp help <command>\` says more about one
 `;
@@ -510,7 +512,18 @@ async function runDaemon(argv: string[]): Promise<number> {
  * because the flag is false in a module that was imported rather than run.
  */
 export async function main(): Promise<void> {
-  const [first, ...rest] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const languageAt = args.findIndex(arg => arg === "--ui-language" || arg.startsWith("--ui-language="));
+  let language = terminalUiLanguage(process.env);
+  if (languageAt >= 0) {
+    const flag = args[languageAt]!;
+    const value = flag.includes("=") ? flag.slice(flag.indexOf("=") + 1) : args[languageAt + 1];
+    if (!value || value.startsWith("-")) throw new Error("nixamp: --ui-language needs a language code, e.g. de");
+    language = uiLanguage(value);
+    args.splice(languageAt, flag.includes("=") ? 1 : 2);
+  }
+  await i18n.setLanguage(language);
+  const [first, ...rest] = args;
 
   // Asked for however anybody asks for it. `nixamp help serve` and
   // `nixamp serve --help` are the same question, so they get the same answer.
@@ -842,15 +855,15 @@ export function view(
 
   ui.row({ size: 1 }, (header) => {
     header.text(" ⣿ NIXAMP", { fg: theme.title, bold: true, size: 11 });
-    header.text(state.playing ? "▶ PLAYING" : "■ STOPPED", {
+    header.text(state.playing ? uiMessage("▶ PLAYING") : uiMessage("■ STOPPED"), {
       fg: state.playing ? theme.success : theme.muted,
       size: 12,
     });
     header.text(`${state.tracks.length} tracks  ${state.root} `, { fg: theme.muted, align: "right" });
   });
 
-  ui.panel({ title: "Now Playing", size: 6 }, (p) => {
-    if (!track) { p.label("Nothing loaded."); return; }
+  ui.panel({ title: uiMessage("Now Playing"), size: 6 }, (p) => {
+    if (!track) { p.label(uiMessage("Nothing loaded.")); return; }
     p.text(displayName(track), { fg: theme.accent, bold: true, size: 1 });
     p.text(track.album || "—", { fg: theme.muted, size: 1 });
     p.row({ size: 1 }, (r) => {
@@ -863,7 +876,7 @@ export function view(
   });
 
   ui.row({ size: height - 10, gap: 1 }, (row) => {
-    row.panel({ title: "Spectrum Analyser", width: "1.3fr" }, (p) => {
+    row.panel({ title: uiMessage("Spectrum Analyser"), width: "1.3fr" }, (p) => {
       // Braille gives four vertical pixels per cell, so the bars move smoothly
       // rather than stepping through eight block glyphs.
       p.canvas((canvas) => {
@@ -879,8 +892,8 @@ export function view(
       });
     });
 
-    row.panel({ title: `Playlist (${state.tracks.length})`, width: "1fr" }, (p) => {
-      if (state.tracks.length === 0) { p.label("Empty."); return; }
+    row.panel({ title: `${uiMessage("Playlist")} (${i18n.number(state.tracks.length)})`, width: "1fr" }, (p) => {
+      if (state.tracks.length === 0) { p.label(uiMessage("Empty.")); return; }
       p.table({
         rows: state.tracks.map((t, i) => ({
           n: String(i + 1).padStart(2, " "),
@@ -910,11 +923,11 @@ export function view(
 
   ui.statusBar({
     items: [
-      { key: "Space", label: state.playing ? "Stop" : "Play", active: state.playing },
-      { key: "↑↓", label: "Select" },
-      { key: "n/p", label: "Next/Prev" },
-      { key: "Enter", label: "Play" },
-      { key: "q", label: "Quit" },
+      { key: "Space", label: state.playing ? uiMessage("Stop") : uiMessage("Play"), active: state.playing },
+      { key: "↑↓", label: uiMessage("Select") },
+      { key: "n/p", label: uiMessage("Next/Prev") },
+      { key: "Enter", label: uiMessage("Play") },
+      { key: "q", label: uiMessage("Quit") },
     ],
   });
 }
