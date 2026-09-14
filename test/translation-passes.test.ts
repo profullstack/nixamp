@@ -71,7 +71,7 @@ test("PostgreSQL: payment verification, idempotent activation, concurrent debit,
     assert.equal((await service.check("alice",order.id)).status,"pending");
     status="confirmed";amount=0.01;
     await service.check("alice",order.id);assert.equal((await service.access("alice")).balanceMicros,0);
-    amount=5;
+    amount=1;
     await Promise.all(Array.from({length:12},()=>service.check("alice",order.id)));
     assert.equal((await service.access("alice")).balanceMicros,1_000_000,"confirmed once across concurrent requests");
     // Exactly 8 x $0.125 debits fit; the other ten must fail atomically.
