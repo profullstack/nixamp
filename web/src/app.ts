@@ -155,6 +155,7 @@ export function start(): void {
     files: need<HTMLInputElement>("files"),
     folder: need<HTMLInputElement>("folder"),
     remoteUrl: need<HTMLInputElement>("remote-url"),
+    remoteServer: need<HTMLSelectElement>("remote-server"),
     remoteForm: need<HTMLFormElement>("remote-form"),
     remoteState: need<HTMLElement>("remote-state"),
     disconnect: need<HTMLButtonElement>("disconnect"),
@@ -2137,6 +2138,32 @@ export function start(): void {
     dom.linkServer.value = here !== "" && !serverCarries && others[0] ? others[0].url : "";
     dom.linkServer.hidden = others.length === 0;
   }
+
+  /** Keep the Server panel's direct connection picker in step with the
+   * directory, while leaving the URL box below it available for any address. */
+  function drawRemoteServers(): void {
+    const current = mode === "remote" ? serverOrigin(remote.address) : "";
+    const options: HTMLOptionElement[] = [];
+    const choose = document.createElement("option");
+    choose.value = "";
+    choose.textContent = "Select a server…";
+    options.push(choose);
+    if (current !== "" && !directoryServers.some((one) => serverOrigin(one.url) === current)) {
+      const connected = document.createElement("option");
+      connected.value = remote.address;
+      connected.textContent = serverName || current;
+      options.push(connected);
+    }
+    for (const one of directoryServers) {
+      const option = document.createElement("option");
+      option.value = one.url;
+      option.textContent = one.name;
+      options.push(option);
+    }
+    dom.remoteServer.replaceChildren(...options);
+    const selected = directoryServers.find((one) => serverOrigin(one.url) === current);
+    dom.remoteServer.value = selected?.url ?? "";
+  }
   /**
    * The directory's servers, asked for once at the start so the picker has
    * something in it before anybody presses Browse. Only where a directory
@@ -2149,6 +2176,7 @@ export function start(): void {
       const body = (await answer.json()) as { streams?: { name: string; url: string }[] };
       directoryServers = (body.streams ?? []).map((one) => ({ name: one.name, url: one.url }));
       drawLinkServers();
+      drawRemoteServers();
     } catch { /* no directory here */ }
   }
 
@@ -2353,6 +2381,15 @@ export function start(): void {
       void loadShare();
       draw();
     })();
+  });
+
+  dom.remoteServer.addEventListener("change", () => {
+    const chosen = dom.remoteServer.value;
+    if (chosen === "") return;
+    viewerOnly = false;
+    askedToPlay = "";
+    dom.remoteUrl.value = chosen;
+    dom.remoteForm.requestSubmit();
   });
 
   /**

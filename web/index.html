@@ -459,6 +459,12 @@
              nixamp.com knew about servers at all. -->
         <section class="panel player-only col-a" data-title="Server" data-i18n-data-title="Server" id="remote-panel">
           <p class="hint" data-i18n="Pick a server in the directory, or paste its link here.">Pick a server in the directory, or paste its link here.</p>
+          <label class="picker" for="remote-server">
+            <span data-i18n="Choose a server">Choose a server</span>
+            <select id="remote-server" aria-label="Choose a server" data-i18n-aria-label="Choose a server">
+              <option value="">Select a server…</option>
+            </select>
+          </label>
           <form id="remote-form" class="picker">
             <input id="remote-url" type="text" inputmode="url" placeholder="a server's link, https://…:4321/view/…" aria-label="A server's link" data-i18n-aria-label="A server's link" />
             <button type="submit" class="button" data-i18n="Connect">Connect</button>

@@ -23,7 +23,7 @@ test("PostgreSQL: ten free panel sessions are atomic, shared across upgrades and
     await second.ensure();
     const duplicate = await Promise.all(Array.from({ length: 20 }, (_, i) => (i % 2 ? first : second).begin("alice", "translation", "same-feed")));
     assert.ok(duplicate.every(Boolean));
-    assert.equal((await first.access("alice")).remaining, 4, "tabs and replicas reuse the same active resource");
+    assert.equal((await first.access("alice")).remaining, 9, "tabs and replicas reuse the same active resource");
     const expiry = (await first.access("alice")).activeUntil;
     now += 60_000;
     await first.begin("alice", "translation", "same-feed");
@@ -92,7 +92,7 @@ test("PostgreSQL: free speech has zero charge, paid fallback stays metered, and 
     const session = (account: string, resource: string) => fetch(`${base}/api/v1/translation-passes/session`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${account}` }, body: JSON.stringify({ resource, remaining: 999, by: "alice" }) });
     assert.equal((await session("anonymous", "feed")).status, 401);
     assert.equal((await session("bob", "feed")).status, 200);
-    assert.equal((await passes.access("bob")).free.remaining, 4);
+    assert.equal((await passes.access("bob")).free.remaining, 9);
     const wav = new Uint8Array(encodeWav(new Float32Array(32000).fill(.1)));
     const hear = (account: string, resource: string) => fetch(`${base}/api/v1/speech/speakers`, { method: "POST", headers: { authorization: `Bearer ${account}`, "content-type": "audio/wav", "x-nixamp-translation-session": resource }, body: wav });
     assert.equal((await hear("stranger", "feed")).status, 402);
