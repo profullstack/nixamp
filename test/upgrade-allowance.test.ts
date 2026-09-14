@@ -105,8 +105,8 @@ test("PostgreSQL: free speech has zero charge, paid fallback stays metered, and 
     await assert.rejects(passes.reserve("bob", "voice", 100, "feed"), /free session/);
     const paid = await passes.reserve("alice", "voice", 100, "feed"); await passes.commit(paid);
     assert.equal((await passes.access("alice")).balanceMicros, 975000, "an ended session falls back to existing 5x credit rate");
-    for (let i = 0; i < 4; i++) { await passes.begin("bob", `more-${i}`); now += 90_001; }
-    assert.equal((await session("bob", "sixth")).status, 402);
+    for (let i = 0; i < 9; i++) { await passes.begin("bob", `more-${i}`); now += 90_001; }
+    assert.equal((await session("bob", "eleventh")).status, 402);
     const before = calls; assert.equal((await hear("bob", "feed")).status, 402); assert.equal(calls, before, "no provider call after free allowance is exhausted");
   } finally {
     if (server) await new Promise<void>(resolve => server!.close(() => resolve()));
