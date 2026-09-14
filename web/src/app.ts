@@ -276,7 +276,6 @@ export function start(): void {
     next: need<HTMLButtonElement>("next"),
     shareNow: need<HTMLButtonElement>("share-now"),
   };
-
   /**
    * The icons, as inline SVG rather than glyphs. A link or copy character
    * is an empty box in most monospace faces, which is what the icons were
@@ -300,6 +299,7 @@ export function start(): void {
   const drawIcon = (button: HTMLElement, name: keyof typeof ICONS): void => {
     button.innerHTML = ICONS[name];
   };
+  drawIcon(dom.copyNixamp, "link");
 
   /**
    * What the tab is called with nothing playing: whatever the shell said.
@@ -1283,7 +1283,7 @@ export function start(): void {
     // The address of what is playing, for another player. A picked file has
     // none, and nothing loaded has nothing to copy.
     dom.copyNow.hidden = player.source === "";
-    dom.copyNixamp.hidden = shareLinkNow() === "";
+    dom.copyNixamp.hidden = liveRoomLinkNow() === "";
     // Share sits with the transport, for anything with an address safe to hand out.
     dom.shareNow.hidden = shareLinkNow() === "";
     // The trollbox follows whatever live is joined.
@@ -4302,6 +4302,14 @@ export function start(): void {
     return playable === "" ? "" : `https://nixamp.com/?play=${encodeURIComponent(playable)}`;
   }
 
+  /** A nixamp page link that opens this server/channel as a live room. */
+  function liveRoomLinkNow(): string {
+    if (mode !== "remote") return "";
+    if (channelOn) return pageLinkFor(`channel:${channelOn.id}`);
+    if (nowMeta?.kind === "live" || onServerLive()) return pageLinkFor("live");
+    return "";
+  }
+
   dom.shareNow.addEventListener("click", () => {
     const link = shareLinkNow();
     if (link === "") return;
@@ -4316,7 +4324,7 @@ export function start(): void {
   });
 
   dom.copyNixamp.addEventListener("click", () => {
-    const link = shareLinkNow();
+    const link = liveRoomLinkNow();
     if (link !== "") void copyText(link, dom.copyNixamp, "✓");
   });
 
