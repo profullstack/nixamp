@@ -2437,11 +2437,39 @@ export function start(): void {
         if (entry?.about) dot.title = entry.about;
         const play = document.createElement("button");
         play.type = "button";
-        play.className = "button";
-        joinPartyLabel(play);
+        play.className = "icon";
+        drawIcon(play, "party");
+        play.setAttribute("aria-label", `Join ${channelName} live on ${stream.name}`);
         play.title = `Join live: ${channelName} on ${stream.name}`;
         play.addEventListener("click", () => open(true, `channel:${channelName}`));
-        row.append(dot, play);
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "icon";
+        drawIcon(copy, "link");
+        copy.setAttribute("aria-label", `Copy live room link for ${channelName}`);
+        copy.title = "Copy a nixamp link to this live room";
+        const room = `${globalThis.location.origin}/?url=${encodeURIComponent(stream.url)}&play=${encodeURIComponent(`channel:${entry?.id ?? channelName}`)}`;
+        copy.addEventListener("click", (event) => {
+          event.stopPropagation();
+          void copyText(room, copy, "✓");
+        });
+        const raw = document.createElement("button");
+        raw.type = "button";
+        raw.className = "icon";
+        drawIcon(raw, "copy");
+        raw.setAttribute("aria-label", `Copy raw stream URL for ${channelName}`);
+        raw.title = "Copy the raw stream URL for VLC or another player";
+        let rawUrl = stream.url;
+        try {
+          const parsed = new URL(stream.url);
+          parsed.pathname = `/api/channels/${encodeURIComponent(entry?.id ?? channelName)}`;
+          rawUrl = parsed.toString();
+        } catch { /* retain the server URL if its listing was malformed */ }
+        raw.addEventListener("click", (event) => {
+          event.stopPropagation();
+          void copyText(rawUrl, raw, "✓");
+        });
+        row.append(dot, play, copy, raw);
         lives.append(row);
       }
       // The same eye and gear as everywhere else a server is shown.
