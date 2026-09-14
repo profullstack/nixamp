@@ -637,7 +637,8 @@ export function start(): void {
   type GoLiveWith =
     | { kind: "channel"; id: string; name: string }
     | { kind: "entry"; catalog: { id: string; name: string }; entry: { id: string; title: string; group?: string; logo?: string; live?: boolean } }
-    | { kind: "track"; index: number; name: string };
+    | { kind: "track"; index: number; name: string }
+    | { kind: "folder"; indices: number[]; name: string };
   function whatToGoLiveWith(): GoLiveWith | null {
     if (mode !== "remote") return null;
     // A link playing here is the link box's to put on the air, with the Go
@@ -678,12 +679,20 @@ export function start(): void {
         // player left to whoever is driving it. It used to take that player
         // over, which a member must not, and which made two files at once
         // impossible for anybody.
-        const path = what.kind === "track"
+        const path = what.kind === "folder"
+          ? "/api/folders/live"
+          : what.kind === "track"
           ? `/api/tracks/${what.index}/live`
           : what.kind === "entry"
             ? `/api/catalogs/${encodeURIComponent(what.catalog.id)}/entries/${encodeURIComponent(what.entry.id)}/live`
             : `/api/channels/${encodeURIComponent(what.id)}/keep`;
-        const answer = await fetch(remote.url(path), { method: "POST" });
+        const answer = await fetch(remote.url(path), {
+          method: "POST",
+          ...(what.kind === "folder" ? {
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ indices: what.indices, name: what.name }),
+          } : {}),
+        });
         const body = (await answer.json().catch(() => ({}))) as { error?: string; channel?: string; video?: boolean };
         if (!answer.ok) {
           note = body.error ?? `${name} would not go on the air.`;
@@ -1435,7 +1444,7 @@ export function start(): void {
   }
 
   /** A folder in the list: its name, and how much is inside it. */
-  function folderRow(name: string, count: number): HTMLElement {
+  function folderRow(name: string, count: number, indices: number[]): HTMLElement {
     const item = document.createElement("li");
     item.className = "folder";
     const label = document.createElement("span");
@@ -1450,6 +1459,32 @@ export function start(): void {
     open.setAttribute("aria-label", `Open folder ${name}, ${count} files`);
     open.append(label, amount); item.replaceChildren(open);
     open.addEventListener("click", event => { event.stopPropagation(); lookAt(openFolder === "" ? name : `${openFolder}/${name}`); });
+    if (indices.length > 0) {
+      const play = document.createElement("button");
+      play.type = "button";
+      play.className = "row-copy";
+      drawIcon(play, "live");
+      play.title = `Play all ${count} files in ${name}`;
+      play.setAttribute("aria-label", `Play folder ${name}`);
+      play.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void playAt(indices[0]!);
+      });
+      item.append(play);
+    }
+    if (mode === "remote" && canGoLive() && indices.length > 0) {
+      const live = document.createElement("button");
+      live.type = "button";
+      live.className = "row-copy";
+      drawIcon(live, "live");
+      live.title = `Go live with all ${count} files in ${name}`;
+      live.setAttribute("aria-label", `Go live with folder ${name}`);
+      live.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void goLiveWith({ kind: "folder", indices, name: `${name}/` }, live);
+      });
+      item.append(live);
+    }
     return item;
   }
   let playlistSource: unknown = null;
@@ -1457,14 +1492,39 @@ export function start(): void {
   function renderPlaylist(): void {
     // Meter ticks and playback clocks do not change the library. Avoid mapping,
     // sorting and serializing thousands of tracks for every incoming frame.
+    const channel = channelOn ? lastAir?.channels.find((one) => one.id === channelOn?.id) : undefined;
+    const channelPlaylist = channel?.playlist;
     const source = mode === "remote" ? snapshot.tracks : local;
-    const view = `${mode}:${openFolder}:${dom.filter.value}:${listPage}:${canGoLive()}:${dom.adminPanel.hidden}`;
+    const view = `${mode}:${channelOn?.id ?? ""}:${channelPlaylist?.join("|") ?? ""}:${channel?.entry ?? 0}:${openFolder}:${dom.filter.value}:${listPage}:${canGoLive()}:${dom.adminPanel.hidden}`;
     if (renderedFor && playlistSource === source && playlistView === view) {
       markPlaylistPlaying();
       return;
     }
     playlistSource = source;
     playlistView = view;
+    // A live folder/show is one contiguous feed. Show its queue in the
+    // existing playlist panel, but keep it read-only so clicking an entry can
+    // never move the shared stream for everybody else.
+    if (channelOn && channelPlaylist && channelPlaylist.length > 0) {
+      dom.crumbs.hidden = true;
+      dom.playlistPager.hidden = true;
+      dom.playlistPager.replaceChildren();
+      const children = channelPlaylist.map((name, index) => {
+        const item = document.createElement("li");
+        item.className = "row";
+        item.dataset.index = String(index);
+        const n = document.createElement("span"); n.className = "n"; n.textContent = String(index + 1).padStart(2, " ");
+        const label = document.createElement("span"); label.className = "name"; label.textContent = name;
+        item.append(n, label);
+        item.setAttribute("aria-readonly", "true");
+        item.title = channel.live === false ? "Part of this on-demand show" : "Live queue (read-only)";
+        if (index === (channel.entry ?? 0)) item.setAttribute("aria-current", "true");
+        return item;
+      });
+      replaceList(dom.playlist, ...children);
+      markPlaylistPlaying();
+      return;
+    }
     // A row is a name, a length, where it sits, and which pile it is in.
     //
     // Where it sits is what turns a library into something you can look
@@ -1536,7 +1596,12 @@ export function start(): void {
       const children: HTMLElement[] = [];
 
       for (const [name, count] of foldersShown) {
-        children.push(folderRow(name, count));
+        const full = openFolder === "" ? name : `${openFolder}/${name}`;
+        const indices = rows
+          .filter((row) => row.folder === full || row.folder.startsWith(`${full}/`))
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }))
+          .map((row) => row.index);
+        children.push(folderRow(name, count, indices));
       }
 
       let heading = "";
@@ -1598,6 +1663,20 @@ export function start(): void {
   }
 
   function markPlaylistPlaying(): void {
+    const channel = channelOn ? lastAir?.channels.find((one) => one.id === channelOn?.id) : undefined;
+    if (channel?.playlist && channel.playlist.length > 0) {
+      const current = channel.entry ?? 0;
+      for (const child of Array.from(dom.playlist.children)) {
+        const row = child as HTMLElement;
+        const index = Number(row.dataset.index);
+        const isCurrent = Number.isInteger(index) && index === current;
+        row.classList.toggle("selected", isCurrent);
+        row.classList.toggle("playing", false);
+        if (isCurrent) row.setAttribute("aria-current", "true");
+        else row.removeAttribute("aria-current");
+      }
+      return;
+    }
     const active = at();
     const live = playing();
     for (const child of Array.from(dom.playlist.children)) {
@@ -2404,6 +2483,7 @@ export function start(): void {
         askedToPlay = play;
         dom.remoteUrl.value = asViewer ? stream.url : (adminLink ?? stream.url);
         dom.directory.hidden = true;
+        document.body.classList.remove("route-directory");
         dom.remoteForm.requestSubmit();
       };
 
@@ -2491,7 +2571,7 @@ export function start(): void {
       // The same eye and gear as everywhere else a server is shown.
       const [connect, admin] = wayIn(
         { name: stream.name, view: stream.url, admin: adminLink },
-        () => { dom.directory.hidden = true; },
+        () => { dom.directory.hidden = true; document.body.classList.remove("route-directory"); },
       );
       item.append(label, connect, admin);
       // A heart, for somebody signed in: the way back to a server you liked.
@@ -6069,6 +6149,8 @@ export function start(): void {
       about?: string;
       /** When its show ended, while the outro plays: joined now, it says so. */
       ended?: number;
+      /** A channel playlist's safe display names, with the current entry. */
+      playlist?: string[]; entry?: number; live?: boolean;
     }[];
     restreams?: { name: string; at: number; tracks: number }[];
   }
@@ -6121,7 +6203,10 @@ export function start(): void {
     }
   }
 
-  function drawOnAir(_air: OnAir): void { drawParties(); }
+  function drawOnAir(_air: OnAir): void {
+    drawParties();
+    if (channelOn) renderPlaylist();
+  }
 
   function onAirRows(air: OnAir): HTMLElement[] {
     const context = serverContext();

@@ -7,9 +7,8 @@ import { UpgradeAllowances, type UpgradeAllowance } from "./upgrade-allowance.ts
 
 export const TRANSLATION_MULTIPLIER = 5;
 export const TRANSLATION_PLANS = [
-  { id: "day", name: "Day", days: 1, priceCents: 500 },
-  { id: "week", name: "Week", days: 7, priceCents: 2500 },
-  { id: "month", name: "Month", days: 30, priceCents: 10000 },
+  { id: "day", name: "Day", days: 1, priceCents: 100 },
+  { id: "month", name: "Month", days: 30, priceCents: 500 },
 ] as const;
 export type TranslationPlan = typeof TRANSLATION_PLANS[number];
 export type TranslationUsage = "transcription" | "voice";

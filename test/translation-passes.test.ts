@@ -18,7 +18,7 @@ test("400% markup is five times the base cost; only exact, confirmed USD payment
   const payment = { id, status: "confirmed", currency: "USD", amount: "5.00000000" };
   assert.equal(verifyTranslationPayment(payment, id, 500), true);
   for (const change of [{id:randomUUID()}, {status:"pending"}, {status:"refunded"}, {amount:"5.001"}, {amount:4.99}, {amount:0}, {amount:"5e0"}, {currency:"USDC"}]) assert.equal(verifyTranslationPayment({...payment,...change}, id, 500), false);
-  assert.deepEqual(TRANSLATION_PLANS.map(plan => [plan.days, plan.priceCents]), [[1,500],[7,2500],[30,10000]]);
+  assert.deepEqual(TRANSLATION_PLANS.map(plan => [plan.days, plan.priceCents]), [[1,100],[30,500]]);
 });
 
 test("paid provider calls reserve before use, refund failures, and cached audio requires paid access", async () => {
@@ -54,11 +54,11 @@ test("PostgreSQL: payment verification, idempotent activation, concurrent debit,
   const admin=new pg.Pool({connectionString});const schema=`translation_test_${randomUUID().replaceAll("-","")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
   const db=new pg.Pool({connectionString,options:`-c search_path=${schema}`});
-  let now=Date.now(), creates=0, status="pending", amount=5;
+  let now=Date.now(), creates=0, status="pending", amount=1;
   const paymentId=randomUUID(), business=randomUUID();
   const service=new TranslationPasses({db,key:"test-key",site:"https://nixamp.com",now:()=>now,fetcher:(async(url,init)=>{
     if (String(url).endsWith("supported-coins")) return Response.json({success:true,business_id:business,coins:[{symbol:"USDC_POL",is_active:true,has_wallet:true}]});
-    if (String(url).endsWith("create")) { creates++; const body=JSON.parse(String(init?.body)); assert.equal(body.amount_usd,5); assert.equal(body.business_id,business); assert.equal(body.payment_method,"crypto"); assert.ok(new Headers(init?.headers).get("idempotency-key")); return Response.json({success:true,payment:{id:paymentId}}); }
+    if (String(url).endsWith("create")) { creates++; const body=JSON.parse(String(init?.body)); assert.equal(body.amount_usd,1); assert.equal(body.business_id,business); assert.equal(body.payment_method,"crypto"); assert.ok(new Headers(init?.headers).get("idempotency-key")); return Response.json({success:true,payment:{id:paymentId}}); }
     return Response.json({success:true,payment:{id:paymentId,status,amount,currency:"USD"}});
   })as typeof fetch});
   try {
@@ -71,13 +71,13 @@ test("PostgreSQL: payment verification, idempotent activation, concurrent debit,
     assert.equal((await service.check("alice",order.id)).status,"pending");
     status="confirmed";amount=0.01;
     await service.check("alice",order.id);assert.equal((await service.access("alice")).balanceMicros,0);
-    amount=5;
+    amount=1;
     await Promise.all(Array.from({length:12},()=>service.check("alice",order.id)));
-    assert.equal((await service.access("alice")).balanceMicros,5_000_000,"confirmed once across concurrent requests");
-    // Exactly 40 x $0.125 debits fit; the other ten must fail atomically.
+    assert.equal((await service.access("alice")).balanceMicros,1_000_000,"confirmed once across concurrent requests");
+    // Exactly 8 x $0.125 debits fit; the other ten must fail atomically.
     const attempts=await Promise.allSettled(Array.from({length:50},()=>service.reserve("alice","voice",500)));
     const paid=attempts.filter((result):result is PromiseFulfilledResult<string>=>result.status==="fulfilled");
-    assert.equal(paid.length,40);assert.equal((await service.access("alice")).balanceMicros,0);
+    assert.equal(paid.length,8);assert.equal((await service.access("alice")).balanceMicros,0);
     await Promise.all(Array.from({length:8},()=>service.refund(paid[0]!.value)));
     assert.equal((await service.access("alice")).balanceMicros,125000,"refund once");
     await service.commit(paid[1]!.value);await service.refund(paid[1]!.value);

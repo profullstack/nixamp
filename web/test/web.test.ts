@@ -1033,6 +1033,8 @@ test("the directory keeps asking while it is on screen, and redraws only on news
   assert.match(load, /setInterval\(\(\) => \{\s*if \(!dom\.directory\.hidden && document\.visibilityState === "visible"\) void loadDirectory\(true\);/);
   // Quietly: no "Looking for…" and no emptied list on a poll that changes nothing.
   assert.match(load, /if \(quiet && seen === directorySeen\) return;/);
+  // Leaving the /directory route must restore player-only panels such as Parties.
+  assert.match(app, /dom\.directory\.hidden = true;\s*document\.body\.classList\.remove\("route-directory"\)/);
   assert.match(load, /if \(!quiet\) \{\s*dom\.directoryNote\.textContent = "Looking for live streams…";/);
   // The clock fields every heartbeat moves are not news.
   assert.match(load, /updatedAt: _u, startedAt: _s/);
