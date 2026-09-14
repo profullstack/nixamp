@@ -10,7 +10,7 @@ import { createServer, EmptyEngine } from "../src/server.ts";
 import type { Accounts } from "../src/accounts.ts";
 import type { AddressInfo } from "node:net";
 
-test("PostgreSQL: five free panel sessions are atomic, shared across upgrades and reset at UTC midnight", { skip: !process.env["NIXAMP_TEST_DATABASE_URL"] }, async () => {
+test("PostgreSQL: ten free panel sessions are atomic, shared across upgrades and reset at UTC midnight", { skip: !process.env["NIXAMP_TEST_DATABASE_URL"] }, async () => {
   const connectionString = process.env["NIXAMP_TEST_DATABASE_URL"]!;
   const admin = new pg.Pool({ connectionString }), schema = `free_test_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
@@ -18,8 +18,8 @@ test("PostgreSQL: five free panel sessions are atomic, shared across upgrades an
   let now = Date.parse("2026-09-14T12:00:00Z");
   const first = new UpgradeAllowances(db, () => now), second = new UpgradeAllowances(db, () => now);
   try {
-    assert.equal((await first.access("alice")).remaining, 5);
-    assert.equal((await first.access("alice")).remaining, 5, "polling does not claim free use");
+    assert.equal((await first.access("alice")).remaining, 10);
+    assert.equal((await first.access("alice")).remaining, 10, "polling does not claim free use");
     await second.ensure();
     const duplicate = await Promise.all(Array.from({ length: 20 }, (_, i) => (i % 2 ? first : second).begin("alice", "translation", "same-feed")));
     assert.ok(duplicate.every(Boolean));
@@ -29,10 +29,10 @@ test("PostgreSQL: five free panel sessions are atomic, shared across upgrades an
     await first.begin("alice", "translation", "same-feed");
     assert.ok(Date.parse((await first.access("alice")).activeUntil!) > Date.parse(expiry!), "active listening renews the lease without another free use");
     const raced = await Promise.all(Array.from({ length: 20 }, (_, i) => (i % 2 ? first : second).begin("alice", i % 2 ? "another-panel" : "translation", `resource-${i}`)));
-    assert.equal(raced.filter(Boolean).length, 4, "all upgrades draw from the same five-use pool");
+    assert.equal(raced.filter(Boolean).length, 9, "all upgrades draw from the same ten-use pool");
     assert.equal((await first.access("alice")).remaining, 0);
-    assert.equal(await first.begin("alice", "translation", "sixth"), false);
-    assert.equal(await first.begin("alice", "translation", "same-feed"), true, "an active fifth use is still accessible");
+    assert.equal(await first.begin("alice", "translation", "eleventh"), false);
+    assert.equal(await first.begin("alice", "translation", "same-feed"), true, "an active tenth use is still accessible");
     assert.deepEqual(await first.active(["alice", "bob"], "translation", "same-feed"), ["alice"]);
     assert.deepEqual(await first.active(["alice"], "another-panel", "same-feed"), []);
     await assert.rejects(first.begin("", "translation", "resource"), /Sign in/);
@@ -50,11 +50,11 @@ test("PostgreSQL: five free panel sessions are atomic, shared across upgrades an
     await first.begin("bob", "translation", "late");
     assert.equal((await first.access("bob")).activeUntil, "2026-09-15T00:00:30.000Z");
     now = Date.parse("2026-09-15T00:00:00Z");
-    assert.equal((await first.access("alice")).remaining, 5);
+    assert.equal((await first.access("alice")).remaining, 10);
     assert.ok((await first.access("bob")).activeUntil, "ongoing sessions continue across midnight");
     assert.equal(await second.begin("bob", "translation", "late"), true);
-    assert.equal((await first.access("bob")).remaining, 5, "reconnecting an ongoing session after midnight is not a new start");
-    assert.equal(await second.begin("alice", "another-panel", "sixth"), true);
+    assert.equal((await first.access("bob")).remaining, 10, "reconnecting an ongoing session after midnight is not a new start");
+    assert.equal(await second.begin("alice", "another-panel", "eleventh"), true);
   } finally { await db.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); }
 });
 

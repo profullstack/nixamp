@@ -78,7 +78,7 @@ recovery must keep original commentary muted. Stock-voice choices must not be pr
 ## Paid panels and upgrades
 
 All Nixamp-owned paid panels and upgrades use the common server-side
-`UpgradeAllowances` policy: five free session starts total per account per UTC
+`UpgradeAllowances` policy: ten free session starts total per account per UTC
 day. New paid features must use this shared counter rather than inventing an
 independent trial or a browser-only limit. Creator-sold event tickets and external
 stream access are separate products, not Nixamp upgrades.
