@@ -162,6 +162,7 @@ export function start(): void {
     panelsToggle: need<HTMLButtonElement>("panels-toggle"),
     panelsPanel: need<HTMLElement>("panels-panel"),
     panelsList: need<HTMLUListElement>("panels-list"),
+    panelsSave: need<HTMLButtonElement>("panels-save"),
     panelsReset: need<HTMLButtonElement>("panels-reset"),
     accountForm: need<HTMLFormElement>("account-form"),
     accountEmail: need<HTMLInputElement>("account-email"),
@@ -5861,6 +5862,12 @@ export function start(): void {
     dom.panelsToggle.focus({ preventScroll: true });
   });
   dom.panelsReset.addEventListener("click", resetLayout);
+  dom.panelsSave.addEventListener("click", () => {
+    saveLayout();
+    const original = dom.panelsSave.textContent ?? "Save setup";
+    dom.panelsSave.textContent = "Saved";
+    window.setTimeout(() => { dom.panelsSave.textContent = original; }, 1200);
+  });
   // A title that changes -- "Playlist (3)", "Files on dev" -- changes the list.
   new MutationObserver(() => { decoratePanels(); drawPanelsList(); }).observe(document.body, { attributes: true, attributeFilter: ["data-title", "hidden"], subtree: true });
   decoratePanels();
