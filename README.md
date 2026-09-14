@@ -574,7 +574,7 @@ uses its direct model; it does not first translate the audio into English.
 
 ### Hear it in your language
 
-Every signed-in account gets **five free live-use sessions per UTC day**, shared
+Every signed-in account gets **ten free live-use sessions per UTC day**, shared
 across Nixamp's paid panels and upgrades. There is no timed cutoff: a session
 continues while its listener remains, within the existing API usage limits.
 Reconnects to the same session within 90 seconds reuse it. A stopped session
@@ -614,7 +614,7 @@ multiplied by five. Credentials and balances never travel in checkout URLs.
 New checkout creation is capped at five per account and fifty per account server
 per UTC day, plus IP and request throttles; retries reuse the original invoice.
 
-After the five free sessions, new sessions require purchased credit. Configure `COINPAY_X402_KEY`
+After the ten free sessions, new sessions require purchased credit. Configure `COINPAY_X402_KEY`
 with `payments:create` permission and at least one business wallet; the scoped
 key supplies the merchant identity. Free sessions and existing credit still work during a
 checkout outage. A self-hosted operator explicitly sponsoring API usage may set

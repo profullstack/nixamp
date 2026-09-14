@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import type { Queryable } from "./follows.ts";
 import { SpeechError } from "./speech.ts";
 
-export const FREE_UPGRADE_SESSIONS = 5;
+export const FREE_UPGRADE_SESSIONS = 10;
 export const FREE_UPGRADE_RECONNECT_SECONDS = 90;
 const DAY = 86_400_000;
 export interface UpgradeAllowance {
@@ -18,8 +18,11 @@ export class UpgradeAllowances {
   async ensure(): Promise<void> {
     this.schema ??= this.db.query(`CREATE TABLE IF NOT EXISTS upgrade_daily_uses (
       by_account TEXT NOT NULL, day BIGINT NOT NULL,
-      uses INTEGER NOT NULL CHECK (uses BETWEEN 1 AND 5),
-      sessions JSONB NOT NULL, PRIMARY KEY (by_account, day))`).then(() => undefined)
+      uses INTEGER NOT NULL CHECK (uses >= 1),
+      sessions JSONB NOT NULL, PRIMARY KEY (by_account, day))`)
+      .then(() => this.db.query(`ALTER TABLE upgrade_daily_uses DROP CONSTRAINT IF EXISTS upgrade_daily_uses_uses_check`))
+      .then(() => this.db.query(`ALTER TABLE upgrade_daily_uses ADD CONSTRAINT upgrade_daily_uses_uses_check CHECK (uses BETWEEN 1 AND 10)`))
+      .then(() => undefined)
       .catch(error => { this.schema = null; throw error; });
     await this.schema;
   }
