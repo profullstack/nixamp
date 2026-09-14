@@ -284,7 +284,7 @@ export function start(): void {
    * on a machine without an emoji font. These are drawn, not typed.
    */
   const ICONS: Record<"play" | "link" | "copy" | "restart" | "remove" | "rename" | "check" | "live" | "party" | "eye" | "gear", string> = {
-    play: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>',
+    play: '<span aria-hidden="true">▶</span>',
     party: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 21 4-12 8 8Z"/><path d="m7 9 8 8M12 7l1-3M16 10l4-1M16 5l2-2M20 14l1 1M8 4l-1-1"/><circle cx="21" cy="4" r=".5" fill="currentColor"/></svg>',
     rename: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
     // An eye is a viewer; a gear is an administrator. Both a size up from the
