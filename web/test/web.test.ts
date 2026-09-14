@@ -1078,10 +1078,13 @@ test("a member may go live, a file goes on the air as its own channel, and joini
   assert.doesNotMatch(app, /remote\.send\(\{ type: "play", index: what\.index \}\)/);
   // A member takes off what they put on.
   assert.match(app, /onStop: canDrive \|\| \(memberHere && meId !== "" && channel\.startedBy === meId\)/);
-  // The list and directory share the party label; live wording stays in the tooltip.
+  // The live list keeps its text label; the directory uses compact icons and
+  // offers both room and raw-stream links.
   assert.match(app, /function joinPartyLabel\(button: HTMLElement, text = "Join party"\)/);
   assert.match(app, /joinPartyLabel\(play, row\.playLabel \?\? "Join party"\)/);
-  assert.match(app, /joinPartyLabel\(play\);\s*play\.title = `Join live: \$\{channelName\} on \$\{stream\.name\}`/);
+  assert.match(app, /drawIcon\(play, "party"\);\s*play\.setAttribute\("aria-label", `Join \$\{channelName\} live/);
+  assert.match(app, /drawIcon\(copy, "link"\);/);
+  assert.match(app, /drawIcon\(raw, "copy"\);/);
   assert.doesNotMatch(app, /play\.textContent = "Play"/);
 });
 
