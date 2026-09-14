@@ -1,5 +1,8 @@
 import type { Catalogue } from "../i18n.ts";
 export default {
+  "No parties live right now.": "Сейчас нет вечеринок в эфире.",
+  "Could not refresh parties.": "Не удалось обновить список вечеринок.",
+  "Pick a server in the directory, or paste its link here.": "Выберите сервер в каталоге или вставьте его ссылку сюда.",
   "Interface language": "Язык интерфейса",
   "Language": "Язык",
   "Translation language": "Язык перевода",

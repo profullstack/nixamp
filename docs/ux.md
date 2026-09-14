@@ -47,6 +47,24 @@ For realtime regressions, focus an unrelated field and scroll to a chosen
 position, deliver multiple updates, and assert that document scroll, panel
 scroll, focus, caret, and the selected browsing page remain unchanged.
 
+## Parties
+
+Show one compact Parties panel, grouped by server or connected site. Include
+public directory streams, the connected server, and watch parties the signed-in
+account can join. A server appears once. Keep Join visible; disclose secondary
+actions and invite-code entry only when requested. Do not put installation
+commands in the server connection form.
+
+Refresh visible live listings automatically with bounded, non-overlapping
+requests. Keep the last usable response through a temporary network failure,
+discard replies from a server/account the viewer has left, and stop account-only
+reads on sign-out. New rows must appear while another row has focus. Preserve
+that focused row until it can safely update, rather than freezing the whole list.
+
+The Panels button must reopen the chooser on the first activation even when its
+saved layout has it closed or shaded. Open the chooser in place without
+scrolling the page. Keep its expanded state accurate.
+
 ## Player translation controls
 
 Keep translated playback in the player: one opt-in beside the existing language

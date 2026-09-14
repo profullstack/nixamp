@@ -46,3 +46,14 @@ jobs:
         env:
           NIXAMP_PLAYWRIGHT_MODULE: ${{ runner.temp }}/nixamp-browser/node_modules/playwright/index.mjs
         run: bun web/scripts/check-interface.mjs
+      - name: Unified parties, live updates and panel controls
+        env:
+          NIXAMP_PLAYWRIGHT_MODULE: ${{ runner.temp }}/nixamp-browser/node_modules/playwright/index.mjs
+        run: bun web/scripts/check-parties.mjs
+      - name: Browser screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parties-browser
+          path: /tmp/nixamp-parties-mobile.png
+          if-no-files-found: ignore

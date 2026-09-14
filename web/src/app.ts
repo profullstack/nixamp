@@ -10,6 +10,7 @@ import { uiText, uiAttribute } from "./i18n.ts";
  */
 import { displayName, formatTime } from "./format.ts";
 import { beginListNavigation, replaceList } from "./accessibility.ts";
+import { updateLiveList } from "./live-list.ts";
 import { liveContext, liveTitle } from "./live-context.ts";
 import {
   BrowserPlayer, revoke, tracksFromFiles,
@@ -233,9 +234,6 @@ export function start(): void {
     notifyPhoneNote: need<HTMLParagraphElement>("notify-phone-note"),
     directoryNote: need<HTMLParagraphElement>("directory-note"),
     directoryList: need<HTMLUListElement>("directory-list"),
-    onairPanel: need<HTMLElement>("onair-panel"),
-    onairNote: need<HTMLParagraphElement>("onair-note"),
-    onairList: need<HTMLUListElement>("onair-list"),
     sharePanel: need<HTMLElement>("share-panel"),
     trollboxPanel: need<HTMLElement>("trollbox-panel"),
     trollboxNote: need<HTMLParagraphElement>("trollbox-note"),
@@ -2183,6 +2181,7 @@ export function start(): void {
       index = 0;
       mode = "local";
       remote.close();
+      watchOnAir(false);
       note = "";
       void playAt(0);
     });
@@ -2262,9 +2261,8 @@ export function start(): void {
       // mean the next visit reconnects to a server that then refuses it.
       try { localStorage.setItem(REMOTE_KEY, typed.trim()); } catch { /* private mode */ }
       remote.connect(typed);
-      void loadOnAir();
-      void loadCatalogs();
       watchOnAir(true);
+      void loadCatalogs();
       // Asked of the server we just connected to. Whether you may administer
       // it is a question about that machine, and it was being answered by
       // whatever host served this page -- so the Admin panel appeared or did
@@ -2962,10 +2960,8 @@ export function start(): void {
   // ---- watch parties: a film on another site, a room here -------------------
   //
   // A watch party lives where the film does -- bittorrented.com, say -- and is
-  // bridged into nixamp as a live event with a room. So this panel is not a
-  // player: it is the list of rooms you could be in, each with the link that
-  // opens the picture on the site that has it. The room, the chat and the
-  // second everybody is at are nixamp's; the bytes never are.
+  // bridged into nixamp as a live event with a room. They share one compact
+  // list with live streams, grouped by their server or the site hosting them.
 
   interface PartyRow {
     party: {
@@ -3022,32 +3018,137 @@ export function start(): void {
     room.className = "ghost";
     room.href = row.links.nixampUrl;
     room.textContent = "Open room";
-    item.append(label, watch, room);
+    item.className = "party-row";
+    label.className = "party-name";
+    label.title = detail.textContent;
+    detail.hidden = true;
+    const more = document.createElement("details"); more.className = "party-actions";
+    const summary = document.createElement("summary"); summary.textContent = "⋯";
+    uiAttribute(summary, "aria-label", () => `${uiMessage("Show more")}: ${row.event.title}`);
+    more.append(summary, room);
+    item.append(label, watch, more);
     return item;
   }
 
-  async function loadParties(): Promise<void> {
-    // Reachable only with an account: a party list is "rooms you could join",
-    // which is a question about somebody.
-    if (!meId) {
-      dom.partiesPanel.hidden = true;
-      return;
-    }
-    try {
-      const answer = await fetch("/api/v1/watch-parties");
-      if (!answer.ok) {
-        dom.partiesPanel.hidden = true;
-        return;
+  interface PartyServer {
+    id: string; name: string; url: string; nowPlaying: string;
+    playing?: boolean; channels?: string[];
+    lineup?: { id: string; name: string }[];
+  }
+  let partyServers: PartyServer[] = [];
+  let bridgedParties: PartyRow[] = [];
+  let partiesLoaded = false;
+  let partiesRequest: AbortController | null = null;
+  let partiesAccount = "";
+
+  /** Keep server headings and their lists in place while independent rows update. */
+  function drawParties(): void {
+    const groups = new Map<string, { name: string; rows: HTMLElement[] }>();
+    const add = (key: string, name: string, rows: HTMLElement[]): void => {
+      if (!rows.length) return;
+      const group = groups.get(key);
+      if (group) {
+        const known = new Set(group.rows.map(row => row.dataset["liveKey"]));
+        group.rows.push(...rows.filter(row => !known.has(row.dataset["liveKey"])));
+      } else groups.set(key, { name, rows });
+    };
+    const current = mode === "remote" && lastAir ? serverOrigin(remote.address) : "";
+    for (const server of partyServers) {
+      const origin = serverOrigin(server.url);
+      if (!origin || origin === current) continue;
+      const rows: HTMLElement[] = [];
+      const addLive = (id: string, title: string): void => {
+        const item = document.createElement("li");
+        item.dataset["liveKey"] = `${origin}:${id}`;
+        item.className = "party-row";
+        const name = document.createElement("span");
+        name.className = "party-name"; name.textContent = title; name.title = title;
+        const join = document.createElement("button");
+        join.type = "button"; joinPartyLabel(join);
+        uiAttribute(join, "aria-label", () => `${uiMessage("Join party")}: ${title} · ${server.name}`);
+        join.addEventListener("click", () => {
+          viewerOnly = true; askedToPlay = id;
+          dom.remoteUrl.value = server.url;
+          dom.remoteForm.requestSubmit();
+        });
+        item.append(name, join); rows.push(item);
+      };
+      if (server.playing !== false && server.nowPlaying) addLive("live", liveTitle(server.nowPlaying));
+      for (const name of server.channels ?? []) {
+        const entry = server.lineup?.find(one => one.name === name);
+        addLive(`channel:${entry?.id ?? name}`, name);
       }
-      const body = (await answer.json()) as { parties?: PartyRow[] };
-      const rows = body.parties ?? [];
-      dom.partiesPanel.hidden = false;
-      dom.partiesNote.textContent = rows.length === 0
-        ? "No parties happening right now. Join with an invite code."
-        : "Join a party on the site hosting the film, or open its room here.";
-      replaceList(dom.partiesList, ...rows.map(partyItem));
-    } catch {
-      dom.partiesPanel.hidden = true;
+      add(origin, server.name, rows);
+    }
+    if (current && lastAir) add(current, lastAir.server.name || serverName || current, onAirRows(lastAir));
+    for (const row of bridgedParties) {
+      let origin = row.party.origin;
+      try { origin = new URL(row.links.partyUrl || row.party.partyUrl).origin; } catch { /* An older bridge names its site. */ }
+      let name = row.party.origin;
+      try { name = new URL(origin).hostname; } catch { /* Use its site name. */ }
+      const item = partyItem(row);
+      item.dataset["liveKey"] = `party:${row.event.id}`;
+      add(origin, name, [item]);
+    }
+    const existing = new Map([...dom.partiesList.children].map(node => [(node as HTMLElement).dataset["liveKey"], node as HTMLElement]));
+    const sections: HTMLElement[] = [];
+    for (const [key, group] of groups) {
+      let section = existing.get(key);
+      if (!section) {
+        section = document.createElement("li"); section.dataset["liveKey"] = key;
+        section.className = "party-server";
+        const heading = document.createElement("h3");
+        const list = document.createElement("ul"); list.className = "party-rows";
+        section.append(heading, list);
+      }
+      const heading = section.querySelector("h3")!;
+      if (heading.textContent !== group.name) heading.textContent = group.name;
+      updateLiveList(section.querySelector("ul")!, group.rows);
+      sections.push(section);
+    }
+    updateLiveList(dom.partiesList, sections);
+    dom.partiesNote.hidden = groups.size > 0;
+    if (!groups.size) uiText(dom.partiesNote, () => uiMessage(partiesLoaded ? "No parties live right now." : "Loading…"));
+  }
+
+  /** One bounded refresh for the directory and the parties this account may see.
+   * No connections to every remote, and no overlap if an endpoint is slow. */
+  async function loadParties(): Promise<void> {
+    if (classroomEmbed) return;
+    if (partiesAccount !== meId) {
+      partiesRequest?.abort(); partiesRequest = null;
+      bridgedParties = []; partiesAccount = meId;
+      drawParties();
+    }
+    if (partiesRequest) return;
+    const controller = new AbortController(); partiesRequest = controller;
+    const account = meId;
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const get = async (path: string): Promise<{ ok: boolean; status: number; body: unknown }> => {
+      const answer = await fetch(path, { signal: controller.signal, cache: "no-store" });
+      return { ok: answer.ok, status: answer.status, body: answer.ok ? await answer.json() : null };
+    };
+    try {
+      const [directory, parties] = await Promise.allSettled([
+        get("/api/directory"),
+        account ? get("/api/v1/watch-parties") : Promise.resolve(null),
+      ]);
+      if (partiesRequest !== controller || account !== meId || controller.signal.aborted) return;
+      if (directory.status === "fulfilled" && directory.value.ok) {
+        partyServers = (directory.value.body as { streams?: PartyServer[] }).streams ?? [];
+        partiesLoaded = true;
+      }
+      if (parties.status === "fulfilled" && parties.value) {
+        if (parties.value.ok) {
+          bridgedParties = (parties.value.body as { parties?: PartyRow[] }).parties ?? [];
+          partiesLoaded = true;
+        } else if ([401, 403].includes(parties.value.status)) bridgedParties = [];
+      }
+      drawParties();
+      if (!partiesLoaded && !lastAir) uiText(dom.partiesNote, () => uiMessage("Could not refresh parties."));
+    } finally {
+      clearTimeout(timeout);
+      if (partiesRequest === controller) partiesRequest = null;
     }
   }
 
@@ -5390,6 +5491,7 @@ export function start(): void {
       }
       meId = "";
       showAccount(null);
+      void loadParties();
 
       // Leaving means leaving. Signing out used to clear the account and
       // nothing else, so the server stayed connected and its address stayed
@@ -5408,7 +5510,6 @@ export function start(): void {
       dom.sharePanel.hidden = true;
       dom.publishPanel.hidden = true;
       dom.adminPanel.hidden = true;
-      dom.onairPanel.hidden = true;
       dom.catalogsPanel.hidden = true;
       dom.listenOnly.hidden = true;
       watchOnAir(false);
@@ -5551,6 +5652,7 @@ export function start(): void {
   }
   function setCollapsed(panel: HTMLElement, on: boolean): void {
     panel.toggleAttribute("data-collapsed", on);
+    if (panel === dom.panelsPanel) dom.panelsToggle.setAttribute("aria-expanded", String(!on && !panel.hidden && !panel.hasAttribute("data-closed")));
     panel.querySelector(".panel-tools [aria-expanded]")?.setAttribute("aria-expanded", String(!on));
     layout.collapsed = toggled(layout.collapsed, panel.id, on);
     saveLayout();
@@ -5559,6 +5661,9 @@ export function start(): void {
   function setClosed(panel: HTMLElement, on: boolean): void {
     const heldFocus = panel.contains(document.activeElement);
     panel.toggleAttribute("data-closed", on);
+    if (panel === dom.panelsPanel && on) { panel.hidePopover?.(); panel.hidden = true; }
+    if (panel === dom.panelsPanel) dom.panelsToggle.setAttribute("aria-expanded", String(!on && !panel.hidden && !panel.hasAttribute("data-collapsed")));
+    if (panel === dom.partiesPanel && !on) void loadParties();
     if (on && heldFocus) dom.panelsToggle.focus({ preventScroll: true });
     layout.closed = toggled(layout.closed, panel.id, on);
     saveLayout();
@@ -5714,16 +5819,31 @@ export function start(): void {
     dom.adminPanel.removeAttribute("data-collapsed");
     dom.adminPanel.removeAttribute("data-closed");
   }
-  dom.panelsToggle.addEventListener("click", () => {
-    const open = dom.panelsPanel.hidden;
+  dom.panelsToggle.addEventListener("click", event => {
+    event.preventDefault();
+    const open = dom.panelsPanel.hidden || dom.panelsPanel.hasAttribute("data-closed") || dom.panelsPanel.hasAttribute("data-collapsed");
     dom.panelsPanel.hidden = !open;
     dom.panelsToggle.setAttribute("aria-expanded", String(open));
     if (open) {
       // Asked for by name: it is not closed, whatever the list said before.
       if (dom.panelsPanel.hasAttribute("data-closed")) setClosed(dom.panelsPanel, false);
+      if (dom.panelsPanel.hasAttribute("data-collapsed")) setCollapsed(dom.panelsPanel, false);
       drawPanelsList();
-      dom.panelsPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
+      dom.panelsPanel.showPopover?.();
+      // Explicit navigation to the chooser; never scroll the document to it.
+      dom.panelsList.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
+    } else dom.panelsPanel.hidePopover?.();
+  });
+  dom.panelsPanel.addEventListener("toggle", () => {
+    const open = dom.panelsPanel.matches(":popover-open");
+    dom.panelsToggle.setAttribute("aria-expanded", String(open && !dom.panelsPanel.hasAttribute("data-collapsed")));
+    if (!open) dom.panelsPanel.hidden = true;
+  });
+  dom.panelsPanel.addEventListener("keydown", event => {
+    if (event.key !== "Escape" || typeof dom.panelsPanel.hidePopover === "function") return;
+    dom.panelsPanel.hidden = true;
+    dom.panelsToggle.setAttribute("aria-expanded", "false");
+    dom.panelsToggle.focus({ preventScroll: true });
   });
   dom.panelsReset.addEventListener("click", resetLayout);
   // A title that changes -- "Playlist (3)", "Files on dev" -- changes the list.
@@ -5752,8 +5872,6 @@ export function start(): void {
     dom.sharePanel.hidden = true;
     dom.publishPanel.hidden = true;
     dom.adminPanel.hidden = true;
-    dom.onairPanel.hidden = true;
-    uiAttribute(dom.onairPanel, "data-title", () => uiMessage("Parties on this server"));
     dom.catalogsPanel.hidden = true;
     uiAttribute(dom.catalogsPanel, "data-title", () => uiMessage("Catalogs on this server"));
     serverName = "";
@@ -5889,81 +6007,59 @@ export function start(): void {
     restreams?: { name: string; at: number; tracks: number }[];
   }
 
-  let drawnOnAir = "";
-  /**
-   * Its own timer, because a viewer has no admin tick to ride on.
-   *
-   * Slow on purpose: this changes when somebody starts or stops publishing,
-   * which is a thing that happens a few times an hour, not a few times a
-   * second. The redraw is skipped entirely when nothing has changed.
-   */
   let onAirTimer: ReturnType<typeof setInterval> | null = null;
-
+  let onAirRequest: AbortController | null = null;
+  let onAirGeneration = 0;
   const watchOnAir = (on: boolean): void => {
     if (onAirTimer) clearInterval(onAirTimer);
     onAirTimer = null;
+    onAirGeneration += 1;
+    onAirRequest?.abort(); onAirRequest = null;
+    lastAir = null;
+    drawParties();
     if (!on) return;
-    onAirTimer = setInterval(() => void loadOnAir(), 6000);
+    void loadOnAir();
+    onAirTimer = setInterval(() => {
+      if (document.visibilityState === "visible") void loadOnAir();
+    }, 2000);
   };
 
-  /**
-   * What is live on the server you are connected to.
-   *
-   * Its own stream -- the playlist it is serving, which is what it is listed
-   * in the directory as -- and anybody publishing into it from OBS or a phone.
-   * A row is worth clicking: the server's plays what it is playing, and a
-   * channel's plays that channel.
-   */
+  /** Read only the connected server. A late reply must never restore a server
+   * that the listener has left, and slow reads must not pile up. */
   async function loadOnAir(): Promise<void> {
-    if (mode !== "remote") {
-      dom.onairPanel.hidden = true;
-      return;
-    }
-    let air: OnAir;
+    if (mode !== "remote" || onAirRequest) return;
+    const controller = new AbortController(); onAirRequest = controller;
+    const generation = onAirGeneration;
+    const url = remote.url("/api/streams");
+    const timeout = setTimeout(() => controller.abort(), 8000);
     try {
-      const answer = await fetch(remote.url("/api/streams"));
-      if (!answer.ok) {
-        dom.onairPanel.hidden = true;
-        return;
-      }
-      air = (await answer.json()) as OnAir;
+      const answer = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      if (!answer.ok) return;
+      const air = (await answer.json()) as OnAir;
+      if (controller.signal.aborted || generation !== onAirGeneration || mode !== "remote" || url !== remote.url("/api/streams")) return;
       serverCarries = air.server.carries !== false;
-      // The server's own name for itself, which is what the panels are
-      // titled with: "Files on ubuntu" says where you are, "Playlist" did not.
       if (air.server.name && air.server.name !== serverName) {
         serverName = air.server.name;
-        dom.onairPanel.setAttribute("data-title", `Parties on ${serverName}`);
         dom.catalogsPanel.setAttribute("data-title", `Catalogs on ${serverName}`);
         updateFavHere();
-        draw();
       }
+      lastAir = air;
+      playWhatWasAsked(air);
+      draw();
+      drawOnAir(air);
     } catch {
-      dom.onairPanel.hidden = true;
-      return;
+      // Retain the last usable list during a short network failure.
+    } finally {
+      clearTimeout(timeout);
+      if (onAirRequest === controller) onAirRequest = null;
     }
-
-    dom.onairPanel.hidden = false;
-    lastAir = air;
-    playWhatWasAsked(air);
-    draw();
-    drawOnAir(air);
   }
 
-  function drawOnAir(air: OnAir): void {
+  function drawOnAir(_air: OnAir): void { drawParties(); }
+
+  function onAirRows(air: OnAir): HTMLElement[] {
     const context = serverContext();
-    // Part of the key, because the admin's buttons are part of the drawing:
-    // learning you may drive this server is news even when nothing on the
-    // air has changed.
-    const key = `${dom.adminPanel.hidden ? "view" : "drive"}:${JSON.stringify(air)}:${context.fullTitle}:${context.position}`;
-    if (key === drawnOnAir) return;
-    drawnOnAir = key;
-
     const restreams = air.restreams ?? [];
-    const others = air.channels.length + restreams.length;
-    dom.onairNote.textContent = others === 0
-      ? "One stream, from this server's own files."
-      : `${others + 1} streams: this server's own files, and ${others} more on it.`;
-
     const rows: HTMLElement[] = [];
 
     // The server's own stream, first, because it is the one that is always
@@ -5974,8 +6070,9 @@ export function start(): void {
     // their own -- which is not a stream, it is several private screenings.
     const running = air.server.playing;
     const canDrive = !dom.adminPanel.hidden;
-    rows.push(onAirRow({
-      title: air.server.name,
+    if (running) rows.push(onAirRow({
+      key: "live",
+      title: liveTitle(air.server.nowPlaying) || air.server.name,
       detail: [
         running
           ? `playing ${context.fullTitle}`
@@ -6010,6 +6107,7 @@ export function start(): void {
     // were in one list.
     for (const restream of restreams) {
       rows.push(onAirRow({
+        key: `restream:${restream.at}`,
         title: restream.name,
         detail: restream.tracks === 1
           ? "re-streamed from the web"
@@ -6041,6 +6139,7 @@ export function start(): void {
       if (channel.redials) detail.push(`redialled ${channel.redials}×`);
       if (canDrive && channel.error) detail.push(channel.error);
       rows.push(onAirRow({
+        key: `channel:${channel.id}`,
         title: channel.name,
         detail: detail.join(" · "),
         onPlay: () => {
@@ -6065,7 +6164,7 @@ export function start(): void {
           : undefined,
       }));
     }
-    replaceList(dom.onairList, ...rows);
+    return rows;
   }
 
   /**
@@ -6217,7 +6316,8 @@ export function start(): void {
    * that did nothing.
    */
   function tellOnAir(message: string): void {
-    dom.onairNote.textContent = message;
+    dom.partiesNote.hidden = false;
+    dom.partiesNote.textContent = message;
     said(message);
   }
 
@@ -6232,7 +6332,6 @@ export function start(): void {
     } catch {
       tellOnAir("could not reach the server");
     }
-    drawnOnAir = "";
     void loadOnAir();
   }
 
@@ -6259,7 +6358,6 @@ export function start(): void {
       tellOnAir("could not reach the server");
     }
     if (channelOn?.id === id) channelOn = { ...channelOn, name: renamed };
-    drawnOnAir = "";
     void loadOnAir();
     draw();
   }
@@ -6278,7 +6376,6 @@ export function start(): void {
       channelOn = null;
       player.stop();
     }
-    drawnOnAir = "";
     void loadOnAir();
   }
 
@@ -6378,6 +6475,7 @@ export function start(): void {
    * its word, because it is the one everybody presses.
    */
   function onAirRow(row: {
+    key: string;
     title: string; detail: string; onPlay: () => void; link: string; playLabel?: string;
     /**
      * A ready-made page link that plays this very thing, when the plain
@@ -6391,7 +6489,8 @@ export function start(): void {
     onStop?: () => void;
   }): HTMLElement {
     const item = document.createElement("li");
-    item.className = "onair";
+    item.className = "party-row";
+    item.dataset["liveKey"] = `${serverOrigin(remote.address)}:${row.key}`;
     const label = document.createElement("span");
     label.className = "recent-label";
     const name = document.createElement("span");
@@ -6454,7 +6553,17 @@ export function start(): void {
       actions.append(icon("remove", "Remove: take it off the air", () => row.onStop?.()));
     }
 
-    item.append(label, actions);
+    label.className = "party-name";
+    label.title = `${row.title} · ${row.detail}`;
+    detail.hidden = true;
+    uiAttribute(play, "aria-label", () => `${uiMessage(row.playLabel ?? "Join party")}: ${row.title}`);
+    const more = document.createElement("details"); more.className = "party-actions";
+    const summary = document.createElement("summary"); summary.textContent = "⋯";
+    uiAttribute(summary, "aria-label", () => `${uiMessage("Show more")}: ${row.title}`);
+    actions.removeChild(play);
+    more.append(summary, actions);
+    item.append(label, play);
+    if (actions.childElementCount) item.append(more);
     return item;
   }
 
@@ -6645,8 +6754,32 @@ export function start(): void {
     // The hint about picking files has been answered by the server itself.
     note = "";
     remote.connect(here);
+    watchOnAir(true);
+    void loadCatalogs();
     draw();
   })();
+
+  void loadParties();
+  const refreshVisibleParties = (): void => {
+    if (document.visibilityState === "visible" && !dom.partiesPanel.hasAttribute("data-closed")) void loadParties();
+  };
+  let partiesTick = setInterval(refreshVisibleParties, 2000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") { void loadParties(); void loadOnAir(); }
+  });
+  globalThis.addEventListener("pagehide", () => {
+    clearInterval(partiesTick);
+    if (onAirTimer) clearInterval(onAirTimer);
+    partiesRequest?.abort(); onAirRequest?.abort();
+    partiesRequest = null; onAirRequest = null; onAirGeneration += 1;
+  });
+  globalThis.addEventListener("pageshow", event => {
+    if (!event.persisted) return;
+    clearInterval(partiesTick);
+    partiesTick = setInterval(refreshVisibleParties, 2000);
+    refreshVisibleParties();
+    if (mode === "remote") watchOnAir(true);
+  });
 
   // The noise it makes when it wakes up.
   //

@@ -1,5 +1,8 @@
 import type { Catalogue } from "../i18n.ts";
 export default {
+  "No parties live right now.": "لا توجد جلسات مباشرة الآن.",
+  "Could not refresh parties.": "تعذر تحديث الجلسات.",
+  "Pick a server in the directory, or paste its link here.": "اختر خادمًا من الدليل أو الصق رابطه هنا.",
   "Interface language": "لغة الواجهة",
   "Language": "اللغة",
   "Translation language": "لغة الترجمة",

@@ -62,11 +62,20 @@ export function parseLayout(raw: string | null | undefined): PanelLayout {
       if (ID.test(id) && typeof where === "string" && PLACE.test(where)) placement[id] = where;
     }
   }
+  // The two party panels are now one. Honour the surviving panel's saved
+  // position first, or carry over the connected-server panel's position.
+  const migrate = (value: unknown): string[] => {
+    const read = ids(value);
+    const saved = read.includes("parties-panel") ? read.filter(id => id !== "onair-panel") : read;
+    return [...new Set(saved.map(id => id === "onair-panel" ? "parties-panel" : id))];
+  };
+  if (!placement["parties-panel"] && placement["onair-panel"]) placement["parties-panel"] = placement["onair-panel"];
+  delete placement["onair-panel"];
   return {
-    order: ids(record["order"]),
+    order: migrate(record["order"]),
     placement,
-    collapsed: ids(record["collapsed"]),
-    closed: ids(record["closed"]),
+    collapsed: migrate(record["collapsed"]),
+    closed: migrate(record["closed"]),
   };
 }
 
