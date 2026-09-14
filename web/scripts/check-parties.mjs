@@ -67,7 +67,10 @@ try {
   await toggle.click(); assert.ok(await page.locator('#panels-list').isVisible());
   await toggle.focus(); await page.keyboard.press('Enter'); assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
   await page.keyboard.press('Enter'); assert.ok(await page.locator('#panels-list').isVisible());
-  await page.keyboard.press('Enter');
+  assert.ok(await page.evaluate(() => document.querySelector('#panels-panel').contains(document.activeElement)), 'keyboard navigation did not enter Panels');
+  await page.keyboard.press('Escape');
+  await chooser.waitFor({ state: 'hidden' });
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
 
   // Keeping focus inside one row must not freeze new rows or other servers.
   const marker = await page.evaluate(() => {

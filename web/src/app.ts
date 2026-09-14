@@ -5830,6 +5830,8 @@ export function start(): void {
       if (dom.panelsPanel.hasAttribute("data-collapsed")) setCollapsed(dom.panelsPanel, false);
       drawPanelsList();
       dom.panelsPanel.showPopover?.();
+      // Explicit navigation to the chooser; never scroll the document to it.
+      dom.panelsList.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
     } else dom.panelsPanel.hidePopover?.();
   });
   dom.panelsPanel.addEventListener("toggle", () => {
