@@ -3,7 +3,10 @@ import "./styles.css";
 import { start } from "./app.ts";
 import { installAccessibility } from "./accessibility.ts";
 
+import { installI18n } from "./i18n.ts";
+
 start();
+void installI18n();
 installAccessibility();
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {

@@ -20,17 +20,18 @@
           <span class="wordmark-mark" aria-hidden="true">B</span>
           <span>BackToSchool<span>.help</span></span>
         </a>
-        <nav class="site-nav" aria-label="Main navigation">
-          <a href="/#live">Live now</a>
-          <a href="/#upcoming">Upcoming</a>
-          <button class="button button-quiet" id="account-button" type="button">Sign in</button>
+        <nav class="site-nav" aria-label="Main navigation" data-i18n-aria-label="Main navigation">
+          <a href="/#live" data-i18n="Live now">Live now</a>
+          <a href="/#upcoming" data-i18n="Upcoming">Upcoming</a>
+          <label class="ui-language"><span data-i18n="Interface language">Interface language</span> <select data-ui-language aria-label="Interface language" data-i18n-aria-label="Interface language"></select></label>
+          <button class="button button-quiet" id="account-button" type="button" data-i18n="Sign in">Sign in</button>
         </nav>
       </header>
       <main id="main" tabindex="-1">
         <section class="loading-page" aria-live="polite">
           <span class="eyebrow">BackToSchool.help</span>
-          <h1>Learn something live.</h1>
-          <p>Finding today’s conversations…</p>
+          <h1 data-i18n="Learn something live.">Learn something live.</h1>
+          <p data-i18n="Finding today’s conversations…">Finding today’s conversations…</p>
         </section>
       </main>
       <footer class="site-footer">
@@ -40,59 +41,59 @@
     </div>
 
     <dialog id="account-dialog" class="dialog" aria-labelledby="account-title">
-      <button class="dialog-close" type="button" data-close aria-label="Close">×</button>
-      <span class="eyebrow">Your NixAmp account</span>
-      <h2 id="account-title">Welcome back</h2>
+      <button class="dialog-close" type="button" data-close aria-label="Close" data-i18n-aria-label="Close">×</button>
+      <span class="eyebrow" data-i18n="Your NixAmp account">Your NixAmp account</span>
+      <h2 id="account-title" data-i18n="Welcome back">Welcome back</h2>
       <p id="account-copy">Sign in to host, chat, or raise your hand.</p>
       <form id="account-form" class="form-stack">
-        <label>Email<input name="email" type="email" autocomplete="email" required /></label>
-        <label>Password<input name="password" type="password" autocomplete="current-password" minlength="8" required /></label>
+        <label><span data-i18n="Email">Email</span><input name="email" type="email" autocomplete="email" required /></label>
+        <label><span data-i18n="Password">Password</span><input name="password" type="password" autocomplete="current-password" minlength="8" required /></label>
         <p class="form-error" id="account-error" role="alert"></p>
-        <button class="button button-primary" type="submit">Sign in</button>
-        <a class="text-button" id="account-forgot" href="/reset-password">Forgot password?</a>
-        <button class="text-button" id="account-mode" type="button">New here? Create an account</button>
+        <button class="button button-primary" type="submit" data-i18n="Sign in">Sign in</button>
+        <a class="text-button" id="account-forgot" href="/reset-password" data-i18n="Forgot password?">Forgot password?</a>
+        <button class="text-button" id="account-mode" type="button" data-i18n="New here? Create an account">New here? Create an account</button>
       </form>
     </dialog>
 
     <dialog id="event-dialog" class="dialog dialog-wide" aria-labelledby="event-form-title">
-      <button class="dialog-close" type="button" data-close aria-label="Close">×</button>
+      <button class="dialog-close" type="button" data-close aria-label="Close" data-i18n-aria-label="Close">×</button>
       <span class="eyebrow" id="event-kicker">Start a conversation</span>
-      <h2 id="event-form-title">Go live</h2>
+      <h2 id="event-form-title" data-i18n="Go live">Go live</h2>
       <form id="event-form" class="form-stack">
         <fieldset class="broadcast-options">
           <legend>Broadcast your class</legend>
           <p>Share your screen with Pairux, or upload a file and go live in Nixamp. Paste the share link below.</p>
-          <div class="broadcast-links"><a class="button button-secondary" href="https://pairux.com/dashboard" target="_blank" rel="noopener noreferrer">Screen share with Pairux ↗</a><a class="button button-secondary" href="https://nixamp.com/#files-panel" target="_blank" rel="noopener noreferrer">Upload &amp; broadcast in Nixamp ↗</a></div>
-          <label>Broadcast link<input name="broadcastUrl" type="url" maxlength="2048" placeholder="Pairux join link or Nixamp Share link" aria-describedby="broadcast-help" /></label>
+          <div class="broadcast-links"><a class="button button-secondary" href="https://pairux.com/dashboard" target="_blank" rel="noopener noreferrer" data-i18n="Screen share with Pairux ↗">Screen share with Pairux ↗</a><a class="button button-secondary" href="https://nixamp.com/#files-panel" target="_blank" rel="noopener noreferrer" data-i18n="Upload &amp; broadcast in Nixamp ↗">Upload &amp; broadcast in Nixamp ↗</a></div>
+          <label><span data-i18n="Broadcast link">Broadcast link</span><input name="broadcastUrl" type="url" maxlength="2048" placeholder="Pairux join link or Nixamp Share link" aria-describedby="broadcast-help" /></label>
           <p class="form-note" id="broadcast-help">You can add the link now or edit your event when the broadcast is ready.</p>
         </fieldset>
-        <label>Title<input name="title" maxlength="160" placeholder="What will people learn?" required /></label>
-        <label>Description<textarea name="description" maxlength="5000" rows="3" placeholder="What will students learn?"></textarea></label>
+        <label><span data-i18n="Title">Title</span><input name="title" maxlength="160" placeholder="What will people learn?" required /></label>
+        <label><span data-i18n="Description">Description</span><textarea name="description" maxlength="5000" rows="3" placeholder="What will students learn?"></textarea></label>
         <div class="form-pair">
-          <label>Topic<input name="topic" maxlength="100" placeholder="Technology, music…" /></label>
-          <label>Who can join
-            <select name="visibility">
-              <option value="public">Public</option>
-              <option value="unlisted">Anyone with the link</option>
-              <option value="private">Invited people</option>
+          <label><span data-i18n="Topic">Topic</span><input name="topic" maxlength="100" placeholder="Technology, music…" /></label>
+          <label><span data-i18n="Who can join">Who can join
+            </span><select name="visibility">
+              <option value="public" data-i18n="Public">Public</option>
+              <option value="unlisted" data-i18n="Anyone with the link">Anyone with the link</option>
+              <option value="private" data-i18n="Invited people">Invited people</option>
             </select>
           </label>
         </div>
         <div class="ai-writer">
-          <div class="ai-writer-actions"><button class="button button-secondary" type="button" id="event-ai-write">Write with AI</button><button class="text-button" type="button" id="event-ai-cancel" hidden>Cancel</button></div>
+          <div class="ai-writer-actions"><button class="button button-secondary" type="button" id="event-ai-write" data-i18n="Write with AI">Write with AI</button><button class="text-button" type="button" id="event-ai-cancel" hidden data-i18n="Cancel">Cancel</button></div>
           <p class="form-note">Optional: use your current title, description, and topic as the prompt. Review the draft before using it.</p>
           <p id="event-ai-status" class="form-note ai-writer-status" role="status" aria-live="polite"></p>
           <div id="event-ai-preview" class="form-stack" hidden>
-            <label for="event-ai-title">Suggested title</label><input id="event-ai-title" readonly />
-            <label for="event-ai-description">Suggested description</label><textarea id="event-ai-description" rows="6" readonly></textarea>
-            <label for="event-ai-topic">Suggested topic</label><input id="event-ai-topic" readonly />
-            <button class="button button-secondary" type="button" id="event-ai-apply" aria-disabled="true">Use these details</button>
+            <label for="event-ai-title" data-i18n="Suggested title">Suggested title</label><input id="event-ai-title" readonly />
+            <label for="event-ai-description" data-i18n="Suggested description">Suggested description</label><textarea id="event-ai-description" rows="6" readonly></textarea>
+            <label for="event-ai-topic" data-i18n="Suggested topic">Suggested topic</label><input id="event-ai-topic" readonly />
+            <button class="button button-secondary" type="button" id="event-ai-apply" aria-disabled="true" data-i18n="Use these details">Use these details</button>
           </div>
         </div>
         <div id="schedule-fields" class="form-pair" hidden>
-          <label>Date and time<input name="startsAt" type="datetime-local" /></label>
-          <label>Expected length
-            <select name="expectedDurationMinutes">
+          <label><span data-i18n="Date and time">Date and time</span><input name="startsAt" type="datetime-local" /></label>
+          <label><span data-i18n="Expected length">Expected length
+            </span><select name="expectedDurationMinutes">
               <option value="30">30 minutes</option>
               <option value="60" selected>1 hour</option>
               <option value="90">90 minutes</option>
@@ -101,20 +102,20 @@
           </label>
         </div>
         <p class="form-note" id="schedule-timezone"></p>
-        <label for="event-recurrence">Repeat</label><select id="event-recurrence" name="recurrence"><option value="none">Does not repeat</option><option value="daily">Every day</option><option value="weekly">Every week</option></select>
+        <label for="event-recurrence" data-i18n="Repeat">Repeat</label><select id="event-recurrence" name="recurrence"><option value="none" data-i18n="Does not repeat">Does not repeat</option><option value="daily" data-i18n="Every day">Every day</option><option value="weekly" data-i18n="Every week">Every week</option></select>
         <p class="form-note">Repeating classes keep this same link. Ending a session schedules the next one at the same local time.</p>
         <fieldset class="broadcast-options"><legend>Host profile</legend>
-          <label>Host name<input name="hostName" maxlength="100" autocomplete="name" /></label>
-          <label>Homepage<input name="homepageUrl" type="url" maxlength="2048" placeholder="https://your-site.com" /></label>
-          <label>Profile photo URL<input name="avatarUrl" type="url" maxlength="2048" placeholder="https://your-site.com/photo.jpg" /></label>
+          <label><span data-i18n="Host name">Host name</span><input name="hostName" maxlength="100" autocomplete="name" /></label>
+          <label><span data-i18n="Homepage">Homepage</span><input name="homepageUrl" type="url" maxlength="2048" placeholder="https://your-site.com" /></label>
+          <label><span data-i18n="Profile photo URL">Profile photo URL</span><input name="avatarUrl" type="url" maxlength="2048" placeholder="https://your-site.com/photo.jpg" /></label>
         </fieldset>
         <div class="form-checks">
-          <label><input name="chatEnabled" type="checkbox" checked /> Chat</label>
-          <label><input name="handRaiseEnabled" type="checkbox" checked /> Raise hand</label>
+          <label><input name="chatEnabled" type="checkbox" checked /><span data-i18n="Chat"> Chat</span></label>
+          <label><input name="handRaiseEnabled" type="checkbox" checked /><span data-i18n="Raise hand"> Raise hand</span></label>
 
         </div>
         <p class="form-error" id="event-error" role="alert"></p>
-        <button class="button button-primary" type="submit" id="event-submit">Create live</button>
+        <button class="button button-primary" type="submit" id="event-submit" data-i18n="Create live">Create live</button>
       </form>
     </dialog>
 

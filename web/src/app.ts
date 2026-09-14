@@ -1,3 +1,5 @@
+import { i18n, t as uiMessage } from "../../src/i18n.ts";
+import { uiText, uiAttribute } from "./i18n.ts";
 /**
  * nixamp on the web: the same player, drawn in a browser.
  *
@@ -98,7 +100,7 @@ export function start(): void {
   // is. One press, remembered, and the page redraws itself as the other room.
   const tvToggle = document.getElementById("tv-toggle") as HTMLButtonElement | null;
   if (tvToggle) {
-    tvToggle.textContent = television ? "TV mode: on" : "TV mode";
+    uiText(tvToggle, () => television ? "TV mode: on" : uiMessage("TV mode"));
     tvToggle.title = television
       ? "Back to the ordinary layout: lists with their own scrollbars, smaller type."
       : "For a television: bigger type, lists a page at a time, and nothing to scroll but the page.";
@@ -743,8 +745,10 @@ export function start(): void {
    */
   function joinPartyLabel(button: HTMLElement, text = "Join party"): void {
     drawIcon(button, text === "Join party" ? "party" : "live");
-    button.append(document.createTextNode(` ${text}`));
-    button.title = text === "Join party" ? "Join live" : text;
+    const label = document.createTextNode("");
+    uiText(label, () => ` ${uiMessage(text)}`);
+    button.append(label);
+    uiAttribute(button, "title", () => uiMessage(text === "Join party" ? "Join live" : text));
   }
 
   joinPartyLabel(dom.partyJoin);
@@ -894,7 +898,7 @@ export function start(): void {
     if (localLink) return localLink.label;
     if (onServerLive()) return serverContext().title;
     const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
-    return track ? displayName(track) : "Nothing loaded.";
+    return track ? displayName(track) : uiMessage("Nothing loaded.");
   };
 
   const currentAlbum = (): string => {
@@ -1262,9 +1266,9 @@ export function start(): void {
     // Loading outranks both: a stream that is on its way is neither playing
     // nor stopped, and STOPPED over a thirty-second wait reads as broken.
     const wait = loading();
-    dom.status.textContent = wait ? "LOADING" : live ? "▶ PLAYING" : "■ STOPPED";
+    uiText(dom.status, () => wait ? uiMessage("LOADING") : live ? uiMessage("▶ PLAYING") : uiMessage("■ STOPPED"));
     dom.status.dataset.playing = wait ? "loading" : String(live);
-    dom.title.textContent = currentName();
+    uiText(dom.title, () => currentName());
     dom.title.classList.toggle("with-context", onServerLive());
     dom.album.classList.toggle("with-context", onServerLive());
     if (onServerLive() || channelOn) updateMediaSession();
@@ -1302,22 +1306,22 @@ export function start(): void {
     }
 
     dom.playPause.textContent = live ? "❚❚" : "▶";
-    dom.playPause.setAttribute("aria-label", live ? "Pause" : "Play");
-    dom.seek.setAttribute("aria-valuetext", `${formatTime(player.position)} of ${formatTime(player.duration)}`);
-    dom.volume.setAttribute("aria-valuetext", `${dom.volume.value} percent`);
+    uiAttribute(dom.playPause, "aria-label", () => live ? uiMessage("Pause") : uiMessage("Play"));
+    uiAttribute(dom.seek, "aria-valuetext", () => `${formatTime(player.position)} ${i18n.language === "en" ? "of" : "/"} ${formatTime(player.duration)}`);
+    uiAttribute(dom.volume, "aria-valuetext", () => i18n.number(Number(dom.volume.value) / 100, { style: "percent" }));
     // Connected, the list is that server's files, and says so; on its own it
     // is a playlist of what was picked.
-    dom.playlistTitle.dataset.title = mode === "remote"
-      ? `Files on ${serverName || "this server"} (${total.toLocaleString()})`
-      : `Playlist (${total})`;
-    dom.source.textContent = mode === "remote"
+    uiAttribute(dom.playlistTitle, "data-title", () => mode === "remote"
+      ? `Files on ${serverName || "this server"} (${total.toLocaleString(i18n.language)})`
+      : `${uiMessage("Playlist")} (${i18n.number(total)})`);
+    uiText(dom.source, () => mode === "remote"
       ? `connected · ${serverName || remote.address.replace(/^https?:\/\//, "") || "—"}`
-      : local.length > 0 ? `local · ${local.length} files` : "no source";
+      : local.length > 0 ? `local · ${local.length} files` : uiMessage("no source"));
     drawWayInHere();
 
-    dom.remoteState.textContent = mode === "remote"
+    uiText(dom.remoteState, () => mode === "remote"
       ? `${remoteStatus}${remoteDetail ? ` — ${remoteDetail}` : ""}`
-      : "not connected";
+      : uiMessage("not connected"));
     dom.remoteState.dataset.status = mode === "remote" ? remoteStatus : "idle";
     dom.disconnect.hidden = mode !== "remote";
 
@@ -1335,8 +1339,7 @@ export function start(): void {
     renderPlaylist();
     dom.glyphs.textContent = bars.map(glyph).join("");
     const [l, r] = remoteSpectrum() ? snapshot.levels : player.levels();
-    dom.levels.textContent =
-      meter(l, r);
+    dom.levels.textContent = meter(l, r);
   }
 
   let renderedFor = "";
@@ -1392,7 +1395,7 @@ export function start(): void {
     };
     const where = document.createElement("span");
     where.className = "pager-where";
-    where.textContent = `${from + 1}–${to} of ${total.toLocaleString()}`;
+    uiText(where, () => `${from + 1}–${to} of ${total.toLocaleString(i18n.language)}`);
     dom.playlistPager.replaceChildren(
       step("‹ Previous", page - 1, "The page before this one"),
       where,
@@ -1691,8 +1694,7 @@ export function start(): void {
     if (playing() || player.jinglePlaying) {
       dom.glyphs.textContent = bars.map(glyph).join("");
       const [l, r] = remoteSpectrum() ? snapshot.levels : player.levels();
-      dom.levels.textContent =
-        meter(l, r);
+      dom.levels.textContent = meter(l, r);
     }
     if (playing()) {
       dom.elapsed.textContent = formatTime(position());
@@ -2357,8 +2359,7 @@ export function start(): void {
       return;
     }
 
-    dom.directoryNote.textContent =
-      `${streams.length} ${streams.length === 1 ? "server is" : "servers are"} on. ` +
+    dom.directoryNote.textContent = `${streams.length} ${streams.length === 1 ? "server is" : "servers are"} on. ` +
       "Connect to one to browse its files and watch what is live on it. No account needed.";
     for (const stream of streams) {
       const item = document.createElement("li");
@@ -2375,7 +2376,7 @@ export function start(): void {
       name.textContent = stream.name;
       const detail = document.createElement("span");
       detail.className = "detail";
-      const parts: string[] = [`${stream.tracks.toLocaleString()} files to browse`];
+      const parts: string[] = [`${stream.tracks.toLocaleString(i18n.language)} files to browse`];
       if (stream.playing !== false && stream.nowPlaying) parts.push(`playing ${stream.nowPlaying}`);
       else parts.push("player idle");
       // The call-in code earns its place in the list: it is the only way to
@@ -2668,8 +2669,7 @@ export function start(): void {
       return;
     }
     const free = entries.length - busy.length;
-    dom.publishNote.textContent =
-      `Point OBS, Larix or ffmpeg at one of these. One publisher per URL — ` +
+    dom.publishNote.textContent = `Point OBS, Larix or ffmpeg at one of these. One publisher per URL — ` +
       `${entries.length} at once, ${free} free right now.`;
 
     replaceList(dom.publishList, ...entries.map((entry) => {
@@ -2689,7 +2689,7 @@ export function start(): void {
       const copy = document.createElement("button");
       copy.type = "button";
       copy.className = "ghost";
-      copy.textContent = "Copy";
+      uiText(copy, () => uiMessage("Copy"));
       copy.addEventListener("click", () => {
         box.select();
         void navigator.clipboard?.writeText(entry.url).catch(() => {});
@@ -3110,7 +3110,7 @@ export function start(): void {
         const off = document.createElement("button");
         off.type = "button";
         off.className = "ghost";
-        off.textContent = "Disconnect";
+        uiText(off, () => uiMessage("Disconnect"));
         off.addEventListener("click", () => {
           void (async () => {
             try {
@@ -3274,7 +3274,7 @@ export function start(): void {
     const when = document.createElement("time");
     const now = new Date();
     when.dateTime = now.toISOString();
-    when.textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    uiText(when, () => now.toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     const text = document.createElement("span");
     // textContent: a message can quote a server's name, or a link somebody typed.
     text.textContent = message;
@@ -3345,7 +3345,7 @@ export function start(): void {
     const value = Number(dom.transcriptBackgroundLevel.value);
     background.setLevel(value / 100);
     dom.transcriptBackgroundValue.value = `${value}%`;
-    dom.transcriptBackgroundLevel.setAttribute("aria-valuetext", `${value} percent`);
+    uiAttribute(dom.transcriptBackgroundLevel, "aria-valuetext", () => i18n.number(value / 100, { style: "percent" }));
     dom.transcriptBackgroundLevel.disabled = !dom.transcriptBackground.checked;
   };
   try {
@@ -3462,9 +3462,12 @@ export function start(): void {
     for (const speaker of recent) {
       if (dom.transcriptSpeakers.querySelector(`[data-speaker="${speaker.id}"]`)) continue;
       const label = document.createElement("label"); label.className = "transcript-switch"; label.dataset["speaker"] = speaker.id;
-      label.append(`Speaker ${speaker.id.split("-")[1]} `);
+      const speakerName = document.createElement("span");
+      const speakerNumber = speaker.id.split("-")[1];
+      uiText(speakerName, () => `${uiMessage("Speaker")} ${speakerNumber} `);
+      label.append(speakerName);
       const select = document.createElement("select"); select.className = "transcript-language";
-      select.setAttribute("aria-label", `Voice for ${label.textContent?.trim()}`);
+      uiAttribute(select, "aria-label", () => `${uiMessage("Speaker voices")}: ${speakerNumber}`);
       for (const voice of voiceOptions?.voices ?? []) select.append(new Option(voice.name, voice.id));
       select.value = speaker.voice;
       select.addEventListener("change", () => { speaker.voice = select.value; liveVoice.reset(); });
@@ -3526,7 +3529,7 @@ export function start(): void {
     dom.trollboxForm.hidden = true;
     stopListening(false);
     if (!room) return;
-    dom.trollboxNote.textContent = `The room for ${currentName() || room.channel}. Loading…`;
+    uiText(dom.trollboxNote, () => `The room for ${currentName() || room.channel}. Loading…`);
     void pollTrollbox();
   }
   /** One line of the room. Once sent it is public record, so a line carries no control to take it down. */
@@ -3537,7 +3540,7 @@ export function start(): void {
     when.className = "when";
     when.dateTime = message.createdAt;
     const at = new Date(message.createdAt);
-    when.textContent = Number.isNaN(at.getTime()) ? "" : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    uiText(when, () => Number.isNaN(at.getTime()) ? "" : at.toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" }));
     const who = document.createElement("span");
     who.className = "who";
     // textContent, always: a handle and a line are somebody's text.
@@ -3545,6 +3548,7 @@ export function start(): void {
     const body = document.createElement("span");
     body.className = "line";
     body.textContent = message.body;
+    body.dir = "auto"; body.translate = false;
     item.append(when, who, body);
     return item;
   }
@@ -3580,11 +3584,11 @@ export function start(): void {
       dom.trollboxForm.hidden = you === "";
       dom.trollboxEditLabel.hidden = you === "" || !canRecord;
       if (you === "") stopListening(false);
-      dom.trollboxNote.textContent = you !== ""
+      uiText(dom.trollboxNote, () => you !== ""
         ? `You are ${you} in the room for ${currentName() || room.channel}.`
         : trollboxSite === ""
           ? `The room for ${currentName() || room.channel}. Sign in to say something.`
-          : `The room for ${currentName() || room.channel}. To say something, open this stream on nixamp.com and sign in.`;
+          : `The room for ${currentName() || room.channel}. To say something, open this stream on nixamp.com and sign in.`);
     } catch {
       if (key === trollboxKey) dom.trollboxNote.textContent = "The trollbox is not answering.";
     } finally {
@@ -3811,7 +3815,7 @@ export function start(): void {
         return;
       }
       dom.personaHandle.value = body.chosen ? (body.handle ?? "") : "";
-      dom.personaHandle.placeholder = body.handle || "handle";
+      uiAttribute(dom.personaHandle, "placeholder", () => body.handle || uiMessage("handle"));
       dom.personaVoice.value = body.voice === "female" || body.voice === "male" ? body.voice : "";
       dom.personaProfile.value = body.profile ?? "";
       // The voice named by id, so two people can see they differ.
@@ -3902,7 +3906,12 @@ export function start(): void {
     dom.transcriptPanel.hidden = false;
     dom.transcriptOn.checked = captionsOn && (!!channelOn || captureWanted || dom.transcriptAudio.checked);
     if (dom.transcriptLanguage.options.length === 0) {
-      for (const choice of LANGUAGE_CHOICES) dom.transcriptLanguage.append(new Option(choice.label, choice.code));
+      for (const choice of LANGUAGE_CHOICES) {
+        const option = new Option(choice.label, choice.code);
+        if (choice.code) option.lang = choice.code;
+        uiText(option, () => choice.code ? choice.label : uiMessage("Original (auto-detect)"));
+        dom.transcriptLanguage.append(option);
+      }
     }
     dom.transcriptLanguage.value = captionsIn;
     drawVoiceControls();
@@ -4007,11 +4016,13 @@ export function start(): void {
     const when = document.createElement("time");
     when.className = "when";
     when.dateTime = new Date(line.at).toISOString();
-    when.textContent = whenLabel(line.at);
+    uiText(when, () => whenLabel(line.at));
     const text = document.createElement("span");
     text.className = "line";
     // textContent, always: it is what somebody said, heard by a model.
     text.textContent = line.text;
+    text.dir = "auto"; text.translate = false;
+    if (line.language || line.sourceLanguage) text.lang = line.language || line.sourceLanguage!;
     const label = captionLabel(line);
     if (label) {
       const lang = document.createElement("span");
@@ -4100,7 +4111,7 @@ export function start(): void {
         : !purchase.loaded() ? purchase.loadingMessage()
         : voiceError || (!voiceOptions ? "Loading voices…" : "Audio translation is unavailable for this language.");
     } else if (!dom.transcriptAudio.checked) {
-      dom.transcriptAudioNote.textContent = voiceError || "Original audio.";
+      uiText(dom.transcriptAudioNote, () => voiceError || uiMessage("Original audio."));
     }
   }
 
@@ -4381,12 +4392,12 @@ export function start(): void {
     name.textContent = catalog.name;
     const detail = document.createElement("span");
     detail.className = "detail";
-    detail.textContent = [
-      `${catalog.entries.toLocaleString()} ${catalog.entries === 1 ? "entry" : "entries"}`,
-      `${catalog.live.toLocaleString()} live`,
-      `${catalog.vod.toLocaleString()} on demand`,
+    uiText(detail, () => [
+      `${catalog.entries.toLocaleString(i18n.language)} ${catalog.entries === 1 ? "entry" : "entries"}`,
+      `${catalog.live.toLocaleString(i18n.language)} live`,
+      `${catalog.vod.toLocaleString(i18n.language)} on demand`,
       `refreshed ${agoOf(catalog.refreshedAt)}`,
-    ].join(" · ");
+    ].join(" · "));
     label.append(name, detail);
     // What went wrong the last time it was read, for whoever can act on it.
     if (canDrive && catalog.error) {
@@ -4416,7 +4427,7 @@ export function start(): void {
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "ghost";
-      remove.textContent = "Remove";
+      uiText(remove, () => uiMessage("Remove"));
       remove.title = "Take this catalog off the server";
       remove.addEventListener("click", () => {
         // Asked, because a catalog is somebody's list and a slip here is a
@@ -4473,7 +4484,7 @@ export function start(): void {
     name.textContent = label;
     const detail = document.createElement("span");
     detail.className = "detail";
-    detail.textContent = `${count.toLocaleString()} · ${live.toLocaleString()} live · ${vod.toLocaleString()} on demand`;
+    uiText(detail, () => `${count.toLocaleString(i18n.language)} · ${live.toLocaleString(i18n.language)} live · ${vod.toLocaleString(i18n.language)} on demand`);
     text.append(name, detail);
     const open = document.createElement("button");
     open.type = "button";
@@ -4578,7 +4589,7 @@ export function start(): void {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "ghost";
-      button.textContent = `Show more (${entriesShown.length.toLocaleString()} of ${entriesTotal.toLocaleString()})`;
+      uiText(button, () => `Show more (${entriesShown.length.toLocaleString(i18n.language)} of ${entriesTotal.toLocaleString(i18n.language)})`);
       button.addEventListener("click", (event) => {
         event.stopPropagation();
         beginListNavigation(dom.catalogsEntries, false);
@@ -4653,7 +4664,7 @@ export function start(): void {
       });
       const body = (await answer.json().catch(() => ({}))) as { error?: string; catalog?: CatalogSummary };
       said(answer.ok
-        ? `${body.catalog?.name ?? catalog.name}: ${(body.catalog?.entries ?? 0).toLocaleString()} entries.`
+        ? `${body.catalog?.name ?? catalog.name}: ${(body.catalog?.entries ?? 0).toLocaleString(i18n.language)} entries.`
         : (body.error ?? "that did not work"));
     } catch {
       said("could not reach the server");
@@ -4693,7 +4704,7 @@ export function start(): void {
           said(body.error ?? "that did not work");
           return;
         }
-        said(`${body.catalog?.name ?? name ?? source}: ${(body.catalog?.entries ?? 0).toLocaleString()} entries.`);
+        said(`${body.catalog?.name ?? name ?? source}: ${(body.catalog?.entries ?? 0).toLocaleString(i18n.language)} entries.`);
         dom.catalogSource.value = "";
         dom.catalogName.value = "";
       } catch {
@@ -4846,7 +4857,7 @@ export function start(): void {
         const stop = document.createElement("button");
         stop.type = "button";
         stop.className = "ghost follow";
-        stop.textContent = "Unfollow";
+        uiText(stop, () => uiMessage("Unfollow"));
         stop.addEventListener("click", () => {
           void (async () => {
             stop.disabled = true;
@@ -4879,11 +4890,11 @@ export function start(): void {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "ghost follow";
-    button.textContent = "Follow";
+    uiText(button, () => uiMessage("Follow"));
     button.setAttribute("aria-label", `Follow ${name}`);
 
     const draw = (following: boolean): void => {
-      button.textContent = following ? "Following" : "Follow";
+      uiText(button, () => following ? "Following" : uiMessage("Follow"));
       button.dataset["following"] = following ? "yes" : "no";
     };
 
@@ -4953,8 +4964,7 @@ export function start(): void {
       return false;
     }
     if (Notification.permission === "denied") {
-      dom.notifyNote.textContent =
-        "This browser is blocking notifications. Allow them in site settings first.";
+      dom.notifyNote.textContent = "This browser is blocking notifications. Allow them in site settings first.";
       return false;
     }
     if ((await Notification.requestPermission()) !== "granted") {
@@ -5146,8 +5156,8 @@ export function start(): void {
       : creating
         ? "Create an account on nixamp.com."
         : "Listening needs no account. Sign in to keep favourites, follow people, and publish.";
-    dom.accountSubmit.textContent = creating ? "Create account" : "Sign in";
-    dom.accountToggle.textContent = creating ? "I have one" : "Create one";
+    uiText(dom.accountSubmit, () => creating ? uiMessage("Create account") : uiMessage("Sign in"));
+    uiText(dom.accountToggle, () => creating ? "I have one" : uiMessage("Create one"));
     dom.accountPassword.autocomplete = creating ? "new-password" : "current-password";
     showWelcome();
   };
@@ -5655,12 +5665,12 @@ export function start(): void {
       const check = document.createElement("input");
       check.type = "checkbox";
       check.checked = !off;
-      check.setAttribute("aria-label", `${panelTitle(panel)} on`);
+      uiAttribute(check, "aria-label", () => `${panelTitle(panel)} on`);
       check.addEventListener("change", () => setClosed(panel, !check.checked));
       const name = document.createElement("span");
       name.className = "name";
       // textContent: a title can carry a server's name, which is somebody's text.
-      name.textContent = panelTitle(panel);
+      uiText(name, () => panelTitle(panel));
       label.append(check, name);
       const detail = document.createElement("span");
       detail.className = "detail";
@@ -5743,9 +5753,9 @@ export function start(): void {
     dom.publishPanel.hidden = true;
     dom.adminPanel.hidden = true;
     dom.onairPanel.hidden = true;
-    dom.onairPanel.dataset.title = "Parties on this server";
+    uiAttribute(dom.onairPanel, "data-title", () => uiMessage("Parties on this server"));
     dom.catalogsPanel.hidden = true;
-    dom.catalogsPanel.dataset.title = "Catalogs on this server";
+    uiAttribute(dom.catalogsPanel, "data-title", () => uiMessage("Catalogs on this server"));
     serverName = "";
     viewLink = "";
     updateFavHere();
@@ -5922,8 +5932,8 @@ export function start(): void {
       // titled with: "Files on ubuntu" says where you are, "Playlist" did not.
       if (air.server.name && air.server.name !== serverName) {
         serverName = air.server.name;
-        dom.onairPanel.dataset.title = `Parties on ${serverName}`;
-        dom.catalogsPanel.dataset.title = `Catalogs on ${serverName}`;
+        dom.onairPanel.setAttribute("data-title", `Parties on ${serverName}`);
+        dom.catalogsPanel.setAttribute("data-title", `Catalogs on ${serverName}`);
         updateFavHere();
         draw();
       }
@@ -6286,7 +6296,7 @@ export function start(): void {
       return;
     }
     if (done === "\u2713" || done === "✓") drawIcon(button, "check");
-    else button.textContent = done;
+    else uiText(button, () => uiMessage(done));
     setTimeout(() => { button.innerHTML = was; }, 1200);
   }
 

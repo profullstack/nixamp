@@ -1,3 +1,5 @@
+import { uiText, uiAttribute } from "../../web/src/i18n.ts";
+import { t as uiMessage } from "../../src/i18n.ts";
 import { api } from "./api.ts";
 import type { EventDraft, EventDraftResult, WriterInput } from "../../src/event-writer.ts";
 
@@ -25,8 +27,8 @@ export function installEventWriter(form: HTMLFormElement, dialog: HTMLDialogElem
   function reset(): void {
     request?.abort(); request = null; proposed = null; source = null;
     preview.hidden = true; preview.removeAttribute("aria-busy"); cancel.hidden = true;
-    write.textContent = "Write with AI"; write.removeAttribute("aria-disabled");
-    apply.textContent = "Use these details"; apply.setAttribute("aria-disabled", "true");
+    uiText(write, () => uiMessage("Write with AI")); write.removeAttribute("aria-disabled");
+    uiText(apply, () => uiMessage("Use these details")); apply.setAttribute("aria-disabled", "true");
     status.textContent = "";
     for (const field of Object.values(fields)) field.value = "";
   }
@@ -39,9 +41,9 @@ export function installEventWriter(form: HTMLFormElement, dialog: HTMLDialogElem
     const controller = new AbortController(); request = controller;
     source = input; proposed = null;
     write.setAttribute("aria-disabled", "true"); write.textContent = "Writing…";
-    cancel.hidden = false; cancel.textContent = "Cancel";
+    cancel.hidden = false; uiText(cancel, () => uiMessage("Cancel"));
     preview.hidden = false; preview.setAttribute("aria-busy", "true");
-    apply.textContent = "Use these details"; apply.setAttribute("aria-disabled", "true");
+    uiText(apply, () => uiMessage("Use these details")); apply.setAttribute("aria-disabled", "true");
     for (const field of Object.values(fields)) field.value = "";
     status.textContent = "Writing a draft from your event details… You can keep editing.";
     try {

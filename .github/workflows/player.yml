@@ -4,6 +4,13 @@ on:
     paths:
       - 'web/**'
       - 'src/protocol.ts'
+      - 'src/i18n.ts'
+      - 'src/ui-languages.ts'
+      - 'src/ui-aliases.ts'
+      - 'src/locales/**'
+      - 'test/i18n.test.ts'
+      - 'backtoschool/**'
+      - 'desktop/**'
       - 'package.json'
       - 'bun.lock'
       - '.github/workflows/player.yml'
@@ -23,8 +30,9 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun test web/test/player.test.ts web/test/web.test.ts
+      - run: bun test test/i18n.test.ts web/test/player.test.ts web/test/web.test.ts web/test/accessibility.test.ts
       - run: bun run web:build
+      - run: bun run backtoschool:build
       - name: Install browser test tools
         run: |
           mkdir -p "$RUNNER_TEMP/nixamp-browser"
@@ -34,3 +42,7 @@ jobs:
         env:
           NIXAMP_PLAYWRIGHT_MODULE: ${{ runner.temp }}/nixamp-browser/node_modules/playwright/index.mjs
         run: bun web/scripts/check-intro.mjs
+      - name: Interface language, select contrast and accessible live switching
+        env:
+          NIXAMP_PLAYWRIGHT_MODULE: ${{ runner.temp }}/nixamp-browser/node_modules/playwright/index.mjs
+        run: bun web/scripts/check-interface.mjs

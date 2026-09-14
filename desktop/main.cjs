@@ -11,10 +11,11 @@
  */
 "use strict";
 
-const { app, BrowserWindow, Menu, dialog, shell, clipboard } = require("electron");
+const { app, BrowserWindow, Menu, dialog, shell, clipboard, ipcMain } = require("electron");
 const { spawn } = require("node:child_process");
 const { createServer } = require("node:net");
-const { existsSync } = require("node:fs");
+const { existsSync, readFileSync, writeFileSync } = require("node:fs");
+const { pathToFileURL } = require("node:url");
 const { homedir } = require("node:os");
 const { join } = require("node:path");
 
@@ -24,6 +25,7 @@ const isDev = !app.isPackaged;
 function resources() {
   const root = isDev ? join(__dirname, "..") : join(process.resourcesPath, "cli");
   return {
+    locale: join(root, "dist", "i18n.js"),
     serveEntry: join(root, "dist", "serve.js"),
     cliEntry: join(root, "dist", "main.js"),
     bin: join(root, "bin", "nixamp.mjs"),
@@ -43,6 +45,8 @@ function freePort() {
   });
 }
 
+let locale;
+const message = (source) => locale ? locale.t(source) : source;
 let child = null;
 let window = null;
 let port = 0;
@@ -95,7 +99,7 @@ async function restart(root) {
 
 async function chooseLibrary() {
   const chosen = await dialog.showOpenDialog({
-    title: "Choose a music folder",
+    title: message("Open folder"),
     defaultPath: library,
     properties: ["openDirectory"],
   });
@@ -108,24 +112,33 @@ function buildMenu() {
     {
       label: "nixamp",
       submenu: [
-        { label: "Open Music Folder…", accelerator: "CmdOrCtrl+O", click: () => void chooseLibrary() },
-        { label: "Reload Player", accelerator: "CmdOrCtrl+R", click: () => window?.reload() },
+        { label: message("Open folder"), accelerator: "CmdOrCtrl+O", click: () => void chooseLibrary() },
+        { label: message("Reload Player"), accelerator: "CmdOrCtrl+R", click: () => window?.reload() },
         { type: "separator" },
         {
-          label: "Copy Bundled CLI Path",
+          label: message("Copy Bundled CLI Path"),
           // The bundle carries the CLI; this is how a person finds it.
           click: () => {
             clipboard.writeText(`ELECTRON_RUN_AS_NODE=1 "${process.execPath}" "${bin}"`);
           },
         },
         { type: "separator" },
-        { role: "toggleDevTools" },
-        { role: "quit" },
+        { role: "toggleDevTools", label: message("Developer tools") },
+        { role: "quit", label: message("Quit") },
       ],
     },
-    { role: "editMenu" },
+    { label: message("Edit"), submenu: [
+      { role: "undo", label: message("Undo") }, { role: "redo", label: message("Redo") },
+      { type: "separator" }, { role: "cut", label: message("Cut") },
+      { role: "copy", label: message("Copy") }, { role: "paste", label: message("Paste") },
+      { role: "selectAll", label: message("Select all") },
+    ] },
+    { label: message("Interface language"), submenu: locale.UI_LANGUAGES.map(language => ({
+      label: language.label, type: "radio", checked: locale.i18n.language === language.code,
+      click: () => { void changeLanguage(language.code); },
+    })) },
     {
-      label: "Help",
+      label: message("Help"),
       submenu: [
         { label: "nixamp on GitHub", click: () => void shell.openExternal("https://github.com/profullstack/nixamp") },
         { label: "nixamp.com", click: () => void shell.openExternal("https://nixamp.com") },
@@ -146,6 +159,7 @@ async function createWindow() {
     icon: join(__dirname, "build", "icon.png"),
     webPreferences: {
       // The page is our own PWA served over loopback; it needs no privileges.
+      preload: join(__dirname, "preload.cjs"),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
@@ -166,8 +180,25 @@ async function createWindow() {
   window.on("closed", () => { window = null; });
 }
 
+async function changeLanguage(code) {
+  if (!locale.UI_LANGUAGES.some(language => language.code === code)) return;
+  if (!await locale.i18n.setLanguage(code)) return;
+  try { writeFileSync(join(app.getPath("userData"), "ui-language.json"), JSON.stringify(code)); } catch { /* Retain the choice for this run. */ }
+  buildMenu();
+  window?.webContents.send("nixamp:language-changed", code);
+}
+function isOwnPage(event) {
+  return !!window && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame
+    && new URL(event.senderFrame.url).origin === `http://127.0.0.1:${port}`;
+}
 app.whenReady().then(async () => {
   try {
+    locale = await import(pathToFileURL(resources().locale).href);
+    let saved;
+    try { saved = JSON.parse(readFileSync(join(app.getPath("userData"), "ui-language.json"), "utf8")); } catch { /* First run. */ }
+    await locale.i18n.setLanguage(locale.preferredUiLanguage(saved, [process.env.NIXAMP_UI_LANGUAGE, ...app.getPreferredSystemLanguages()]));
+    ipcMain.handle("nixamp:language-get", event => isOwnPage(event) ? locale.i18n.language : "en");
+    ipcMain.handle("nixamp:language-set", async (event, code) => { if (isOwnPage(event)) await changeLanguage(code); });
     port = await freePort();
     child = startServer(library);
   } catch (error) {
