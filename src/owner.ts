@@ -146,6 +146,7 @@ export function needsAdmin(path: string, method = "GET"): boolean {
  */
 export function needsMember(path: string, method = "GET"): boolean {
   if (method === "POST" && /^\/api\/tracks\/\d+\/live$/.test(path)) return true;
+  if (method === "POST" && path === "/api/folders/live") return true;
   if (method === "POST" && /^\/api\/catalogs\/[^/]+\/entries\/[^/]+\/live$/.test(path)) return true;
   if (method === "POST" && /^\/api\/channels\/[^/]+\/keep$/.test(path)) return true;
   if (method === "POST" && /^\/api\/channels\/[^/]+\/(?:start|stop|restart)$/.test(path)) return true;

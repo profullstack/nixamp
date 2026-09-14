@@ -4493,6 +4493,53 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
      * do and which made two files at once impossible for anybody. The owner
      * and any member may; the caps and the throttle above say how much.
      */
+    if (path === "/api/folders/live" && request.method === "POST") {
+      if (!options.channels) {
+        json(response, 503, { error: "this server cannot carry channels" });
+        return;
+      }
+      let body: { indices?: unknown; name?: unknown } = {};
+      try { body = JSON.parse(await readBody(request)) as typeof body; } catch {
+        json(response, 400, { error: "bad JSON" });
+        return;
+      }
+      const indices = Array.isArray(body.indices)
+        ? [...new Set(body.indices.filter((one): one is number => Number.isInteger(one) && one >= 0))]
+        : [];
+      if (indices.length === 0 || indices.length > 10_000) {
+        json(response, 400, { error: "choose a folder with playable files" });
+        return;
+      }
+      const tracks = engine.snapshot().tracks ?? [];
+      const selected = indices
+        .map((index) => ({ index, track: tracks[index], source: engine.trackPath(index) }))
+        .filter((one): one is { index: number; track: (typeof tracks)[number]; source: string } => Boolean(one.track && one.source && !isRemote(one.source)));
+      if (selected.length !== indices.length) {
+        json(response, 404, { error: "one or more folder files are no longer available" });
+        return;
+      }
+      selected.sort((a, b) => String(a.track.title ?? a.source).localeCompare(String(b.track.title ?? b.source), undefined, { numeric: true, sensitivity: "base" }));
+      const sources = selected.map((one) => one.source);
+      const channelId = cleanId(`folder-${sha("sha1").update(sources.join("\n")).digest("hex").slice(0, 12)}`);
+      const name = typeof body.name === "string" && body.name.trim() !== ""
+        ? body.name.trim().slice(0, 120)
+        : selected[0]?.track.folder || "folder";
+      if (liveBy && !options.channels.has(channelId)) {
+        const refusal = memberLiveRefusal(options.channels, liveBy);
+        if (refusal) { json(response, 429, { error: refusal }); return; }
+      }
+      if (!options.channels.has(channelId)) {
+        const started = await pullChannel(options.channels, options.ffprobe ?? ["ffprobe"], channelId, name, sources[0]!, [], "", { playlist: sources, live: true });
+        if (!started) { json(response, 409, { error: "that folder is already going on the air" }); return; }
+        if (liveBy) options.channels.info(channelId)!.startedBy = liveBy;
+      }
+      options.channels.keep(channelId);
+      options.rememberChannels?.(rememberedNow(options.channels));
+      void options.live?.announce?.();
+      json(response, 200, { channel: channelId, name, video: options.channels.kindOf(channelId) !== "audio" });
+      return;
+    }
+
     const trackLive = /^\/api\/tracks\/(\d+)\/live$/.exec(path);
     if (trackLive && request.method === "POST") {
       if (!options.channels) {

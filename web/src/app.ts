@@ -637,7 +637,8 @@ export function start(): void {
   type GoLiveWith =
     | { kind: "channel"; id: string; name: string }
     | { kind: "entry"; catalog: { id: string; name: string }; entry: { id: string; title: string; group?: string; logo?: string; live?: boolean } }
-    | { kind: "track"; index: number; name: string };
+    | { kind: "track"; index: number; name: string }
+    | { kind: "folder"; indices: number[]; name: string };
   function whatToGoLiveWith(): GoLiveWith | null {
     if (mode !== "remote") return null;
     // A link playing here is the link box's to put on the air, with the Go
@@ -678,12 +679,20 @@ export function start(): void {
         // player left to whoever is driving it. It used to take that player
         // over, which a member must not, and which made two files at once
         // impossible for anybody.
-        const path = what.kind === "track"
+        const path = what.kind === "folder"
+          ? "/api/folders/live"
+          : what.kind === "track"
           ? `/api/tracks/${what.index}/live`
           : what.kind === "entry"
             ? `/api/catalogs/${encodeURIComponent(what.catalog.id)}/entries/${encodeURIComponent(what.entry.id)}/live`
             : `/api/channels/${encodeURIComponent(what.id)}/keep`;
-        const answer = await fetch(remote.url(path), { method: "POST" });
+        const answer = await fetch(remote.url(path), {
+          method: "POST",
+          ...(what.kind === "folder" ? {
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ indices: what.indices, name: what.name }),
+          } : {}),
+        });
         const body = (await answer.json().catch(() => ({}))) as { error?: string; channel?: string; video?: boolean };
         if (!answer.ok) {
           note = body.error ?? `${name} would not go on the air.`;
@@ -1435,7 +1444,7 @@ export function start(): void {
   }
 
   /** A folder in the list: its name, and how much is inside it. */
-  function folderRow(name: string, count: number): HTMLElement {
+  function folderRow(name: string, count: number, indices: number[]): HTMLElement {
     const item = document.createElement("li");
     item.className = "folder";
     const label = document.createElement("span");
@@ -1450,6 +1459,32 @@ export function start(): void {
     open.setAttribute("aria-label", `Open folder ${name}, ${count} files`);
     open.append(label, amount); item.replaceChildren(open);
     open.addEventListener("click", event => { event.stopPropagation(); lookAt(openFolder === "" ? name : `${openFolder}/${name}`); });
+    if (indices.length > 0) {
+      const play = document.createElement("button");
+      play.type = "button";
+      play.className = "row-copy";
+      drawIcon(play, "live");
+      play.title = `Play all ${count} files in ${name}`;
+      play.setAttribute("aria-label", `Play folder ${name}`);
+      play.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void playAt(indices[0]!);
+      });
+      item.append(play);
+    }
+    if (mode === "remote" && canGoLive() && indices.length > 0) {
+      const live = document.createElement("button");
+      live.type = "button";
+      live.className = "row-copy";
+      drawIcon(live, "live");
+      live.title = `Go live with all ${count} files in ${name}`;
+      live.setAttribute("aria-label", `Go live with folder ${name}`);
+      live.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void goLiveWith({ kind: "folder", indices, name: `${name}/` }, live);
+      });
+      item.append(live);
+    }
     return item;
   }
   let playlistSource: unknown = null;
@@ -1536,7 +1571,12 @@ export function start(): void {
       const children: HTMLElement[] = [];
 
       for (const [name, count] of foldersShown) {
-        children.push(folderRow(name, count));
+        const full = openFolder === "" ? name : `${openFolder}/${name}`;
+        const indices = rows
+          .filter((row) => row.folder === full || row.folder.startsWith(`${full}/`))
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }))
+          .map((row) => row.index);
+        children.push(folderRow(name, count, indices));
       }
 
       let heading = "";
