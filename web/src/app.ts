@@ -1514,9 +1514,25 @@ export function start(): void {
   }
   let playlistSource: unknown = null;
   let playlistView = "";
-  /** Keep the complete path available in the tooltip and accessibility tree. */
+  /** Wrap everywhere; a fine mouse may additionally pan a long path. */
   const pathMarquee = (path: HTMLElement): void => {
     path.title = path.textContent ?? "";
+    path.addEventListener("pointerenter", (event) => {
+      if (event.pointerType === "mouse") path.dataset["pan"] = "true";
+    });
+    path.addEventListener("pointermove", (event) => {
+      if (path.dataset["pan"] !== "true") return;
+      const overflow = path.scrollWidth - path.clientWidth;
+      if (overflow <= 0) return;
+      const box = path.getBoundingClientRect();
+      const raw = Math.max(0, Math.min(1, (event.clientX - box.left) / Math.max(1, box.width)));
+      const eased = raw * raw * (3 - 2 * raw);
+      path.style.setProperty("--path-shift", `${-overflow * eased}px`);
+    });
+    path.addEventListener("pointerleave", () => {
+      delete path.dataset["pan"];
+      path.style.removeProperty("--path-shift");
+    });
   };
   function renderPlaylist(): void {
     // Meter ticks and playback clocks do not change the library. Avoid mapping,
