@@ -6499,10 +6499,11 @@ export function start(): void {
     // A playlist live has repeated per-file MP4 init boxes at each boundary.
     // Native progressive MP4 treats that as a new resource and may end or
     // reload; HLS keeps one player session while the channel advances.
-    const asHls = channel.video && (wantsHls() || (channel.playlist?.length ?? 0) > 1);
+    const asHls = channel.video && wantsHls();
+    const playlistHls = channel.video && (channel.playlist?.length ?? 0) > 1;
     await whileLoading(() => player.load({
       title: channel.name, artist: "", album: "", duration: 0,
-      url: remote.url(asHls
+      url: remote.url(asHls || playlistHls
         ? `/api/channels/${encodeURIComponent(channel.id)}/hls/index.m3u8`
         : `/api/channels/${encodeURIComponent(channel.id)}`),
       video: channel.video, objectUrl: false,
