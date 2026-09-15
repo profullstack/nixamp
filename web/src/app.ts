@@ -687,7 +687,9 @@ export function start(): void {
         });
         const body = (await answer.json().catch(() => ({}))) as { error?: string; channel?: string; video?: boolean };
         if (!answer.ok) {
-          note = body.error ?? `${name} would not go on the air.`;
+          note = answer.status === 404 && what.kind === "folder"
+            ? "This server needs an update before folders can go live."
+            : body.error ?? `${name} would not go on the air.`;
           draw();
           return;
         }
