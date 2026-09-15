@@ -1481,8 +1481,8 @@ export function start(): void {
       });
       item.append(play);
     }
-    if (mode === "remote" && canGoLive() && indices.length > 0) {
-      item.append(goLiveButton(() => ({ kind: "folder", indices, name: `${name}/` }), `${name}/`));
+    if (mode === "remote" && indices.length > 0) {
+      if (canGoLive()) { item.append(goLiveButton(() => ({ kind: "folder", indices, name: `${name}/` }), `${name}/`)); }
     }
     return item;
   }
