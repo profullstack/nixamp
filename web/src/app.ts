@@ -300,6 +300,13 @@ export function start(): void {
   };
   drawIcon(dom.copyNixamp, "link");
 
+  const trollboxSignIn = document.createElement("a");
+  trollboxSignIn.className = "button";
+  trollboxSignIn.href = "#account-panel";
+  trollboxSignIn.hidden = true;
+  uiText(trollboxSignIn, () => uiMessage("Sign in"));
+  dom.trollboxNote.after(trollboxSignIn);
+
   if (classroomEmbed) {
     // Reuse the caption controls and their existing handlers in the compact
     // player. Move them once at startup, before playback or user interaction.
@@ -311,6 +318,24 @@ export function start(): void {
     dom.transcriptPanel.hidden = false;
     document.querySelector(".classroom-player")!.append(dom.transcriptPanel);
     document.querySelector("#app")!.append(dom.trollboxPanel);
+    const signInDialog = document.createElement("dialog");
+    signInDialog.className = "classroom-sign-in";
+    uiAttribute(signInDialog, "aria-label", () => uiMessage("Sign in"));
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "button";
+    uiText(close, () => uiMessage("Close"));
+    close.addEventListener("click", () => signInDialog.close());
+    dom.accountPanel.classList.remove("panel", "col-a");
+    signInDialog.append(close, dom.accountPanel);
+    document.body.append(signInDialog);
+    trollboxSignIn.addEventListener("click", (event) => {
+      event.preventDefault();
+      signInDialog.showModal();
+    });
+    signInDialog.addEventListener("close", () => {
+      (trollboxSignIn.hidden ? dom.trollboxList : trollboxSignIn).focus({ preventScroll: true });
+    });
   }
 
   /**
@@ -3947,6 +3972,8 @@ export function start(): void {
       const you = body.you ?? "";
       const signedInChanged = trollboxYou !== you;
       trollboxYou = you;
+      trollboxSignIn.hidden = you !== "";
+      if (trollboxSite !== "") trollboxSignIn.href = `${trollboxSite}/?url=${encodeURIComponent(shareableLink())}&play=${encodeURIComponent(`channel:${room.channel}`)}#account-panel`;
       if (signedInChanged) { voiceGrant = null; drawVoiceControls(); }
       dom.trollboxForm.hidden = you === "";
       dom.trollboxEditLabel.hidden = you === "" || !canRecord;

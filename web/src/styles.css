@@ -1465,6 +1465,8 @@ body.classroom-embed { padding: 0; margin: 0; background: #101015; }
 .classroom-embed #trollbox-panel > .panel-tools { display: none; }
 .classroom-embed #trollbox-list { max-height: 10em; overflow: auto; }
 .classroom-embed #video { max-height: 40dvh; }
+.classroom-sign-in { width: min(480px, calc(100vw - 32px)); max-height: 85dvh; overflow: auto; color: var(--fg); background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; padding: 16px; }
+.classroom-sign-in::backdrop { background: #0009; }
 
 /* Language controls stay native, visible and compact on phones and TV. */
 .ui-language { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; font-size: 12px; }
