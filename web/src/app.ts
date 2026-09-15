@@ -1534,6 +1534,7 @@ export function start(): void {
       const queue = channelPlaylist.map((name, index) => {
         const item = document.createElement("li");
         item.className = "row";
+        item.dataset.index = String(index);
         const n = document.createElement("span"); n.className = "n"; n.textContent = String(index + 1).padStart(2, " ");
         const slash = name.lastIndexOf("/");
         const file = document.createElement("span"); file.className = "name row-file"; file.textContent = slash < 0 ? name : name.slice(slash + 1);
@@ -1543,7 +1544,14 @@ export function start(): void {
         const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
         label.append(fileView); pathMarquee(fileView, file); pathMarquee(pathView, path);
         item.classList.add("live-file-row");
-        item.append(n, label, pathView);
+        const progress = document.createElement("span");
+        progress.className = "live-file-progress";
+        progress.setAttribute("role", "progressbar");
+        progress.setAttribute("aria-label", `Estimated progress for ${name}`);
+        const fill = document.createElement("span");
+        fill.className = "live-file-progress-fill";
+        progress.append(fill);
+        item.append(n, label, pathView, progress);
         item.setAttribute("aria-readonly", "true");
         item.title = channel.live === false ? "Part of this on-demand show" : "Live queue (read-only)";
         if (index === (channel.entry ?? 0)) item.setAttribute("aria-current", "true");
@@ -1696,6 +1704,16 @@ export function start(): void {
     const channel = channelOn ? lastAir?.channels.find((one) => one.id === channelOn?.id) : undefined;
     if (channel?.playlist && channel.playlist.length > 0) {
       const current = channel.entry ?? 0;
+      for (const child of Array.from(dom.livePlaylist.children)) {
+        const row = child as HTMLElement;
+        const index = Number(row.dataset.index);
+        const isCurrent = Number.isInteger(index) && index === current;
+        row.classList.toggle("selected", isCurrent);
+        row.classList.toggle("playing", isCurrent);
+        row.classList.toggle("live-file-current", isCurrent);
+        if (isCurrent) row.setAttribute("aria-current", "true");
+        else row.removeAttribute("aria-current");
+      }
       for (const child of Array.from(dom.playlist.children)) {
         const row = child as HTMLElement;
         const index = Number(row.dataset.index);
@@ -1706,6 +1724,11 @@ export function start(): void {
         else row.removeAttribute("aria-current");
       }
       return;
+    }
+    for (const child of Array.from(dom.livePlaylist.children)) {
+      const row = child as HTMLElement;
+      row.classList.remove("selected", "playing", "live-file-current");
+      row.removeAttribute("aria-current");
     }
     const active = at();
     const live = playing();

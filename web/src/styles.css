@@ -821,13 +821,38 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .live-file-row > .n { grid-column: 1; }
 .live-file-row > .row-label { grid-column: 2; align-items: flex-start; justify-self: stretch; text-align: left; }
 .live-file-row > .row-value { grid-column: 1 / -1; width: 100%; }
-.live-file-row > .row-label .long-string-scroller { padding-inline: 0; }
+.live-file-row > .live-file-progress { grid-column: 1 / -1; width: 100%; }
+.file-row > .row-main .long-string-scroller,
+.live-file-row > .row-label .long-string-scroller { padding-inline: 0 !important; }
 .file-row > .row-value { grid-column: 1 / -1; width: 100%; }
 
 .row:hover { background: #142019; }
 .row.selected { background: #16241c; }
 .row.selected .name { color: var(--accent); }
 .row.playing .name { color: var(--green); }
+
+.live-file-progress {
+  display: none;
+  height: 3px;
+  margin: 1px 0 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--edge);
+}
+.live-file-current .live-file-progress { display: block; }
+.live-file-progress-fill {
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+  animation: live-file-progress 1.8s ease-in-out infinite;
+}
+@keyframes live-file-progress {
+  0% { transform: translateX(-110%); }
+  50% { transform: translateX(165%); }
+  100% { transform: translateX(280%); }
+}
 
 /* A heading over a block of the playlist: the library, or something added to
    it. Not clickable -- there is no track behind it. */
