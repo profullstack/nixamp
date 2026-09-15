@@ -850,7 +850,7 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .row-label { display: flex; flex: 1; min-width: 0; min-height: 24px; flex-direction: column; justify-content: center; line-height: 1.2; white-space: normal; overflow: hidden; }
 .row-value { display: block; min-width: 0; max-width: 100%; overflow: hidden; }
 .long-string-scroller { box-sizing: border-box; padding-inline: 4px; }
-.long-string-scroller-content { transform: translateX(var(--path-shift, 0)); transition: transform 280ms ease-out; }
+.long-string-scroller-content { transform: translateX(var(--path-shift, 0)); transition: transform 280ms ease-out; pointer-events: none; }
 @media (hover: hover) and (pointer: fine) {
   .row .long-string-scroller-content {
     white-space: nowrap;

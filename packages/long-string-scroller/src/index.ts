@@ -1,5 +1,7 @@
 /** A wrapped long string that pans with a fine mouse and stays touch-safe. */
 export function attachLongStringScroller(viewport: HTMLElement, content: HTMLElement): void {
+  if (viewport.dataset.longStringScroller === "true") return;
+  viewport.dataset.longStringScroller = "true";
   viewport.classList.add("long-string-scroller");
   content.classList.add("long-string-scroller-content");
   content.title = content.textContent ?? "";
