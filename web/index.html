@@ -204,6 +204,12 @@
             <nav id="playlist-pager" class="pager" aria-label="Playlist pages" data-i18n-aria-label="Playlist pages" hidden></nav>
           </section>
 
+          <!-- The queue for the live currently being watched. It is read-only;
+               the connected server's files remain in the Playlist panel. -->
+          <section class="panel player-only" id="live-playlist-panel" data-title="Live playlist" data-i18n-data-title="Live playlist" hidden>
+            <ol id="live-playlist" class="playlist" aria-label="Current live playlist" data-i18n-aria-label="Current live playlist"></ol>
+          </section>
+
           <!-- One live list across servers and connected sites. -->
           <section class="panel player-only" data-title="Parties" data-i18n-data-title="Parties" id="parties-panel">
             <p class="hint" id="parties-note" data-i18n="Loading…">Loading…</p>

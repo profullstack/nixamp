@@ -146,6 +146,8 @@ export function start(): void {
     glyphs: need<HTMLElement>("glyphs"),
     levels: need<HTMLElement>("levels"),
     playlist: need<HTMLOListElement>("playlist"),
+    livePlaylist: need<HTMLOListElement>("live-playlist"),
+    livePlaylistPanel: need<HTMLElement>("live-playlist-panel"),
     playlistPager: need<HTMLElement>("playlist-pager"),
     crumbs: need<HTMLElement>("crumbs"),
     filter: need<HTMLInputElement>("filter"),
@@ -1509,25 +1511,11 @@ export function start(): void {
     // sorting and serializing thousands of tracks for every incoming frame.
     const channel = channelOn ? lastAir?.channels.find((one) => one.id === channelOn?.id) : undefined;
     const channelPlaylist = channel?.playlist;
-    const source = mode === "remote" ? snapshot.tracks : local;
-    const view = `${mode}:${channelOn?.id ?? ""}:${channelPlaylist?.join("|") ?? ""}:${channel?.entry ?? 0}:${openFolder}:${dom.filter.value}:${listPage}:${canGoLive()}:${dom.adminPanel.hidden}`;
-    if (renderedFor && playlistSource === source && playlistView === view) {
-      markPlaylistPlaying();
-      return;
-    }
-    playlistSource = source;
-    playlistView = view;
-    // A live folder/show is one contiguous feed. Show its queue in the
-    // existing playlist panel, but keep it read-only so clicking an entry can
-    // never move the shared stream for everybody else.
+    dom.livePlaylistPanel.hidden = !(channelOn && channelPlaylist && channelPlaylist.length > 0);
     if (channelOn && channelPlaylist && channelPlaylist.length > 0) {
-      dom.crumbs.hidden = true;
-      dom.playlistPager.hidden = true;
-      dom.playlistPager.replaceChildren();
-      const children = channelPlaylist.map((name, index) => {
+      const queue = channelPlaylist.map((name, index) => {
         const item = document.createElement("li");
         item.className = "row";
-        item.dataset.index = String(index);
         const n = document.createElement("span"); n.className = "n"; n.textContent = String(index + 1).padStart(2, " ");
         const label = document.createElement("span"); label.className = "name"; label.textContent = name;
         item.append(n, label);
@@ -1536,10 +1524,18 @@ export function start(): void {
         if (index === (channel.entry ?? 0)) item.setAttribute("aria-current", "true");
         return item;
       });
-      replaceList(dom.playlist, ...children);
+      replaceList(dom.livePlaylist, ...queue);
+    } else {
+      dom.livePlaylist.replaceChildren();
+    }
+    const source = mode === "remote" ? snapshot.tracks : local;
+    const view = `${mode}:${channelOn?.id ?? ""}:${channelPlaylist?.join("|") ?? ""}:${channel?.entry ?? 0}:${openFolder}:${dom.filter.value}:${listPage}:${canGoLive()}:${dom.adminPanel.hidden}`;
+    if (renderedFor && playlistSource === source && playlistView === view) {
       markPlaylistPlaying();
       return;
     }
+    playlistSource = source;
+    playlistView = view;
     // A row is a name, a length, where it sits, and which pile it is in.
     //
     // Where it sits is what turns a library into something you can look
