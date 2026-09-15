@@ -4532,7 +4532,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 404, { error: "one or more folder files are no longer available" });
         return;
       }
-      selected.sort((a, b) => String(a.track.title ?? a.source).localeCompare(String(b.track.title ?? b.source), undefined, { numeric: true, sensitivity: "base" }));
+      // `indices` already follows the server's depth-first library order.
+      // Keep it intact: sorting these paths by title flattens nested folders
+      // and makes a folder live start the wrong file.
       const sources = selected.map((one) => one.source);
       const channelId = cleanId(`folder-${sha("sha1").update(sources.join("\n")).digest("hex").slice(0, 12)}`);
       const name = typeof body.name === "string" && body.name.trim() !== ""
