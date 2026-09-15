@@ -1288,7 +1288,9 @@ export function start(): void {
     for (const chip of chips) {
       const span = document.createElement("span");
       // The chip that says a game is on gets the red dot.
-      span.className = score?.state === "in" && chip === score.status ? "meta-chip chip-live" : "meta-chip";
+      span.className = /^on air \d/.test(chip)
+        ? "meta-chip meta-chip-clock"
+        : score?.state === "in" && chip === score.status ? "meta-chip chip-live" : "meta-chip";
       span.textContent = chip;
       children.push(span);
     }

@@ -511,6 +511,11 @@ body.tv .subtitle { font-size: 28px; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.meta-chip-clock {
+  min-inline-size: 7.5ch;
+  font-variant-numeric: tabular-nums;
+  text-align: start;
+}
 .meta-chip:first-of-type { color: var(--green); border-color: var(--green-dim); }
 .meta-logo {
   height: 22px;
