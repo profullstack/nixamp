@@ -3316,6 +3316,8 @@ export function start(): void {
       if (directory.status === "fulfilled" && directory.value.ok) {
         partyServers = (directory.value.body as { streams?: PartyServer[] }).streams ?? [];
         partiesLoaded = true;
+        dom.directory.dataset["available"] = String(partyServers.length > 0);
+        drawPanelsList();
       }
       if (parties.status === "fulfilled" && parties.value) {
         if (parties.value.ok) {
@@ -5853,6 +5855,7 @@ export function start(): void {
   function setClosed(panel: HTMLElement, on: boolean): void {
     const heldFocus = panel.contains(document.activeElement);
     panel.toggleAttribute("data-closed", on);
+    if (!on && panel.dataset["available"] === "true") panel.hidden = false;
     if (panel === dom.panelsPanel && on) { panel.hidePopover?.(); panel.hidden = true; }
     if (panel === dom.panelsPanel) dom.panelsToggle.setAttribute("aria-expanded", String(!on && !panel.hidden && !panel.hasAttribute("data-collapsed")));
     if (panel === dom.partiesPanel && !on) void loadParties();
@@ -5971,7 +5974,7 @@ export function start(): void {
       label.append(check, name);
       const detail = document.createElement("span");
       detail.className = "detail";
-      detail.textContent = off ? "off" : panel.hasAttribute("data-collapsed") ? "shaded" : panel.hidden ? "nothing to show right now" : "";
+      detail.textContent = off ? "off" : panel.hasAttribute("data-collapsed") ? "shaded" : panel.hidden && panel.dataset["available"] !== "true" ? "nothing to show right now" : "";
       item.append(label, detail);
       return item;
     });
