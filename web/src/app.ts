@@ -644,7 +644,7 @@ export function start(): void {
     if (channelOn) return { kind: "channel", id: channelOn.id, name: channelOn.name };
     const track = snapshot.tracks[at()];
     if (track && (player.source !== "" || remoteDrives())) {
-      return { kind: "track", index: at(), name: displayName(track) };
+      return { kind: "track", index: at(), name: fileDisplayName(track) };
     }
     return null;
   }
@@ -895,14 +895,25 @@ export function start(): void {
   const onServerLive = (): boolean => mode === "remote" && !channelOn && nowMeta?.kind === "live";
   const currentShareTitle = (): string => onServerLive() ? serverContext().fullTitle : currentName();
 
+  /** Show the complete served-relative path so nested files stay identifiable. */
+  const fileDisplayName = (track: { title: string; artist: string; folder?: string }): string => {
+    const name = displayName(track);
+    return track.folder ? `${track.folder} / ${name}` : name;
+  };
+
   const currentName = (): string => {
     // On a channel, the channel: it is not in the playlist, and naming the
     // server's own track over CNN said the wrong thing was playing.
-    if (channelOn) return channelOn.name;
+    if (channelOn) {
+      const channelId = channelOn.id;
+      const channel = lastAir?.channels.find(one => one.id === channelId);
+      const entry = channel?.playlist?.[channel.entry ?? 0];
+      return entry || channelOn.name;
+    }
     if (localLink) return localLink.label;
     if (onServerLive()) return serverContext().title;
     const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
-    return track ? displayName(track) : uiMessage("Nothing loaded.");
+    return track ? fileDisplayName(track) : uiMessage("Nothing loaded.");
   };
 
   const currentAlbum = (): string => {
@@ -1036,7 +1047,7 @@ export function start(): void {
     // What it is, from its name: a film gets a poster and a year.
     enrich(track.title, "auto");
     await whileLoading(() => player.load({
-      title: track.title, artist: track.artist, album: track.album,
+      title: fileDisplayName(track), artist: track.artist, album: track.album,
       duration: track.duration, url: remote.media(next, rung),
       // It was false for everything, so a film played its soundtrack over a
       // blank panel. The server says which tracks have a picture.
