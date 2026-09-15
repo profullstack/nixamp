@@ -1587,7 +1587,7 @@ export function start(): void {
     // the point of typing the name.
     const inside = (folder: string): boolean =>
       wanted !== "" || openFolder === "" || folder === openFolder || folder.startsWith(`${openFolder}/`);
-    const here = (folder: string): boolean => wanted !== "" || folder === openFolder;
+    const here = (folder: string): boolean => folder === openFolder;
     const below = (folder: string): string => {
       const rest = openFolder === "" ? folder : folder.slice(openFolder.length + 1);
       const at = rest.indexOf("/");
@@ -1664,15 +1664,14 @@ export function start(): void {
         time.className = "time";
         time.textContent = row.seconds > 0 ? formatTime(row.seconds) : "--:--";
         const play = document.createElement("button"); play.type = "button"; play.className = "row-main";
-        drawIcon(play, "play");
         play.setAttribute("aria-label", `Play ${pathLabel}${row.seconds > 0 ? `, ${formatTime(row.seconds)}` : ""}`);
         play.append(n, label, time); item.append(play);
+        const playGlyph = document.createElement("span"); playGlyph.className = "row-play-glyph"; drawIcon(playGlyph, "play"); item.append(playGlyph);
         // The file's own address, for whoever wants it somewhere other than
         // here. A picked file is a blob in this tab and has no address.
         if (mode === "remote") {
-          const watchingThis = watching === row.index || (remoteDrives() && at() === row.index);
-          if (canGoLive()) {
-            if (watchingThis) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: pathLabel }), pathLabel));
+          if (canGoLive() && channelOn === null && !onServerLive()) {
+            item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: pathLabel }), pathLabel));
           }
           // File rows stay compact. Sharing belongs to the active live row,
           // where raw and room links are both available.
