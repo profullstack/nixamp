@@ -6296,7 +6296,10 @@ export function start(): void {
   async function loadOnAir(): Promise<void> {
     if (mode !== "remote" || onAirRequest) return;
     const controller = new AbortController(); onAirRequest = controller;
-    dom.partiesPanel.dataset.loading = "true";
+    // The first load needs a visible cue. Polling every two seconds must stay
+    // quiet or the panel appears to reload forever while somebody watches it.
+    const firstLoad = lastAir === null;
+    if (firstLoad) dom.partiesPanel.dataset.loading = "true";
     const generation = onAirGeneration;
     const url = remote.url("/api/streams");
     const timeout = setTimeout(() => controller.abort(), 8000);
@@ -6319,7 +6322,7 @@ export function start(): void {
       // Retain the last usable list during a short network failure.
     } finally {
       clearTimeout(timeout);
-      delete dom.partiesPanel.dataset.loading;
+      if (firstLoad) delete dom.partiesPanel.dataset.loading;
       if (onAirRequest === controller) onAirRequest = null;
     }
   }

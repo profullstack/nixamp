@@ -188,20 +188,18 @@ body {
 }
 
 .panel::before { content: none; }
-.panel[data-loading="true"], .panel:has([aria-busy="true"]) { min-height: 88px; }
-.panel[data-loading="true"]::before, .panel:has([aria-busy="true"])::before {
+.panel[data-loading="true"] > .panel-heading::after,
+.panel:has([aria-busy="true"]) > .panel-heading::after {
   content: "";
-  position: absolute;
-  z-index: 2;
-  inset: 50% auto auto 50%;
-  width: 22px;
-  height: 22px;
-  margin: -11px 0 0 -11px;
-  border: 3px solid var(--edge);
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-left: 8px;
+  vertical-align: -1px;
+  border: 2px solid var(--edge);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: delete-spin 700ms linear infinite;
-  pointer-events: none;
 }
 .panel > .panel-heading {
   margin: 0;
