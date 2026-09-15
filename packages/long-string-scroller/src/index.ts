@@ -48,12 +48,20 @@ export function attachLongStringScroller(viewport: HTMLElement, content: HTMLEle
   viewport.addEventListener("pointermove", (event) => {
     if (content.dataset["pan"] !== "true") return;
     lastX = event.clientX;
-    const overflow = viewport.scrollWidth - viewport.clientWidth;
+    const overflow = Math.max(viewport.scrollWidth, content.scrollWidth) - viewport.clientWidth;
     if (overflow <= 0) return;
     const box = viewport.getBoundingClientRect();
     const raw = Math.max(0, Math.min(1, (lastX - box.left) / Math.max(1, box.width)));
-    const eased = raw * raw * (3 - 2 * raw);
-    target = -overflow * eased;
+    // Reserve a small edge band for the physical limits of a mouse: the
+    // pointer rarely lands on the exact last pixel, but the string must still
+    // reach both ends. Smoothstep gives the acceleration/deceleration curve in
+    // the usable middle.
+    if (raw <= 0.02) target = 0;
+    else if (raw >= 0.98) target = -overflow;
+    else {
+      const eased = raw * raw * (3 - 2 * raw);
+      target = -overflow * eased;
+    }
     wake();
   });
   viewport.addEventListener("pointerleave", () => {
