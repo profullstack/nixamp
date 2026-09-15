@@ -3338,6 +3338,7 @@ export function start(): void {
     }
     if (partiesRequest) return;
     const controller = new AbortController(); partiesRequest = controller;
+    dom.partiesPanel.dataset.loading = "true";
     const account = meId;
     const timeout = setTimeout(() => controller.abort(), 8000);
     const get = async (path: string): Promise<{ ok: boolean; status: number; body: unknown }> => {
@@ -3366,6 +3367,7 @@ export function start(): void {
       if (!partiesLoaded && !lastAir) uiText(dom.partiesNote, () => uiMessage("Could not refresh parties."));
     } finally {
       clearTimeout(timeout);
+      delete dom.partiesPanel.dataset.loading;
       if (partiesRequest === controller) partiesRequest = null;
     }
   }
@@ -6271,6 +6273,7 @@ export function start(): void {
   async function loadOnAir(): Promise<void> {
     if (mode !== "remote" || onAirRequest) return;
     const controller = new AbortController(); onAirRequest = controller;
+    dom.partiesPanel.dataset.loading = "true";
     const generation = onAirGeneration;
     const url = remote.url("/api/streams");
     const timeout = setTimeout(() => controller.abort(), 8000);
@@ -6293,6 +6296,7 @@ export function start(): void {
       // Retain the last usable list during a short network failure.
     } finally {
       clearTimeout(timeout);
+      delete dom.partiesPanel.dataset.loading;
       if (onAirRequest === controller) onAirRequest = null;
     }
   }

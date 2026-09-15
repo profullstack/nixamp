@@ -172,7 +172,7 @@ body {
  * the start of a column, which is how the second column's first panel lost
  * its title and its buttons. The background starts at the frame too.
  */
-.panel {
+.panel { 
   position: relative;
   padding: 22px 12px 12px;
   min-width: 0;
@@ -188,6 +188,21 @@ body {
 }
 
 .panel::before { content: none; }
+.panel[data-loading="true"], .panel:has([aria-busy="true"]) { min-height: 88px; }
+.panel[data-loading="true"]::before, .panel:has([aria-busy="true"])::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  inset: 50% auto auto 50%;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border: 3px solid var(--edge);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: delete-spin 700ms linear infinite;
+  pointer-events: none;
+}
 .panel > .panel-heading {
   margin: 0;
   font-weight: 400;
