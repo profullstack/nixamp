@@ -1308,7 +1308,8 @@ export function start(): void {
     drawMeta();
     // Going live is for whoever administers this server, with something to
     // go live with. Play is everybody's; this is the one beside it.
-    dom.goLiveNow.hidden = !canGoLive() || whatToGoLiveWith() === null;
+    // A live feed should not be re-published as a new live of the live feed.
+    dom.goLiveNow.hidden = !canGoLive() || channelOn !== null || onServerLive() || whatToGoLiveWith() === null;
     // The tab says what is on, the way a radio does, so a row of tabs reads
     // as "CNN" rather than as five copies of the site's name.
     const tab = live ? `${currentShareTitle()} · ${baseTitle}` : baseTitle;
