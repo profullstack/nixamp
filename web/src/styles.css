@@ -838,7 +838,7 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .row-value { display: block; min-width: 0; max-width: 100%; overflow: hidden; }
 .long-string-scroller-content { transform: translateX(var(--path-shift, 0)); transition: transform 280ms ease-out; }
 @media (hover: hover) and (pointer: fine) {
-  .long-string-scroller-content {
+  .row .long-string-scroller-content {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
