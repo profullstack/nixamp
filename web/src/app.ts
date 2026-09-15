@@ -5963,7 +5963,14 @@ export function start(): void {
       panel.setAttribute("aria-label", name);
       let heading = panel.querySelector<HTMLHeadingElement>(":scope > .panel-heading");
       if (!heading) { heading = document.createElement("h2"); heading.className = "panel-heading"; panel.prepend(heading); }
-      if (heading.textContent !== name) heading.textContent = name;
+      // Keep the loading indicator inside the title strip. A pseudo-element
+      // could sit over the panel when a title was long; this is part of the
+      // heading's inline content and is clipped with the title itself.
+      heading.replaceChildren(document.createTextNode(name));
+      const spinner = document.createElement("span");
+      spinner.className = "panel-loading-spinner";
+      spinner.setAttribute("aria-hidden", "true");
+      heading.append(spinner);
       if (panel.querySelector(":scope > .panel-tools")) continue;
       const tools = document.createElement("span");
       tools.className = "panel-tools";

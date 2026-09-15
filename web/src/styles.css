@@ -188,10 +188,8 @@ body {
 }
 
 .panel::before { content: none; }
-.panel[data-loading="true"] > .panel-heading::after,
-.panel:has([aria-busy="true"]) > .panel-heading::after {
-  content: "";
-  display: inline-block;
+.panel-loading-spinner {
+  display: none;
   width: 10px;
   height: 10px;
   margin-left: 8px;
@@ -200,6 +198,10 @@ body {
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: delete-spin 700ms linear infinite;
+}
+.panel[data-loading="true"] > .panel-heading .panel-loading-spinner,
+.panel:has([aria-busy="true"]) > .panel-heading .panel-loading-spinner {
+  display: inline-block;
 }
 .panel > .panel-heading {
   margin: 0;
