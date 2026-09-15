@@ -16,8 +16,9 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { Fragments, isOpening } from "./fragments.ts";
 
@@ -329,6 +330,8 @@ export class Channel {
   private readonly sourceTaps = new Set<Listener>();
   /** Pulls the plug on the current read-through, when there is one. */
   private throughAbort: AbortController | null = null;
+  /** ffmpeg concat manifest for a local multi-file live. */
+  private concatListPath: string | null = null;
 
   constructor(
     readonly info: ChannelInfo,
@@ -404,6 +407,23 @@ export class Channel {
     // A list plays entry by entry: the one that is on is what gets dialled,
     // and an entry that ended is followed by the next, at once.
     const list = resume.playlist && resume.playlist.length > 0 ? resume.playlist : null;
+    // A local directory live must be one ffmpeg input. Starting a new ffmpeg
+    // process for every file makes browsers see a new MP4 stream at each
+    // boundary, even when the HTTP listener stays attached. The concat
+    // demuxer keeps timestamps and the output pipe continuous.
+    const concatList = list && list.length > 1 && list.every((one) => !/^https?:\/\//i.test(one))
+      ? list
+      : null;
+    if (this.concatListPath) {
+      rmSync(this.concatListPath, { force: true });
+      this.concatListPath = null;
+    }
+    if (concatList) {
+      const dir = mkdtempSync(join(tmpdir(), "nixamp-playlist-"));
+      this.concatListPath = join(dir, "playlist.txt");
+      const quote = (one: string): string => one.replaceAll("'", "'\\''");
+      writeFileSync(this.concatListPath, concatList.map((one) => `file '${quote(one)}'`).join("\n") + "\n");
+    }
     let at = 0;
     if (list) {
       this.info.playlist = list;
@@ -413,7 +433,7 @@ export class Channel {
     let current = list ? (list[at] as string) : source;
     // The last entry is the end of the show, not a way back to the first:
     // a list that played through is over, and says so with the outro.
-    this.advance = list && list.length > 1
+    this.advance = list && list.length > 1 && !concatList
       ? () => {
           if (at + 1 >= list.length) return false;
           at += 1;
@@ -449,6 +469,12 @@ export class Channel {
       // The outro is a file read by ffmpeg itself: a pipe cannot loop.
       const through = this.outroOn ? null : this.options.through?.(this.info, from, input, audio) ?? null;
       this.info.teed = through !== null;
+      const concatInput = this.concatListPath
+        ? [
+            ...(paced ? ["-re"] : []),
+            "-f", "concat", "-safe", "0", "-i", this.concatListPath,
+          ]
+        : null;
       const child = spawn(
         command,
         [
@@ -491,9 +517,7 @@ export class Channel {
                 // What the source's site expects on the request: a user agent, a
                 // referer, a cookie. A link resolved by yt-dlp comes with these,
                 // and a CDN that got them from yt-dlp and not from us answers 403.
-                ...input,
-                ...seek,
-                "-i", current,
+                ...(concatInput ?? [...input, ...seek, "-i", current]),
                 // The sound, when the site keeps it apart from the picture: a
                 // second input, dialled the same way, that the encode maps in.
                 ...(audio ? [...remoteArgs, ...(paced ? ["-re"] : []), ...input, ...seek, "-i", audio] : []),
@@ -1027,6 +1051,10 @@ export class Channel {
     this.child = null;
     this.throughAbort?.abort();
     this.throughAbort = null;
+    if (this.concatListPath) {
+      rmSync(dirname(this.concatListPath), { force: true, recursive: true });
+      this.concatListPath = null;
+    }
     this.endTaps();
     try {
       child?.stdin?.end();
