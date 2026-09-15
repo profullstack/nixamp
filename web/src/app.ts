@@ -1537,7 +1537,7 @@ export function start(): void {
         const n = document.createElement("span"); n.className = "n"; n.textContent = String(index + 1).padStart(2, " ");
         const slash = name.lastIndexOf("/");
         const file = document.createElement("span"); file.className = "name row-file"; file.textContent = slash < 0 ? name : name.slice(slash + 1);
-        const path = document.createElement("span"); path.className = "row-path"; path.textContent = slash < 0 ? "" : name.slice(0, slash);
+        const path = document.createElement("span"); path.className = "row-path"; path.textContent = name;
         const label = document.createElement("span"); label.className = "row-label";
         const fileView = document.createElement("span"); fileView.className = "row-value"; fileView.append(file);
         const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
@@ -1661,7 +1661,7 @@ export function start(): void {
         n.textContent = String(row.index + 1).padStart(2, " ");
         const pathLabel = row.folder ? `${row.folder} / ${row.name}` : row.name;
         const file = document.createElement("span"); file.className = "name row-file"; file.textContent = row.name;
-        const path = document.createElement("span"); path.className = "row-path"; path.textContent = row.folder;
+        const path = document.createElement("span"); path.className = "row-path"; path.textContent = row.folder ? `${row.folder}/${row.name}` : row.name;
         const label = document.createElement("span"); label.className = "row-label";
         const fileView = document.createElement("span"); fileView.className = "row-value"; fileView.append(file);
         const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
