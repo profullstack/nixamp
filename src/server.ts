@@ -1150,7 +1150,7 @@ export async function pullChannel(
   const kind = codecs.video !== "" ? "video" : codecs.audio !== "" ? "audio" : (known.kind ?? "video");
   if (assumed) console.log(`  "${id}": the source would not say what it holds; carrying it as ${kind}.`);
   // A film has a length and a place to go back to; a live source has neither.
-  // A list is a station: joined where it is, and never seeked.
+  // Listeners join a playlist live; its producer resumes the saved entry and position.
   const playlist = known.playlist && known.playlist.length > 0 ? known.playlist : null;
   const live = playlist ? true : (known.live ?? !((codecs.duration ?? 0) > 0));
   const encode = kind === "video"
@@ -1174,13 +1174,12 @@ export async function pullChannel(
   const tagged = looksLikeFileName(name) && codecs.tags?.title ? codecs.tags.title : name;
   const channel = channels.pull(
     id, tagged, source, encode, kind, true, undefined, opening, kind === "video" ? audio : "",
-    { live, position: known.position ?? 0, ...(playlist ? { playlist } : {}) },
+    { live, position: known.position ?? 0, ...(playlist ? { playlist, playlistAt: known.playlistAt ?? 0 } : {}) },
     // Known before the first dial: whether the source is a transport stream
     // decides whether it can be read here for a source-boundary relay.
     assumed ? undefined : codecs,
   );
   if (channel && !assumed) channel.info.codecs = codecs;
-  if (channel && playlist && known.playlistAt !== undefined) channel.info.playlistAt = known.playlistAt;
   if (channel) {
     // Its picture from wherever it came with one, and a line about it: what
     // was given, else the show and the album the file's own tags name.
@@ -1208,7 +1207,7 @@ export async function pullChannel(
   // told otherwise would cut fMP4 segments for a stream that did not need
   // them.
   if (channel && kind === "video") {
-    channel.info.emits = encode.includes("libx264") ? "h264" : codecs.video || "h264";
+    channel.info.emits = (playlist && playlist.length > 1 && playlist.every(one => !/^https?:\/\//i.test(one))) || encode.includes("libx264") ? "h264" : codecs.video || "h264";
   }
   return channel;
 }
@@ -6100,6 +6099,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const outro = new Outro({ ffmpeg: tools.ffmpeg, dir: join(stateDir(), "outro"), onEvent: (message) => console.log(message) });
   const channels = new Channels({
     ffmpeg: tools.ffmpeg,
+    ffprobe: tools.ffprobe,
     ...(tools.carries ? { outro: (kind) => outro.clip(kind) } : {}),
     onOutro: (info) => console.log(`  "${info.id}" has ended; the outro plays for an hour.`),
     onStart: (info) =>
@@ -6141,7 +6141,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // every restart used to take CNN off the air until somebody noticed.
   const remembering = (list: RememberedChannel[]): void => rememberChannels(stateDir(), options.port, list);
   for (const one of rememberedChannels(stateDir(), options.port)) {
-    const where = one.position && !one.live ? `, from ${Math.floor(one.position / 60)}m${Math.floor(one.position % 60)}s` : "";
+    const where = one.position && (!one.live || one.playlist?.length) ? `, from ${Math.floor(one.position / 60)}m${Math.floor(one.position % 60)}s` : "";
     console.log(`  Putting "${one.id}" (${one.name}) back on the air${where}.`);
     // With what was written down about it: what it holds, so the source is
     // not asked again, and where it had got to, so a film carries on.
@@ -6164,7 +6164,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   let lastRemembered = "";
   setInterval(() => {
     const now = rememberedNow(channels);
-    // A list moves on without a position: which entry is on is the thing to keep.
+    // Both the entry and its elapsed time advance during a directory live.
     if (!now.some((one) => one.position !== undefined || one.playlist)) return;
     const text = JSON.stringify(now);
     if (text === lastRemembered) return;

@@ -442,7 +442,7 @@ export interface Codecs {
  * answering other requests, and a synchronous probe per media request is how
  * the whole library came to be tagged with the process wedged solid.
  */
-export async function codecsOf(tools: Tools, path: string, input: string[] = []): Promise<Codecs> {
+export async function codecsOf(tools: Tools, path: string, input: string[] = [], signal?: AbortSignal): Promise<Codecs> {
   const [cmd, ...rest] = tools.ffprobe;
   const empty: Codecs = { video: "", audio: "", container: "" };
   if (!cmd) return empty;
@@ -469,7 +469,7 @@ export async function codecsOf(tools: Tools, path: string, input: string[] = [])
         ...input,
         path,
       ],
-      { stdio: ["ignore", "pipe", "ignore"] },
+      { stdio: ["ignore", "pipe", "ignore"], signal },
     );
     let out = "";
     child.stdout.on("data", (chunk: Buffer) => {

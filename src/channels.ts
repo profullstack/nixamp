@@ -16,11 +16,11 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { PlaylistInputStream } from "./playlist-input.ts";
 import type { Readable } from "node:stream";
-import { Fragments, isOpening } from "./fragments.ts";
+import { FragmentClock, Fragments, isOpening } from "./fragments.ts";
 
 /** Somewhere for a channel's audio to go. A response, in practice. */
 export interface Listener {
@@ -59,9 +59,9 @@ export interface ChannelInfo {
   redials?: number;
   /**
    * For a channel that plays a list: the entries, in order, and which one is
-   * on. When one ends the next is dialled at once, and the last is followed
-   * by the first: a station, not a file. A restart picks up at the entry
-   * that was on.
+   * on. Local files are normalized into one continuous stream. After the
+   * final entry the show ends. A restart picks up at the saved entry and
+   * position within it.
    */
   playlist?: string[];
   playlistAt?: number;
@@ -121,6 +121,7 @@ export interface PullResume {
   position: number;
   /** For a list of things rather than one: every entry, in order. */
   playlist?: string[];
+  playlistAt?: number;
 }
 
 /**
@@ -188,18 +189,9 @@ export const BACKLOG_AUDIO = 64 * 1024;
  */
 export const LISTENER_QUEUE = 16 * 1024 * 1024;
 
-/**
- * The backlog is really a number of seconds, and four megabytes was that
- * number for the stream we happened to have.
- *
- * Six seconds of 720p is about 4 MB. Six seconds of a 1080p transport stream
- * copied straight through is nearer 12, and of 4K nearer 30 -- so a fixed
- * 4 MB hands a 4K joiner under a second of video, which is the live edge with
- * no cushion, which is the play-wait-play loop the backlog exists to prevent.
- * So the cap follows the stream: seconds times the rate it is actually
- * running at, between the old floor and a ceiling that keeps a channel's
- * memory bounded whatever it is carrying.
- */
+/** Media-time window for complete MP4 fragments. Byte limits are a separate
+ * memory ceiling; the measured byte rate is only a fallback for inputs with
+ * no usable fragment timestamps. It must never make low-bitrate video old. */
 export const BACKLOG_SECONDS = 6;
 export const BACKLOG_VIDEO_MAX = 48 * 1024 * 1024;
 /**
@@ -253,6 +245,7 @@ export function cleanId(value: unknown, fallback = "main"): string {
 
 export interface ChannelOptions {
   ffmpeg: string[];
+  ffprobe?: string[];
   onStart?: (info: ChannelInfo) => void;
   onEnd?: (info: ChannelInfo) => void;
   /**
@@ -314,6 +307,8 @@ export class Channel {
    * can begin at; for MP3 any point will do, a frame announces itself.
    */
   private recent: Buffer[] = [];
+  private fragmentClock = new FragmentClock();
+  private fragmentTimes = new WeakMap<Buffer, number>();
   private recentBytes = 0;
   /** The rate window: when it opened, what has arrived in it, and what the last closed one measured. */
   private rateStart = 0;
@@ -330,8 +325,6 @@ export class Channel {
   private readonly sourceTaps = new Set<Listener>();
   /** Pulls the plug on the current read-through, when there is one. */
   private throughAbort: AbortController | null = null;
-  /** ffmpeg concat manifest for a local multi-file live. */
-  private concatListPath: string | null = null;
 
   constructor(
     readonly info: ChannelInfo,
@@ -403,42 +396,27 @@ export class Channel {
     if (this.info.kind === "video") this.fragments = new Fragments();
     const [command, ...prefix] = this.options.ffmpeg as [string, ...string[]];
     this.info.live = resume.live;
-    if (!resume.live) this.info.position = Math.max(0, resume.position);
+    if (!resume.live || resume.playlist?.length) this.info.position = Math.max(0, resume.position);
     // A list plays entry by entry: the one that is on is what gets dialled,
     // and an entry that ended is followed by the next, at once.
     const list = resume.playlist && resume.playlist.length > 0 ? resume.playlist : null;
-    // A local directory live must be one ffmpeg input. Starting a new ffmpeg
-    // process for every file makes browsers see a new MP4 stream at each
-    // boundary, even when the HTTP listener stays attached. The concat
-    // demuxer keeps timestamps and the output pipe continuous.
-    const concatList = list && list.length > 1 && list.every((one) => !/^https?:\/\//i.test(one))
-      ? list
-      : null;
-    if (this.concatListPath) {
-      rmSync(this.concatListPath, { force: true });
-      this.concatListPath = null;
-    }
-    if (concatList) {
-      const dir = mkdtempSync(join(tmpdir(), "nixamp-playlist-"));
-      this.concatListPath = join(dir, "playlist.txt");
-      const quote = (one: string): string => one.replaceAll("'", "'\\''");
-      writeFileSync(this.concatListPath, concatList.map((one) => `file '${quote(one)}'`).join("\n") + "\n");
-    }
+    const localPlaylist = list && list.length > 1 && list.every(one => !/^https?:\/\//i.test(one)) ? list : null;
     let at = 0;
     if (list) {
       this.info.playlist = list;
-      at = Math.min(Math.max(0, this.info.playlistAt ?? 0), list.length - 1);
+      at = Math.min(Math.max(0, resume.playlistAt ?? this.info.playlistAt ?? 0), list.length - 1);
       this.info.playlistAt = at;
     }
     let current = list ? (list[at] as string) : source;
     // The last entry is the end of the show, not a way back to the first:
     // a list that played through is over, and says so with the outro.
-    this.advance = list && list.length > 1 && !concatList
+    this.advance = list && list.length > 1 && !localPlaylist
       ? () => {
           if (at + 1 >= list.length) return false;
           at += 1;
           this.info.playlistAt = at;
           current = list[at] as string;
+          this.info.position = 0;
           return true;
         }
       : null;
@@ -457,7 +435,7 @@ export class Channel {
       // the place was written down a moment ago and a moment of it twice is
       // better than a moment of it missing. A live source is joined as is,
       // and a film that has barely started is started.
-      const from = resume.live ? 0 : Math.max(0, Math.floor((this.info.position ?? 0) - REWIND));
+      const from = resume.live && !list ? 0 : Math.max(0, Math.floor((this.info.position ?? 0) - REWIND));
       const seek = from > 0 ? ["-ss", String(from)] : [];
       // Read the source here rather than in ffmpeg, when a policy wants the
       // original bytes and the source is the kind that can be. ffmpeg then
@@ -467,26 +445,19 @@ export class Channel {
       this.throughAbort?.abort();
       this.throughAbort = null;
       // The outro is a file read by ffmpeg itself: a pipe cannot loop.
-      const through = this.outroOn ? null : this.options.through?.(this.info, from, input, audio) ?? null;
-      this.info.teed = through !== null;
-    const concatInput = this.concatListPath
-      ? [
-          ...(paced ? ["-re"] : []),
-            // Directory lives may contain different codecs, dimensions, or
-            // timestamp bases. Copying the first file's streams can make
-            // ffmpeg reject later entries and leave the audience on entry 1.
-            // The output settings below normalize the entire concat stream.
-            "-f", "concat", "-safe", "0", "-i", this.concatListPath,
-          ]
-      : null;
-      const concatEncode = this.concatListPath && this.info.kind === "video"
-        ? [
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-            "-pix_fmt", "yuv420p", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0",
-            "-c:a", "aac", "-b:a", "160k", "-ac", "2",
-            "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-          ]
-        : null;
+      const playlistInput = localPlaylist ? new PlaylistInputStream({
+        ffmpeg: this.options.ffmpeg,
+        ffprobe: this.options.ffprobe ?? this.options.ffmpeg.map(one => one.replace(/ffmpeg(?=(?:\.exe)?$)/, "ffprobe")),
+        files: localPlaylist, at: this.info.playlistAt ?? 0, position: from,
+        video: this.info.kind === "video", width: this.info.codecs?.width, height: this.info.codecs?.height,
+      }) : null;
+      const through = this.outroOn ? null : playlistInput
+        ? { format: "mpegts", open: async (signal: AbortSignal) => playlistInput.open(signal) }
+        : this.options.through?.(this.info, from, input, audio) ?? null;
+      this.info.teed = through !== null && !playlistInput;
+      const playlistEncode = !playlistInput ? null : this.info.kind === "video"
+        ? ["-c", "copy", "-bsf:a", "aac_adtstoasc", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof"]
+        : ["-af", "aresample=async=1:first_pts=0", ...encode];
       const child = spawn(
         command,
         [
@@ -508,7 +479,7 @@ export class Channel {
                 // headers, which only a source read through us leaves out,
                 // are no use to a pipe and are not here (a source that needs
                 // them is not read through us in the first place).
-                ...input,
+                ...(playlistInput ? ["-probesize", "32768", "-analyzeduration", "1000000"] : input),
                 "-f", through.format,
                 ...(paced ? ["-re"] : []),
                 "-i", "pipe:0",
@@ -529,12 +500,12 @@ export class Channel {
                 // What the source's site expects on the request: a user agent, a
                 // referer, a cookie. A link resolved by yt-dlp comes with these,
                 // and a CDN that got them from yt-dlp and not from us answers 403.
-                ...(concatInput ?? [...input, ...seek, "-i", current]),
+                ...input, ...seek, "-i", current,
                 // The sound, when the site keeps it apart from the picture: a
                 // second input, dialled the same way, that the encode maps in.
                 ...(audio ? [...remoteArgs, ...(paced ? ["-re"] : []), ...input, ...seek, "-i", audio] : []),
               ]),
-          ...(concatEncode ?? encode),
+          ...(playlistEncode ?? encode),
           "pipe:1",
         ],
         { stdio: [through ? "pipe" : "ignore", "pipe", "pipe", "pipe"] },
@@ -551,18 +522,26 @@ export class Channel {
       let progress = "";
       (child.stdio[3] as Readable | null)?.on("data", (chunk: Buffer) => {
         progress = (progress + chunk.toString("utf8")).slice(-4000);
-        if (this.child !== child || resume.live) return;
+        if (this.child !== child || (resume.live && !list)) return;
         const lines = progress.split("\n");
         progress = lines.pop() ?? "";
         for (const line of lines) {
           const match = /^out_time_us=(\d+)/.exec(line.trim());
-          if (match) this.info.position = from + Number(match[1]) / 1e6;
+          if (match) {
+            const seconds = Number(match[1]) / 1e6;
+            if (playlistInput) {
+              const place = playlistInput.place(seconds);
+              this.info.playlistAt = place.at;
+              this.info.position = place.position;
+            } else this.info.position = from + seconds;
+          }
         }
       });
       (child.stdio[3] as Readable | null)?.on("error", () => undefined);
       child.stdout?.on("data", (chunk: Buffer) => {
         // An ffmpeg that was replaced can still have a chunk in the pipe.
         if (this.child !== child) return;
+        if (!sent) this.info.error = undefined;
         sent = true;
         this.info.bytes += chunk.byteLength;
         this.rearm(child);
@@ -572,8 +551,12 @@ export class Channel {
       drain(child.stderr, (tail) => { this.stderr = tail; });
       // Only the ffmpeg we are currently running gets to say the source
       // dropped. One that was killed to make way for a restart is not news.
-      child.on("error", () => { if (this.child === child) this.dropped(sent); });
-      child.on("close", () => { if (this.child === child) this.dropped(sent); });
+      child.on("error", () => { if (this.child === child) this.dropped(sent, false); });
+      child.on("close", (code, signal) => {
+        if (this.child !== child) return;
+        if (playlistInput?.error) this.stderr = playlistInput.error.message;
+        this.dropped(sent, code === 0 && !signal && (!playlistInput || playlistInput.complete));
+      });
     };
 
     this.redial = dial;
@@ -596,6 +579,7 @@ export class Channel {
     const kind = this.info.kind ?? "audio";
     const old = this.child;
     this.child = null;
+    this.throughAbort?.abort();
     if (this.watchdog) clearTimeout(this.watchdog);
     this.watchdog = null;
     if (this.timer) clearTimeout(this.timer);
@@ -642,7 +626,7 @@ export class Channel {
       this.info.playlistAt = 0;
       this.startOver();
       const show = this.dialed;
-      this.pull(show.source, show.encode, show.paced, show.stall, show.input, show.audio, { ...show.resume, position: 0 });
+      this.pull(show.source, show.encode, show.paced, show.stall, show.input, show.audio, { ...show.resume, position: 0, playlistAt: 0 });
       return true;
     }
     const dial = this.redial;
@@ -676,6 +660,8 @@ export class Channel {
   private startOver(preserveListeners = false): void {
     if (this.info.kind === "video") this.fragments = new Fragments();
     this.recent = [];
+    this.fragmentClock = new FragmentClock();
+    this.fragmentTimes = new WeakMap();
     this.recentBytes = 0;
     // A new source may be a different size of stream, and the rate measured
     // off the old one is not evidence about this one.
@@ -734,7 +720,7 @@ export class Channel {
    * worth dialling again, and a URL that has never once produced a byte is a
    * mistake somebody made, and retrying it for ever helps nobody.
    */
-  private dropped(sent: boolean): void {
+  private dropped(sent: boolean, clean = false): void {
     if (this.closing || !this.redial) return;
     // An outro that stopped is over; there is nothing after it.
     if (this.outroOn) {
@@ -742,26 +728,26 @@ export class Channel {
       return;
     }
     this.child = null;
+    this.throughAbort?.abort();
     if (this.watchdog) clearTimeout(this.watchdog);
     this.watchdog = null;
     const said = lastLine(this.stderr);
     if (said) this.info.error = said;
-    this.failures = sent ? 0 : this.failures + 1;
+    this.failures = sent && clean ? 0 : this.failures + 1;
     if (this.failures >= GIVE_UP) {
       this.close();
       return;
     }
-    // A list moves on. An entry that played to its end is not a source that
-    // dropped: the next is dialled now, and it is not a redial. One that
-    // gave nothing is skipped the same way, counted as the failure it was,
-    // so a list of dead links gives up rather than cycling for ever.
-    const moved = this.advance?.() ?? false;
+    // Only a clean EOF advances a per-URL playlist. Decoder errors, a
+    // watchdog kill, or a failed normalized input recover at the saved place
+    // with bounded retries; an MP4 header alone is not a completed show.
+    const moved = clean ? this.advance?.() ?? false : false;
     // A show that ended: a film or a podcast that played to its end, a
     // list whose last entry did. That is not a source that dropped, and it
     // is not dialled again from the top; it is over, and the outro says
     // so. A live feed that stopped is a feed that dropped, and is redialled.
     const list = (this.info.playlist?.length ?? 0) > 0;
-    if (sent && !moved && (this.info.live === false || list)) {
+    if (clean && sent && !moved && (this.info.live === false || list)) {
       void this.endShow();
       return;
     }
@@ -798,7 +784,19 @@ export class Channel {
     }
     const cap = this.backlogCap();
     for (const box of this.fragments.push(chunk)) {
-      if (!isOpening(boxType(box))) this.remember(box, cap, true);
+      const time = this.fragmentClock.read(box);
+      if (time !== null) this.fragmentTimes.set(box, time);
+      if (!isOpening(boxType(box))) this.remember(box, time === null ? cap : BACKLOG_VIDEO_MAX, true);
+      if (time !== null) {
+        // Drop complete old fragments even when six seconds occupy only a
+        // few kilobytes (slides, static cameras, or a paused game screen).
+        while (this.recent.length > 0) {
+          const oldest = this.fragmentTimes.get(this.recent[0]!);
+          if (oldest === undefined || time - oldest < BACKLOG_SECONDS) break;
+          do { this.recentBytes -= this.recent.shift()!.byteLength; }
+          while (this.recent.length && boxType(this.recent[0]!) !== "moof");
+        }
+      }
       this.send(box);
     }
   }
@@ -978,8 +976,11 @@ export class Channel {
           // Wait for ffmpeg to take it, or for the pipe to go: a pipe that
           // closed never drains, and waiting on it would hold the read open.
           await new Promise<void>((done) => {
-            stdin.once("drain", done);
-            stdin.once("close", done);
+            const finish = (): void => {
+              stdin.off("drain", finish); stdin.off("close", finish); done();
+            };
+            stdin.once("drain", finish);
+            stdin.once("close", finish);
           });
         }
       }
@@ -1063,10 +1064,7 @@ export class Channel {
     this.child = null;
     this.throughAbort?.abort();
     this.throughAbort = null;
-    if (this.concatListPath) {
-      rmSync(dirname(this.concatListPath), { force: true, recursive: true });
-      this.concatListPath = null;
-    }
+
     this.endTaps();
     try {
       child?.stdin?.end();
@@ -1437,7 +1435,7 @@ export function rememberedNow(channels: Channels): RememberedChannel[] {
       if (one.kind) kept.kind = one.kind;
       if (one.codecs) kept.codecs = one.codecs;
       if (typeof one.live === "boolean") kept.live = one.live;
-      if (!one.live && typeof one.position === "number" && one.position > 0) kept.position = Math.floor(one.position);
+      if ((!one.live || one.playlist?.length) && typeof one.position === "number" && one.position > 0) kept.position = Math.floor(one.position);
       if (one.startedBy) kept.startedBy = one.startedBy;
       if (one.playlist && one.playlist.length > 0) {
         kept.playlist = one.playlist;

@@ -190,6 +190,7 @@ body {
 .panel::before { content: none; }
 .panel-loading-spinner {
   display: none;
+  flex: none;
   width: 10px;
   height: 10px;
   margin-left: 8px;
@@ -203,7 +204,9 @@ body {
 .panel:has([aria-busy="true"]) > .panel-heading .panel-loading-spinner {
   display: inline-block;
 }
+.panel-heading-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .panel > .panel-heading {
+  display: flex; align-items: center;
   margin: 0;
   font-weight: 400;
   max-width: calc(100% - 108px);
@@ -817,16 +820,9 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .file-row > .n { grid-column: 1; }
 .file-row > .row-label { grid-column: 2 / -1; align-items: flex-start; justify-self: stretch; text-align: left; }
 .file-row .row-file { text-align: left; }
-.live-file-row { display: grid; grid-template-columns: auto minmax(0, 1fr); row-gap: 0; }
-.live-file-row > .n { grid-column: 1; }
-.live-file-row > .row-label { grid-column: 2; align-items: flex-start; justify-self: stretch; text-align: left; }
-.live-file-row > .row-value { grid-column: 1 / -1; width: 100%; }
-.file-row > .row-main .long-string-scroller,
-.live-file-row > .row-label .long-string-scroller {
-  padding: 0 !important;
-  margin: 0;
-  text-align: left;
-}
+.live-file-row { grid-template-columns: minmax(0, 1fr); row-gap: 0; cursor: default; }
+.file-row > .row-main { padding: 0; }
+.live-file-row > .row-main { cursor: default; }
 .file-row > .row-value { grid-column: 1 / -1; width: 100%; }
 
 .row:hover { background: #142019; }
@@ -872,7 +868,7 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .row-label { display: flex; flex: 1; min-width: 0; min-height: 24px; flex-direction: column; justify-content: center; line-height: 1.2; white-space: normal; overflow: hidden; }
 .row-value { display: block; min-width: 0; max-width: 100%; overflow: hidden; }
 .long-string-scroller { box-sizing: border-box; padding-inline: 4px; }
-.long-string-scroller-content { transform: translateX(var(--path-shift, 0)); transition: transform 280ms ease-out; pointer-events: none; }
+.long-string-scroller-content { display: block; transform: translateX(var(--path-shift, 0)); transition: transform 280ms ease-out; pointer-events: none; }
 @media (hover: hover) and (pointer: fine) {
   .row .long-string-scroller-content {
     white-space: nowrap;

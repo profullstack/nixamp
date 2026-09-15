@@ -64,6 +64,52 @@ export function isOpening(type: string): boolean {
   return type === "ftyp" || type === "moov";
 }
 
+function children(box: Buffer): Box[] {
+  let rest = box.subarray(box.readUInt32BE(0) === 1 ? BIG : HEADER);
+  const found: Box[] = [];
+  for (;;) {
+    const next = firstBox(rest);
+    if (!next) return found;
+    found.push(next.box);
+    rest = next.rest;
+  }
+}
+
+/** Decode timestamps use each track's own timescale, never its byte rate. */
+export class FragmentClock {
+  private scales = new Map<number, number>();
+  read(box: Buffer): number | null {
+    const type = box.toString("latin1", 4, 8);
+    if (type === "moov") {
+      for (const track of children(box).filter(one => one.type === "trak")) {
+        const parts = children(track.bytes);
+        const tkhd = parts.find(one => one.type === "tkhd")?.bytes;
+        const mdia = parts.find(one => one.type === "mdia")?.bytes;
+        const mdhd = mdia && children(mdia).find(one => one.type === "mdhd")?.bytes;
+        if (!tkhd || !mdhd) continue;
+        const idAt = tkhd[8] === 1 ? 28 : 20;
+        const scaleAt = mdhd[8] === 1 ? 28 : 20;
+        if (tkhd.length < idAt + 4 || mdhd.length < scaleAt + 4) continue;
+        const scale = mdhd.readUInt32BE(scaleAt);
+        if (scale) this.scales.set(tkhd.readUInt32BE(idAt), scale);
+      }
+    }
+    if (type !== "moof") return null;
+    const times: number[] = [];
+    for (const track of children(box).filter(one => one.type === "traf")) {
+      const parts = children(track.bytes);
+      const tfhd = parts.find(one => one.type === "tfhd")?.bytes;
+      const tfdt = parts.find(one => one.type === "tfdt")?.bytes;
+      if (!tfhd || tfhd.length < 16 || !tfdt || tfdt.length < (tfdt[8] === 1 ? 20 : 16)) continue;
+      const scale = this.scales.get(tfhd.readUInt32BE(12));
+      if (!scale) continue;
+      const time = tfdt[8] === 1 ? Number(tfdt.readBigUInt64BE(12)) : tfdt.readUInt32BE(12);
+      times.push(time / scale);
+    }
+    return times.length ? Math.min(...times) : null;
+  }
+}
+
 /**
  * A fragmented MP4 arriving in pieces, handed back a box at a time.
  *
