@@ -1610,7 +1610,6 @@ export function start(): void {
         const full = openFolder === "" ? name : `${openFolder}/${name}`;
         const indices = rows
           .filter((row) => row.folder === full || row.folder.startsWith(`${full}/`))
-          .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }))
           .map((row) => row.index);
         children.push(folderRow(name, count, indices));
       }
