@@ -1648,23 +1648,10 @@ export function start(): void {
         // The file's own address, for whoever wants it somewhere other than
         // here. A picked file is a blob in this tab and has no address.
         if (mode === "remote") {
-          if (canGoLive()) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: pathLabel }), pathLabel));
-          // Copy is contextual: it belongs beside the file currently being
-          // watched, while Play and Go Live remain available on every row.
           const watchingThis = watching === row.index || (remoteDrives() && at() === row.index);
-          if (watchingThis) {
-            const copy = document.createElement("button");
-            copy.type = "button";
-            copy.className = "row-copy";
-            drawIcon(copy, "link");
-            copy.title = "Copy a link that plays this here, from where it is";
-            copy.setAttribute("aria-label", `Copy a link that plays ${pathLabel}`);
-            copy.addEventListener("click", (event) => {
-              event.stopPropagation();
-              void copyText(pageLinkFor(`track:${row.index}`, watching === row.index ? player.position : 0), copy, "✓");
-            });
-            item.append(copy);
-          }
+          if (canGoLive() && watchingThis) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: pathLabel }), pathLabel));
+          // File rows stay compact. Sharing belongs to the active live row,
+          // where raw and room links are both available.
         }
         children.push(item);
       }
