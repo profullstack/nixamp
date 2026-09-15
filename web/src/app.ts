@@ -6374,7 +6374,7 @@ export function start(): void {
         title: channel.name,
         detail: detail.join(" · "),
         onPlay: () => {
-          void watchChannel({ id: channel.id, name: channel.name, video: withPicture, art: channel.art });
+          void watchChannel({ id: channel.id, name: channel.name, video: withPicture, art: channel.art, playlist: channel.playlist });
         },
         link: address,
         page: pageLinkFor(`channel:${channel.id}`),
@@ -6479,7 +6479,7 @@ export function start(): void {
    * of those in a row without the picture ever settling means it is gone.
    */
   async function watchChannel(
-    channel: { id: string; name: string; video: boolean; art?: string },
+    channel: { id: string; name: string; video: boolean; art?: string; playlist?: string[] },
     fresh = true,
     from?: typeof nowMeta,
   ): Promise<void> {
@@ -6496,7 +6496,10 @@ export function start(): void {
     // Safari on a phone will not play the endless MP4 a channel is sent as;
     // it plays HLS, so it is handed the same channel as a playlist. A
     // browser with MediaSource plays the MP4 as it is, which is lower latency.
-    const asHls = channel.video && wantsHls();
+    // A playlist live has repeated per-file MP4 init boxes at each boundary.
+    // Native progressive MP4 treats that as a new resource and may end or
+    // reload; HLS keeps one player session while the channel advances.
+    const asHls = channel.video && (wantsHls() || (channel.playlist?.length ?? 0) > 1);
     await whileLoading(() => player.load({
       title: channel.name, artist: "", album: "", duration: 0,
       url: remote.url(asHls
