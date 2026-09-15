@@ -1649,7 +1649,9 @@ export function start(): void {
         // here. A picked file is a blob in this tab and has no address.
         if (mode === "remote") {
           const watchingThis = watching === row.index || (remoteDrives() && at() === row.index);
-          if (canGoLive() && watchingThis) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: pathLabel }), pathLabel));
+          if (canGoLive()) {
+            if (watchingThis) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: pathLabel }), pathLabel));
+          }
           // File rows stay compact. Sharing belongs to the active live row,
           // where raw and room links are both available.
         }
