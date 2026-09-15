@@ -63,7 +63,7 @@ export function findAudio(root: string): string[] {
   const walk = (dir: string): void => {
     let entries: string[];
     try {
-      entries = readdirSync(dir).sort();
+      entries = readdirSync(dir).sort(compareNames);
     } catch {
       return;
     }
@@ -163,7 +163,7 @@ export async function readRemoteIndex(source: string, send: typeof fetch = fetch
   }
   // Server order is by whatever column the index sorted on; by name is what
   // somebody handing over an album meant.
-  found.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
+  found.sort((a, b) => compareNames(a.title, b.title));
   return found;
 }
 
@@ -304,7 +304,7 @@ export async function findAudioAsync(root: string, every = 200): Promise<string[
   const walk = async (dir: string): Promise<void> => {
     let entries: string[];
     try {
-      entries = readdirSync(dir).sort();
+      entries = readdirSync(dir).sort(compareNames);
     } catch {
       return;
     }
@@ -329,3 +329,6 @@ export async function findAudioAsync(root: string, every = 200): Promise<string[
 export function displayName(track: Track): string {
   return track.artist ? `${track.artist} — ${track.title}` : track.title;
 }
+/** Human filename order: numeric runs compare as numbers (01, 02, 10). */
+export const compareNames = (a: string, b: string): number =>
+  a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
