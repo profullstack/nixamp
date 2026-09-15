@@ -637,7 +637,7 @@ export class Channel {
    * gone, not when the redial happens: somebody joining in between gets the
    * new beginning as it is written, rather than a stale one first.
    */
-  private startOver(): void {
+  private startOver(preserveListeners = false): void {
     if (this.info.kind === "video") this.fragments = new Fragments();
     this.recent = [];
     this.recentBytes = 0;
@@ -646,7 +646,7 @@ export class Channel {
     this.rateStart = 0;
     this.rateBytes = 0;
     this.rate = 0;
-    this.hangUp();
+    if (!preserveListeners) this.hangUp();
     // The source's own bytes start over too: a new dial is a new stream
     // from its beginning, and whoever was tapping it must not be handed the
     // new beginning after the old middle.
@@ -732,7 +732,11 @@ export class Channel {
     const ended = moved && sent;
     if (ended) this.info.error = undefined;
     else this.info.redials = (this.info.redials ?? 0) + 1;
-    this.startOver();
+    // Advancing a playlist is an internal source boundary, not the end of
+    // the channel. Keep listeners attached so a directory live remains one
+    // contiguous stream; a real redial still starts a new stream and hangs
+    // listeners up below.
+    this.startOver(moved);
     const dial = this.redial;
     this.timer = setTimeout(() => {
       this.timer = null;

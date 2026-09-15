@@ -624,10 +624,21 @@ test("a channel playing a list moves to the next entry when one ends, and is ove
   const list = ["http://x.test/ep1.mp3", "http://x.test/ep2.mp3", "http://x.test/ep3.mp3"];
   const channel = set.pull("show", "A Show", list[0] as string, [], "audio", true, 30_000, [], "", { live: true, position: 0, playlist: list });
   assert.ok(channel);
+  const listener = collector();
+  set.listen("show", listener);
   assert.deepEqual(channel.info.playlist, list);
   assert.equal(channel.info.playlistAt, 0);
   // Entries end and the next is dialled at once, not after the redial wait.
   const seen = new Set<number>();
+  for (let i = 0; i < 60 && seen.size < 2; i++) {
+    seen.add(channel.info.playlistAt ?? -1);
+    await wait(10);
+  }
+  assert.deepEqual([...seen].sort(), [0, 1]);
+  // Moving between files is an internal playlist transition. The channel
+  // stays attached to its audience instead of forcing every player to load
+  // the next file as a new live stream.
+  assert.equal(listener.ended(), false);
   for (let i = 0; i < 60 && seen.size < 3; i++) {
     seen.add(channel.info.playlistAt ?? -1);
     await wait(10);
@@ -640,6 +651,7 @@ test("a channel playing a list moves to the next entry when one ends, and is ove
   // channel closes rather than starting again from the first.
   await wait(200);
   assert.deepEqual(ended, ["show"]);
+  assert.equal(listener.ended(), true);
   assert.equal(set.count, 0);
   set.stopAll();
 });
