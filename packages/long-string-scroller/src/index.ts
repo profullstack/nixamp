@@ -5,8 +5,17 @@ export function attachLongStringScroller(viewport: HTMLElement, content: HTMLEle
   content.title = content.textContent ?? "";
   let frame = 0;
   let lastX = 0;
+  let releaseHeight: ReturnType<typeof setTimeout> | null = null;
   viewport.addEventListener("pointerenter", (event) => {
-    if (event.pointerType === "mouse") content.dataset["pan"] = "true";
+    if (event.pointerType !== "mouse") return;
+    if (releaseHeight !== null) {
+      clearTimeout(releaseHeight);
+      releaseHeight = null;
+    }
+    // Switching to nowrap makes a wrapped path shorter. Hold the original
+    // viewport height so the row never jumps while the pointer is moving.
+    viewport.style.minHeight = `${viewport.getBoundingClientRect().height}px`;
+    content.dataset["pan"] = "true";
   });
   viewport.addEventListener("pointermove", (event) => {
     if (content.dataset["pan"] !== "true") return;
@@ -27,5 +36,9 @@ export function attachLongStringScroller(viewport: HTMLElement, content: HTMLEle
     frame = 0;
     delete content.dataset["pan"];
     content.style.removeProperty("--path-shift");
+    releaseHeight = setTimeout(() => {
+      releaseHeight = null;
+      viewport.style.removeProperty("min-height");
+    }, 280);
   });
 }
