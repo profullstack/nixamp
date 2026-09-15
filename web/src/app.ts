@@ -272,6 +272,7 @@ export function start(): void {
     listenOnly: need<HTMLParagraphElement>("listen-only"),
     listenHere: need<HTMLInputElement>("listen-here"),
     volume: need<HTMLInputElement>("volume"),
+    volumeToggle: need<HTMLButtonElement>("volume-toggle"),
     prev: need<HTMLButtonElement>("prev"),
     playPause: need<HTMLButtonElement>("play-pause"),
     transport: need<HTMLElement>("transport"),
@@ -2277,7 +2278,20 @@ export function start(): void {
   dom.volume.addEventListener("input", () => {
     const value = Number(dom.volume.value) / 100;
     player.volume = value;
+    dom.volumeToggle.setAttribute("aria-pressed", value === 0 ? "true" : "false");
+    dom.volumeToggle.textContent = value === 0 ? "🔇" : "🔊";
+    uiAttribute(dom.volumeToggle, "aria-label", () => uiMessage(value === 0 ? "Unmute" : "Mute"));
     try { localStorage.setItem(VOLUME_KEY, String(value)); } catch { /* private mode */ }
+  });
+  dom.volumeToggle.addEventListener("click", () => {
+    const muted = Number(dom.volume.value) === 0;
+    let restore = 100;
+    try {
+      const saved = Number(localStorage.getItem(VOLUME_KEY));
+      if (Number.isFinite(saved) && saved > 0) restore = Math.round(saved * 100);
+    } catch { /* private mode */ }
+    dom.volume.value = muted ? String(restore) : "0";
+    dom.volume.dispatchEvent(new Event("input"));
   });
 
   const pick = (input: HTMLInputElement): void => {
