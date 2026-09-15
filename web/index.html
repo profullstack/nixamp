@@ -164,6 +164,21 @@
              person was using. "Connect to a server first" at the bottom of
              the page went unread. -->
         <p id="link-note" class="hint link-note" hidden></p>
+        <section class="transport" id="transport" role="group" aria-label="Playback controls" data-i18n-aria-label="Playback controls" aria-describedby="keyboard-help" tabindex="0">
+          <button id="prev" type="button" aria-label="Previous" data-i18n-aria-label="Previous">|◀◀</button>
+          <button id="play-pause" type="button" class="primary" aria-label="Play" data-i18n-aria-label="Play">▶</button>
+          <button id="go-live-now" type="button" class="golive" hidden
+                  title="Go live: put this on the air for everyone, list it in the directory with a phone code, and copy the link to share" data-i18n="● GO LIVE">● GO LIVE</button>
+          <button id="stop" type="button" aria-label="Stop" data-i18n-aria-label="Stop">■</button>
+          <button id="next" type="button" aria-label="Next" data-i18n-aria-label="Next">▶▶|</button>
+          <button id="share-now" type="button" class="share" hidden
+                  title="Share: a nixamp.com link that plays this" aria-label="Share what is playing" data-i18n-aria-label="Share what is playing" data-i18n="Share">Share</button>
+          <button id="refresh-player" type="button" class="ghost" title="Refresh player" data-i18n-title="Refresh player" aria-label="Refresh player" data-i18n-aria-label="Refresh player">↻</button>
+          <label class="volume player-volume">
+            <button id="volume-toggle" type="button" class="volume-toggle" aria-label="Mute" data-i18n-aria-label="Mute" aria-pressed="false">🔊</button>
+            <input id="volume" type="range" min="0" max="100" value="100" aria-label="Volume" data-i18n-aria-label="Volume" />
+          </label>
+        </section>
       </section>
 
       <div class="split" id="zone-top">
@@ -226,28 +241,6 @@
             <ol id="catalogs-entries" class="playlist" hidden></ol>
           </section>
       </div>
-
-      <section class="transport" id="transport" role="group" aria-label="Playback controls" data-i18n-aria-label="Playback controls" aria-describedby="keyboard-help" tabindex="0">
-        <button id="prev" type="button" aria-label="Previous" data-i18n-aria-label="Previous">|◀◀</button>
-        <button id="play-pause" type="button" class="primary" aria-label="Play" data-i18n-aria-label="Play">▶</button>
-        <!-- For whoever administers the server: Play plays it for you; this
-             puts it on the air for everybody, lists it, and copies the link. -->
-        <button id="go-live-now" type="button" class="golive" hidden
-                title="Go live: put this on the air for everyone, list it in the directory with a phone code, and copy the link to share" data-i18n="● GO LIVE">● GO LIVE</button>
-        <button id="stop" type="button" aria-label="Stop" data-i18n-aria-label="Stop">■</button>
-        <button id="next" type="button" aria-label="Next" data-i18n-aria-label="Next">▶▶|</button>
-        <!-- A link to what is playing, for anybody: nixamp.com/?play=<the
-             stream's own address>, which plays in VLC as it is and which
-             nixamp.com opens as a viewer. The device's share sheet where
-             there is one; copied otherwise. Only when there is something
-             safe to hand out: a viewing address, never the driving one. -->
-        <button id="share-now" type="button" class="share" hidden
-                title="Share: a nixamp.com link that plays this" aria-label="Share what is playing" data-i18n-aria-label="Share what is playing" data-i18n="Share">Share</button>
-        <label class="volume">
-          <button id="volume-toggle" type="button" class="volume-toggle" aria-label="Mute" data-i18n-aria-label="Mute" aria-pressed="false">🔊</button>
-          <input id="volume" type="range" min="0" max="100" value="100" aria-label="Volume" data-i18n-aria-label="Volume" />
-        </label>
-      </section>
 
       <div class="split" id="zone-main">
         <section class="panel player-only col-a" data-title="Files" data-i18n-data-title="Files" id="files-panel">
