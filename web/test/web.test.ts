@@ -716,7 +716,8 @@ test("go live sits beside play, for whoever may, and puts it on the air for ever
   const play = html.indexOf('id="play-pause"');
   const goLive = html.indexOf('id="go-live-now"');
   assert.ok(goLive > play && goLive < html.indexOf('id="stop"'));
-  assert.match(app, /dom\.goLiveNow\.hidden = !canGoLive\(\) \|\| whatToGoLiveWith\(\) === null/);
+  assert.match(app, /dom\.goLiveNow\.hidden = !canGoLive\(\)/);
+  assert.match(app, /dom\.goLiveNow\.hidden[^\n]*channelOn !== null/);
   // Every row that plays offers it too, to whoever may: the owner, or a member.
   assert.equal((app.match(/goLiveButton\(/g) ?? []).length >= 3, true);
   // A catalog entry becomes a kept channel; a channel is kept; a file becomes

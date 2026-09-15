@@ -279,6 +279,7 @@ export function start(): void {
     stop: need<HTMLButtonElement>("stop"),
     next: need<HTMLButtonElement>("next"),
     shareNow: need<HTMLButtonElement>("share-now"),
+    refreshPlayer: need<HTMLButtonElement>("refresh-player"),
   };
   /**
    * The icons, as inline SVG rather than glyphs. A link or copy character
@@ -2294,6 +2295,7 @@ export function start(): void {
     dom.volume.value = muted ? String(restore) : "0";
     dom.volume.dispatchEvent(new Event("input"));
   });
+  dom.refreshPlayer.addEventListener("click", () => window.location.reload());
 
   const pick = (input: HTMLInputElement): void => {
     input.addEventListener("change", () => {
