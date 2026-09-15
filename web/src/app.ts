@@ -415,6 +415,9 @@ export function start(): void {
    * same video played however many times you clicked another.
    */
   let watching = -1;
+  /** A folder started from the library, kept separate from the whole-server cursor. */
+  let folderQueue: number[] | null = null;
+  let folderQueueAt = 0;
   /**
    * The channel this device is on, if it is on one.
    *
@@ -755,7 +758,7 @@ export function start(): void {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "row-copy row-live";
-    drawIcon(button, "link");
+    drawIcon(button, "live");
     button.title = `Go live with ${name}: on the air for everyone, listed, link copied`;
     button.setAttribute("aria-label", `Go live with ${name}`);
     button.addEventListener("click", (event) => {
@@ -780,6 +783,7 @@ export function start(): void {
       if (rejoinChannel()) return;
       // A list playing here moves on to its next entry, round again after the last.
       if (stepList()) return;
+      if (stepFolder()) return;
       // A channel that gave up is not a place in the playlist: stepping on
       // from it played the first file in somebody's library, which read as
       // the page picking something else to fail on.
@@ -985,6 +989,20 @@ export function start(): void {
     draw();
   }
 
+  function stepFolder(): boolean {
+    if (!folderQueue || folderQueue.length < 2) return false;
+    folderQueueAt = (folderQueueAt + 1) % folderQueue.length;
+    void playAt(folderQueue[folderQueueAt]!);
+    return true;
+  }
+
+  function playFolder(indices: number[]): void {
+    if (indices.length === 0) return;
+    folderQueue = [...indices];
+    folderQueueAt = 0;
+    void playAt(folderQueue[0]!);
+  }
+
   /**
    * Ask for a smaller stream after the second stall.
    *
@@ -1047,6 +1065,7 @@ export function start(): void {
   }
 
   async function step(delta: number): Promise<void> {
+    folderQueue = null;
     const total = count();
     if (total === 0) return;
     if (remoteDrives()) {
@@ -1060,6 +1079,7 @@ export function start(): void {
   }
 
   async function halt(): Promise<void> {
+    folderQueue = null;
     // A link playing here is stopped here, whatever the server is doing.
     clearEmbed();
     localLink = null;
@@ -1457,22 +1477,12 @@ export function start(): void {
       play.setAttribute("aria-label", `Play folder ${name}`);
       play.addEventListener("click", (event) => {
         event.stopPropagation();
-        void playAt(indices[0]!);
+        playFolder(indices);
       });
       item.append(play);
     }
-    if (mode === "remote" && canGoLive() && indices.length > 0) {
-      const live = document.createElement("button");
-      live.type = "button";
-      live.className = "row-copy";
-      drawIcon(live, "link");
-      live.title = `Go live with all ${count} files in ${name}`;
-      live.setAttribute("aria-label", `Go live with folder ${name}`);
-      live.addEventListener("click", (event) => {
-        event.stopPropagation();
-        void goLiveWith({ kind: "folder", indices, name: `${name}/` }, live);
-      });
-      item.append(live);
+    if (mode === "remote" && indices.length > 0) {
+      if (canGoLive()) { item.append(goLiveButton(() => ({ kind: "folder", indices, name: `${name}/` }), `${name}/`)); }
     }
     return item;
   }
@@ -1616,33 +1626,24 @@ export function start(): void {
         n.textContent = String(row.index + 1).padStart(2, " ");
         const label = document.createElement("span");
         label.className = "name";
-        label.textContent = row.name;
+        const pathLabel = row.folder ? `${row.folder} / ${row.name}` : row.name;
+        label.textContent = pathLabel;
         const time = document.createElement("span");
         time.className = "time";
         time.textContent = row.seconds > 0 ? formatTime(row.seconds) : "--:--";
         const play = document.createElement("button"); play.type = "button"; play.className = "row-main";
-        play.setAttribute("aria-label", `Play ${row.name}${row.seconds > 0 ? `, ${formatTime(row.seconds)}` : ""}`);
+        drawIcon(play, "play");
+        play.setAttribute("aria-label", `Play ${pathLabel}${row.seconds > 0 ? `, ${formatTime(row.seconds)}` : ""}`);
         play.append(n, label, time); item.append(play);
         // The file's own address, for whoever wants it somewhere other than
         // here. A picked file is a blob in this tab and has no address.
         if (mode === "remote") {
-          const copy = document.createElement("button");
-          copy.type = "button";
-          copy.className = "row-copy";
-          drawIcon(copy, "copy");
-          copy.title = "Copy a link that plays this here, from where it is";
-          copy.setAttribute("aria-label", `Copy a link that plays ${row.name}`);
-          copy.addEventListener("click", (event) => {
-            // Copying is not choosing: the row's own click plays it.
-            event.stopPropagation();
-            // A link to this page that plays the file, not the file's bytes:
-            // the bytes are what the player's own copy button is for. From
-            // where it has got to, when it is the one playing, so a link sent
-            // mid-song lands at the same spot.
-            void copyText(pageLinkFor(`track:${row.index}`, watching === row.index ? player.position : 0), copy, "✓");
-          });
-          item.append(copy);
-          if (canGoLive()) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: row.name }), row.name));
+          const watchingThis = watching === row.index || (remoteDrives() && at() === row.index);
+          if (canGoLive()) {
+            if (watchingThis) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: pathLabel }), pathLabel));
+          }
+          // File rows stay compact. Sharing belongs to the active live row,
+          // where raw and room links are both available.
         }
         children.push(item);
       }
@@ -1860,7 +1861,7 @@ export function start(): void {
   dom.playlist.addEventListener("click", (event) => {
     const row = (event.target as HTMLElement).closest("li");
     const chosen = Number(row?.dataset.index);
-    if (Number.isInteger(chosen)) void playAt(chosen);
+        if (Number.isInteger(chosen)) { folderQueue = null; void playAt(chosen); }
   });
 
   /**
