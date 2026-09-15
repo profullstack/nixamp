@@ -18,6 +18,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { Readable } from "node:stream";
 import { pipeline as pipeStream } from "node:stream/promises";
+import { relative } from "node:path";
 import { SharedTranslations, type SharedEvent } from "./shared-translation.ts";
 import { TranslationPasses } from "./translation-passes.ts";
 import { LiveVoice, LIVE_VOICE_LANGUAGES, LIVE_VOICE_MODEL, type VoiceRequest } from "./live-voice.ts";
@@ -4019,6 +4020,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
             entries: one.playlist.length,
             entry: one.playlistAt ?? 0,
             playlist: one.playlist.map((source) => {
+              const root = engine.snapshot(false).root;
+              if (root && !isRemote(source)) {
+                const served = relative(root, source).replaceAll("\\", "/");
+                if (served && !served.startsWith("../")) return served;
+              }
               const parts = source.split(/[\\/]/).filter(Boolean);
               return parts.length > 1 ? parts.slice(-2).join(" / ") : (parts[0] || "Untitled");
             }),
