@@ -2953,7 +2953,14 @@ export function start(): void {
     // chose not to drive it, not to be a stranger on it, and "go live" was
     // the one thing a stranger and the owner-as-viewer both could not do.
     memberHere = known && !allowed;
+    const roleChanged = dom.partiesList.dataset.adminMode !== String(allowed);
     dom.adminPanel.hidden = !allowed;
+    if (roleChanged) {
+      dom.partiesList.dataset.adminMode = String(allowed);
+      // Do not let an open details menu preserve controls from the old role.
+      dom.partiesList.querySelectorAll("details[open]").forEach((one) => one.removeAttribute("open"));
+      drawParties();
+    }
     // An administrator's page opens on the Admin panel: first in its column
     // and unshaded, until they arrange the panels themselves.
     promoteAdminPanel(allowed);
