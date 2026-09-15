@@ -802,10 +802,11 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .file-row > .n { grid-column: 1; }
 .file-row > .row-label { grid-column: 2 / -1; align-items: flex-start; justify-self: stretch; text-align: left; }
 .file-row .row-file { text-align: left; }
-.live-file-row { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+.live-file-row { display: grid; grid-template-columns: auto minmax(0, 1fr); row-gap: 0; }
 .live-file-row > .n { grid-column: 1; }
 .live-file-row > .row-label { grid-column: 2; align-items: flex-start; justify-self: stretch; text-align: left; }
 .live-file-row > .row-value { grid-column: 1 / -1; width: 100%; }
+.live-file-row > .row-label .long-string-scroller { padding-inline: 0; }
 .file-row > .row-value { grid-column: 1 / -1; width: 100%; }
 
 .row:hover { background: #142019; }
