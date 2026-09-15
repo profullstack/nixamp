@@ -1235,8 +1235,14 @@ export function start(): void {
     const known = enrichment?.key === enrichAsked ? enrichment.match : null;
     // A game has no synopsis worth the room under its score.
     const blurb = !nothing && !score && known?.summary ? known.summary : "";
-    const key = `${logo}|${score ? `${score.away.logo}|${score.home.logo}|${score.text}` : ""}|${chips.join("|")}|${blurb}`;
-    if (key === drawnMeta) return;
+    const stableChips = chips.map((chip) => /^on air \d/.test(chip) ? "on air" : chip);
+    const key = `${logo}|${score ? `${score.away.logo}|${score.home.logo}|${score.text}` : ""}|${stableChips.join("|")}|${blurb}`;
+    if (key === drawnMeta) {
+      const clock = dom.meta.querySelector<HTMLElement>(".meta-chip-clock");
+      const current = chips.find((chip) => /^on air \d/.test(chip));
+      if (clock && current) clock.textContent = current;
+      return;
+    }
     drawnMeta = key;
     dom.meta.hidden = chips.length === 0;
     dom.metaBlurb.textContent = blurb;
@@ -1508,18 +1514,9 @@ export function start(): void {
   }
   let playlistSource: unknown = null;
   let playlistView = "";
-  /** Pan a long path opposite the pointer without hijacking page scrolling. */
+  /** Keep the complete path available in the tooltip and accessibility tree. */
   const pathMarquee = (path: HTMLElement): void => {
     path.title = path.textContent ?? "";
-    path.addEventListener("pointermove", (event) => {
-      const overflow = path.scrollWidth - path.clientWidth;
-      if (overflow <= 0) return;
-      const box = path.getBoundingClientRect();
-      const raw = Math.max(0, Math.min(1, (event.clientX - box.left) / Math.max(1, box.width)));
-      const eased = raw * raw * (3 - 2 * raw);
-      path.style.setProperty("--path-shift", `${-overflow * eased}px`);
-    });
-    path.addEventListener("pointerleave", () => path.style.removeProperty("--path-shift"));
   };
   function renderPlaylist(): void {
     // Meter ticks and playback clocks do not change the library. Avoid mapping,
