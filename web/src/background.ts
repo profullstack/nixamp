@@ -1,7 +1,9 @@
-/** Local speech removal for background sound while translated voices play.
- * Failure silences this branch; original commentary is never used as fallback. */
+/** Listener-local background bed for translated playback. The normal path is
+ * a direct gain-controlled feed, which avoids inference latency and dropouts.
+ * Speech separation remains available to callers that explicitly request it. */
 // Fixed makeup gain restores ambience lost in separation. It never follows TTS.
 const BACKGROUND_MAKEUP = 3;
+const PASSTHROUGH_MAKEUP = 1;
 export class BackgroundAudio {
   private generation = 0;
   private worker: Worker | null = null;
@@ -13,12 +15,19 @@ export class BackgroundAudio {
   private on = false;
   private level = 1;
   private static loaded = new WeakMap<AudioContext, Promise<void>>();
-  constructor(private readonly failed: () => void) {}
+  constructor(private readonly failed: () => void, private readonly options: { process?: boolean } = {}) {}
 
   async start(context: AudioContext, input: AudioNode): Promise<boolean> {
     this.stop();
     const generation = this.generation;
     try {
+      if (this.options.process === false) {
+        if (generation !== this.generation) return false;
+        const gain = context.createGain(); this.gain = gain;
+        gain.gain.value = this.on ? this.level * PASSTHROUGH_MAKEUP : 0;
+        this.input = input; input.connect(gain); gain.connect(context.destination);
+        return true;
+      }
       if (context.sampleRate !== 48000) throw new Error("Unsupported background sample rate");
       let module = BackgroundAudio.loaded.get(context);
       if (!module) {
@@ -66,11 +75,14 @@ export class BackgroundAudio {
     } catch { if (generation === this.generation) { this.stop(); this.failed(); } }
     return false;
   }
-  active(on: boolean): void { this.on = on; if (this.gain) this.gain.gain.value = on ? this.level * BACKGROUND_MAKEUP : 0; }
+  active(on: boolean): void {
+    this.on = on;
+    if (this.gain) this.gain.gain.value = on ? this.level * (this.options.process === false ? PASSTHROUGH_MAKEUP : BACKGROUND_MAKEUP) : 0;
+  }
   setLevel(level: number): void {
     if (!Number.isFinite(level)) return;
     this.level = Math.max(0, Math.min(2, level));
-    if (this.gain) this.gain.gain.value = this.on ? this.level * BACKGROUND_MAKEUP : 0;
+    if (this.gain) this.gain.gain.value = this.on ? this.level * (this.options.process === false ? PASSTHROUGH_MAKEUP : BACKGROUND_MAKEUP) : 0;
   }
   stop(): void {
     this.generation++; this.on = false;
@@ -80,6 +92,11 @@ export class BackgroundAudio {
       this.node.port.postMessage({ stop: true });
       try { this.input?.disconnect(this.node); } catch { /* source already detached */ }
       this.node.disconnect(); this.node.port.close();
+    }
+    if (!this.node) {
+      if (this.input && this.gain) {
+        try { this.input.disconnect(this.gain); } catch { /* source already detached */ }
+      }
     }
     this.gain?.disconnect(); this.worker?.terminate();
     this.worker = null; this.node = null; this.gain = null; this.input = null;

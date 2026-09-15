@@ -3594,7 +3594,7 @@ export function start(): void {
   const background = new BackgroundAudio(() => {
     backgroundFailed = true;
     if (translatedAudioOn) dom.transcriptAudioNote.textContent = "Translated audio · background sound unavailable on this device";
-  });
+  }, { process: false });
   const drawBackgroundLevel = (): void => {
     const value = Number(dom.transcriptBackgroundLevel.value);
     background.setLevel(value / 100);
