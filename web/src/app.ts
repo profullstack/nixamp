@@ -1519,7 +1519,10 @@ export function start(): void {
         const item = document.createElement("li");
         item.className = "row";
         const n = document.createElement("span"); n.className = "n"; n.textContent = String(index + 1).padStart(2, " ");
-        const label = document.createElement("span"); label.className = "name"; label.textContent = name;
+        const slash = name.lastIndexOf("/");
+        const file = document.createElement("span"); file.className = "name row-file"; file.textContent = slash < 0 ? name : name.slice(slash + 1);
+        const path = document.createElement("span"); path.className = "row-path"; path.textContent = slash < 0 ? "" : name.slice(0, slash);
+        const label = document.createElement("span"); label.className = "row-label"; label.append(file, path);
         item.append(n, label);
         item.setAttribute("aria-readonly", "true");
         item.title = channel.live === false ? "Part of this on-demand show" : "Live queue (read-only)";
@@ -1637,10 +1640,11 @@ export function start(): void {
         const n = document.createElement("span");
         n.className = "n";
         n.textContent = String(row.index + 1).padStart(2, " ");
-        const label = document.createElement("span");
-        label.className = "name";
         const pathLabel = row.folder ? `${row.folder} / ${row.name}` : row.name;
-        label.textContent = pathLabel;
+        const label = document.createElement("span"); label.className = "row-label";
+        const file = document.createElement("span"); file.className = "name row-file"; file.textContent = row.name;
+        const path = document.createElement("span"); path.className = "row-path"; path.textContent = row.folder;
+        label.append(file, path);
         const time = document.createElement("span");
         time.className = "time";
         time.textContent = row.seconds > 0 ? formatTime(row.seconds) : "--:--";

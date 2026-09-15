@@ -830,6 +830,9 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 
 .row .n { color: var(--muted); width: 2.4em; text-align: right; flex: none; }
 .row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.row-label { display: flex; flex: 1; min-width: 0; min-height: 24px; flex-direction: column; justify-content: center; line-height: 1.2; white-space: normal; }
+.row-file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-path { color: var(--muted); font-size: 0.78em; overflow-wrap: anywhere; }
 .row .time { color: var(--muted); flex: none; }
 
 /* The file's address, one glyph wide, quiet until the row is under the
@@ -1347,6 +1350,7 @@ body.tv input, body.tv .filter { font-size: 1em; padding: 8px 10px; }
 .row-main { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; min-height: 24px; background: transparent; color: inherit; border: 0; border-radius: 0; text-align: left; font: inherit; padding: 2px; cursor: pointer; }
 .row-main:focus-visible { outline-offset: -2px; }
 .row-main .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-main .row-label { align-items: flex-start; }
 .row-copy:focus-visible, .row:focus-within .row-copy { opacity: 1; }
 .panel-tools button { min-width: 24px; min-height: 24px; }
 @media (prefers-reduced-motion: reduce) {
