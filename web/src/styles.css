@@ -795,6 +795,12 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
   align-items: flex-start;
 }
 
+/* File actions stay on the title line; the full path gets the whole row below
+   them, so long names are not squeezed into the button column. */
+.file-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; }
+.file-row > .row-main { grid-column: 1; }
+.file-row > .row-value { grid-column: 1 / -1; width: 100%; }
+
 .row:hover { background: #142019; }
 .row.selected { background: #16241c; }
 .row.selected .name { color: var(--accent); }

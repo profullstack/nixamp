@@ -1541,7 +1541,7 @@ export function start(): void {
         const label = document.createElement("span"); label.className = "row-label";
         const fileView = document.createElement("span"); fileView.className = "row-value"; fileView.append(file);
         const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
-        label.append(fileView, pathView); pathMarquee(fileView, file); pathMarquee(pathView, path);
+        label.append(fileView); pathMarquee(fileView, file); pathMarquee(pathView, path);
         item.append(n, label);
         item.setAttribute("aria-readonly", "true");
         item.title = channel.live === false ? "Part of this on-demand show" : "Live queue (read-only)";
@@ -1682,6 +1682,8 @@ export function start(): void {
           // File rows stay compact. Sharing belongs to the active live row,
           // where raw and room links are both available.
         }
+        item.classList.add("file-row");
+        item.append(pathView);
         children.push(item);
       }
       replaceList(dom.playlist, ...children);
