@@ -114,6 +114,48 @@ main { flex: 1; outline: none; }
 .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
 .hero-copy .hero-note { margin-top: 15px; font-size: 0.82rem; }
 
+.platforms { margin-top: 28px; max-width: 440px; }
+.platform-badges { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.platform-badge {
+  min-height: 76px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--purple);
+  border-radius: 12px;
+  color: var(--purple);
+  background: var(--white);
+  text-align: start;
+  text-decoration: none;
+}
+.platform-badge img { flex-shrink: 0; object-fit: contain; }
+.platform-badge > span { display: grid; gap: 3px; min-width: 0; }
+.platform-badge small { font-size: .69rem; line-height: 1.25; }
+.platform-badge strong { font-size: .97rem; font-weight: 750; line-height: 1.2; }
+.platform-fire-tv { color: #fff8eb; border-color: #232f3e; background: #232f3e; }
+.platform-fire-tv small { color: #ffd08a; }
+.platform-pwa { cursor: pointer; }
+.platform-pwa:hover { background: #eee8ff; }
+.platform-pwa:focus-visible { outline: 3px solid var(--purple); outline-offset: 4px; }
+.platform-unavailable:disabled { color: #767676; background: #e9e9e9; border-color: #d1d1d1; cursor: not-allowed; }
+.platform-unavailable img { opacity: .65; }
+.pwa-instructions { color: var(--muted); line-height: 1.6; }
+.pwa-instructions ul { padding-inline-start: 22px; }
+.pwa-instructions li + li { margin-top: 12px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@media (max-width: 400px) {
+  .platform-badge { padding: 10px; gap: 8px; }
+  .platform-badge strong { font-size: .85rem; }
+}
+@media (forced-colors: active) {
+  .platform-badge { border-color: CanvasText; }
+  .platform-fire-tv small { color: CanvasText; }
+  .platform-unavailable:disabled { color: GrayText; border-color: GrayText; }
+  .platform-pwa:focus-visible { outline-color: Highlight; }
+}
+
 .button {
   min-height: 44px;
   border: 0;

@@ -1,5 +1,7 @@
+import platformMessages from "./platforms.ts";
 import type { Catalogue } from "../i18n.ts";
 export default {
+  ...platformMessages,
   "No parties live right now.": "Er zijn nu geen feestjes live.",
   "Could not refresh parties.": "Feestjes konden niet worden bijgewerkt.",
   "Pick a server in the directory, or paste its link here.": "Kies een server in de lijst of plak hier de link.",

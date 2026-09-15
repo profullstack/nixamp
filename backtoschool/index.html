@@ -40,6 +40,24 @@
       </footer>
     </div>
 
+    <dialog id="pwa-dialog" class="dialog" aria-labelledby="pwa-title">
+      <button class="dialog-close" type="button" data-close aria-label="Close" data-i18n-aria-label="Close">×</button>
+      <span class="eyebrow">BackToSchool.help</span>
+      <h2 id="pwa-title" data-i18n="Install the web app">Install the web app</h2>
+      <div class="pwa-instructions" data-pwa-instructions>
+        <p data-i18n="Keep BackToSchool on your home screen or desktop. No app store needed.">Keep BackToSchool on your home screen or desktop. No app store needed.</p>
+        <ul>
+          <li data-i18n="iPhone or iPad: open this site in Safari, tap Share, then Add to Home Screen.">iPhone or iPad: open this site in Safari, tap Share, then Add to Home Screen.</li>
+          <li data-i18n="Android: open your browser menu and choose Install app or Add to Home screen.">Android: open your browser menu and choose Install app or Add to Home screen.</li>
+          <li data-i18n="Desktop: look for Install in the address bar or browser menu. The option depends on your browser.">Desktop: look for Install in the address bar or browser menu. The option depends on your browser.</li>
+        </ul>
+        <p data-i18n="You can also keep using BackToSchool in this browser.">You can also keep using BackToSchool in this browser.</p>
+      </div>
+      <p data-pwa-installed hidden data-i18n="The web app is installed. You can keep learning here.">The web app is installed. You can keep learning here.</p>
+      <button class="button button-primary" type="button" data-close data-i18n="Continue learning">Continue learning</button>
+    </dialog>
+    <p id="pwa-status" class="visually-hidden" role="status"></p>
+
     <dialog id="account-dialog" class="dialog" aria-labelledby="account-title">
       <button class="dialog-close" type="button" data-close aria-label="Close" data-i18n-aria-label="Close">×</button>
       <span class="eyebrow" data-i18n="Your NixAmp account">Your NixAmp account</span>

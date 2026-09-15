@@ -1,5 +1,7 @@
+import platformMessages from "./platforms.ts";
 import type { Catalogue } from "../i18n.ts";
 export default {
+  ...platformMessages,
   "No parties live right now.": "Belum ada pesta yang sedang live.",
   "Could not refresh parties.": "Tidak dapat memperbarui pesta.",
   "Pick a server in the directory, or paste its link here.": "Pilih server di direktori atau tempel tautannya di sini.",

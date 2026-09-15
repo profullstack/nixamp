@@ -1,5 +1,7 @@
+import platformMessages from "./platforms.ts";
 import type { Catalogue } from "../i18n.ts";
 export default {
+  ...platformMessages,
   "No parties live right now.": "अभी कोई पार्टी लाइव नहीं है।",
   "Could not refresh parties.": "पार्टियाँ अपडेट नहीं हो सकीं।",
   "Pick a server in the directory, or paste its link here.": "डायरेक्टरी में सर्वर चुनें या उसका लिंक यहाँ पेस्ट करें।",

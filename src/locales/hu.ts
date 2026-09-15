@@ -1,5 +1,7 @@
+import platformMessages from "./platforms.ts";
 import type { Catalogue } from "../i18n.ts";
 export default {
+  ...platformMessages,
   "No parties live right now.": "Jelenleg nincs élő közös nézés.",
   "Could not refresh parties.": "Nem sikerült frissíteni a közös nézéseket.",
   "Pick a server in the directory, or paste its link here.": "Válassz egy szervert a listából, vagy illeszd be ide a hivatkozását.",

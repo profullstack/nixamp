@@ -1,5 +1,7 @@
+import platformMessages from "./platforms.ts";
 import type { Catalogue } from "../i18n.ts";
 export default {
+  ...platformMessages,
   "No parties live right now.": "Зараз немає вечірок наживо.",
   "Could not refresh parties.": "Не вдалося оновити список вечірок.",
   "Pick a server in the directory, or paste its link here.": "Виберіть сервер у каталозі або вставте його посилання сюди.",

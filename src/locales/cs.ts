@@ -1,5 +1,7 @@
+import platformMessages from "./platforms.ts";
 import type { Catalogue } from "../i18n.ts";
 export default {
+  ...platformMessages,
   "No parties live right now.": "Právě neprobíhají žádné párty.",
   "Could not refresh parties.": "Párty se nepodařilo aktualizovat.",
   "Pick a server in the directory, or paste its link here.": "Vyberte server v seznamu nebo sem vložte jeho odkaz.",

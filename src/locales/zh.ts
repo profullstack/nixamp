@@ -1,5 +1,7 @@
+import platformMessages from "./platforms.ts";
 import type { Catalogue } from "../i18n.ts";
 export default {
+  ...platformMessages,
   "No parties live right now.": "目前没有正在直播的派对。",
   "Could not refresh parties.": "无法刷新派对列表。",
   "Pick a server in the directory, or paste its link here.": "从目录中选择服务器，或在此粘贴其链接。",

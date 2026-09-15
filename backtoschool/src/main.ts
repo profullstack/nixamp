@@ -4,6 +4,7 @@ import { t as uiMessage } from "../../src/i18n.ts";
 import { installI18n } from "../../web/src/i18n.ts";
 void installI18n();
 import "./styles.css";
+import { platformBadges } from "./platforms.ts";
 import { installEventWriter } from "./event-writer.ts";
 import type { LiveEvent } from "../../src/live-events.ts";
 import { classroomBroadcast } from "../../src/classroom.ts";
@@ -206,6 +207,7 @@ async function home(): Promise<void> {
           <button class="button button-secondary" type="button" data-event-mode="scheduled" data-i18n="Schedule live">Schedule live</button>
         </div>
         <p class="hero-note">Watch classes and screen shares. No account required.</p>
+        ${platformBadges()}
       </div>
       <div class="hero-board" aria-label="What is happening today">
         <span class="tape tape-one" aria-hidden="true"></span>
