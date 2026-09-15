@@ -1544,14 +1544,7 @@ export function start(): void {
         const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
         label.append(fileView); pathMarquee(fileView, file); pathMarquee(pathView, path);
         item.classList.add("live-file-row");
-        const progress = document.createElement("span");
-        progress.className = "live-file-progress";
-        progress.setAttribute("role", "progressbar");
-        progress.setAttribute("aria-label", `Estimated progress for ${name}`);
-        const fill = document.createElement("span");
-        fill.className = "live-file-progress-fill";
-        progress.append(fill);
-        item.append(n, label, pathView, progress);
+        item.append(n, label, pathView);
         item.setAttribute("aria-readonly", "true");
         item.title = channel.live === false ? "Part of this on-demand show" : "Live queue (read-only)";
         if (index === (channel.entry ?? 0)) item.setAttribute("aria-current", "true");
