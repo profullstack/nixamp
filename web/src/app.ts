@@ -1648,23 +1648,23 @@ export function start(): void {
         // The file's own address, for whoever wants it somewhere other than
         // here. A picked file is a blob in this tab and has no address.
         if (mode === "remote") {
-          const copy = document.createElement("button");
-          copy.type = "button";
-          copy.className = "row-copy";
-          drawIcon(copy, "link");
-          copy.title = "Copy a link that plays this here, from where it is";
-          copy.setAttribute("aria-label", `Copy a link that plays ${pathLabel}`);
-          copy.addEventListener("click", (event) => {
-            // Copying is not choosing: the row's own click plays it.
-            event.stopPropagation();
-            // A link to this page that plays the file, not the file's bytes:
-            // the bytes are what the player's own copy button is for. From
-            // where it has got to, when it is the one playing, so a link sent
-            // mid-song lands at the same spot.
-            void copyText(pageLinkFor(`track:${row.index}`, watching === row.index ? player.position : 0), copy, "✓");
-          });
           if (canGoLive()) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: pathLabel }), pathLabel));
-          item.append(copy);
+          // Copy is contextual: it belongs beside the file currently being
+          // watched, while Play and Go Live remain available on every row.
+          const watchingThis = watching === row.index || (remoteDrives() && at() === row.index);
+          if (watchingThis) {
+            const copy = document.createElement("button");
+            copy.type = "button";
+            copy.className = "row-copy";
+            drawIcon(copy, "link");
+            copy.title = "Copy a link that plays this here, from where it is";
+            copy.setAttribute("aria-label", `Copy a link that plays ${pathLabel}`);
+            copy.addEventListener("click", (event) => {
+              event.stopPropagation();
+              void copyText(pageLinkFor(`track:${row.index}`, watching === row.index ? player.position : 0), copy, "✓");
+            });
+            item.append(copy);
+          }
         }
         children.push(item);
       }
