@@ -38,6 +38,7 @@ import { TranslationPurchase } from "./translation-pass.ts";
 import { Interpreter } from "./interpreter.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
+import { attachLongStringScroller } from "../../packages/long-string-scroller/src/index.ts";
 
 export const BAND_COUNT = 24;
 const REMOTE_KEY = "nixamp.remote";
@@ -1514,9 +1515,10 @@ export function start(): void {
   }
   let playlistSource: unknown = null;
   let playlistView = "";
-  /** Wrapped text is stable on mouse, touch, and TV. */
-  const pathMarquee = (path: HTMLElement): void => {
-    path.title = path.textContent ?? "";
+  /** Wrap everywhere; on a fine pointer, let the shared scroller pan it. */
+  const pathMarquee = (viewport: HTMLElement, content: HTMLElement): void => {
+    content.title = content.textContent ?? "";
+    attachLongStringScroller(viewport, content);
   };
   function renderPlaylist(): void {
     // Meter ticks and playback clocks do not change the library. Avoid mapping,
@@ -1535,7 +1537,7 @@ export function start(): void {
         const label = document.createElement("span"); label.className = "row-label";
         const fileView = document.createElement("span"); fileView.className = "row-value"; fileView.append(file);
         const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
-        label.append(fileView, pathView); pathMarquee(file); pathMarquee(path);
+        label.append(fileView, pathView); pathMarquee(fileView, file); pathMarquee(pathView, path);
         item.append(n, label);
         item.setAttribute("aria-readonly", "true");
         item.title = channel.live === false ? "Part of this on-demand show" : "Live queue (read-only)";
@@ -1659,7 +1661,7 @@ export function start(): void {
         const label = document.createElement("span"); label.className = "row-label";
         const fileView = document.createElement("span"); fileView.className = "row-value"; fileView.append(file);
         const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
-        label.append(fileView, pathView); pathMarquee(file); pathMarquee(path);
+        label.append(fileView, pathView); pathMarquee(fileView, file); pathMarquee(pathView, path);
         const time = document.createElement("span");
         time.className = "time";
         time.textContent = row.seconds > 0 ? formatTime(row.seconds) : "--:--";

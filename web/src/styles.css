@@ -833,6 +833,16 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .row-label { display: flex; flex: 1; min-width: 0; min-height: 24px; flex-direction: column; justify-content: center; line-height: 1.2; white-space: normal; overflow: hidden; }
 .row-value { display: block; min-width: 0; max-width: 100%; overflow: hidden; }
+.long-string-scroller-content { transform: translateX(var(--path-shift, 0)); transition: transform 280ms ease-out; }
+@media (hover: hover) and (pointer: fine) {
+  .long-string-scroller-content[data-pan="true"] {
+    width: max-content;
+    max-width: none;
+    white-space: nowrap;
+    will-change: transform;
+    transition: none;
+  }
+}
 .row-file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-path { display: block; max-width: 100%; color: var(--muted); font-size: 0.78em; white-space: normal; overflow-wrap: anywhere; }
 .row .time { color: var(--muted); flex: none; }
