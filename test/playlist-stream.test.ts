@@ -47,6 +47,9 @@ test("a directory live crosses codecs and subdirectories in one decodable stream
         const bytes = Buffer.concat(chunks);
         assert.equal(boxes(bytes).filter(one => one.type === "moov").length, 1, "one stream header across every file");
         const out = join(root, "out.mp4"); writeFileSync(out, bytes);
+        const probed = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=codec_name,extradata_size", "-of", "json", out], { encoding: "utf8" }));
+        assert.ok(probed.streams.find((stream: { codec_name: string }) => stream.codec_name === "aac")?.extradata_size >= 2,
+          "the initial MP4 header must contain AAC config before an HLS packager or browser receives it");
         const pixels = ff(["-i", out, "-an", "-vf", "scale=1:1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"]);
         const colors: string[] = [];
         for (let at = 0; at < pixels.length; at += 3) {

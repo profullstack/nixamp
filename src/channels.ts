@@ -455,8 +455,11 @@ export class Channel {
         ? { format: "mpegts", open: async (signal: AbortSignal) => playlistInput.open(signal) }
         : this.options.through?.(this.info, from, input, audio) ?? null;
       this.info.teed = through !== null && !playlistInput;
+      // AAC's AudioSpecificConfig is produced by the bitstream filter on
+      // its first packet. Writing an empty moov earlier omits that config:
+      // HLS remuxing then emits AAC with no ADTS headers and browsers fail.
       const playlistEncode = !playlistInput ? null : this.info.kind === "video"
-        ? ["-c", "copy", "-bsf:a", "aac_adtstoasc", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof"]
+        ? ["-c", "copy", "-bsf:a", "aac_adtstoasc", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof+delay_moov"]
         : ["-af", "aresample=async=1:first_pts=0", ...encode];
       const child = spawn(
         command,
@@ -792,7 +795,9 @@ export class Channel {
         // few kilobytes (slides, static cameras, or a paused game screen).
         while (this.recent.length > 0) {
           const oldest = this.fragmentTimes.get(this.recent[0]!);
-          if (oldest === undefined || time - oldest < BACKLOG_SECONDS) break;
+          // Audio frame rounding and floating-point subtraction must not
+          // retain one extra two-second fragment at the window boundary.
+          if (oldest === undefined || time - oldest < BACKLOG_SECONDS - 0.05) break;
           do { this.recentBytes -= this.recent.shift()!.byteLength; }
           while (this.recent.length && boxType(this.recent[0]!) !== "moof");
         }

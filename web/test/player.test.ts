@@ -164,3 +164,28 @@ test('the intro retries a suspended graph once per media element and leaves the 
     else Reflect.deleteProperty(globalThis, 'AudioContext');
   }
 });
+
+test("engine recovery notices and aborted play requests do not reload a live source", async () => {
+  const audio = new MediaElement();
+  const errors: string[] = [];
+  const busy: boolean[] = [];
+  let sourceOptions: Parameters<typeof import("@profullstack/player").attachSource>[1] | undefined;
+  let destroyed = 0;
+  const player = new BrowserPlayer({ audio: audio as unknown as HTMLAudioElement, video: new MediaElement() as unknown as HTMLVideoElement }, {
+    onTime() {}, onEnded() {}, onState() {}, onError: message => errors.push(message), onBusy: value => busy.push(value),
+  }, async (_media, options) => {
+    sourceOptions = options;
+    return { engine: "hls", kind: "hls", levels: () => [], destroy() { destroyed++; } };
+  });
+  await player.load({ title: "Live", artist: "", album: "", duration: 0, url: "https://server.example/live", video: false, objectUrl: false, kind: "audio" }, false);
+  sourceOptions!.onNotice?.("Recovering…");
+  audio.dispatchEvent(new Event("error"));
+  audio.refusal = new DOMException("MediaSource replaced during recovery", "AbortError");
+  await player.play();
+  assert.deepEqual(errors, [], "transient engine recovery must not consume the room's rejoin budget");
+  assert.equal(destroyed, 0);
+  assert.ok(busy.includes(true));
+  sourceOptions!.onError?.("Recovery failed");
+  assert.deepEqual(errors, ["Recovery failed"], "terminal engine failures still reach the app");
+  player.stop();
+});

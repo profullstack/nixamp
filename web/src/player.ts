@@ -194,6 +194,7 @@ export class BrowserPlayer {
   constructor(
     private readonly elements: PlayerElements,
     private readonly handlers: PlayerHandlers,
+    private readonly attach: typeof attachSource = attachSource,
   ) {
     this.active = elements.audio;
     for (const element of [elements.audio, elements.video]) {
@@ -217,7 +218,7 @@ export class BrowserPlayer {
         if (element === this.active) this.handlers.onState(false);
       });
       element.addEventListener("error", () => {
-        if (element === this.active) this.handlers.onError(mediaError(element));
+        if (element === this.active && (!this.attached || this.attached.engine === "native")) this.handlers.onError(mediaError(element));
       });
       const busy = (is: boolean) => () => {
         if (element === this.active) this.handlers.onBusy?.(is);
@@ -391,15 +392,18 @@ export class BrowserPlayer {
     this.attached?.destroy();
     this.attached = null;
     try {
-      this.attached = await attachSource(this.active, {
+      this.attached = await this.attach(this.active, {
         src: track.url,
         kind,
         // A film the browser has no decoder for is the ordinary case in a
         // library of downloads, and silence is the worst way to say so.
         unplayableAdvice: "VLC or mpv will play it; nixamp can only hand it to your browser.",
         onError: (message) => this.handlers.onError(message),
+        // The engine owns transient recovery. Turning its notice into an
+        // error reloads the source in the middle of recoverMediaError/startLoad
+        // and spends the room's rejoin budget before playback can resume.
         onNotice: (message) => {
-          if (message) this.handlers.onError(message);
+          if (message) this.handlers.onBusy?.(true);
         },
       });
     } catch (error) {
@@ -432,6 +436,9 @@ export class BrowserPlayer {
         this.handlers.onState(false);
         return;
       }
+      // HLS/MSE recovery replaces its MediaSource and aborts the pending play
+      // request. The engine still owns that recovery, including terminal errors.
+      if (error instanceof Error && error.name === "AbortError" && this.attached?.engine !== "native") return;
       this.handlers.onError(error instanceof Error ? error.message : "playback was refused");
     }
   }
