@@ -6288,7 +6288,7 @@ export function start(): void {
     void loadOnAir();
     onAirTimer = setInterval(() => {
       if (document.visibilityState === "visible") void loadOnAir();
-    }, 2000);
+    }, 5000);
   };
 
   /** Read only the connected server. A late reply must never restore a server
@@ -6296,7 +6296,7 @@ export function start(): void {
   async function loadOnAir(): Promise<void> {
     if (mode !== "remote" || onAirRequest) return;
     const controller = new AbortController(); onAirRequest = controller;
-    // The first load needs a visible cue. Polling every two seconds must stay
+    // The first load needs a visible cue. Polling every five seconds must stay
     // quiet or the panel appears to reload forever while somebody watches it.
     const firstLoad = lastAir === null;
     if (firstLoad) dom.partiesPanel.dataset.loading = "true";
