@@ -15,6 +15,7 @@ COPY package.json bun.lock ./
 COPY web/package.json web/package.json
 COPY desktop/package.json desktop/package.json
 COPY backtoschool/package.json backtoschool/package.json
+COPY packages packages
 RUN bun install --frozen-lockfile
 
 COPY . .
@@ -33,6 +34,7 @@ COPY package.json bun.lock ./
 COPY web/package.json web/package.json
 COPY desktop/package.json desktop/package.json
 COPY backtoschool/package.json backtoschool/package.json
+COPY packages packages
 RUN bun install --frozen-lockfile --production
 
 # The models, fetched once here rather than at the first ask after every
