@@ -469,10 +469,22 @@ export class Channel {
       // The outro is a file read by ffmpeg itself: a pipe cannot loop.
       const through = this.outroOn ? null : this.options.through?.(this.info, from, input, audio) ?? null;
       this.info.teed = through !== null;
-      const concatInput = this.concatListPath
-        ? [
-            ...(paced ? ["-re"] : []),
+    const concatInput = this.concatListPath
+      ? [
+          ...(paced ? ["-re"] : []),
+            // Directory lives may contain different codecs, dimensions, or
+            // timestamp bases. Copying the first file's streams can make
+            // ffmpeg reject later entries and leave the audience on entry 1.
+            // The output settings below normalize the entire concat stream.
             "-f", "concat", "-safe", "0", "-i", this.concatListPath,
+          ]
+      : null;
+      const concatEncode = this.concatListPath && this.info.kind === "video"
+        ? [
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0",
+            "-c:a", "aac", "-b:a", "160k", "-ac", "2",
+            "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof",
           ]
         : null;
       const child = spawn(
@@ -522,7 +534,7 @@ export class Channel {
                 // second input, dialled the same way, that the encode maps in.
                 ...(audio ? [...remoteArgs, ...(paced ? ["-re"] : []), ...input, ...seek, "-i", audio] : []),
               ]),
-          ...encode,
+          ...(concatEncode ?? encode),
           "pipe:1",
         ],
         { stdio: [through ? "pipe" : "ignore", "pipe", "pipe", "pipe"] },
