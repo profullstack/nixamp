@@ -310,6 +310,7 @@ export function start(): void {
     dom.transcriptPanel.classList.remove("panel", "col-b");
     dom.transcriptPanel.hidden = false;
     document.querySelector(".classroom-player")!.append(dom.transcriptPanel);
+    document.querySelector("#app")!.append(dom.trollboxPanel);
   }
 
   /**
@@ -973,7 +974,12 @@ export function start(): void {
       ? (lastAir?.channels.find((one) => one.id === channelOn?.id)?.code ?? "")
       : (listed ? phoneCode : "");
     if (code) {
-      parts.push(". To talk about it, call ", boldly(phoneNumber || "the line"), " and key ", boldly(code), ".");
+      const phone = phoneNumber ? document.createElement("a") : boldly("the line");
+      if (phoneNumber) {
+        phone.textContent = phoneNumber;
+        phone.setAttribute("href", `tel:${phoneNumber.replace(/[^+\d]/g, "")}`);
+      }
+      parts.push(". To talk about it, call ", phone, " and key ", boldly(code), ".");
     }
     const key = parts.map((p) => (typeof p === "string" ? p : p.textContent)).join("");
     if (dom.liveLine.dataset.drawn === key) return;
@@ -6225,6 +6231,8 @@ export function start(): void {
     } catch {
       // The page's own host keeps no directory. The link still works.
     }
+    phoneNumber = callIn;
+    drawLiveLine();
 
     interface LiveState { live: boolean; code: string; possible: boolean; url?: string }
     let live: LiveState | null = null;

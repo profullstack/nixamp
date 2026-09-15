@@ -1445,7 +1445,7 @@ body.tv input, body.tv .filter { font-size: 1em; padding: 8px 10px; }
 /* A classroom iframe uses the same video transport without the publishing desk. */
 body.classroom-embed { padding: 0; margin: 0; background: #101015; }
 .classroom-embed #app { width: 100%; max-width: none; margin: 0; padding: 8px; }
-.classroom-embed #app > :not(.classroom-player):not(#transport),
+.classroom-embed #app > :not(.classroom-player):not(#transport):not(#trollbox-panel),
 .classroom-embed .skip-links,
 .classroom-embed .classroom-player > .panel-heading,
 .classroom-embed .classroom-player > .panel-tools,
@@ -1460,7 +1460,11 @@ body.classroom-embed { padding: 0; margin: 0; background: #101015; }
 .classroom-embed #transcript-list { max-height: 5em; overflow: auto; }
 .classroom-embed #transport { position: static; margin-top: 8px; }
 .classroom-embed #title-line { font-size: 1rem; margin-top: 8px; }
-.classroom-embed #album-line, .classroom-embed #meta-blurb, .classroom-embed #live-line { display: none !important; }
+.classroom-embed #album-line, .classroom-embed #meta-blurb { display: none !important; }
+.classroom-embed #trollbox-panel { margin: 12px 0 0; }
+.classroom-embed #trollbox-panel > .panel-tools { display: none; }
+.classroom-embed #trollbox-list { max-height: 10em; overflow: auto; }
+.classroom-embed #video { max-height: 40dvh; }
 
 /* Language controls stay native, visible and compact on phones and TV. */
 .ui-language { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; font-size: 12px; }
