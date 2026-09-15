@@ -1517,19 +1517,21 @@ export function start(): void {
   /** Wrap everywhere; a fine mouse may additionally pan a long path. */
   const pathMarquee = (path: HTMLElement): void => {
     path.title = path.textContent ?? "";
-    path.addEventListener("pointerenter", (event) => {
+    const viewport = path.parentElement;
+    if (!viewport) return;
+    viewport.addEventListener("pointerenter", (event) => {
       if (event.pointerType === "mouse") path.dataset["pan"] = "true";
     });
-    path.addEventListener("pointermove", (event) => {
+    viewport.addEventListener("pointermove", (event) => {
       if (path.dataset["pan"] !== "true") return;
-      const overflow = path.scrollWidth - path.clientWidth;
+      const overflow = path.scrollWidth - viewport.clientWidth;
       if (overflow <= 0) return;
-      const box = path.getBoundingClientRect();
+      const box = viewport.getBoundingClientRect();
       const raw = Math.max(0, Math.min(1, (event.clientX - box.left) / Math.max(1, box.width)));
       const eased = raw * raw * (3 - 2 * raw);
       path.style.setProperty("--path-shift", `${-overflow * eased}px`);
     });
-    path.addEventListener("pointerleave", () => {
+    viewport.addEventListener("pointerleave", () => {
       delete path.dataset["pan"];
       path.style.removeProperty("--path-shift");
     });
