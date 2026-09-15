@@ -4018,7 +4018,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           ...(one.playlist ? {
             entries: one.playlist.length,
             entry: one.playlistAt ?? 0,
-            playlist: one.playlist.map((source) => source.split(/[\\/]/).pop() || "Untitled"),
+            playlist: one.playlist.map((source) => {
+              const parts = source.split(/[\\/]/).filter(Boolean);
+              return parts.length > 1 ? parts.slice(-2).join(" / ") : (parts[0] || "Untitled");
+            }),
             live: one.live !== false,
           } : {}),
           // The member who put it on, when one did: theirs to take off.

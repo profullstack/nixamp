@@ -1636,13 +1636,14 @@ export function start(): void {
         n.textContent = String(row.index + 1).padStart(2, " ");
         const label = document.createElement("span");
         label.className = "name";
-        label.textContent = row.name;
+        const pathLabel = row.folder ? `${row.folder} / ${row.name}` : row.name;
+        label.textContent = pathLabel;
         const time = document.createElement("span");
         time.className = "time";
         time.textContent = row.seconds > 0 ? formatTime(row.seconds) : "--:--";
         const play = document.createElement("button"); play.type = "button"; play.className = "row-main";
         drawIcon(play, "play");
-        play.setAttribute("aria-label", `Play ${row.name}${row.seconds > 0 ? `, ${formatTime(row.seconds)}` : ""}`);
+        play.setAttribute("aria-label", `Play ${pathLabel}${row.seconds > 0 ? `, ${formatTime(row.seconds)}` : ""}`);
         play.append(n, label, time); item.append(play);
         // The file's own address, for whoever wants it somewhere other than
         // here. A picked file is a blob in this tab and has no address.
@@ -1652,7 +1653,7 @@ export function start(): void {
           copy.className = "row-copy";
           drawIcon(copy, "link");
           copy.title = "Copy a link that plays this here, from where it is";
-          copy.setAttribute("aria-label", `Copy a link that plays ${row.name}`);
+          copy.setAttribute("aria-label", `Copy a link that plays ${pathLabel}`);
           copy.addEventListener("click", (event) => {
             // Copying is not choosing: the row's own click plays it.
             event.stopPropagation();
@@ -1662,7 +1663,7 @@ export function start(): void {
             // mid-song lands at the same spot.
             void copyText(pageLinkFor(`track:${row.index}`, watching === row.index ? player.position : 0), copy, "✓");
           });
-          if (canGoLive()) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: row.name }), row.name));
+          if (canGoLive()) item.append(goLiveButton(() => ({ kind: "track", index: row.index, name: pathLabel }), pathLabel));
           item.append(copy);
         }
         children.push(item);
