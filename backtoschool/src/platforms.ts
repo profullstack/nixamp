@@ -25,10 +25,10 @@ export function platformBadges(): string {
   const pwaLabel = installed ? "PWA installed" : "Install PWA";
   return `<div class="platforms" role="group" aria-label="Supported platforms" data-i18n-aria-label="Supported platforms">
     <div class="platform-badges">
-      <div class="platform-badge platform-fire-tv">
+      <a class="platform-badge platform-fire-tv" href="https://www.amazon.com/gp/mas/dl/android?p=help.backtoschool.tv">
         <img src="/platform-icons/amazon.svg" width="28" height="28" alt="" />
-        <span><small data-i18n="In review">In review</small><strong>Amazon Fire TV</strong><small>Fire TV Stick</small></span>
-      </div>
+        <span><small>Amazon Appstore</small><strong>Amazon Fire TV</strong><small>Fire TV Stick</small></span>
+      </a>
       <button class="platform-badge platform-pwa" type="button" data-install-pwa>
         <img src="/platform-icons/pwa.svg" width="40" height="40" alt="" />
         <span><small data-pwa-label data-i18n="${pwaLabel}">${pwaLabel}</small><strong data-i18n="Web app">Web app</strong></span>
