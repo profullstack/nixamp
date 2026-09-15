@@ -800,7 +800,8 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 .file-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; }
 .file-row > .row-main { grid-column: 1; }
 .file-row > .n { grid-column: 1; }
-.file-row > .row-label { grid-column: 2 / -1; align-items: flex-start; }
+.file-row > .row-label { grid-column: 2 / -1; align-items: flex-start; justify-self: stretch; text-align: left; }
+.file-row .row-file { text-align: left; }
 .file-row > .row-value { grid-column: 1 / -1; width: 100%; }
 
 .row:hover { background: #142019; }
