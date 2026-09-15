@@ -87,6 +87,18 @@ function need<T extends Element>(id: string): T {
 
 export function start(): void {
   const classroomEmbed = new URLSearchParams(location.search).get("embed") === "1";
+  // Cross-site embeds cannot rely on the account's SameSite cookie. Keep the
+  // login response token in memory and send it only to this origin's account API.
+  let embeddedSession = "";
+  function fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+    if (!embeddedSession || url.origin !== location.origin || !url.pathname.startsWith("/api/v1/")) {
+      return globalThis.fetch(input, init);
+    }
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    headers.set("authorization", `Bearer ${embeddedSession}`);
+    return globalThis.fetch(input, { ...init, headers });
+  }
   document.body.classList.toggle("classroom-embed", classroomEmbed);
   // A television first, before anything is measured: the lists lose their
   // own scrollbars and page with buttons, and the type grows, because a
@@ -5768,12 +5780,14 @@ export function start(): void {
         });
         const body = (await answer.json()) as {
           account?: { email?: string; id?: string };
+          token?: string;
           error?: string;
         };
         if (!answer.ok) {
           dom.accountNote.textContent = body.error ?? "that did not work";
           return;
         }
+        if (classroomEmbed) embeddedSession = body.token ?? "";
         meId = body.account?.id ?? "";
         // Never leave a password sitting in the DOM after it has been used.
         dom.accountPassword.value = "";
@@ -5797,6 +5811,7 @@ export function start(): void {
       } catch {
         // The cookie is the session; failing to say so does not keep it.
       }
+      embeddedSession = "";
       meId = "";
       showAccount(null);
       void loadParties();

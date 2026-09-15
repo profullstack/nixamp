@@ -281,7 +281,7 @@ async function home(): Promise<void> {
 
 function playerPanel(event: LiveEvent): string {
   const broadcast = classroomBroadcast(event.broadcastUrl);
-  if (broadcast) return `<div class="classroom-video"><iframe src="${escape(broadcast.embed)}" title="${escape(event.title)} broadcast" allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
+  if (broadcast) return `<div class="classroom-video"><iframe src="${escape(broadcast.embed)}" title="${escape(event.title)} broadcast" allow="autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
     <p class="broadcast-caption"><a class="button button-secondary" href="${escape(broadcast.join)}" target="_blank" rel="noopener noreferrer">${broadcast.provider === "pairux" ? "Join screen share on Pairux" : "Open video in Nixamp"} ↗</a></p>`;
   const invite = inviteQuery();
   const source = event.recordingId && event.status === "ended"
