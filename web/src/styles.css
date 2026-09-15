@@ -789,6 +789,7 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
   border-radius: 3px;
   cursor: pointer;
   white-space: nowrap;
+  align-items: flex-start;
 }
 
 .row:hover { background: #142019; }
@@ -1349,6 +1350,7 @@ body.tv input, body.tv .filter { font-size: 1em; padding: 8px 10px; }
 .skip-links a:focus { transform: none; }
 :where(button, a, input, select, textarea, [tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .row-main { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; min-height: 24px; background: transparent; color: inherit; border: 0; border-radius: 0; text-align: left; font: inherit; padding: 2px; cursor: pointer; }
+.row > .row-copy, .row > .row-live, .row > .golive { margin-top: 2px; }
 .row-main:focus-visible { outline-offset: -2px; }
 .row-main .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-main .row-label { align-items: flex-start; }
