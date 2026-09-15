@@ -1482,17 +1482,7 @@ export function start(): void {
       item.append(play);
     }
     if (mode === "remote" && canGoLive() && indices.length > 0) {
-      const live = document.createElement("button");
-      live.type = "button";
-      live.className = "row-copy";
-      drawIcon(live, "live");
-      live.title = `Go live with all ${count} files in ${name}`;
-      live.setAttribute("aria-label", `Go live with folder ${name}`);
-      live.addEventListener("click", (event) => {
-        event.stopPropagation();
-        void goLiveWith({ kind: "folder", indices, name: `${name}/` }, live);
-      });
-      item.append(live);
+      item.append(goLiveButton(() => ({ kind: "folder", indices, name: `${name}/` }), `${name}/`));
     }
     return item;
   }
