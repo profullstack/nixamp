@@ -300,6 +300,18 @@ export function start(): void {
   };
   drawIcon(dom.copyNixamp, "link");
 
+  if (classroomEmbed) {
+    // Reuse the caption controls and their existing handlers in the compact
+    // player. Move them once at startup, before playback or user interaction.
+    const controls = document.createElement("div");
+    controls.className = "classroom-caption-controls";
+    controls.append(dom.transcriptOn.closest("label")!, dom.transcriptLanguage.closest("label")!);
+    dom.transcriptPanel.prepend(controls);
+    dom.transcriptPanel.classList.remove("panel", "col-b");
+    dom.transcriptPanel.hidden = false;
+    document.querySelector(".classroom-player")!.append(dom.transcriptPanel);
+  }
+
   /**
    * What the tab is called with nothing playing: whatever the shell said.
    * A join page arrives already titled for its channel, and says what the

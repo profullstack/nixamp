@@ -1454,7 +1454,10 @@ body.classroom-embed { padding: 0; margin: 0; background: #101015; }
 .classroom-embed #download-now, .classroom-embed #copy-now,
 .classroom-embed #go-live-now, .classroom-embed #prev, .classroom-embed #next { display: none !important; }
 .classroom-embed .classroom-player { margin: 0; border: 0; padding: 0; }
-.classroom-embed #video { max-height: calc(100dvh - 165px); width: 100%; object-fit: contain; }
+.classroom-embed #video { max-height: calc(100dvh - 260px); width: 100%; object-fit: contain; }
+.classroom-embed #transcript-panel { margin: 8px 0 0; }
+.classroom-caption-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.classroom-embed #transcript-list { max-height: 5em; overflow: auto; }
 .classroom-embed #transport { position: static; margin-top: 8px; }
 .classroom-embed #title-line { font-size: 1rem; margin-top: 8px; }
 .classroom-embed #album-line, .classroom-embed #meta-blurb, .classroom-embed #live-line { display: none !important; }
