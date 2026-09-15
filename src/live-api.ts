@@ -35,6 +35,7 @@ export interface LiveApiOptions {
   tickets?: Tickets;
   site?: string;
   email?: (to: string, note: { title: string; body: string; url: string }) => Promise<boolean>;
+  onEventUpdated?: (event: LiveEvent, previous: LiveEvent) => void;
 }
 
 const CORS = {
@@ -433,11 +434,13 @@ export async function handleLiveApi(
       const account = await requiredAccount(request, response, options);
       if (!account) return true;
       if (request.method === "PATCH") {
+        const previous = event!;
         const input = await body(request);
         const updated = await options.events.update(eventRef, account.id, {
           ...input,
           version: requestedVersion(request, input),
         });
+        options.onEventUpdated?.(updated, previous);
         json(response, 200, view(updated, account, await ticketHeld(request, url, options, updated)));
         return true;
       }

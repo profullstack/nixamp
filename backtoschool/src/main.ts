@@ -36,6 +36,30 @@ let routeCleanup: (() => void) | null = null;
 let envelope: EventEnvelope | null = null;
 const writer = installEventWriter(eventForm, eventDialog, () => editing?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC");
 const renderedUpdates = new WeakMap<HTMLElement, string>();
+
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  void navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
+
+function pushKey(value: string): Uint8Array<ArrayBuffer> {
+  const raw = atob((value + "=".repeat((4 - value.length % 4) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
+  const bytes = new Uint8Array(new ArrayBuffer(raw.length));
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
+async function enableWebNotifications(): Promise<void> {
+  if (!("serviceWorker" in navigator && "PushManager" in window && "Notification" in window)) return;
+  if (Notification.permission === "default" && (await Notification.requestPermission()) !== "granted") return;
+  if (Notification.permission !== "granted") return;
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const { publicKey } = await (await fetch("/api/v1/notify/key")).json() as { publicKey?: string };
+    if (!publicKey) return;
+    const subscription = await registration.pushManager.getSubscription() ?? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pushKey(publicKey) });
+    await fetch("/api/v1/notify/subscribe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(subscription.toJSON()) });
+  } catch { /* email remains enabled even when push is unavailable */ }
+}
 function renderUpdate(target: HTMLElement, html: string): void {
   if (renderedUpdates.get(target) === html || target.contains(document.activeElement)) return;
   target.innerHTML = html; renderedUpdates.set(target, html);
@@ -286,7 +310,7 @@ function chatPanel(event: LiveEvent): string {
 function panelBody(type: string, event: LiveEvent): string | null {
   switch (type) {
     case "event-header":
-      return `<div class="event-heading"><span class="status-pill ${event.status === "live" ? "status-live" : ""}">${escape(relativeStart(event))}</span>${event.topic ? `<span class="topic">${escape(event.topic)}</span>` : ""}<h1>${escape(event.title)}</h1><p>${escape(event.description || "A live conversation powered by NixAmp.")}</p></div>`;
+      return `<div class="event-heading"><span class="status-pill ${event.status === "live" ? "status-live" : ""}">${escape(relativeStart(event))}</span>${event.topic ? `<span class="topic">${escape(event.topic)}</span>` : ""}<h1>${escape(event.title)}</h1><p>${escape(event.description || "A live conversation powered by NixAmp.")}</p><button class="button button-secondary follow-event" type="button" data-follow-owner="${escape(event.ownerId)}" data-following="unknown" data-i18n="Follow host">Follow host</button><p class="form-note" id="follow-note" role="status"></p></div>`;
     case "player": return playerPanel(event);
     case "stage": return `<div class="stage-card"><span class="stage-avatar">${escape(event.title.slice(0, 1).toUpperCase())}</span><div><span class="eyebrow" data-i18n="Host stage">Host stage</span><h2>${escape(event.title)}</h2><p id="broadcast-note">${event.status === "live" ? "This event is live." : "Start when you’re ready."}</p></div></div>`;
     case "host": return `<div class="host-line">${event.avatarUrl ? `<img class="avatar host-avatar" src="${escape(event.avatarUrl)}" alt="" referrerpolicy="no-referrer" />` : `<span class="avatar">${escape((event.hostName || event.title).slice(0, 1))}</span>`}<div><small data-i18n="Your host">Your host</small><strong>${escape(event.hostName || uiMessage("Class host"))}</strong>${event.homepageUrl ? `<a href="${escape(event.homepageUrl)}" target="_blank" rel="noopener noreferrer">Visit homepage ↗</a>` : ""}</div></div>`;
@@ -395,6 +419,30 @@ function bindEventPage(event: LiveEvent): void {
   });
 
   document.querySelector("[data-edit-event]")?.addEventListener("click", () => openEventForm("scheduled", envelope!.event));
+  const followButton = document.querySelector<HTMLButtonElement>("[data-follow-owner]");
+  if (followButton) {
+    const ownerId = followButton.dataset.followOwner ?? "";
+    void api<{ following: boolean }>(`/api/v1/follows/${encodeURIComponent(ownerId)}`).then(({ following }) => {
+      followButton.dataset.following = following ? "yes" : "no";
+      uiText(followButton, () => uiMessage(following ? "Following" : "Follow host"));
+    }).catch(() => undefined);
+    followButton.addEventListener("click", () => {
+      if (!account) { openAccount(() => void route()); return; }
+      const following = followButton.dataset.following === "yes";
+      followButton.disabled = true;
+      void api<{ following: boolean }>(`/api/v1/follows/${encodeURIComponent(ownerId)}`, { method: following ? "DELETE" : "PUT", body: following ? undefined : "{}" })
+        .then(({ following: now }) => {
+          followButton.dataset.following = now ? "yes" : "no";
+          uiText(followButton, () => uiMessage(now ? "Following" : "Follow host"));
+          const note = document.querySelector<HTMLElement>("#follow-note");
+          if (note) uiText(note, () => uiMessage(now ? "You’ll get email and web notifications for this host." : "Notifications turned off for this host."));
+          if (now) void enableWebNotifications();
+        }).catch((error) => {
+          const note = document.querySelector<HTMLElement>("#follow-note");
+          if (note) note.textContent = error instanceof Error ? error.message : "Could not update notifications.";
+        }).finally(() => { followButton.disabled = false; });
+    });
+  }
   document.querySelector("[data-start-event]")?.addEventListener("click", () => void startClass());
   document.querySelector("[data-dismiss-update]")?.addEventListener("click", () => document.querySelector<HTMLElement>(".class-update")!.hidden = true);
   document.querySelector("[data-refresh-event]")?.addEventListener("click", () => navigate(eventPath(event) + inviteQuery()));

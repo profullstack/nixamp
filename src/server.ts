@@ -1763,6 +1763,7 @@ export interface HandlerOptions {
   /** Scheduled and live sessions, kept by NixAmp and shared by branded clients. */
   events?: LiveEvents;
   eventWriter?: EventWriter;
+  onEventUpdated?: (event: LiveEvent, previous: LiveEvent) => void;
   /** Versioned panel layouts, including event and user overrides. */
   layouts?: Layouts;
   /** Persistent participation state that must not be coupled to live audio. */
@@ -1955,6 +1956,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       ...(options.tickets ? { tickets: options.tickets } : {}),
       ...(eventSite ? { site: eventSite } : {}),
       ...(options.invites?.email ? { email: options.invites.email } : {}),
+      ...(options.onEventUpdated ? { onEventUpdated: options.onEventUpdated } : {}),
     })) return;
 
     // The page explaining the reminder texts. Public for the same reason the
@@ -6427,6 +6429,46 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       .catch(() => {});
   };
 
+  // Scheduled event reminders are sent once, three minutes before start.
+  // Followers already have email/web preferences, so the same audience and
+  // delivery paths serve live, update, and reminder notifications.
+  const notifiedEvents = new Set<string>();
+  const eventMail = schoolMail ?? (process.env["RESEND_API_KEY"] ? {
+    apiKey: process.env["RESEND_API_KEY"],
+    from: process.env["NIXAMP_MAIL_FROM"] ?? "nixamp <notifications@nixamp.com>",
+  } : undefined);
+  const notifyEventFollowers = (event: LiveEvent, kind: "updated" | "starting-soon"): void => {
+    if (!follows || !event.ownerId) return;
+    const key = `${event.id}:${kind}:${kind === "updated" ? event.version : event.startsAt ?? ""}`;
+    if (notifiedEvents.has(key)) return;
+    notifiedEvents.add(key);
+    const note: Notification = {
+      title: kind === "starting-soon" ? `${event.title} starts in 3 minutes` : `${event.title} was updated`,
+      body: kind === "starting-soon" ? "Your followed host is about to start. Join now." : "A followed host changed the schedule or details.",
+      url: `${nixampSite}/live/${encodeURIComponent(event.slug)}`,
+    };
+    void follows.audience(event.ownerId).then((audience) => notifyAll(audience, note, {
+      ...(eventMail ? { email: resendEmail({ ...eventMail, onEvent: (message) => console.log(message) }) } : {}),
+      ...(vapidPublicKey && vapidPrivateKey ? { push: webPush({ publicKey: vapidPublicKey, privateKey: vapidPrivateKey, subject: nixampSite, onEvent: (message) => console.log(message) }) } : {}),
+      onGone: (endpoint) => follows.removePush(endpoint),
+      onEvent: (message) => console.log(message),
+    })).catch(() => undefined);
+  };
+
+  if (events && follows) {
+    const checkScheduledEvents = async (): Promise<void> => {
+      const now = Date.now();
+      const upcoming = await events.list({ status: "scheduled", from: new Date(now - 4 * 60 * 1000).toISOString(), limit: 100 }).catch(() => []);
+      for (const event of upcoming) {
+        if (!event.startsAt) continue;
+        const until = new Date(event.startsAt).getTime() - now;
+        if (until <= 3 * 60 * 1000 && until > -60 * 1000) notifyEventFollowers(event, "starting-soon");
+      }
+    };
+    void checkScheduledEvents();
+    setInterval(() => void checkScheduledEvents(), 30_000).unref();
+  }
+
   // Hoisted rather than built inline, because the party line needs the same
   // instance: a second Directory would be a second set of stream codes, and
   // the one the phone looked in would never be the one the publishers reach.
@@ -6738,6 +6780,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       openaiKey: process.env["OPENAI_API_KEY"], anthropicKey: process.env["ANTHROPIC_API_KEY"],
       openaiModel: process.env["NIXAMP_WRITER_OPENAI_MODEL"], claudeModel: process.env["NIXAMP_WRITER_CLAUDE_MODEL"],
     }) } : {}),
+    ...(events && follows ? { onEventUpdated: (updated: LiveEvent, previous: LiveEvent) => {
+      if (updated.version !== previous.version) notifyEventFollowers(updated, "updated");
+    } } : {}),
     ...(layouts ? { layouts } : {}),
     ...(rooms ? { rooms } : {}),
     ...(trollbox ? { trollbox } : {}),

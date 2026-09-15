@@ -15,4 +15,9 @@ export default {
   "The web app is installed. You can keep learning here.": "The web app is installed. You can keep learning here.",
   "Continue learning": "Continue learning",
   "The install prompt could not open. Select Web app again for installation instructions.": "The install prompt could not open. Select Web app again for installation instructions.",
+  "Follow host": "Follow host",
+  "Following": "Following",
+  "You’ll get email and web notifications for this host.": "You’ll get email and web notifications for this host.",
+  "Notifications turned off for this host.": "Notifications turned off for this host.",
+  "Could not update notifications.": "Could not update notifications.",
 };
