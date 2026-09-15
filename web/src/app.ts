@@ -38,6 +38,8 @@ import { TranslationPurchase } from "./translation-pass.ts";
 import { Interpreter } from "./interpreter.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
+
+declare const __NIXAMP_VERSION__: string;
 import { attachLongStringScroller } from "../../packages/long-string-scroller/src/index.ts";
 
 export const BAND_COUNT = 24;
@@ -283,7 +285,9 @@ export function start(): void {
     next: need<HTMLButtonElement>("next"),
     shareNow: need<HTMLButtonElement>("share-now"),
     refreshPlayer: need<HTMLButtonElement>("refresh-player"),
+    appVersion: need<HTMLSpanElement>("app-version"),
   };
+  dom.appVersion.textContent = `nixamp ${__NIXAMP_VERSION__}`;
   /**
    * The icons, as inline SVG rather than glyphs. A link or copy character
    * is an empty box in most monospace faces, which is what the icons were
@@ -1741,14 +1745,14 @@ export function start(): void {
       remove.setAttribute("aria-label", `Remove ${group} from the playlist`);
       remove.addEventListener("click", (event) => {
         event.stopPropagation();
-        void removeGroup(group);
+        pendingRemoval(item, remove, () => removeGroup(group), () => renderPlaylist());
       });
       item.append(remove);
     }
     return item;
   }
 
-  async function removeGroup(group: string): Promise<void> {
+  async function removeGroup(group: string): Promise<boolean> {
     try {
       const answer = await fetch(remote.url("/api/source/remove"), {
         method: "POST",
@@ -1759,8 +1763,10 @@ export function start(): void {
       said(answer.ok
         ? `Removed ${body.removed ?? 0} tracks from ${group}.`
         : (body.error ?? "that did not work"));
+      return answer.ok;
     } catch {
       said("could not reach the server");
+      return false;
     }
   }
 
@@ -4749,7 +4755,7 @@ export function start(): void {
         // Asked, because a catalog is somebody's list and a slip here is a
         // thousand channels gone.
         if (!confirm(`Remove ${catalog.name} from this server?`)) return;
-        void removeCatalog(catalog);
+        pendingRemoval(item, remove, () => removeCatalog(catalog), () => void loadCatalogs());
       });
       item.append(refresh, remove);
     }
@@ -4988,18 +4994,20 @@ export function start(): void {
     void loadCatalogs();
   }
 
-  async function removeCatalog(catalog: CatalogSummary): Promise<void> {
+  async function removeCatalog(catalog: CatalogSummary): Promise<boolean> {
     try {
       const answer = await fetch(remote.url(`/api/catalogs/${encodeURIComponent(catalog.id)}`), { method: "DELETE" });
       said(answer.ok ? `${catalog.name} is off the server.` : "that did not work");
+      if (!answer.ok) return false;
     } catch {
       said("could not reach the server");
+      return false;
     }
     if (openCatalog?.id === catalog.id) {
       openCatalog = null;
       openGroup = null;
     }
-    void loadCatalogs();
+    return true;
   }
 
   dom.catalogsForm.addEventListener("submit", (event) => {
@@ -6380,7 +6388,7 @@ export function start(): void {
           : undefined,
         // A member takes off, or renames, what they put on, and nothing else.
         onStop: canDrive || (memberHere && meId !== "" && channel.startedBy === meId)
-          ? () => { void removeChannel(channel.id, channel.name); }
+          ? () => removeChannel(channel.id, channel.name)
           : undefined,
         onRename: canDrive || (memberHere && meId !== "" && channel.startedBy === meId)
           ? () => { void renameChannel(channel.id, channel.name); }
@@ -6585,21 +6593,58 @@ export function start(): void {
     draw();
   }
 
-  async function removeChannel(id: string, name: string): Promise<void> {
+  async function removeChannel(id: string, name: string): Promise<boolean> {
     tellOnAir(`Taking ${name} off the air…`);
     try {
       const answer = await fetch(remote.url(`/api/channels/${encodeURIComponent(id)}`), { method: "DELETE" });
       const body = (await answer.json().catch(() => ({}))) as { error?: string };
       tellOnAir(answer.ok ? `${name} is off the air.` : (body.error ?? "that did not work"));
+      if (!answer.ok) return false;
     } catch {
       tellOnAir("could not reach the server");
+      return false;
     }
     // Nothing to rejoin: it was taken off on purpose.
     if (channelOn?.id === id) {
       channelOn = null;
       player.stop();
     }
-    void loadOnAir();
+    return true;
+  }
+
+  /** Keep a deleting row in place while the server answers, then ease it out. */
+  function pendingRemoval(
+    item: HTMLElement,
+    button: HTMLButtonElement,
+    work: () => Promise<boolean>,
+    after?: () => void,
+  ): void {
+    if (item.classList.contains("removing")) return;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    const spinner = document.createElement("span");
+    spinner.className = "delete-spinner";
+    spinner.setAttribute("role", "status");
+    spinner.setAttribute("aria-label", "Removing");
+    spinner.textContent = "";
+    button.after(spinner);
+    void work().then((ok) => {
+      if (!ok) {
+        spinner.remove();
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+        return;
+      }
+      item.classList.add("removing");
+      window.setTimeout(() => {
+        item.remove();
+        after?.();
+      }, 260);
+    }).catch(() => {
+      spinner.remove();
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    });
   }
 
   /** Onto the clipboard, and the button says so for a moment. */
@@ -6709,7 +6754,7 @@ export function start(): void {
     direct?: string;
     onRestart?: () => void;
     onRename?: () => void;
-    onStop?: () => void;
+    onStop?: () => Promise<boolean>;
   }): HTMLElement {
     const item = document.createElement("li");
     item.className = "party-row";
@@ -6777,7 +6822,9 @@ export function start(): void {
       actions.append(icon("rename", "Rename: call it something better in the directory", () => row.onRename?.()));
     }
     if (row.onStop) {
-      actions.append(icon("remove", "Remove: take it off the air", () => row.onStop?.()));
+      actions.append(icon("remove", "Remove: take it off the air", (button) => {
+        pendingRemoval(item, button, row.onStop!, () => void loadOnAir());
+      }));
     }
 
     label.className = "party-name";

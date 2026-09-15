@@ -316,6 +316,9 @@ body.tv .subtitle { font-size: 28px; }
 .party-actions summary::-webkit-details-marker { display: none; }
 .party-actions[open] { grid-column: 1 / -1; justify-self: end; display: flex; }
 .party-actions .onair-actions { margin-block: 4px; flex-wrap: wrap; }
+.party-row.removing, .group.removing { opacity: 0; transform: translateY(-3px); transition: opacity 240ms ease, transform 240ms ease; pointer-events: none; }
+.delete-spinner { display: inline-block; inline-size: 1em; block-size: 1em; margin-inline-start: 4px; border: 2px solid var(--edge); border-top-color: var(--accent); border-radius: 50%; vertical-align: middle; animation: delete-spin 700ms linear infinite; }
+@keyframes delete-spin { to { transform: rotate(360deg); } }
 .party-invite { margin-block-start: 6px; font-size: 12px; }
 .party-invite summary { cursor: pointer; min-block-size: 24px; }
 .party-invite .picker { margin-block: 4px 0; }

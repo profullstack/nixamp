@@ -12,6 +12,7 @@ import { writeIcons } from "./scripts/icons.ts";
 const here = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = resolve(here, "public");
 const INSTALLERS = ["install.sh", "install.ps1"];
+const packageVersion = (JSON.parse(readFileSync(resolve(here, "..", "package.json"), "utf8")) as { version: string }).version;
 
 /** Every file under `dir`, as web paths. */
 function walk(dir: string, base = dir): string[] {
@@ -92,6 +93,7 @@ export default defineConfig(({ mode }) => ({
   // A hash of the build inputs would be neater, but a timestamp is what
   // actually changes when a deploy happens, which is when caches must roll.
   plugins: [icons(), installer(), serviceWorker(process.env.NIXAMP_BUILD_ID ?? String(Date.now()))],
+  define: { __NIXAMP_VERSION__: JSON.stringify(packageVersion) },
   publicDir,
   build: {
     target: "es2022",
