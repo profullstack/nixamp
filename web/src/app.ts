@@ -1542,7 +1542,7 @@ export function start(): void {
         const fileView = document.createElement("span"); fileView.className = "row-value"; fileView.append(file);
         const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
         label.append(fileView); pathMarquee(fileView, file); pathMarquee(pathView, path);
-        item.classList.add("file-row");
+        item.classList.add("live-file-row");
         item.append(n, label, pathView);
         item.setAttribute("aria-readonly", "true");
         item.title = channel.live === false ? "Part of this on-demand show" : "Live queue (read-only)";
