@@ -146,6 +146,8 @@ export function start(): void {
     glyphs: need<HTMLElement>("glyphs"),
     levels: need<HTMLElement>("levels"),
     playlist: need<HTMLOListElement>("playlist"),
+    livePlaylist: need<HTMLOListElement>("live-playlist"),
+    livePlaylistPanel: need<HTMLElement>("live-playlist-panel"),
     playlistPager: need<HTMLElement>("playlist-pager"),
     crumbs: need<HTMLElement>("crumbs"),
     filter: need<HTMLInputElement>("filter"),
@@ -1509,6 +1511,23 @@ export function start(): void {
     // sorting and serializing thousands of tracks for every incoming frame.
     const channel = channelOn ? lastAir?.channels.find((one) => one.id === channelOn?.id) : undefined;
     const channelPlaylist = channel?.playlist;
+    dom.livePlaylistPanel.hidden = !(channelOn && channelPlaylist && channelPlaylist.length > 0);
+    if (channelOn && channelPlaylist && channelPlaylist.length > 0) {
+      const queue = channelPlaylist.map((name, index) => {
+        const item = document.createElement("li");
+        item.className = "row";
+        const n = document.createElement("span"); n.className = "n"; n.textContent = String(index + 1).padStart(2, " ");
+        const label = document.createElement("span"); label.className = "name"; label.textContent = name;
+        item.append(n, label);
+        item.setAttribute("aria-readonly", "true");
+        item.title = channel.live === false ? "Part of this on-demand show" : "Live queue (read-only)";
+        if (index === (channel.entry ?? 0)) item.setAttribute("aria-current", "true");
+        return item;
+      });
+      replaceList(dom.livePlaylist, ...queue);
+    } else {
+      dom.livePlaylist.replaceChildren();
+    }
     const source = mode === "remote" ? snapshot.tracks : local;
     const view = `${mode}:${channelOn?.id ?? ""}:${channelPlaylist?.join("|") ?? ""}:${channel?.entry ?? 0}:${openFolder}:${dom.filter.value}:${listPage}:${canGoLive()}:${dom.adminPanel.hidden}`;
     if (renderedFor && playlistSource === source && playlistView === view) {
@@ -1586,25 +1605,6 @@ export function start(): void {
       drawCrumbs(wanted === "" && (sortedFolders.length > 0 || openFolder !== ""));
       drawPager(sortedFolders.length + files.length, slice.page, slice.pages, slice.from, slice.to);
       const children: HTMLElement[] = [];
-
-      // Keep the connected server's library browseable while a live folder is
-      // playing. The live queue is read-only context above the library; it
-      // must not replace the folders and breadcrumbs used to browse the
-      // server's files.
-      if (channelOn && channelPlaylist && channelPlaylist.length > 0 && openFolder === "" && wanted === "") {
-        children.push(groupHeading(channel.live === false ? "Show playlist" : "Live playlist"));
-        channelPlaylist.forEach((name, index) => {
-          const item = document.createElement("li");
-          item.className = "row";
-          const n = document.createElement("span"); n.className = "n"; n.textContent = String(index + 1).padStart(2, " ");
-          const label = document.createElement("span"); label.className = "name"; label.textContent = name;
-          item.append(n, label);
-          item.setAttribute("aria-readonly", "true");
-          item.title = channel.live === false ? "Part of this on-demand show" : "Live queue (read-only)";
-          if (index === (channel.entry ?? 0)) item.setAttribute("aria-current", "true");
-          children.push(item);
-        });
-      }
 
       for (const [name, count] of foldersShown) {
         const full = openFolder === "" ? name : `${openFolder}/${name}`;
