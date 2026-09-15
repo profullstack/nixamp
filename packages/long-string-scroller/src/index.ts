@@ -6,14 +6,13 @@ export function attachLongStringScroller(viewport: HTMLElement, content: HTMLEle
   content.classList.add("long-string-scroller-content");
   content.title = content.textContent ?? "";
   let frame = 0;
-  let lastX = 0;
   let target = 0;
   let position = 0;
   let returning = false;
   let releaseHeight: ReturnType<typeof setTimeout> | null = null;
   const animate = (): void => {
     frame = 0;
-    const next = position + (target - position) * 0.22;
+    const next = matchMedia("(prefers-reduced-motion: reduce)").matches ? target : position + (target - position) * 0.22;
     position = Math.abs(target - next) < 0.5 ? target : next;
     content.style.setProperty("--path-shift", `${position}px`);
     if (Math.abs(target - position) >= 0.5) {
@@ -34,7 +33,7 @@ export function attachLongStringScroller(viewport: HTMLElement, content: HTMLEle
     if (!frame) frame = requestAnimationFrame(animate);
   };
   viewport.addEventListener("pointerenter", (event) => {
-    if (event.pointerType !== "mouse") return;
+    if (event.pointerType !== "mouse" || !matchMedia("(hover: hover) and (pointer: fine)").matches) return;
     if (releaseHeight !== null) {
       clearTimeout(releaseHeight);
       releaseHeight = null;
@@ -47,11 +46,14 @@ export function attachLongStringScroller(viewport: HTMLElement, content: HTMLEle
   });
   viewport.addEventListener("pointermove", (event) => {
     if (content.dataset["pan"] !== "true") return;
-    lastX = event.clientX;
-    const overflow = Math.max(viewport.scrollWidth, content.scrollWidth) - viewport.clientWidth;
+    const style = getComputedStyle(viewport);
+    const padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    // The viewport's scrollWidth includes the transformed child and changes
+    // while panning. Measure the untransformed content against the text area.
+    const overflow = Math.max(0, content.scrollWidth - (viewport.clientWidth - padding));
     if (overflow <= 0) return;
     const box = viewport.getBoundingClientRect();
-    const raw = Math.max(0, Math.min(1, (lastX - box.left) / Math.max(1, box.width)));
+    const raw = Math.max(0, Math.min(1, (event.clientX - box.left) / Math.max(1, box.width)));
     // Reserve a small edge band for the physical limits of a mouse: the
     // pointer rarely lands on the exact last pixel, but the string must still
     // reach both ends. Smoothstep gives the acceleration/deceleration curve in

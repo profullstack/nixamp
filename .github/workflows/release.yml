@@ -39,6 +39,8 @@ jobs:
       - run: bun run build
       - run: bun run web:build
       - run: bun run backtoschool:build
+      - name: Install media test tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: bun test test web/test
       # Prove the OpenStream envelope on the build we are about to ship, and
       # gate the release on it: the command exits non-zero if any codec that

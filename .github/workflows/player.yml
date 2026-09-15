@@ -3,6 +3,11 @@ on:
   pull_request:
     paths:
       - 'web/**'
+      - 'packages/long-string-scroller/**'
+      - 'src/channels.ts'
+      - 'src/fragments.ts'
+      - 'src/playlist-input.ts'
+      - 'test/playlist-stream.test.ts'
       - 'src/protocol.ts'
       - 'src/i18n.ts'
       - 'src/ui-languages.ts'
@@ -30,6 +35,9 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      - name: Install media test tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: bun test test/playlist-stream.test.ts
       - run: bun test test/i18n.test.ts web/test/player.test.ts web/test/web.test.ts web/test/accessibility.test.ts
       - run: bun run web:build
       - run: bun run backtoschool:build
@@ -50,6 +58,10 @@ jobs:
         env:
           NIXAMP_PLAYWRIGHT_MODULE: ${{ runner.temp }}/nixamp-browser/node_modules/playwright/index.mjs
         run: bun web/scripts/check-parties.mjs
+      - name: Live playlist row stability and mouse scrolling
+        env:
+          NIXAMP_PLAYWRIGHT_MODULE: ${{ runner.temp }}/nixamp-browser/node_modules/playwright/index.mjs
+        run: bun web/scripts/check-playlist.mjs
       - name: Browser screenshots
         if: always()
         uses: actions/upload-artifact@v4

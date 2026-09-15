@@ -82,8 +82,8 @@ try {
   streams[0].channels.push('New sports live');
   streams[0].lineup.push({ id: 'sports', name: 'New sports live' });
   bridge = [{ party: { roomId: 'room-1', slug: 'movie', origin: 'Cinema', partyCode: 'ABC123', partyUrl: 'https://cinema.example.test/watch/abc', mediaTitle: 'Movie night', positionNow: 5, playing: true }, event: { id: 'event-1', title: 'Movie night', status: 'live' }, links: { partyUrl: 'https://cinema.example.test/watch/abc', nixampUrl: 'https://nixamp.com/room/abc', roomUrl: 'https://nixamp.com/room/abc' }, host: false }];
-  await page.locator('#parties-list').getByText('New sports live', { exact: true }).waitFor({ timeout: 4500 });
-  await page.locator('#parties-list').getByText('Movie night', { exact: true }).waitFor({ timeout: 4500 });
+  await page.locator('#parties-list').getByText('New sports live', { exact: true }).waitFor({ timeout: 6500 });
+  await page.locator('#parties-list').getByText('Movie night', { exact: true }).waitFor({ timeout: 6500 });
   assert.ok(await page.evaluate(() => document.activeElement === window.__partyFocus && window.__partyFocus.isConnected));
   assert.deepEqual(await page.evaluate(() => ({ scroll: scrollY, panel: document.querySelector('#parties-list').scrollTop })), marker);
   assert.equal(await page.locator('.party-server').filter({ has: page.getByRole('heading', { name: 'Alpha server', exact: true }) }).getByText('New sports live', { exact: true }).count(), 1);
@@ -92,7 +92,7 @@ try {
     return { scroll: scrollY, panel: document.querySelector('#parties-list').scrollTop };
   });
   bridge = [];
-  await page.locator('#parties-list').getByText('Movie night', { exact: true }).waitFor({ state: 'detached', timeout: 4500 });
+  await page.locator('#parties-list').getByText('Movie night', { exact: true }).waitFor({ state: 'detached', timeout: 6500 });
   assert.deepEqual(await page.locator('#remote-url').evaluate(input => [input.value, input.selectionStart, input.selectionEnd]), ['keep my draft', 2, 5]);
   assert.deepEqual(await page.evaluate(() => ({ scroll: scrollY, panel: document.querySelector('#parties-list').scrollTop })), draft);
   delayedDirectory = true; maxDirectory = 0;

@@ -1519,43 +1519,50 @@ export function start(): void {
   }
   let playlistSource: unknown = null;
   let playlistView = "";
+  let liveQueueId = "";
+  let liveQueueFiles: string[] = [];
   /** Wrap everywhere; on a fine pointer, let the shared scroller pan it. */
   const pathMarquee = (viewport: HTMLElement, content: HTMLElement): void => {
     content.title = content.textContent ?? "";
     attachLongStringScroller(viewport, content);
   };
+  function fileLabel(title: string, fullPath: string): { label: HTMLElement; pathView: HTMLElement } {
+    const file = document.createElement("span"); file.className = "name row-file"; file.textContent = title;
+    const path = document.createElement("span"); path.className = "row-path"; path.textContent = fullPath;
+    const label = document.createElement("span"); label.className = "row-label";
+    const fileView = document.createElement("span"); fileView.className = "row-value"; fileView.append(file);
+    const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
+    label.append(fileView);
+    pathMarquee(fileView, file); pathMarquee(pathView, path);
+    return { label, pathView };
+  }
   function renderPlaylist(): void {
     // Meter ticks and playback clocks do not change the library. Avoid mapping,
     // sorting and serializing thousands of tracks for every incoming frame.
     const channel = channelOn ? lastAir?.channels.find((one) => one.id === channelOn?.id) : undefined;
     const channelPlaylist = channel?.playlist;
-    dom.livePlaylistPanel.hidden = !(channelOn && channelPlaylist && channelPlaylist.length > 0);
-    if (channelOn && channelPlaylist && channelPlaylist.length > 0) {
-      const queue = channelPlaylist.map((name, index) => {
+    const showQueue = Boolean(channelOn && channelPlaylist?.length);
+    if (dom.livePlaylistPanel.hidden === showQueue) dom.livePlaylistPanel.hidden = !showQueue;
+    const queueId = showQueue ? channelOn!.id : "";
+    const queueFiles = showQueue ? channelPlaylist! : [];
+    if (liveQueueId !== queueId || liveQueueFiles.length !== queueFiles.length || liveQueueFiles.some((file, index) => file !== queueFiles[index])) {
+      liveQueueId = queueId;
+      liveQueueFiles = queueFiles;
+      const queue = queueFiles.map((name, index) => {
         const item = document.createElement("li");
-        item.className = "row";
+        item.className = "row file-row live-file-row";
         item.dataset.index = String(index);
-        const n = document.createElement("span"); n.className = "n"; n.textContent = String(index + 1).padStart(2, " ");
-        const slash = name.lastIndexOf("/");
-        const file = document.createElement("span"); file.className = "name row-file"; file.textContent = slash < 0 ? name : name.slice(slash + 1);
-        const path = document.createElement("span"); path.className = "row-path"; path.textContent = name;
-        const label = document.createElement("span"); label.className = "row-label";
-        const fileView = document.createElement("span"); fileView.className = "row-value"; fileView.append(file);
-        const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
-        label.append(fileView); pathMarquee(fileView, file); pathMarquee(pathView, path);
-        item.classList.add("live-file-row");
-        item.append(n, label, pathView);
-        item.setAttribute("aria-readonly", "true");
-        item.title = channel.live === false ? "Part of this on-demand show" : "Live queue (read-only)";
-        if (index === (channel.entry ?? 0)) item.setAttribute("aria-current", "true");
+        const n = document.createElement("span"); n.className = "n"; n.textContent = String(index + 1);
+        const { label, pathView } = fileLabel(name.slice(name.lastIndexOf("/") + 1), name);
+        const main = document.createElement("span"); main.className = "row-main";
+        main.append(label, n);
+        item.append(main, pathView);
         return item;
       });
       replaceList(dom.livePlaylist, ...queue);
-    } else {
-      dom.livePlaylist.replaceChildren();
     }
     const source = mode === "remote" ? snapshot.tracks : local;
-    const view = `${mode}:${channelOn?.id ?? ""}:${channelPlaylist?.join("|") ?? ""}:${channel?.entry ?? 0}:${openFolder}:${dom.filter.value}:${listPage}:${canGoLive()}:${dom.adminPanel.hidden}`;
+    const view = `${mode}:${channelOn?.id ?? ""}:${openFolder}:${dom.filter.value}:${listPage}:${canGoLive()}:${dom.adminPanel.hidden}`;
     if (renderedFor && playlistSource === source && playlistView === view) {
       markPlaylistPlaying();
       return;
@@ -1662,18 +1669,13 @@ export function start(): void {
         n.className = "n";
         n.textContent = String(row.index + 1).padStart(2, " ");
         const pathLabel = row.folder ? `${row.folder} / ${row.name}` : row.name;
-        const file = document.createElement("span"); file.className = "name row-file"; file.textContent = row.name;
-        const path = document.createElement("span"); path.className = "row-path"; path.textContent = row.folder ? `${row.folder}/${row.name}` : row.name;
-        const label = document.createElement("span"); label.className = "row-label";
-        const fileView = document.createElement("span"); fileView.className = "row-value"; fileView.append(file);
-        const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
-        label.append(fileView, pathView); pathMarquee(fileView, file); pathMarquee(pathView, path);
+        const { label, pathView } = fileLabel(row.name, row.folder ? `${row.folder}/${row.name}` : row.name);
         const time = document.createElement("span");
         time.className = "time";
         time.textContent = row.seconds > 0 ? formatTime(row.seconds) : "--:--";
         const play = document.createElement("button"); play.type = "button"; play.className = "row-main";
         play.setAttribute("aria-label", `Play ${pathLabel}${row.seconds > 0 ? `, ${formatTime(row.seconds)}` : ""}`);
-        play.append(n, label, time); item.append(play);
+        play.append(label, n, time); item.append(play);
         const playGlyph = document.createElement("span"); playGlyph.className = "row-play-glyph"; drawIcon(playGlyph, "play"); item.append(playGlyph);
         // The file's own address, for whoever wants it somewhere other than
         // here. A picked file is a blob in this tab and has no address.
@@ -1710,7 +1712,9 @@ export function start(): void {
       for (const child of Array.from(dom.playlist.children)) {
         const row = child as HTMLElement;
         const index = Number(row.dataset.index);
-        const isCurrent = Number.isInteger(index) && index === current;
+        const track = snapshot.tracks[index];
+        const path = track ? `${track.folder ? `${track.folder}/` : ""}${displayName(track)}` : "";
+        const isCurrent = Boolean(path) && path === channel.playlist[current];
         row.classList.toggle("selected", isCurrent);
         row.classList.toggle("playing", false);
         if (isCurrent) row.setAttribute("aria-current", "true");
@@ -3345,6 +3349,13 @@ export function start(): void {
 
   /** One bounded refresh for the directory and the parties this account may see.
    * No connections to every remote, and no overlap if an endpoint is slow. */
+  const PARTY_REFRESH_MS = 5000;
+  const partyLoads = new Set<object>();
+  const partyLoading = (owner: object, on: boolean): void => {
+    if (on) partyLoads.add(owner); else partyLoads.delete(owner);
+    if (partyLoads.size) dom.partiesPanel.dataset.loading = "true";
+    else delete dom.partiesPanel.dataset.loading;
+  };
   async function loadParties(): Promise<void> {
     if (classroomEmbed) return;
     if (partiesAccount !== meId) {
@@ -3354,7 +3365,8 @@ export function start(): void {
     }
     if (partiesRequest) return;
     const controller = new AbortController(); partiesRequest = controller;
-    dom.partiesPanel.dataset.loading = "true";
+    const firstLoad = !partiesLoaded;
+    if (firstLoad) partyLoading(controller, true);
     const account = meId;
     const timeout = setTimeout(() => controller.abort(), 8000);
     const get = async (path: string): Promise<{ ok: boolean; status: number; body: unknown }> => {
@@ -3383,7 +3395,7 @@ export function start(): void {
       if (!partiesLoaded && !lastAir) uiText(dom.partiesNote, () => uiMessage("Could not refresh parties."));
     } finally {
       clearTimeout(timeout);
-      delete dom.partiesPanel.dataset.loading;
+      if (firstLoad) partyLoading(controller, false);
       if (partiesRequest === controller) partiesRequest = null;
     }
   }
@@ -5959,11 +5971,14 @@ export function start(): void {
       // Keep the loading indicator inside the title strip. A pseudo-element
       // could sit over the panel when a title was long; this is part of the
       // heading's inline content and is clipped with the title itself.
-      heading.replaceChildren(document.createTextNode(name));
-      const spinner = document.createElement("span");
-      spinner.className = "panel-loading-spinner";
-      spinner.setAttribute("aria-hidden", "true");
-      heading.append(spinner);
+      let title = heading.querySelector<HTMLSpanElement>(".panel-heading-text");
+      if (!title) {
+        title = document.createElement("span"); title.className = "panel-heading-text";
+        const spinner = document.createElement("span"); spinner.className = "panel-loading-spinner";
+        spinner.setAttribute("aria-hidden", "true");
+        heading.replaceChildren(title, spinner);
+      }
+      if (title.textContent !== name) title.textContent = name;
       if (panel.querySelector(":scope > .panel-tools")) continue;
       const tools = document.createElement("span");
       tools.className = "panel-tools";
@@ -6288,7 +6303,7 @@ export function start(): void {
     void loadOnAir();
     onAirTimer = setInterval(() => {
       if (document.visibilityState === "visible") void loadOnAir();
-    }, 5000);
+    }, PARTY_REFRESH_MS);
   };
 
   /** Read only the connected server. A late reply must never restore a server
@@ -6299,7 +6314,7 @@ export function start(): void {
     // The first load needs a visible cue. Polling every five seconds must stay
     // quiet or the panel appears to reload forever while somebody watches it.
     const firstLoad = lastAir === null;
-    if (firstLoad) dom.partiesPanel.dataset.loading = "true";
+    if (firstLoad) partyLoading(controller, true);
     const generation = onAirGeneration;
     const url = remote.url("/api/streams");
     const timeout = setTimeout(() => controller.abort(), 8000);
@@ -6322,7 +6337,7 @@ export function start(): void {
       // Retain the last usable list during a short network failure.
     } finally {
       clearTimeout(timeout);
-      if (firstLoad) delete dom.partiesPanel.dataset.loading;
+      if (firstLoad) partyLoading(controller, false);
       if (onAirRequest === controller) onAirRequest = null;
     }
   }
@@ -6523,6 +6538,8 @@ export function start(): void {
     fresh = true,
     from?: typeof nowMeta,
   ): Promise<void> {
+    const known = lastAir?.channels.find(one => one.id === channel.id);
+    if (!channel.playlist && known?.playlist) channel = { ...channel, playlist: known.playlist };
     watching = -1;
     channelOn = channel;
     if (fresh) rejoins = 0;
@@ -6536,11 +6553,10 @@ export function start(): void {
     // Safari on a phone will not play the endless MP4 a channel is sent as;
     // it plays HLS, so it is handed the same channel as a playlist. A
     // browser with MediaSource plays the MP4 as it is, which is lower latency.
-    // A playlist live has repeated per-file MP4 init boxes at each boundary.
-    // Native progressive MP4 treats that as a new resource and may end or
-    // reload; HLS keeps one player session while the channel advances.
+    // Use the same transport for a folder live whether joined from its row,
+    // a shared room link, or immediately after putting the folder on air.
     const asHls = channel.video && wantsHls();
-    const playlistHls = channel.video && (channel.playlist?.length ?? 0) > 1;
+    const playlistHls = channel.video && ((channel.playlist?.length ?? 0) > 1 || channel.id.startsWith("folder-"));
     await whileLoading(() => player.load({
       title: channel.name, artist: "", album: "", duration: 0,
       url: remote.url(asHls || playlistHls
@@ -7081,7 +7097,7 @@ export function start(): void {
   const refreshVisibleParties = (): void => {
     if (document.visibilityState === "visible" && !dom.partiesPanel.hasAttribute("data-closed")) void loadParties();
   };
-  let partiesTick = setInterval(refreshVisibleParties, 2000);
+  let partiesTick = setInterval(refreshVisibleParties, PARTY_REFRESH_MS);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") { void loadParties(); void loadOnAir(); }
   });
@@ -7094,7 +7110,7 @@ export function start(): void {
   globalThis.addEventListener("pageshow", event => {
     if (!event.persisted) return;
     clearInterval(partiesTick);
-    partiesTick = setInterval(refreshVisibleParties, 2000);
+    partiesTick = setInterval(refreshVisibleParties, PARTY_REFRESH_MS);
     refreshVisibleParties();
     if (mode === "remote") watchOnAir(true);
   });
