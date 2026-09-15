@@ -1508,6 +1508,19 @@ export function start(): void {
   }
   let playlistSource: unknown = null;
   let playlistView = "";
+  /** Pan a long path opposite the pointer without hijacking page scrolling. */
+  const pathMarquee = (path: HTMLElement): void => {
+    path.title = path.textContent ?? "";
+    path.addEventListener("pointermove", (event) => {
+      const overflow = path.scrollWidth - path.clientWidth;
+      if (overflow <= 0) return;
+      const box = path.getBoundingClientRect();
+      const raw = Math.max(0, Math.min(1, (event.clientX - box.left) / Math.max(1, box.width)));
+      const eased = raw * raw * (3 - 2 * raw);
+      path.style.setProperty("--path-shift", `${-overflow * eased}px`);
+    });
+    path.addEventListener("pointerleave", () => path.style.removeProperty("--path-shift"));
+  };
   function renderPlaylist(): void {
     // Meter ticks and playback clocks do not change the library. Avoid mapping,
     // sorting and serializing thousands of tracks for every incoming frame.
@@ -1522,6 +1535,7 @@ export function start(): void {
         const slash = name.lastIndexOf("/");
         const file = document.createElement("span"); file.className = "name row-file"; file.textContent = slash < 0 ? name : name.slice(slash + 1);
         const path = document.createElement("span"); path.className = "row-path"; path.textContent = slash < 0 ? "" : name.slice(0, slash);
+        pathMarquee(path);
         const label = document.createElement("span"); label.className = "row-label"; label.append(file, path);
         item.append(n, label);
         item.setAttribute("aria-readonly", "true");
@@ -1644,6 +1658,7 @@ export function start(): void {
         const label = document.createElement("span"); label.className = "row-label";
         const file = document.createElement("span"); file.className = "name row-file"; file.textContent = row.name;
         const path = document.createElement("span"); path.className = "row-path"; path.textContent = row.folder;
+        pathMarquee(path);
         label.append(file, path);
         const time = document.createElement("span");
         time.className = "time";
