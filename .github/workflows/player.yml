@@ -58,6 +58,10 @@ jobs:
         env:
           NIXAMP_PLAYWRIGHT_MODULE: ${{ runner.temp }}/nixamp-browser/node_modules/playwright/index.mjs
         run: bun web/scripts/check-parties.mjs
+      - name: Real HLS playlist decoding across mixed source files
+        env:
+          NIXAMP_PLAYWRIGHT_MODULE: ${{ runner.temp }}/nixamp-browser/node_modules/playwright/index.mjs
+        run: bun web/scripts/check-media-playlist.mjs
       - name: Live playlist row stability and mouse scrolling
         env:
           NIXAMP_PLAYWRIGHT_MODULE: ${{ runner.temp }}/nixamp-browser/node_modules/playwright/index.mjs
