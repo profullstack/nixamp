@@ -38,6 +38,7 @@ import { TranslationPurchase } from "./translation-pass.ts";
 import { Interpreter } from "./interpreter.ts";
 import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../src/protocol.ts";
 import { isMatchupName } from "../../src/matchup.ts";
+import { attachLongStringScroller } from "@profullstack/long-string-scroller";
 
 export const BAND_COUNT = 24;
 const REMOTE_KEY = "nixamp.remote";
@@ -1514,27 +1515,9 @@ export function start(): void {
   }
   let playlistSource: unknown = null;
   let playlistView = "";
-  /** Wrap everywhere; a fine mouse may additionally pan a long path. */
-  const pathMarquee = (path: HTMLElement): void => {
-    path.title = path.textContent ?? "";
-    const viewport = path.parentElement;
-    if (!viewport) return;
-    viewport.addEventListener("pointerenter", (event) => {
-      if (event.pointerType === "mouse") path.dataset["pan"] = "true";
-    });
-    viewport.addEventListener("pointermove", (event) => {
-      if (path.dataset["pan"] !== "true") return;
-      const overflow = path.scrollWidth - viewport.clientWidth;
-      if (overflow <= 0) return;
-      const box = viewport.getBoundingClientRect();
-      const raw = Math.max(0, Math.min(1, (event.clientX - box.left) / Math.max(1, box.width)));
-      const eased = raw * raw * (3 - 2 * raw);
-      path.style.setProperty("--path-shift", `${-overflow * eased}px`);
-    });
-    viewport.addEventListener("pointerleave", () => {
-      delete path.dataset["pan"];
-      path.style.removeProperty("--path-shift");
-    });
+  /** Wrap everywhere; the shared package adds fine-mouse panning. */
+  const pathMarquee = (viewport: HTMLElement, path: HTMLElement): void => {
+    attachLongStringScroller(viewport, path);
   };
   function renderPlaylist(): void {
     // Meter ticks and playback clocks do not change the library. Avoid mapping,
@@ -1550,8 +1533,10 @@ export function start(): void {
         const slash = name.lastIndexOf("/");
         const file = document.createElement("span"); file.className = "name row-file"; file.textContent = slash < 0 ? name : name.slice(slash + 1);
         const path = document.createElement("span"); path.className = "row-path"; path.textContent = slash < 0 ? "" : name.slice(0, slash);
-        pathMarquee(path);
-        const label = document.createElement("span"); label.className = "row-label"; label.append(file, path);
+        const label = document.createElement("span"); label.className = "row-label";
+        const fileView = document.createElement("span"); fileView.className = "row-value"; fileView.append(file);
+        const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
+        label.append(fileView, pathView); pathMarquee(fileView, file); pathMarquee(pathView, path);
         item.append(n, label);
         item.setAttribute("aria-readonly", "true");
         item.title = channel.live === false ? "Part of this on-demand show" : "Live queue (read-only)";
@@ -1670,11 +1655,12 @@ export function start(): void {
         n.className = "n";
         n.textContent = String(row.index + 1).padStart(2, " ");
         const pathLabel = row.folder ? `${row.folder} / ${row.name}` : row.name;
-        const label = document.createElement("span"); label.className = "row-label";
         const file = document.createElement("span"); file.className = "name row-file"; file.textContent = row.name;
         const path = document.createElement("span"); path.className = "row-path"; path.textContent = row.folder;
-        pathMarquee(path);
-        label.append(file, path);
+        const label = document.createElement("span"); label.className = "row-label";
+        const fileView = document.createElement("span"); fileView.className = "row-value"; fileView.append(file);
+        const pathView = document.createElement("span"); pathView.className = "row-value"; pathView.append(path);
+        label.append(fileView, pathView); pathMarquee(fileView, file); pathMarquee(pathView, path);
         const time = document.createElement("span");
         time.className = "time";
         time.textContent = row.seconds > 0 ? formatTime(row.seconds) : "--:--";

@@ -41,10 +41,15 @@
         "electron-builder": "^26.15.3",
       },
     },
+    "packages/long-string-scroller": {
+      "name": "@profullstack/long-string-scroller",
+      "version": "0.1.0",
+    },
     "web": {
       "name": "@nixamp/web",
       "version": "0.21.4",
       "dependencies": {
+        "@profullstack/long-string-scroller": "workspace:*",
         "@profullstack/player": "^0.7.0",
         "fastenhancer-web": "^0.1.1",
         "fft.js": "4.0.4",
@@ -189,6 +194,8 @@
     "@profullstack/auth-system": ["@profullstack/auth-system@0.6.0", "", { "dependencies": { "bcryptjs": "^2.4.3", "jsonwebtoken": "^9.0.2", "uuid": "^11.1.0" }, "optionalDependencies": { "@supabase/supabase-js": "^2.49.4", "mongodb": "^6.5.0", "mysql2": "^3.9.2", "pg": "^8.11.3", "pocketbase": "^0.21.1" } }, "sha512-3vzsWMbhQJqbxAAaC7YTbG8d33ypD2YAIk7ZF3vP0A/Rw/uwqcFTMm3SKuHfWj5q1fmi8MXDdIiu2gxM5VUW/g=="],
 
     "@profullstack/hqtui": ["@profullstack/hqtui@0.5.0", "", { "bin": { "hqtui": "bin/hqtui.mjs" } }, "sha512-jDwILBmdQx8pQA0ao/tzzty8u5nFNS4XhvU9xXhZvdIaMeiF3HBJIVtP6cS6kigS4lXmHR7sztbb9QJpaWwhig=="],
+
+    "@profullstack/long-string-scroller": ["@profullstack/long-string-scroller@workspace:packages/long-string-scroller"],
 
     "@profullstack/player": ["@profullstack/player@0.7.0", "", { "dependencies": { "hls.js": "^1.7.1", "mpegts.js": "^1.8.2" }, "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-DmshIcHTrWVl0A2p4DpuV7kI5hXPdaSL7zHesJVszA93cGyucaYppvvRm8S1eCC7GgyA8X0iRFKFdcF0P3LUrw=="],
 

@@ -19,6 +19,7 @@
     "vite": "^8.2.2"
   },
   "dependencies": {
+    "@profullstack/long-string-scroller": "workspace:*",
     "@profullstack/player": "^0.7.0",
     "fastenhancer-web": "^0.1.1",
     "fft.js": "4.0.4"

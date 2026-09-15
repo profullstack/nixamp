@@ -20,7 +20,8 @@
   "workspaces": [
     "web",
     "backtoschool",
-    "desktop"
+    "desktop",
+    "packages/*"
   ],
   "engines": {
     "bun": ">=1.1",
