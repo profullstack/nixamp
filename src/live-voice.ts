@@ -6,6 +6,7 @@ import type { VoiceProfile } from "./voice-profile.ts";
 import { Guard } from "./guard.ts";
 import type { TranslationMeter } from "./translation-passes.ts";
 import type { Queryable } from "./follows.ts";
+import { voiceProviderFailure } from "./voice-provider.ts";
 
 export const LIVE_VOICE_MODEL = "eleven_flash_v2_5";
 export const LIVE_VOICE_RATE = 16_000;
@@ -37,6 +38,20 @@ export class LiveVoice {
   private readonly dailyAudioSeconds: number;
   private readonly userDailyChars: number;
   private readonly userDailyAudioSeconds: number;
+  private providerPause: { until: number; error: SpeechError } | null = null;
+
+  private checkProvider(): void {
+    if (this.providerPause && this.providerPause.until > this.now()) throw this.providerPause.error;
+  }
+
+  private async providerFailed(response: Response, operation: string): Promise<never> {
+    const failure = await voiceProviderFailure(response);
+    const until = this.now() + failure.cooldownMs;
+    // Another in-flight response must not shorten an existing billing pause.
+    if (!this.providerPause || this.providerPause.until < until) this.providerPause = { until, error: failure.error };
+    console.error(JSON.stringify({ event: "voice_provider_failure", provider: "elevenlabs", operation, status: response.status, code: failure.code, cooldownMs: failure.cooldownMs }));
+    throw failure.error;
+  }
 
   constructor(options: { apiKey?: string; fetcher?: typeof fetch; now?: () => number; charsPerMinute?: number; dailyChars?: number; dailyAudioSeconds?: number; userDailyChars?: number; userDailyAudioSeconds?: number; db?: Queryable; billing?: TranslationMeter } = {}) {
     this.key = options.apiKey ?? process.env["ELEVENLABS_API_KEY"] ?? "";
@@ -60,6 +75,7 @@ export class LiveVoice {
   async hear(bytes: Uint8Array, by: string, signal?: AbortSignal, meter = this.billing, resource = ""): Promise<SpeakerTranscript> {
     if (!this.available()) throw new SpeechError("speaker voices are unavailable", 503);
     await meter?.require(by, resource);
+    this.checkProvider();
     const wav = decodeWav(bytes);
     const seconds = wav.samples.length / wav.rate;
     if (wav.rate !== 16000 || wav.channels !== 1 || seconds < 0.2 || seconds > 15.1) throw new SpeechError("send up to 15 seconds of mono 16 kHz WAV", 400);
@@ -77,6 +93,7 @@ export class LiveVoice {
       await this.reserve(`scribe:user:${by}`, billed, this.userDailyAudioSeconds, 86_400_000);
       await this.reserve("scribe:server", billed, this.dailyAudioSeconds, 86_400_000);
       signal?.throwIfAborted();
+      this.checkProvider();
       const form = new FormData();
       // Canonical PCM prevents a crafted container from billing more audio
       // than the duration we validated, and removes uploaded metadata.
@@ -91,8 +108,9 @@ export class LiveVoice {
         method: "POST", headers: { "xi-api-key": this.key }, body: form,
         signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
       });
-      if (!answer.ok) throw new SpeechError("speaker transcription could not run; check provider quota and permissions", answer.status === 429 ? 429 : 502);
+      if (!answer.ok) await this.providerFailed(answer, "transcription");
       accepted = true;
+      console.info(JSON.stringify({ event: "voice_provider_usage", provider: "elevenlabs", operation: "transcription", account: createHash("sha256").update(by).digest("hex").slice(0, 16), audioSeconds: seconds }));
       if (reservation) await meter!.commit(reservation);
       return speakerTurns(await answer.json() as ScribeResult, wav);
     } catch (error) {
@@ -103,12 +121,13 @@ export class LiveVoice {
 
   async voices(): Promise<LiveVoiceChoice[]> {
     if (!this.available()) throw new SpeechError("translated audio needs ELEVENLABS_API_KEY on the account server", 503);
+    this.checkProvider();
     if (!this.catalog || this.now() >= this.catalogUntil) {
       this.catalogUntil = this.now() + 3600_000;
       this.catalog = this.fetcher("https://api.elevenlabs.io/v2/voices?page_size=100&voice_type=default", {
         headers: { "xi-api-key": this.key }, signal: AbortSignal.timeout(8000),
       }).then(async response => {
-        if (!response.ok) throw new SpeechError("ElevenLabs could not list voices; check the server key and its voice permissions", 503);
+        if (!response.ok) await this.providerFailed(response, "voices");
         const body = await response.json() as { voices: { voice_id: string; name: string; labels?: Record<string, string> }[] };
         return body.voices.filter(voice => /^[a-zA-Z0-9_-]+$/.test(voice.voice_id)).map(voice => ({
           id: voice.voice_id, name: voice.name, gender: voice.labels?.["gender"] ?? "neutral", language: voice.labels?.["language"] ?? "",
@@ -238,6 +257,7 @@ export class LiveVoice {
     let accepted = false;
     try {
       await this.charge(by, ask.channel ?? "direct", text.length);
+      this.checkProvider();
       signal?.throwIfAborted();
       reservation = await meter?.reserve(by, "voice", text.length, ask.channel);
       const response = await this.fetcher(`https://api.elevenlabs.io/v1/text-to-speech/${voice.id}/stream?output_format=pcm_16000`, {
@@ -246,9 +266,11 @@ export class LiveVoice {
         body: JSON.stringify({ text, model_id: LIVE_VOICE_MODEL, language_code: ask.language }),
         signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
       });
-      if (!response.ok || !response.body) throw new SpeechError(response.status === 429 ? "ElevenLabs audio quota is temporarily exhausted" : "ElevenLabs could not generate audio; check the server key and quota", response.status === 429 ? 429 : 502);
+      if (!response.ok) await this.providerFailed(response, "synthesis");
+      if (!response.body) throw new SpeechError("ElevenLabs returned no audio", 502);
       // Once the provider accepts, aborting playback cannot refund heard audio.
       accepted = true;
+      console.info(JSON.stringify({ event: "voice_provider_usage", provider: "elevenlabs", operation: "synthesis", account: createHash("sha256").update(by).digest("hex").slice(0, 16), characters: text.length }));
       if (reservation) await meter!.commit(reservation);
       const [play, keep] = response.body.tee();
       void (async () => {

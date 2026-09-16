@@ -15,6 +15,38 @@ const result = { language_code: 'spa', words: [
   { type: 'word', text: 'La pelea sigue.', start: 2.5, end: 4.9, speaker_id: 'speaker_1' },
 ] };
 
+test('a provider rejection refunds once, blocks other accounts during cooldown, then recovers', async () => {
+  let now = 0, calls = 0, reserved = 0, refunded = 0, committed = 0;
+  const billing = { require: async () => {}, reserve: async () => { reserved++; return 'reservation'; }, refund: async () => { refunded++; }, commit: async () => { committed++; } };
+  const voice = new LiveVoice({ apiKey: 'key', now: () => now, billing, fetcher: (async () => {
+    calls++;
+    return calls === 1 ? Response.json({ detail: { status: 'quota_exceeded' } }, { status: 401 }) : Response.json(result);
+  }) as typeof fetch });
+  await assert.rejects(voice.hear(audio(), 'alice'), error => error instanceof SpeechError && error.status === 402);
+  await assert.rejects(voice.hear(audio(), 'bob'), /credits are exhausted/);
+  await assert.rejects(voice.voices(), /credits are exhausted/);
+  assert.deepEqual([calls, reserved, refunded, committed], [1, 1, 1, 0]);
+  now = 300_001;
+  await voice.hear(audio(), 'bob');
+  assert.deepEqual([calls, reserved, refunded, committed], [2, 2, 1, 1]);
+});
+
+test('an in-flight transient failure cannot shorten a provider billing cooldown', async () => {
+  let now = 0;
+  const finish: ((response: Response) => void)[] = [];
+  const voice = new LiveVoice({ apiKey: 'key', now: () => now, fetcher: (() => new Promise<Response>(resolve => finish.push(resolve))) as typeof fetch });
+  const first = assert.rejects(voice.hear(audio(), 'alice'), /credits are exhausted/);
+  const second = assert.rejects(voice.hear(audio(), 'bob'), /temporarily unavailable/);
+  while (finish.length < 2) await new Promise(resolve => setTimeout(resolve, 1));
+  finish[0]!(Response.json({ detail: { status: 'quota_exceeded' } }, { status: 401 }));
+  await first;
+  finish[1]!(new Response('outage', { status: 500 }));
+  await second;
+  now = 11_000;
+  await assert.rejects(voice.hear(audio(), 'charlie'), /credits are exhausted/);
+  assert.equal(finish.length, 2);
+});
+
 test('Scribe auto-detects native language, separates speakers, and receives canonical bounded WAV only', async () => {
   let calls = 0;
   const voice = new LiveVoice({ apiKey: 'key', fetcher: (async (url, init) => {

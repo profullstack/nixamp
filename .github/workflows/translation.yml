@@ -36,4 +36,4 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun test test/upgrade-allowance.test.ts test/translation-passes.test.ts test/shared-translation.test.ts test/live-voice.test.ts web/test/interpreter.test.ts web/test/live-voice.test.ts web/test/shared-translation.test.ts web/test/background.test.ts
+      - run: bun test test/upgrade-allowance.test.ts test/translation-passes.test.ts test/shared-translation.test.ts test/live-voice.test.ts test/voice-provider.test.ts test/speaker-transcription.test.ts web/test/interpreter.test.ts web/test/live-voice.test.ts web/test/shared-translation.test.ts web/test/background.test.ts
