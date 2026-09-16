@@ -24,4 +24,3 @@ Configure daily spending ceilings with `NIXAMP_DUB_DAILY_CHARS`,
 `NIXAMP_DUB_USER_DAILY_AUDIO_SECONDS`. Audio includes overlapping context sent
 to Scribe. These are unit limits, not currency limits, and do not cover use of
 the provider key outside LiveVoice (including telephone voices).
-
