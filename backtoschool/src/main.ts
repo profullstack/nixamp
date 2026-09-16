@@ -12,6 +12,10 @@ import { mountClassroomPlayer } from "./player.ts";
 import { installTvNavigation } from "./tv.ts";
 installTvNavigation();
 import { api, ApiError, send, type Account, type EventEnvelope } from "./api.ts";
+import type { LinkView, ServerStreams } from "../../src/nixamp-link-types.ts";
+
+/** The card as /api/v1/me/profile answers it. */
+interface Profile { name: string; homepage: string; avatarUrl: string; bio: string; photo: string }
 
 const main = document.querySelector<HTMLElement>("#main")!;
 const accountButton = document.querySelector<HTMLButtonElement>("#account-button")!;
@@ -28,8 +32,30 @@ const eventKicker = document.querySelector<HTMLElement>("#event-kicker")!;
 const eventSubmit = document.querySelector<HTMLButtonElement>("#event-submit")!;
 const eventError = document.querySelector<HTMLElement>("#event-error")!;
 const scheduleFields = document.querySelector<HTMLElement>("#schedule-fields")!;
+const settingsDialog = document.querySelector<HTMLDialogElement>("#settings-dialog")!;
+const settingsStatus = document.querySelector<HTMLElement>("#settings-status")!;
+const profileForm = document.querySelector<HTMLFormElement>("#profile-form")!;
+const profileError = document.querySelector<HTMLElement>("#profile-error")!;
+const profilePhoto = document.querySelector<HTMLImageElement>("#profile-photo")!;
+const profileInitial = document.querySelector<HTMLElement>("#profile-initial")!;
+const profilePhotoFile = document.querySelector<HTMLInputElement>("#profile-photo-file")!;
+const profilePhotoRemove = document.querySelector<HTMLButtonElement>("#profile-photo-remove")!;
+const openProfileForm = document.querySelector<HTMLFormElement>("#openprofile-form")!;
+const openProfileUrl = document.querySelector<HTMLInputElement>("#profile-openprofile")!;
+const openProfileError = document.querySelector<HTMLElement>("#openprofile-error")!;
+const nixampConnection = document.querySelector<HTMLElement>("#nixamp-connection")!;
+const nixampConnect = document.querySelector<HTMLAnchorElement>("#nixamp-connect")!;
+const nixampDisconnect = document.querySelector<HTMLButtonElement>("#nixamp-disconnect")!;
+const nixampStreamsField = document.querySelector<HTMLElement>("#nixamp-streams-field")!;
+const nixampStreams = document.querySelector<HTMLSelectElement>("#nixamp-streams")!;
+const nixampStreamsNote = document.querySelector<HTMLElement>("#nixamp-streams-note")!;
+const eventHostCard = document.querySelector<HTMLElement>("#event-host-card")!;
 
 let account: Account | null = null;
+/** The card and the connection, as last read; null until signed in. */
+type ProfileView = Profile & { card: { hostName: string; homepageUrl: string; avatarUrl: string }; openProfile: string; handle: string };
+let profile: ProfileView | null = null;
+let connection: (LinkView & { available: boolean }) | null = null;
 let creatingAccount = false;
 let scheduling = false;
 let editing: LiveEvent | null = null;
@@ -116,7 +142,7 @@ function hasPermission(permission: string): boolean {
 }
 
 function updateAccountButton(): void {
-  uiText(accountButton, () => account ? account.email.split("@")[0] || uiMessage("Account") : uiMessage("Sign in"));
+  uiText(accountButton, () => account ? profile?.name || account.email.split("@")[0] || uiMessage("Account") : uiMessage("Sign in"));
   accountButton.classList.toggle("signed-in", Boolean(account));
 }
 
@@ -127,17 +153,23 @@ async function readAccount(): Promise<void> {
     account = null;
   }
   updateAccountButton();
+  await readProfile();
+}
+
+/** The card and the connection follow the account: read after it, dropped with it. */
+async function readProfile(): Promise<void> {
+  if (!account) { profile = null; connection = null; return; }
+  const [card, link] = await Promise.all([
+    api<ProfileView>("/api/v1/me/profile").catch(() => null),
+    api<LinkView & { available: boolean }>("/api/v1/nixamp/connection").catch(() => null),
+  ]);
+  profile = card;
+  connection = link;
+  updateAccountButton();
 }
 
 function openAccount(next?: () => void): void {
-  if (account) {
-    accountDialog.showModal();
-    const email = account.email;
-    accountTitle.textContent = `Signed in as ${email}`;
-    accountCopy.textContent = "Your BackToSchool identity is your NixAmp account.";
-    accountForm.hidden = true;
-    return;
-  }
+  if (account) { openSettings(); return; }
   afterSignIn = next ?? null;
   accountForm.hidden = false;
   accountError.textContent = "";
@@ -145,10 +177,111 @@ function openAccount(next?: () => void): void {
   accountDialog.showModal();
 }
 
+// --- settings: the card said once, and the optional nixamp connection ------
+
+function drawProfile(): void {
+  const card = profile ?? { name: "", homepage: "", avatarUrl: "", bio: "", photo: "", card: { hostName: "", homepageUrl: "", avatarUrl: "" }, openProfile: "", handle: "" };
+  for (const key of ["name", "homepage", "bio", "avatarUrl"] as const) {
+    (profileForm.elements.namedItem(key) as HTMLInputElement | HTMLTextAreaElement).value = card[key];
+  }
+  const picture = card.card.avatarUrl;
+  profilePhoto.hidden = picture === "";
+  profileInitial.hidden = picture !== "";
+  if (picture !== "") profilePhoto.src = picture;
+  profileInitial.textContent = (card.name || account?.email || "?").slice(0, 1).toUpperCase();
+  profilePhotoRemove.hidden = card.photo === "";
+  if (openProfileUrl.value === "" || document.activeElement !== openProfileUrl) openProfileUrl.value = card.openProfile;
+  document.querySelector<HTMLElement>("#settings-email")!.textContent = account ? `Signed in as ${account.email}` : "";
+  drawConnection();
+}
+
+function drawConnection(): void {
+  const link = connection;
+  if (!link || !link.available) {
+    nixampConnection.textContent = link ? "Connecting is not available on this site." : "";
+    nixampConnect.hidden = true;
+    nixampDisconnect.hidden = true;
+    return;
+  }
+  nixampConnect.hidden = link.connected;
+  nixampDisconnect.hidden = !link.connected;
+  nixampConnection.textContent = link.connected
+    ? `Connected as @${link.handle || link.nixampUserId} on nixamp.com. Your live streams appear when you go live.`
+    : "Not connected.";
+}
+
+function openSettings(status = ""): void {
+  if (!account) { openAccount(() => openSettings(status)); return; }
+  settingsStatus.textContent = status;
+  profileError.textContent = "";
+  openProfileError.textContent = "";
+  drawProfile();
+  settingsDialog.showModal();
+  void readProfile().then(drawProfile);
+}
+
+async function saveProfile(input: Record<string, unknown>): Promise<boolean> {
+  profileError.textContent = "";
+  try {
+    profile = await api<ProfileView>("/api/v1/me/profile", { method: "PUT", body: JSON.stringify(input) });
+    drawProfile();
+    updateAccountButton();
+    return true;
+  } catch (error) {
+    profileError.textContent = error instanceof Error ? error.message : "Could not save your profile.";
+    return false;
+  }
+}
+
+/** What the class form shows about the host: the card, or where to make one. */
+function drawHostCard(): void {
+  const card = profile?.card;
+  const named = card && (card.hostName !== "" || card.avatarUrl !== "");
+  eventHostCard.innerHTML = named
+    ? `${card.avatarUrl ? `<img class="avatar host-avatar" src="${escape(card.avatarUrl)}" alt="" referrerpolicy="no-referrer" />` : `<span class="avatar">${escape((card.hostName || "?").slice(0, 1))}</span>`}<div><small data-i18n="Your host card">Your host card</small><strong>${escape(card.hostName || uiMessage("Class host"))}</strong>${card.homepageUrl ? `<a href="${escape(card.homepageUrl)}" target="_blank" rel="noopener noreferrer">${escape(new URL(card.homepageUrl).hostname)}</a>` : ""}</div><button class="text-button" type="button" data-open-settings data-i18n="Edit in settings">Edit in settings</button>`
+    : `<span class="avatar">?</span><div><strong data-i18n="No host card yet">No host card yet</strong><small>Your name and photo go on every class you host.</small></div><button class="text-button" type="button" data-open-settings data-i18n="Add them in settings">Add them in settings</button>`;
+}
+
+/** The streams a connected nixamp account could go live with, as a pick list. */
+async function drawStreams(): Promise<void> {
+  const link = connection;
+  nixampStreamsField.hidden = true;
+  nixampStreamsNote.textContent = "";
+  if (!link?.available) return;
+  if (!link.connected) {
+    nixampStreamsNote.innerHTML = `<button class="text-button" type="button" data-open-settings data-i18n="Connect nixamp to pick one of your streams">Connect nixamp to pick one of your streams</button>`;
+    return;
+  }
+  nixampStreamsNote.textContent = "Looking at your nixamp servers…";
+  try {
+    const { servers } = await api<{ servers: ServerStreams[] }>("/api/v1/nixamp/streams");
+    while (nixampStreams.options.length > 1) nixampStreams.remove(1);
+    let offered = 0;
+    for (const server of servers) {
+      const group = document.createElement("optgroup");
+      group.label = server.reachable ? server.name : `${server.name} (not reachable)`;
+      if (server.live) {
+        const option = new Option(`What ${server.name} is playing now${server.nowPlaying ? `: ${server.nowPlaying}` : ""}`, server.live);
+        group.append(option); offered += 1;
+      }
+      for (const channel of server.channels) {
+        group.append(new Option(`${channel.name} (${channel.kind}${channel.listeners ? `, ${channel.listeners} listening` : ""})`, channel.link)); offered += 1;
+      }
+      if (group.childElementCount) nixampStreams.append(group);
+    }
+    nixampStreamsField.hidden = offered === 0;
+    nixampStreamsNote.textContent = offered === 0
+      ? (servers.length === 0 ? "Your nixamp account remembers no servers yet. Start one, then come back." : "Nothing is live on your servers right now. Start a channel in nixamp, then pick it here.")
+      : "Picking one fills in the broadcast link below.";
+  } catch (error) {
+    nixampStreamsNote.textContent = error instanceof Error ? error.message : "Your nixamp streams could not be read.";
+  }
+}
+
 function drawAccountMode(): void {
   uiText(accountTitle, () => creatingAccount ? uiMessage("Create your account") : uiMessage("Welcome back"));
   accountCopy.textContent = creatingAccount
-    ? "One NixAmp account works here and everywhere NixAmp goes."
+    ? "One account for every class on BackToSchool.help. Nothing else to sign up for."
     : "Sign in to host, chat, or raise your hand.";
   uiText(accountMode, () => creatingAccount ? uiMessage("Already have an account? Sign in") : uiMessage("New here? Create an account"));
   document.querySelector<HTMLElement>("#account-forgot")!.hidden = creatingAccount;
@@ -176,8 +309,10 @@ function openEventForm(mode: "live" | "scheduled", existing: LiveEvent | null = 
   eventError.textContent = "";
   const startsAt = eventForm.elements.namedItem("startsAt") as HTMLInputElement;
   startsAt.required = scheduling && (!existing || Boolean(existing.startsAt));
+  drawHostCard();
+  void drawStreams();
   if (existing) {
-    for (const key of ["title", "description", "topic", "visibility", "broadcastUrl", "hostName", "homepageUrl", "avatarUrl", "recurrence"] as const) {
+    for (const key of ["title", "description", "topic", "visibility", "broadcastUrl", "recurrence"] as const) {
       (eventForm.elements.namedItem(key) as HTMLInputElement | HTMLSelectElement).value = existing[key] ?? (key === "recurrence" ? "none" : "");
     }
     for (const key of ["chatEnabled", "handRaiseEnabled"] as const) (eventForm.elements.namedItem(key) as HTMLInputElement).checked = existing[key];
@@ -317,7 +452,7 @@ function panelBody(type: string, event: LiveEvent): string | null {
     case "stage": return `<div class="stage-card"><span class="stage-avatar">${escape(event.title.slice(0, 1).toUpperCase())}</span><div><span class="eyebrow" data-i18n="Host stage">Host stage</span><h2>${escape(event.title)}</h2><p id="broadcast-note">${event.status === "live" ? "This event is live." : "Start when you’re ready."}</p></div></div>`;
     case "host": return `<div class="host-line">${event.avatarUrl ? `<img class="avatar host-avatar" src="${escape(event.avatarUrl)}" alt="" referrerpolicy="no-referrer" />` : `<span class="avatar">${escape((event.hostName || event.title).slice(0, 1))}</span>`}<div><small data-i18n="Your host">Your host</small><strong>${escape(event.hostName || uiMessage("Class host"))}</strong>${event.homepageUrl ? `<a href="${escape(event.homepageUrl)}" target="_blank" rel="noopener noreferrer">Visit homepage ↗</a>` : ""}</div></div>`;
     case "about": return `<p class="reading-copy">${escape(event.description || "Come listen, learn, and ask a question live.")}</p>${event.topic ? `<span class="topic topic-large">${escape(event.topic)}</span>` : ""}`;
-    case "join": return account ? `<p class="panel-empty">You’re signed in and ready to participate.</p>` : `<div class="join-line"><div><strong>Want to ask something?</strong><p>Join with your NixAmp account.</p></div><button class="button button-secondary" type="button" data-sign-in data-i18n="Join in">Join in</button></div>`;
+    case "join": return account ? `<p class="panel-empty">You’re signed in and ready to participate.</p>` : `<div class="join-line"><div><strong>Want to ask something?</strong><p>Sign in to BackToSchool to join.</p></div><button class="button button-secondary" type="button" data-sign-in data-i18n="Join in">Join in</button></div>`;
     case "chat": return chatPanel(event);
     case "questions": return `<div class="panel-empty">Questions shared in chat can be brought onto the stage.</div>`;
     case "resources": return `<div class="panel-empty">The host hasn’t added resources yet.</div>`;
@@ -576,17 +711,75 @@ async function route(): Promise<void> {
 }
 
 accountButton.addEventListener("click", () => {
-  if (!account) {
-    openAccount();
-    return;
-  }
-  const leave = confirm(`Signed in as ${account.email}. Sign out?`);
-  if (!leave) return;
+  if (!account) { openAccount(); return; }
+  openSettings();
+});
+
+document.querySelector<HTMLButtonElement>("#settings-signout")!.addEventListener("click", () => {
+  if (!account) return;
   void api("/api/v1/auth/logout", { method: "POST" }).finally(() => {
-    account = null;
+    account = null; profile = null; connection = null;
     updateAccountButton();
+    settingsDialog.close();
     void route();
   });
+});
+
+profileForm.addEventListener("submit", (submit) => {
+  submit.preventDefault();
+  const data = new FormData(profileForm);
+  const button = profileForm.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  button.disabled = true;
+  void saveProfile({ name: data.get("name"), homepage: data.get("homepage"), bio: data.get("bio"), avatarUrl: data.get("avatarUrl") })
+    .then((saved) => { if (saved) settingsStatus.textContent = "Saved. Every class you host shows this."; })
+    .finally(() => { button.disabled = false; });
+});
+
+profilePhotoFile.addEventListener("change", () => {
+  const file = profilePhotoFile.files?.[0];
+  if (!file) return;
+  profileError.textContent = "";
+  if (file.size > 1024 * 1024) { profileError.textContent = "A photo may be up to 1 MB."; profilePhotoFile.value = ""; return; }
+  void fetch("/api/v1/me/profile/photo", { method: "PUT", credentials: "same-origin", body: file })
+    .then(async (response) => {
+      const body = await response.json() as ProfileView & { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "That photo could not be kept.");
+      profile = body;
+      drawProfile();
+      settingsStatus.textContent = "Photo saved.";
+    })
+    .catch((error) => { profileError.textContent = error instanceof Error ? error.message : "That photo could not be kept."; })
+    .finally(() => { profilePhotoFile.value = ""; });
+});
+
+profilePhotoRemove.addEventListener("click", () => {
+  void api<ProfileView>("/api/v1/me/profile/photo", { method: "DELETE" })
+    .then((next) => { profile = next; drawProfile(); settingsStatus.textContent = "Photo removed."; })
+    .catch((error) => { profileError.textContent = error instanceof Error ? error.message : "Could not remove the photo."; });
+});
+
+openProfileForm.addEventListener("submit", (submit) => {
+  submit.preventDefault();
+  openProfileError.textContent = "";
+  const button = openProfileForm.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  button.disabled = true;
+  void api<ProfileView>("/api/v1/me/profile/import", { method: "POST", body: JSON.stringify({ url: openProfileUrl.value.trim() }) })
+    .then((next) => { profile = next; drawProfile(); updateAccountButton(); settingsStatus.textContent = "Filled from your OpenProfile."; })
+    .catch((error) => { openProfileError.textContent = error instanceof Error ? error.message : "That profile could not be read."; })
+    .finally(() => { button.disabled = false; });
+});
+
+nixampDisconnect.addEventListener("click", () => {
+  nixampDisconnect.disabled = true;
+  void api("/api/v1/nixamp/connection", { method: "DELETE" })
+    .then(() => readProfile())
+    .then(() => { drawProfile(); settingsStatus.textContent = "nixamp disconnected. Your classes here are untouched."; })
+    .finally(() => { nixampDisconnect.disabled = false; });
+});
+
+nixampStreams.addEventListener("change", () => {
+  if (nixampStreams.value === "") return;
+  (eventForm.elements.namedItem("broadcastUrl") as HTMLInputElement).value = nixampStreams.value;
 });
 
 accountMode.addEventListener("click", () => {
@@ -607,6 +800,7 @@ accountForm.addEventListener("submit", (submit) => {
   }).then((result) => {
     account = result.account;
     updateAccountButton();
+    void readProfile();
     accountForm.reset();
     accountDialog.close();
     const next = afterSignIn;
@@ -642,8 +836,9 @@ eventForm.addEventListener("submit", (submit) => {
   eventError.textContent = "";
   const input = {
     title: data.get("title"), description: data.get("description"), topic: data.get("topic"),
-    visibility: data.get("visibility"), broadcastUrl: data.get("broadcastUrl"),
-    hostName: data.get("hostName"), homepageUrl: data.get("homepageUrl"), avatarUrl: data.get("avatarUrl"), recurrence,
+    visibility: data.get("visibility"), broadcastUrl: data.get("broadcastUrl"), recurrence,
+    // The host card is not sent: a new class takes the account's, and an
+    // edited one keeps what it has.
     chatEnabled: data.get("chatEnabled") === "on", handRaiseEnabled: data.get("handRaiseEnabled") === "on",
     ...(existing ? { version: existing.version } : {kind: "class"}),
     ...(scheduling ? {
@@ -678,6 +873,7 @@ document.addEventListener("click", (click) => {
   const eventMode = target.closest<HTMLElement>("[data-event-mode]")?.dataset.eventMode;
   if (eventMode === "live" || eventMode === "scheduled") openEventForm(eventMode);
   if (target.closest("[data-sign-in]")) openAccount(() => void route());
+  if (target.closest("[data-open-settings]")) { eventDialog.close(); openSettings(); }
   const close = target.closest<HTMLElement>("[data-close]");
   if (close) (close.closest("dialog") as HTMLDialogElement | null)?.close();
   const hand = target.closest<HTMLButtonElement>("[data-hand]");
@@ -692,4 +888,27 @@ document.addEventListener("click", (click) => {
 window.addEventListener("popstate", () => void route());
 
 
-void readAccount().then(() => route());
+/**
+ * Back from nixamp.com's consent page: the callback lands here with a word
+ * in the query. Said in settings, then the query is dropped so a reload
+ * does not say it again.
+ */
+function landedFromNixamp(): string {
+  const params = new URLSearchParams(location.search);
+  const outcome = params.get("nixamp");
+  if (!outcome) return "";
+  const reason = params.get("reason") ?? "";
+  history.replaceState(null, "", `${location.pathname}${location.hash}`);
+  if (outcome === "connected") return "nixamp connected. Your live streams appear when you go live.";
+  if (outcome === "denied") return "You said not now on nixamp.com. Nothing was connected.";
+  return `nixamp could not be connected${reason ? `: ${reason}` : "."}`;
+}
+
+void readAccount().then(() => {
+  const landed = landedFromNixamp();
+  if (landed !== "" || location.hash === "#settings") {
+    if (location.hash === "#settings") history.replaceState(null, "", location.pathname);
+    openSettings(landed);
+  }
+  return route();
+});

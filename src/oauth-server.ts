@@ -52,6 +52,7 @@ export const SCOPES = {
   profile: "who you are on nixamp (your handle)",
   email: "the address on your account",
   parties: "host and join watch parties as you",
+  streams: "see the servers you run on nixamp, and what is live on them",
   offline_access: "stay connected without asking again",
 } as const;
 
@@ -83,13 +84,33 @@ export const BITTORRENTED_CLIENT: OAuthClient = {
 };
 
 /**
- * The registered clients: the built-in one, plus whatever NIXAMP_OAUTH_CLIENTS
+ * backtoschool.help runs on this codebase and used to tell its teachers that
+ * their school identity *was* a nixamp account. It is not, any more: a school
+ * account is a school account, and nixamp is the broadcast backend a host may
+ * connect -- through this client, like any other site. Public, PKCE only.
+ */
+export const BACKTOSCHOOL_CLIENT: OAuthClient = {
+  id: "backtoschool",
+  name: "BackToSchool.help",
+  homepage: "https://backtoschool.help",
+  redirectUris: [
+    "https://backtoschool.help/api/v1/nixamp/callback",
+    "https://www.backtoschool.help/api/v1/nixamp/callback",
+    "http://localhost:5174/api/v1/nixamp/callback",
+  ],
+};
+
+/**
+ * The registered clients: the built-in ones, plus whatever NIXAMP_OAUTH_CLIENTS
  * names. The variable is a JSON list of `{id, name, redirectUris, secret?,
  * homepage?}`; an entry with the built-in id replaces it, so a staging
  * bittorrented can point the callback somewhere else.
  */
 export function clientsFrom(env: Record<string, string | undefined>): OAuthClient[] {
-  const byId = new Map<string, OAuthClient>([[BITTORRENTED_CLIENT.id, BITTORRENTED_CLIENT]]);
+  const byId = new Map<string, OAuthClient>([
+    [BITTORRENTED_CLIENT.id, BITTORRENTED_CLIENT],
+    [BACKTOSCHOOL_CLIENT.id, BACKTOSCHOOL_CLIENT],
+  ]);
   const raw = env["NIXAMP_OAUTH_CLIENTS"];
   if (raw) {
     let parsed: unknown = [];
@@ -116,6 +137,7 @@ export function clientsFrom(env: Record<string, string | undefined>): OAuthClien
     }
   }
   if (env["NIXAMP_OAUTH_BITTORRENTED"] === "off") byId.delete(BITTORRENTED_CLIENT.id);
+  if (env["NIXAMP_OAUTH_BACKTOSCHOOL"] === "off") byId.delete(BACKTOSCHOOL_CLIENT.id);
   return [...byId.values()];
 }
 

@@ -43,6 +43,9 @@ import { passwordResetPage } from "./password-reset-page.ts";
 import { anonymousHandle, Handles } from "./handles.ts";
 import { OpenDirs } from "./opendirs.ts";
 import { Servers } from "./servers.ts";
+import { AccountProfiles, hostCard, PHOTO_LIMIT } from "./profiles.ts";
+import { NixampLinks, nixampExchange } from "./nixamp-link.ts";
+import { handleNixampLinkApi, nixampLinkPath } from "./nixamp-link-api.ts";
 import { DeviceGrants } from "./device.ts";
 import { BAD_KEY_LIMIT, callerOf, Guard, SIGN_IN_LIMIT } from "./guard.ts";
 import {
@@ -53,7 +56,7 @@ import {
   signInFailedPage,
   SignIn,
 } from "./oauth.ts";
-import { AuthorizationServer, SCOPE_NAMES, clientsFrom } from "./oauth-server.ts";
+import { AuthorizationServer, BACKTOSCHOOL_CLIENT, SCOPE_NAMES, clientsFrom } from "./oauth-server.ts";
 import { handleOAuthApi, oauthApiPath } from "./oauth-api.ts";
 import { WatchParties } from "./watch-party.ts";
 import { needsAdmin, needsMember, Owner } from "./owner.ts";
@@ -1387,6 +1390,12 @@ export function isSignInPath(path: string): boolean {
     path === "/api/v1/servers" ||
     path.startsWith("/api/v1/servers/") ||
     path === "/api/v1/me/handle" ||
+    path === "/api/v1/me/profile" ||
+    path.startsWith("/api/v1/me/profile/") ||
+    // A stored photo is public: it is on every class the host runs.
+    path.startsWith("/api/v1/profiles/") ||
+    // "Connect nixamp" on a site that is a client of nixamp.com.
+    nixampLinkPath(path) ||
     // Public to read, so it must not be behind a share key either.
     path === "/api/v1/opendirs" ||
     path.startsWith("/api/v1/opendirs/") ||
@@ -1729,6 +1738,10 @@ export interface HandlerOptions {
   servers?: Servers;
   /** The name other people see, which is never the address they signed up with. */
   handles?: Handles;
+  /** The account's card: a name, a homepage, a photo, a line. One table, read by every site here. */
+  accountProfiles?: AccountProfiles;
+  /** nixamp accounts connected to accounts here, where this site is a client of nixamp.com. */
+  links?: NixampLinks;
   /** Open directories people have found, which anyone may read. */
   openDirs?: OpenDirs;
   /** True when this instance is reached over https, for the cookie's Secure. */
@@ -1946,6 +1959,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       secureCookies: options.secureCookies ?? false,
     })) return;
 
+    // A site here that is a client of nixamp.com: connect, callback, streams.
+    if (options.links && options.accounts && options.authServer && await handleNixampLinkApi(request, response, url, {
+      links: options.links,
+      accounts: options.accounts,
+      issuer: options.site ?? DEFAULT_DIRECTORY,
+      site: accountSite,
+      redirectUris: options.authServer.client(BACKTOSCHOOL_CLIENT.id)?.redirectUris ?? [],
+      home: "/#settings",
+      secureCookies: options.secureCookies ?? false,
+      fetcher: options.links.fetcher,
+    })) return;
+
     if (options.events && await handleLiveApi(request, response, url, {
       events: options.events,
       ...(options.eventWriter ? {eventWriter: options.eventWriter} : {}),
@@ -1956,6 +1981,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       ...(eventSite ? { site: eventSite } : {}),
       ...(options.invites?.email ? { email: options.invites.email } : {}),
       ...(options.onEventUpdated ? { onEventUpdated: options.onEventUpdated } : {}),
+      ...(options.accountProfiles
+        ? { hostProfile: async (userId: string) => hostCard(await options.accountProfiles!.of(userId), userId, accountSite) }
+        : {}),
     })) return;
 
     // The page explaining the reminder texts. Public for the same reason the
@@ -3557,6 +3585,127 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       json(response, 405, { error: "GET or PUT" });
+      return;
+    }
+
+    // --- the account's card -------------------------------------------------
+    //
+    // A name, a homepage, a photo and a line, said once. A class is made from
+    // it, a settings page edits it, and an OpenProfile.md fills it in one move.
+    if ((path === "/api/v1/me/profile" || path.startsWith("/api/v1/me/profile/")) && options.accountProfiles && options.accounts) {
+      const profiles = options.accountProfiles;
+      const who = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (who === null) {
+        json(response, 401, { error: "not signed in" });
+        return;
+      }
+      const persona = options.handles ? await options.handles.persona(who.id) : null;
+      const answer = async (): Promise<void> => {
+        const profile = await profiles.of(who.id);
+        // Read again: an import may just have remembered the address.
+        const now = options.handles ? await options.handles.persona(who.id) : null;
+        json(response, 200, {
+          ...profile,
+          card: hostCard(profile, who.id, accountSite),
+          openProfile: now?.profile ?? "",
+          handle: now?.handle || fallbackHandle(who.id),
+        });
+      };
+
+      if (path === "/api/v1/me/profile") {
+        if (request.method === "GET") { await answer(); return; }
+        if (request.method === "PUT" || request.method === "POST") {
+          let body: Record<string, unknown>;
+          try {
+            body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+          } catch {
+            json(response, 400, { error: "bad JSON" });
+            return;
+          }
+          const written = await profiles.set(who.id, body);
+          if (written.error) { json(response, 422, { error: written.error }); return; }
+          await answer();
+          return;
+        }
+        json(response, 405, { error: "GET or PUT" });
+        return;
+      }
+
+      if (path === "/api/v1/me/profile/import") {
+        if (request.method !== "POST") { json(response, 405, { error: "POST only" }); return; }
+        let body: { url?: unknown } = {};
+        try {
+          const raw = await readBody(request);
+          body = raw.trim() === "" ? {} : (JSON.parse(raw) as typeof body);
+        } catch {
+          json(response, 400, { error: "bad JSON" });
+          return;
+        }
+        const given = typeof body.url === "string" ? body.url.trim() : "";
+        const from = given || persona?.profile || "";
+        if (from === "") {
+          json(response, 422, { error: "give the URL of your OpenProfile.md, like https://you.example/.well-known/openprofile.md" });
+          return;
+        }
+        const imported = await profiles.importFrom(who.id, from);
+        if (imported.error) { json(response, 422, { error: imported.error }); return; }
+        // The address is remembered, so the phone line reads the same file
+        // for the voice, and a later import needs no URL.
+        if (given && options.handles && given !== persona?.profile) {
+          await options.handles.describe(who.id, fallbackHandle(who.id), { profile: given });
+        }
+        await answer();
+        return;
+      }
+
+      if (path === "/api/v1/me/profile/photo") {
+        if (request.method === "PUT" || request.method === "POST") {
+          let bytes: Uint8Array;
+          try {
+            bytes = await readBytes(request, PHOTO_LIMIT);
+          } catch {
+            json(response, 413, { error: "a photo may be up to 1 MB" });
+            return;
+          }
+          const kept = await profiles.setPhoto(who.id, bytes);
+          if (kept.error) { json(response, 422, { error: kept.error }); return; }
+          await answer();
+          return;
+        }
+        if (request.method === "DELETE") {
+          await profiles.removePhoto(who.id);
+          await answer();
+          return;
+        }
+        json(response, 405, { error: "PUT or DELETE" });
+        return;
+      }
+      json(response, 404, { error: "no such profile route" });
+      return;
+    }
+
+    // The stored photo, public: it is on every class the host runs, and a
+    // page shows it to strangers by design. Cached by its etag.
+    if (path.startsWith("/api/v1/profiles/") && path.endsWith("/photo") && options.accountProfiles) {
+      if (request.method !== "GET" && request.method !== "HEAD") { json(response, 405, { error: "GET only" }); return; }
+      const userId = decodeURIComponent(path.slice("/api/v1/profiles/".length, -"/photo".length));
+      const photo = userId === "" ? null : await options.accountProfiles.photo(userId);
+      if (photo === null) { json(response, 404, { error: "no photo" }); return; }
+      const etag = `"${photo.etag}"`;
+      if (request.headers["if-none-match"] === etag) {
+        response.writeHead(304, { etag, "cache-control": "public, max-age=86400" });
+        response.end();
+        return;
+      }
+      response.writeHead(200, {
+        "content-type": photo.type,
+        "content-length": photo.bytes.length,
+        etag,
+        "cache-control": "public, max-age=86400",
+        "x-content-type-options": "nosniff",
+        "access-control-allow-origin": "*",
+      });
+      response.end(request.method === "HEAD" ? undefined : Buffer.from(photo.bytes));
       return;
     }
 
@@ -6004,7 +6153,10 @@ function sendFile(request: IncomingMessage, response: ServerResponse, file: stri
 export function createServer(engine: Engine, options: HandlerOptions): Server {
   const handle = createHandler(engine, options);
   const onRequest = (request: IncomingMessage, response: ServerResponse): void => {
-    handle(request, response).catch(() => {
+    handle(request, response).catch((error: unknown) => {
+      // Silent by default: a stack trace per bad request is a log nobody
+      // reads. Said aloud when asked, which is how a 500 in a test is found.
+      if (process.env["NIXAMP_DEBUG"]) console.error(error);
       if (!response.headersSent) json(response, 500, { error: "server error" });
       else response.end();
     });
@@ -6864,7 +7016,16 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
           // The same pool the follows and reminders use: three small tables in
           // one database do not want three sets of connections.
           ...(pool
-            ? { servers: new Servers(pool), handles: new Handles(pool), openDirs: new OpenDirs(pool) }
+            ? {
+                servers: new Servers(pool),
+                handles: new Handles(pool),
+                openDirs: new OpenDirs(pool),
+                accountProfiles: new AccountProfiles(pool),
+                // The school's side of "Connect nixamp": tokens from nixamp.com,
+                // kept against the school account. The issuer is this same
+                // program in production, reached over HTTP like any client.
+                links: new NixampLinks(pool, nixampExchange(nixampSite, BACKTOSCHOOL_CLIENT.id), BACKTOSCHOOL_CLIENT.id),
+              }
             : {}),
           signIn: new SignIn(
             providersFrom(process.env),

@@ -469,3 +469,19 @@ input[type="url"], input[type="email"], input[type="tel"], input[type="datetime-
 .tv .event-heading p { margin: 0; }
 .tv .classroom-controls { gap: 10px; padding: 14px; }
 .tv .classroom-controls .button { padding: 12px 16px; font-size: 1rem; }
+
+/* Settings: the host card said once, and the optional nixamp connection. */
+.profile-photo-row { display: flex; align-items: center; gap: 18px; }
+.profile-photo { width: 72px; height: 72px; font-size: 1.8rem; }
+.profile-photo-actions { display: grid; gap: 6px; }
+.profile-photo-actions .button { width: fit-content; cursor: pointer; }
+.settings-section { margin-top: 22px; }
+.settings-section legend { font-weight: 700; padding-inline: 6px; }
+.settings-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.settings-footer { justify-content: space-between; margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line); }
+.host-card { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; }
+.host-card > div { display: grid; flex: 1; min-width: 0; }
+.host-card small { color: var(--muted); font-size: .76rem; font-weight: 790; }
+.host-card strong { color: var(--purple); }
+.host-card a { color: var(--muted); font-size: .84rem; overflow-wrap: anywhere; }
+.form-stack #nixamp-streams-field + .form-note { margin-top: -8px; }

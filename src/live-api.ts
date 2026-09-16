@@ -36,6 +36,12 @@ export interface LiveApiOptions {
   site?: string;
   email?: (to: string, note: { title: string; body: string; url: string }) => Promise<boolean>;
   onEventUpdated?: (event: LiveEvent, previous: LiveEvent) => void;
+  /**
+   * The account's own card -- name, homepage, photo -- so a class made
+   * without them carries the host's instead of nothing. What the class
+   * says explicitly still wins.
+   */
+  hostProfile?: (userId: string) => Promise<{ hostName: string; homepageUrl: string; avatarUrl: string }>;
 }
 
 const CORS = {
@@ -309,6 +315,13 @@ export async function handleLiveApi(
         const account = await requiredAccount(request, response, options);
         if (!account) return true;
         const input = await body(request);
+        if (options.hostProfile) {
+          const card = await options.hostProfile(account.id);
+          for (const key of ["hostName", "homepageUrl", "avatarUrl"] as const) {
+            const given = input[key];
+            if (card[key] && (given === undefined || given === null || given === "")) input[key] = card[key];
+          }
+        }
         const event = await options.events.create(account.id, { ...input, title: input["title"] });
         json(response, 201, view(event, account));
         return true;

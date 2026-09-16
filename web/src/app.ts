@@ -157,6 +157,7 @@ export function start(): void {
     fullscreen: need<HTMLButtonElement>("fullscreen"),
     copyNow: need<HTMLButtonElement>("copy-now"),
     copyNixamp: need<HTMLButtonElement>("copy-nixamp"),
+    schoolLive: need<HTMLButtonElement>("school-live"),
     canvas: need<HTMLCanvasElement>("spectrum"),
     glyphs: need<HTMLElement>("glyphs"),
     levels: need<HTMLElement>("levels"),
@@ -1390,6 +1391,9 @@ export function start(): void {
     // none, and nothing loaded has nothing to copy.
     dom.copyNow.hidden = player.source === "";
     dom.copyNixamp.hidden = liveRoomLinkNow() === "";
+    // Teaching it needs a live room to point at and an account to own the
+    // class; the school and this site keep the same accounts.
+    dom.schoolLive.hidden = liveRoomLinkNow() === "" || !keepsAccounts || meId === "";
     // Share sits with the transport, for anything with an address safe to hand out.
     dom.shareNow.hidden = shareLinkNow() === "";
     // The trollbox follows whatever live is joined.
@@ -4631,6 +4635,49 @@ export function start(): void {
     const link = liveRoomLinkNow();
     if (link !== "") void copyText(link, dom.copyNixamp, "✓");
   });
+
+  /** Where classes are. The school runs on this same server and keeps the same accounts. */
+  const SCHOOL_SITE = "https://backtoschool.help";
+
+  /**
+   * One click: a class on backtoschool.help that plays this live room. The
+   * events API is the school's own, on this origin, so the session cookie
+   * carries it; the host card comes from the profile, so nothing is asked.
+   * The class is started at once and opened in a new tab.
+   */
+  async function teachOnSchool(): Promise<void> {
+    const link = liveRoomLinkNow();
+    if (link === "" || dom.schoolLive.disabled) return;
+    const was = dom.schoolLive.textContent;
+    dom.schoolLive.disabled = true;
+    dom.schoolLive.textContent = "Opening a classroom…";
+    const headers = { "content-type": "application/json" };
+    try {
+      const made = await fetch("/api/v1/events", {
+        method: "POST", headers,
+        body: JSON.stringify({ kind: "class", title: currentShareTitle() || "Live class", broadcastUrl: link, visibility: "public" }),
+      });
+      const body = (await made.json().catch(() => ({}))) as { event?: { id: string; slug: string; version: number }; error?: string };
+      if (!made.ok || !body.event) throw new Error(body.error ?? "the class could not be made");
+      const event = body.event;
+      const started = await fetch(`/api/v1/events/${encodeURIComponent(event.id)}/start`, {
+        method: "POST", headers, body: JSON.stringify({ version: event.version }),
+      });
+      const where = `${SCHOOL_SITE}/live/${encodeURIComponent(event.slug)}`;
+      note = started.ok
+        ? `Your class is live on backtoschool.help: ${where}`
+        : `The class is made but not started yet. Open it to start: ${where}`;
+      draw();
+      globalThis.open(where, "_blank", "noopener");
+    } catch (error) {
+      note = `Could not open a classroom: ${(error as Error).message}`;
+      draw();
+    } finally {
+      dom.schoolLive.disabled = false;
+      dom.schoolLive.textContent = was;
+    }
+  }
+  dom.schoolLive.addEventListener("click", () => { void teachOnSchool(); });
 
   dom.favHere.addEventListener("click", () => {
     // Kept as the view link, so opening a favourite later is watching it;
