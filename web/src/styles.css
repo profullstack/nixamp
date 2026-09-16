@@ -938,6 +938,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 
 button.primary { color: var(--green); border-color: var(--green-dim); min-width: 64px; }
 button.ghost { background: transparent; color: var(--muted); }
+/* A link dressed as a ghost button, so "Forgot password?" sits with "Create one". */
+a.ghost { color: var(--muted); font-size: 0.9em; text-decoration: none; padding: 6px 4px; }
+a.ghost:hover { color: var(--green); text-decoration: underline; }
 /* Share, with the transport: the one button there that is for somebody else. */
 button.share { color: var(--accent); border-color: var(--edge); letter-spacing: 0.04em; }
 button.share:hover { background: #16241c; }
