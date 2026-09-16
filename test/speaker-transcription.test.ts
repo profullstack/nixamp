@@ -31,6 +31,22 @@ test('a provider rejection refunds once, blocks other accounts during cooldown, 
   assert.deepEqual([calls, reserved, refunded, committed], [2, 2, 1, 1]);
 });
 
+test('an in-flight transient failure cannot shorten a provider billing cooldown', async () => {
+  let now = 0;
+  const finish: ((response: Response) => void)[] = [];
+  const voice = new LiveVoice({ apiKey: 'key', now: () => now, fetcher: (() => new Promise<Response>(resolve => finish.push(resolve))) as typeof fetch });
+  const first = assert.rejects(voice.hear(audio(), 'alice'), /credits are exhausted/);
+  const second = assert.rejects(voice.hear(audio(), 'bob'), /temporarily unavailable/);
+  while (finish.length < 2) await new Promise(resolve => setTimeout(resolve, 1));
+  finish[0]!(Response.json({ detail: { status: 'quota_exceeded' } }, { status: 401 }));
+  await first;
+  finish[1]!(new Response('outage', { status: 500 }));
+  await second;
+  now = 11_000;
+  await assert.rejects(voice.hear(audio(), 'charlie'), /credits are exhausted/);
+  assert.equal(finish.length, 2);
+});
+
 test('Scribe auto-detects native language, separates speakers, and receives canonical bounded WAV only', async () => {
   let calls = 0;
   const voice = new LiveVoice({ apiKey: 'key', fetcher: (async (url, init) => {

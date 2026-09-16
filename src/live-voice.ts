@@ -46,7 +46,9 @@ export class LiveVoice {
 
   private async providerFailed(response: Response, operation: string): Promise<never> {
     const failure = await voiceProviderFailure(response);
-    this.providerPause = { until: this.now() + failure.cooldownMs, error: failure.error };
+    const until = this.now() + failure.cooldownMs;
+    // Another in-flight response must not shorten an existing billing pause.
+    if (!this.providerPause || this.providerPause.until < until) this.providerPause = { until, error: failure.error };
     console.error(JSON.stringify({ event: "voice_provider_failure", provider: "elevenlabs", operation, status: response.status, code: failure.code, cooldownMs: failure.cooldownMs }));
     throw failure.error;
   }
