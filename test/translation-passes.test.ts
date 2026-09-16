@@ -22,9 +22,9 @@ test("400% markup is five times the base cost; only exact, confirmed USD payment
 });
 
 test("paid provider calls reserve before use, refund failures, and cached audio requires paid access", async () => {
-  const calls: string[] = []; let funded = true, providerOK = true;
+  const calls: string[] = []; let funded = true, providerOK = true, now = 0;
   const meter = { require: async () => { if (!funded) throw new SpeechError("Buy a pass",402); }, reserve: async (_by: string,kind:string,units:number) => { calls.push(`reserve:${kind}:${units}`); return "r"; }, commit: async () => { calls.push("commit"); }, refund: async () => { calls.push("refund"); } };
-  const voice = new LiveVoice({apiKey:"test",billing:meter,fetcher:(async (url) => {
+  const voice = new LiveVoice({apiKey:"test",billing:meter,now:()=>now,fetcher:(async (url) => {
     if (String(url).includes("/voices?")) return Response.json({voices:[{voice_id:"stock",name:"Voice"}]});
     calls.push("provider");
     if (!providerOK) return new Response("",{status:500});
@@ -42,10 +42,13 @@ test("paid provider calls reserve before use, refund failures, and cached audio 
   await assert.rejects(voice.grant("alice","channel"),/Buy a pass/);
   await assert.rejects(voice.hear(new Uint8Array(encodeWav(new Float32Array(32000).fill(.1))),"alice"),/Buy a pass/);
   funded=true;providerOK=false;calls.length=0;
-  await assert.rejects(voice.stream({...ask,text:"Unavailable"},"alice"),/could not generate/);
+  await assert.rejects(voice.stream({...ask,text:"Unavailable"},"alice"),/temporarily unavailable/);
   assert.deepEqual(calls,["reserve:voice:11","provider","refund"]);
   calls.length=0;
-  await assert.rejects(voice.hear(new Uint8Array(encodeWav(new Float32Array(32000).fill(.1))),"alice"),/could not run/);
+  await assert.rejects(voice.hear(new Uint8Array(encodeWav(new Float32Array(32000).fill(.1))),"alice"),/temporarily unavailable/);
+  assert.deepEqual(calls,[],"a provider cooldown does not reserve credit or call the provider");
+  now=10_001;
+  await assert.rejects(voice.hear(new Uint8Array(encodeWav(new Float32Array(32000).fill(.1))),"alice"),/temporarily unavailable/);
   assert.deepEqual(calls,["reserve:transcription:32000","provider","refund"]);
 });
 

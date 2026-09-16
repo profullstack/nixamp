@@ -15,6 +15,22 @@ const result = { language_code: 'spa', words: [
   { type: 'word', text: 'La pelea sigue.', start: 2.5, end: 4.9, speaker_id: 'speaker_1' },
 ] };
 
+test('a provider rejection refunds once, blocks other accounts during cooldown, then recovers', async () => {
+  let now = 0, calls = 0, reserved = 0, refunded = 0, committed = 0;
+  const billing = { require: async () => {}, reserve: async () => { reserved++; return 'reservation'; }, refund: async () => { refunded++; }, commit: async () => { committed++; } };
+  const voice = new LiveVoice({ apiKey: 'key', now: () => now, billing, fetcher: (async () => {
+    calls++;
+    return calls === 1 ? Response.json({ detail: { status: 'quota_exceeded' } }, { status: 401 }) : Response.json(result);
+  }) as typeof fetch });
+  await assert.rejects(voice.hear(audio(), 'alice'), error => error instanceof SpeechError && error.status === 402);
+  await assert.rejects(voice.hear(audio(), 'bob'), /credits are exhausted/);
+  await assert.rejects(voice.voices(), /credits are exhausted/);
+  assert.deepEqual([calls, reserved, refunded, committed], [1, 1, 1, 0]);
+  now = 300_001;
+  await voice.hear(audio(), 'bob');
+  assert.deepEqual([calls, reserved, refunded, committed], [2, 2, 1, 1]);
+});
+
 test('Scribe auto-detects native language, separates speakers, and receives canonical bounded WAV only', async () => {
   let calls = 0;
   const voice = new LiveVoice({ apiKey: 'key', fetcher: (async (url, init) => {
