@@ -34,6 +34,9 @@ jobs:
           cache: gradle
 
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       - name: Install Android SDK
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
