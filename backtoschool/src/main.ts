@@ -8,6 +8,9 @@ import { platformBadges } from "./platforms.ts";
 import { installEventWriter } from "./event-writer.ts";
 import type { LiveEvent } from "../../src/live-events.ts";
 import { classroomBroadcast } from "../../src/classroom.ts";
+import { mountClassroomPlayer } from "./player.ts";
+import { installTvNavigation } from "./tv.ts";
+installTvNavigation();
 import { api, ApiError, send, type Account, type EventEnvelope } from "./api.ts";
 
 const main = document.querySelector<HTMLElement>("#main")!;
@@ -281,8 +284,7 @@ async function home(): Promise<void> {
 
 function playerPanel(event: LiveEvent): string {
   const broadcast = classroomBroadcast(event.broadcastUrl);
-  if (broadcast) return `<div class="classroom-video"><iframe src="${escape(broadcast.embed)}" title="${escape(event.title)} broadcast" allow="autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
-    <p class="broadcast-caption"><a class="button button-secondary" href="${escape(broadcast.join)}" target="_blank" rel="noopener noreferrer">${broadcast.provider === "pairux" ? "Join screen share on Pairux" : "Open video in Nixamp"} ↗</a></p>`;
+  if (broadcast) return `<div class="classroom-player" data-classroom-player></div>`;
   const invite = inviteQuery();
   const source = event.recordingId && event.status === "ended"
     ? `/api/v1/recordings/${encodeURIComponent(event.recordingId)}`
@@ -362,6 +364,8 @@ async function eventPage(slug: string): Promise<void> {
 }
 
 function bindEventPage(event: LiveEvent): void {
+  const playerRoot = document.querySelector<HTMLElement>("[data-classroom-player]");
+  const disposePlayer = playerRoot ? mountClassroomPlayer(playerRoot, event.broadcastUrl) : () => {};
   document.querySelector<HTMLButtonElement>("[data-listen]")?.addEventListener("click", async (click) => {
     const button = click.currentTarget as HTMLButtonElement;
     const audio = document.querySelector<HTMLAudioElement>("#event-audio");
@@ -471,7 +475,7 @@ function bindEventPage(event: LiveEvent): void {
     showClassUpdate("The host updated this class. Refresh the details when you’re ready.");
     // Keep the viewer's player, chat field, focus, and scroll exactly where they are.
   }).catch(() => undefined), 5000);
-  routeCleanup = () => { clearInterval(chatTimer); clearInterval(raiseTimer); clearInterval(eventTimer); };
+  routeCleanup = () => { disposePlayer(); clearInterval(chatTimer); clearInterval(raiseTimer); clearInterval(eventTimer); };
   void loadListeners(event);
 }
 

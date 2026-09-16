@@ -1,5 +1,26 @@
 /* English fallback for BackToSchool platform and installation messages. */
 export default {
+  "Nixamp Share link or HTTPS media URL": "Nixamp Share link or HTTPS media URL",
+  "For TV playback, use a Nixamp Share link or a direct HTTPS media URL. Pairux viewing opens separately.": "For TV playback, use a Nixamp Share link or a direct HTTPS media URL. Pairux viewing opens separately.",
+
+  "Paused": "Paused",
+  "Broadcast ended": "Broadcast ended",
+  "Class broadcast": "Class broadcast",
+  "Play": "Play",
+  "Pause": "Pause",
+  "Retry playback": "Retry playback",
+  "Back 10 seconds": "Back 10 seconds",
+  "Forward 10 seconds": "Forward 10 seconds",
+  "Mute": "Mute",
+  "Unmute": "Unmute",
+  "Full screen": "Full screen",
+  "Exit full screen": "Exit full screen",
+  "Playing": "Playing",
+  "Select Play to watch the broadcast.": "Select Play to watch the broadcast.",
+  "The broadcast could not be loaded. Try again.": "The broadcast could not be loaded. Try again.",
+  "This Pairux broadcast opens separately. For playback here on Fire TV, the host needs to share a Nixamp stream or direct media link.": "This Pairux broadcast opens separately. For playback here on Fire TV, the host needs to share a Nixamp stream or direct media link.",
+  "Open on Pairux": "Open on Pairux",
+
   "Supported platforms": "Supported platforms",
   "In review": "In review",
   "Not available": "Not available",

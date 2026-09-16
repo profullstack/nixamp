@@ -132,12 +132,33 @@ public final class MainActivity extends Activity {
     }
 
     @Override
-    public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_BACK && webView.canGoBack()) {
-            webView.goBack();
-            return true;
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        String key;
+        switch (event.getKeyCode()) {
+            case KeyEvent.KEYCODE_BACK: key = "Back"; break;
+            case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE: key = "MediaPlayPause"; break;
+            case KeyEvent.KEYCODE_MEDIA_PLAY: key = "MediaPlay"; break;
+            case KeyEvent.KEYCODE_MEDIA_PAUSE: key = "MediaPause"; break;
+            case KeyEvent.KEYCODE_MEDIA_REWIND: key = "MediaRewind"; break;
+            case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD: key = "MediaFastForward"; break;
+            default: return super.dispatchKeyEvent(event);
         }
-        return super.onKeyDown(keyCode, event);
+        if (event.getAction() == KeyEvent.ACTION_UP) {
+            final boolean back = event.getKeyCode() == KeyEvent.KEYCODE_BACK;
+            webView.evaluateJavascript(
+                "(() => { const event = new CustomEvent('backtoschool-remote', {detail:'" + key + "',cancelable:true});"
+                    + "if (!document.dispatchEvent(event)) return true;"
+                    + (back ? "const dialog=document.querySelector('dialog[open]');if(dialog){dialog.close();return true;}" : "")
+                    + "return false; })()",
+                handled -> {
+                    if (back && !"true".equals(handled)) {
+                        if (webView.canGoBack()) webView.goBack();
+                        else finish();
+                    }
+                }
+            );
+        }
+        return true;
     }
 
     @Override

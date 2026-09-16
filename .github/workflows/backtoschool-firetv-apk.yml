@@ -8,9 +8,14 @@ on:
       - "backtoschool-firetv/**"
       - ".github/workflows/backtoschool-firetv-apk.yml"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to build and attach the APK to (leave blank for an artifact only)"
+        required: false
+        default: ""
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -19,6 +24,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - uses: actions/setup-java@v4
         with:
@@ -31,6 +38,12 @@ jobs:
       - name: Install Android SDK
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
 
+      - name: Validate Android app before signing
+        working-directory: backtoschool-firetv
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon lintDebug assembleDebug
+
       - name: Prepare release signing key
         id: signing
         shell: bash
@@ -41,34 +54,15 @@ jobs:
         run: |
           set -euo pipefail
           keystore="$RUNNER_TEMP/backtoschool-release.p12"
-          if [[ -n "$SAVED_KEYSTORE_BASE64" ]]; then
-            [[ -n "$SAVED_KEYSTORE_PASSWORD" && -n "$SAVED_KEY_PASSWORD" ]]
-            printf '%s' "$SAVED_KEYSTORE_BASE64" | base64 --decode > "$keystore"
-            store_password="$SAVED_KEYSTORE_PASSWORD"
-            key_password="$SAVED_KEY_PASSWORD"
-            echo "generated=false" >> "$GITHUB_OUTPUT"
-          else
-            store_password="$(openssl rand -hex 24)"
-            key_password="$store_password"
-            keytool -genkeypair \
-              -keystore "$keystore" \
-              -storetype PKCS12 \
-              -storepass "$store_password" \
-              -keypass "$key_password" \
-              -alias backtoschool \
-              -keyalg RSA \
-              -keysize 4096 \
-              -validity 10000 \
-              -dname "CN=BackToSchool.help, O=ProFullStack, C=US"
-            {
-              echo "keystore=backtoschool-release.p12"
-              echo "storeType=PKCS12"
-              echo "alias=backtoschool"
-              echo "storePassword=$store_password"
-              echo "keyPassword=$key_password"
-            } > "$RUNNER_TEMP/signing-key-info.txt"
-            echo "generated=true" >> "$GITHUB_OUTPUT"
+          if [[ -z "$SAVED_KEYSTORE_BASE64" || -z "$SAVED_KEYSTORE_PASSWORD" || -z "$SAVED_KEY_PASSWORD" ]]; then
+            echo "::error::The original BackToSchool signing key and passwords are required for app updates. Configure BACKTOSCHOOL_RELEASE_KEYSTORE_BASE64, BACKTOSCHOOL_RELEASE_KEYSTORE_PASSWORD, and BACKTOSCHOOL_RELEASE_KEY_PASSWORD."
+            exit 1
           fi
+          printf '%s' "$SAVED_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          store_password="$SAVED_KEYSTORE_PASSWORD"
+          key_password="$SAVED_KEY_PASSWORD"
+          echo "::add-mask::$store_password"
+          echo "::add-mask::$key_password"
           {
             echo "BACKTOSCHOOL_KEYSTORE_PATH=$keystore"
             echo "BACKTOSCHOOL_KEYSTORE_PASSWORD=$store_password"
@@ -93,7 +87,7 @@ jobs:
           "$aapt" dump badging "$apk" | tee "$RUNNER_TEMP/apk-badging.txt"
           mkdir -p "$RUNNER_TEMP/apk-release"
           cp "$apk" "$RUNNER_TEMP/apk-release/backtoschoolhelp-release.apk"
-          sha256sum "$apk" > "$RUNNER_TEMP/apk-release/SHA256SUMS.txt"
+          (cd "$RUNNER_TEMP/apk-release" && sha256sum backtoschoolhelp-release.apk > SHA256SUMS.txt)
           cp "$RUNNER_TEMP/apk-badging.txt" "$RUNNER_TEMP/apk-release/"
 
       - name: Upload signed APK
@@ -104,13 +98,11 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Upload first-release signing key
-        if: steps.signing.outputs.generated == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: backtoschool-help-signing-key-FIRST-RELEASE
-          path: |
-            ${{ runner.temp }}/backtoschool-release.p12
-            ${{ runner.temp }}/signing-key-info.txt
-          retention-days: 1
-          if-no-files-found: error
+      - name: Attach APK to the release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release view "$RELEASE_TAG"
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/apk-release/backtoschoolhelp-release.apk" "$RUNNER_TEMP/apk-release/SHA256SUMS.txt"

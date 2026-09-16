@@ -9,8 +9,8 @@ Upload this signed binary in **Step 1: Upload your app file**:
 Do not upload the Appstore artwork ZIP in the binary field. The artwork files
 belong in **Step 3: Appstore details**.
 
-The APK has package ID `help.backtoschool.tv`, version code `1`, version name
-`1.0.0`, minimum API 22, target API 36, an Android launcher, and a Fire TV
+The APK has package ID `help.backtoschool.tv`, version code `2`, version name
+`1.0.1`, minimum API 22, target API 36, an Android launcher, and a Fire TV
 Leanback launcher.
 
 ## Targeting

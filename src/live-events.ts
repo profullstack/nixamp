@@ -307,7 +307,7 @@ function classroomSettings(input: CreateLiveEventInput | UpdateLiveEventInput, c
     if (key === "hostName") settings[key] = value;
     else if (key === "broadcastUrl") {
       const broadcast = classroomBroadcast(value);
-      if (!broadcast) throw new LiveEventError("Use a Pairux live/join link or a Nixamp Share link with a stream selected. Admin links cannot be shared.", 422);
+      if (!broadcast) throw new LiveEventError("Use a Nixamp Share link, a direct HTTPS media link, or a Pairux live/join link. Admin links cannot be shared.", 422);
       settings[key] = broadcast.url;
     } else {
       const safe = publicWebUrl(value);

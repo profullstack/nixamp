@@ -15,5 +15,8 @@
     "@types/node": "^26",
     "typescript": "^7.0.2",
     "vite": "^8.2.2"
+  },
+  "dependencies": {
+    "@profullstack/player": "^0.7.0"
   }
 }

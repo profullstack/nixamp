@@ -412,14 +412,12 @@ main { flex: 1; outline: none; }
 .broadcast-options label + label { margin-top: 14px; }
 .broadcast-links { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
 .broadcast-links .button { font-size: .8rem; padding: 12px; }
-.classroom-video { aspect-ratio: 16 / 11; background: #101015; border-radius: 12px; overflow: hidden; }
-.classroom-video iframe { width: 100%; height: 100%; border: 0; }
 .broadcast-caption { margin-bottom: 0; }
 .host-avatar { object-fit: cover; }
 .host-line a { display: block; font-size: .85rem; margin-top: 5px; }
 button[aria-disabled="true"] { opacity: .65; cursor: default; }
 .event-panel h2.panel-title { font-size: .7rem; }
-@media (max-width: 640px) { .classroom-video { aspect-ratio: 3 / 4; } }
+
 @media (forced-colors: active) { .button, .event-panel, .broadcast-options { border: 1px solid CanvasText; } }
 .event-toolbar { display: flex; gap: 16px; justify-content: space-between; align-items: center; margin-bottom: 24px; }
 .event-toolbar .back-link { margin: 0; }
@@ -447,3 +445,27 @@ button[aria-disabled="true"] { opacity: .65; cursor: default; }
 .site-header, .site-nav { flex-wrap: wrap; }
 input[type="url"], input[type="email"], input[type="tel"], input[type="datetime-local"] { direction: ltr; }
 [dir="rtl"] .form-stack, [dir="rtl"] .event-panel { text-align: start; }
+
+.classroom-player { background: #101015; color: #fff; border-radius: 12px; overflow: hidden; }
+.classroom-player video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; }
+.classroom-controls { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px; }
+.classroom-controls .button { min-height: 48px; background: #fff; color: #201a32; }
+.classroom-controls .button:disabled { opacity: .5; }
+.classroom-player .player-status { margin: 0; padding: 0 16px 16px; color: #fff; line-height: 1.5; }
+.classroom-player > .player-status:first-child { padding: 20px; }
+.classroom-player > a { margin: 0 20px 20px; }
+.classroom-player.is-expanded { position: fixed; inset: 0; z-index: 1000; border-radius: 0; display: flex; flex-direction: column; }
+.classroom-player.is-expanded video { flex: 1; min-height: 0; aspect-ratio: auto; }
+.tv .classroom-controls .button { font-size: 1.1rem; min-height: 56px; }
+.tv :is(button, a, input, select, textarea):focus,
+.classroom-controls button:focus-visible { outline: 4px solid #ffd465; outline-offset: 3px; box-shadow: 0 0 0 7px #34246d; }
+@media (forced-colors: active) {
+  .classroom-controls button:focus-visible { outline-color: Highlight; }
+  .classroom-controls .button:disabled { color: GrayText; opacity: 1; }
+}
+
+.tv .event-heading { padding: 20px 24px; }
+.tv .event-heading h1 { font-size: 2rem; margin: 12px 0; }
+.tv .event-heading p { margin: 0; }
+.tv .classroom-controls { gap: 10px; padding: 14px; }
+.tv .classroom-controls .button { padding: 12px 16px; font-size: 1rem; }

@@ -16,7 +16,7 @@ export function publicWebUrl(value: unknown): string | null {
   } catch { return null; }
 }
 
-export function classroomBroadcast(value: unknown): { provider: "pairux" | "nixamp"; url: string; embed: string; join: string } | null {
+export function classroomBroadcast(value: unknown): { provider: "pairux" | "nixamp" | "media"; url: string; embed: string; join: string } | null {
   const safe = publicWebUrl(value);
   if (!safe) return null;
   const url = new URL(safe);
@@ -47,6 +47,10 @@ export function classroomBroadcast(value: unknown): { provider: "pairux" | "nixa
     player.searchParams.set("url", url.href);
     player.searchParams.set("play", "live");
     return classroomBroadcast(player.href);
+  }
+  // Direct media is loaded by the browser, never fetched by this server.
+  if (/\.(?:m3u8|mp4|webm|mp3|m4a|ogg|wav|ts)$/i.test(url.pathname)) {
+    return { provider: "media", url: safe, embed: safe, join: safe };
   }
   return null;
 }

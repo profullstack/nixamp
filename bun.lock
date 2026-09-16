@@ -27,6 +27,9 @@
     "backtoschool": {
       "name": "@nixamp/backtoschool-web",
       "version": "0.1.0",
+      "dependencies": {
+        "@profullstack/player": "^0.7.0",
+      },
       "devDependencies": {
         "@types/node": "^26",
         "typescript": "^7.0.2",
