@@ -350,14 +350,15 @@ test("PKCE accepts only a well-formed verifier that hashes to the challenge", ()
   assert.equal(verifierMatches(undefined, challengeFor(verifier)), false);
 });
 
-test("bittorrented.com is registered out of the box, and the env may add more", () => {
+test("bittorrented.com and the school are registered out of the box, and the env may add more", () => {
   assert.ok(clientsFrom({}).some((client) => client.id === "bittorrented"));
+  assert.ok(clientsFrom({}).some((client) => client.id === "backtoschool"));
   const extra = clientsFrom({
     NIXAMP_OAUTH_CLIENTS: JSON.stringify([{ id: "other", name: "Other", redirectUris: ["https://other.test/cb"] }]),
   });
-  assert.deepEqual(extra.map((client) => client.id).sort(), ["bittorrented", "other"]);
+  assert.deepEqual(extra.map((client) => client.id).sort(), ["backtoschool", "bittorrented", "other"]);
   // An entry with no redirect URI is not a client; it is a mistake.
-  assert.equal(clientsFrom({ NIXAMP_OAUTH_CLIENTS: '[{"id":"bad"}]' }).length, 1);
+  assert.equal(clientsFrom({ NIXAMP_OAUTH_CLIENTS: '[{"id":"bad"}]' }).length, 2);
 });
 
 test("a party code is rubbed of the spacing people type, and a watch link must be the client's own site", () => {

@@ -60,7 +60,7 @@
 
     <dialog id="account-dialog" class="dialog" aria-labelledby="account-title">
       <button class="dialog-close" type="button" data-close aria-label="Close" data-i18n-aria-label="Close">×</button>
-      <span class="eyebrow" data-i18n="Your NixAmp account">Your NixAmp account</span>
+      <span class="eyebrow" data-i18n="Your BackToSchool account">Your BackToSchool account</span>
       <h2 id="account-title" data-i18n="Welcome back">Welcome back</h2>
       <p id="account-copy">Sign in to host, chat, or raise your hand.</p>
       <form id="account-form" class="form-stack">
@@ -73,6 +73,57 @@
       </form>
     </dialog>
 
+    <!-- Settings: the host card said once, the optional nixamp connection,
+         and the way out. Opened from the header once signed in. -->
+    <dialog id="settings-dialog" class="dialog dialog-wide" aria-labelledby="settings-title">
+      <button class="dialog-close" type="button" data-close aria-label="Close" data-i18n-aria-label="Close">×</button>
+      <span class="eyebrow" data-i18n="Settings">Settings</span>
+      <h2 id="settings-title" data-i18n="Your profile">Your profile</h2>
+      <p id="settings-copy">What every class you host shows about you. Say it once here.</p>
+      <p class="form-note" id="settings-status" role="status" aria-live="polite"></p>
+      <form id="profile-form" class="form-stack compact">
+        <div class="profile-photo-row">
+          <img id="profile-photo" class="avatar host-avatar profile-photo" alt="" hidden />
+          <span id="profile-initial" class="avatar profile-photo">?</span>
+          <div class="profile-photo-actions">
+            <label class="button button-secondary" for="profile-photo-file" data-i18n="Upload a photo">Upload a photo</label>
+            <input id="profile-photo-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" class="visually-hidden" />
+            <button class="text-button" type="button" id="profile-photo-remove" hidden data-i18n="Remove photo">Remove photo</button>
+            <p class="form-note">PNG, JPEG, WebP or GIF, up to 1 MB. Kept here, shown on every class you host.</p>
+          </div>
+        </div>
+        <label><span data-i18n="Your name">Your name</span><input name="name" maxlength="100" autocomplete="name" placeholder="How students should know you" /></label>
+        <label><span data-i18n="Homepage">Homepage</span><input name="homepage" type="url" maxlength="2048" placeholder="https://your-site.com" /></label>
+        <label><span data-i18n="About you">About you</span><textarea name="bio" maxlength="1000" rows="2" placeholder="One line about what you teach"></textarea></label>
+        <label><span data-i18n="Photo URL">Photo URL</span><input name="avatarUrl" type="url" maxlength="2048" placeholder="https://your-site.com/photo.jpg" aria-describedby="profile-avatar-help" /></label>
+        <p class="form-note" id="profile-avatar-help">Used when no photo is uploaded.</p>
+        <p class="form-error" id="profile-error" role="alert"></p>
+        <button class="button button-primary" type="submit" id="profile-save" data-i18n="Save profile">Save profile</button>
+      </form>
+      <fieldset class="broadcast-options settings-section">
+        <legend data-i18n="OpenProfile">OpenProfile</legend>
+        <p>Keep one profile for every site (<a href="https://logicsrc.com/openprofile" target="_blank" rel="noopener noreferrer">OpenProfile</a>). Paste its address and the card above is filled from it.</p>
+        <form id="openprofile-form" class="inline-form">
+          <input id="profile-openprofile" type="url" maxlength="500" placeholder="https://you.example/.well-known/openprofile.md" aria-label="OpenProfile URL" data-i18n-aria-label="OpenProfile URL" />
+          <button class="button button-small" type="submit" id="profile-import" data-i18n="Fill from OpenProfile">Fill from OpenProfile</button>
+        </form>
+        <p class="form-error" id="openprofile-error" role="alert"></p>
+      </fieldset>
+      <fieldset class="broadcast-options settings-section">
+        <legend data-i18n="Broadcast backend">Broadcast backend</legend>
+        <p id="nixamp-connection-copy">Optional. Connect a <a href="https://nixamp.com" target="_blank" rel="noopener noreferrer">nixamp</a> account to pick one of your live streams when you go live, instead of pasting a link. You never need nixamp to teach here.</p>
+        <p id="nixamp-connection" class="form-note"></p>
+        <div class="settings-actions">
+          <a class="button button-secondary" id="nixamp-connect" href="/api/v1/nixamp/connect" data-i18n="Connect nixamp">Connect nixamp</a>
+          <button class="text-button" type="button" id="nixamp-disconnect" hidden data-i18n="Disconnect">Disconnect</button>
+        </div>
+      </fieldset>
+      <div class="settings-actions settings-footer">
+        <span id="settings-email" class="form-note"></span>
+        <button class="text-button" type="button" id="settings-signout" data-i18n="Sign out">Sign out</button>
+      </div>
+    </dialog>
+
     <dialog id="event-dialog" class="dialog dialog-wide" aria-labelledby="event-form-title">
       <button class="dialog-close" type="button" data-close aria-label="Close" data-i18n-aria-label="Close">×</button>
       <span class="eyebrow" id="event-kicker">Start a conversation</span>
@@ -82,6 +133,8 @@
           <legend>Broadcast your class</legend>
           <p>Share your screen with Pairux, or upload a file and go live in Nixamp. Paste the share link below.</p>
           <div class="broadcast-links"><a class="button button-secondary" href="https://pairux.com/dashboard" target="_blank" rel="noopener noreferrer" data-i18n="Screen share with Pairux ↗">Screen share with Pairux ↗</a><a class="button button-secondary" href="https://nixamp.com/#files-panel" target="_blank" rel="noopener noreferrer" data-i18n="Upload &amp; broadcast in Nixamp ↗">Upload &amp; broadcast in Nixamp ↗</a></div>
+          <label id="nixamp-streams-field" hidden><span data-i18n="Your nixamp streams">Your nixamp streams</span><select id="nixamp-streams" aria-describedby="nixamp-streams-note"><option value="" data-i18n="Pick a stream…">Pick a stream…</option></select></label>
+          <p class="form-note" id="nixamp-streams-note"></p>
           <label><span data-i18n="Broadcast link">Broadcast link</span><input name="broadcastUrl" type="url" maxlength="2048" placeholder="Nixamp Share link or HTTPS media URL" data-i18n-placeholder="Nixamp Share link or HTTPS media URL" aria-describedby="broadcast-help" /></label>
           <p class="form-note" id="broadcast-help" data-i18n="For TV playback, use a Nixamp Share link or a direct HTTPS media URL. Pairux viewing opens separately.">For TV playback, use a Nixamp Share link or a direct HTTPS media URL. Pairux viewing opens separately.</p>
         </fieldset>
@@ -122,11 +175,9 @@
         <p class="form-note" id="schedule-timezone"></p>
         <label for="event-recurrence" data-i18n="Repeat">Repeat</label><select id="event-recurrence" name="recurrence"><option value="none" data-i18n="Does not repeat">Does not repeat</option><option value="daily" data-i18n="Every day">Every day</option><option value="weekly" data-i18n="Every week">Every week</option></select>
         <p class="form-note">Repeating classes keep this same link. Ending a session schedules the next one at the same local time.</p>
-        <fieldset class="broadcast-options"><legend>Host profile</legend>
-          <label><span data-i18n="Host name">Host name</span><input name="hostName" maxlength="100" autocomplete="name" /></label>
-          <label><span data-i18n="Homepage">Homepage</span><input name="homepageUrl" type="url" maxlength="2048" placeholder="https://your-site.com" /></label>
-          <label><span data-i18n="Profile photo URL">Profile photo URL</span><input name="avatarUrl" type="url" maxlength="2048" placeholder="https://your-site.com/photo.jpg" /></label>
-        </fieldset>
+        <!-- The host card comes from the profile, said once in settings,
+             not typed into every class. -->
+        <div class="host-card" id="event-host-card"></div>
         <div class="form-checks">
           <label><input name="chatEnabled" type="checkbox" checked /><span data-i18n="Chat"> Chat</span></label>
           <label><input name="handRaiseEnabled" type="checkbox" checked /><span data-i18n="Raise hand"> Raise hand</span></label>
