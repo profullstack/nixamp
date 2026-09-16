@@ -288,6 +288,9 @@
                    placeholder="password" data-i18n-placeholder="password" aria-label="Password" data-i18n-aria-label="Password" />
             <button type="submit" class="button" id="account-submit" data-i18n="Sign in">Sign in</button>
             <button id="account-toggle" type="button" class="ghost" data-i18n="Create one">Create one</button>
+            <!-- The recovery page nixamp.com already serves; a password that
+                 no longer matches is otherwise a dead end here. -->
+            <a id="account-forgot" class="ghost" href="/reset-password" data-i18n="Forgot password?">Forgot password?</a>
           </form>
           <!-- Outside the form, because signing out is the one thing you can do
                once the form is gone. -->

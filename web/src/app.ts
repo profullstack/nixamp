@@ -188,6 +188,7 @@ export function start(): void {
     accountPassword: need<HTMLInputElement>("account-password"),
     accountSubmit: need<HTMLButtonElement>("account-submit"),
     accountToggle: need<HTMLButtonElement>("account-toggle"),
+    accountForgot: need<HTMLAnchorElement>("account-forgot"),
     accountProviders: need<HTMLDivElement>("account-providers"),
     accountPanel: need<HTMLElement>("account-panel"),
     accountElsewhere: need<HTMLParagraphElement>("account-elsewhere"),
@@ -5580,6 +5581,10 @@ export function start(): void {
     uiText(dom.accountSubmit, () => creating ? uiMessage("Create account") : uiMessage("Sign in"));
     uiText(dom.accountToggle, () => creating ? "I have one" : uiMessage("Create one"));
     dom.accountPassword.autocomplete = creating ? "new-password" : "current-password";
+    // Nothing to forget while making an account. Inside a classroom embed
+    // the page is somebody else's iframe, so recovery opens in its own tab.
+    dom.accountForgot.hidden = creating;
+    if (classroomEmbed) { dom.accountForgot.target = "_blank"; dom.accountForgot.rel = "noopener"; }
     showWelcome();
   };
 
