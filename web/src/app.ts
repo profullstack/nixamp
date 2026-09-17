@@ -12,7 +12,7 @@ import { CONTROL_ICONS, drawControlIcon } from "./control-icons.ts";
 import { displayName, formatTime } from "./format.ts";
 import { beginListNavigation, replaceList } from "./accessibility.ts";
 import { updateLiveList } from "./live-list.ts";
-import { liveContext, liveTitle } from "./live-context.ts";
+import { classTitle, liveContext, liveTitle } from "./live-context.ts";
 import {
   BrowserPlayer, revoke, tracksFromFiles,
   type LocalTrack,
@@ -4827,7 +4827,7 @@ export function start(): void {
     try {
       const made = await fetch("/api/v1/events", {
         method: "POST", headers,
-        body: JSON.stringify({ kind: "class", title: currentShareTitle() || "Live class", broadcastUrl: link, visibility: "public" }),
+        body: JSON.stringify({ kind: "class", title: classTitle(currentShareTitle()) || "Live class", broadcastUrl: link, visibility: "public" }),
       });
       const body = (await made.json().catch(() => ({}))) as { event?: { id: string; slug: string; version: number }; error?: string };
       if (!made.ok || !body.event) throw new Error(body.error ?? "the class could not be made");

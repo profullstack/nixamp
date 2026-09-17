@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { liveContext, liveTitle } from "../src/live-context.ts";
+import { classTitle, liveContext, liveTitle } from "../src/live-context.ts";
 import { parseSnapshot } from "../src/remote.ts";
 import { emptySnapshot, merge, type RemoteTrack } from "../../src/protocol.ts";
 
@@ -67,4 +67,30 @@ test("real wire snapshots keep the course when a later SSE frame changes only th
   const snapshot = merge(merge(emptySnapshot(), initial), next);
   assert.equal(liveContext(snapshot.tracks, snapshot.index).fullTitle, "Course › Section › Second");
   assert.equal(liveContext(snapshot.tracks, snapshot.index).position, "Playlist · 2 of 2");
+});
+
+test("a class title walks up from the lecture to the collection and fits the school's limit", () => {
+  const lecture = "Coursera - Deep Learning Specialization/1. Neural Networks and Deep Learning/Week 1 - Introduction to Deep Learning/Neural Networks and Deep Learning Basics/03_what-is-a-neural-network-and-how-does-it-learn.mp4";
+  assert.ok(lecture.length > 160);
+  const fitted = classTitle(lecture);
+  assert.ok(fitted.length <= 160, fitted);
+  // The collection and the lecture are kept; the nearest folder (the section)
+  // fits and stays, the week above it would run over and goes.
+  assert.equal(fitted, "Coursera - Deep Learning Specialization › Neural Networks and Deep Learning Basics › what-is-a-neural-network-and-how-does-it-learn");
+  assert.equal(classTitle(lecture, 200), "Coursera - Deep Learning Specialization › Week 1 - Introduction to Deep Learning › Neural Networks and Deep Learning Basics › what-is-a-neural-network-and-how-does-it-learn");
+  assert.equal(classTitle(lecture, 90), "Coursera - Deep Learning Specialization › what-is-a-neural-network-and-how-does-it-learn");
+  // With no room for both, the lecture stays whole and the collection is cut at a word.
+  assert.equal(classTitle(lecture, 70), "Coursera - Deep… › what-is-a-neural-network-and-how-does-it-learn");
+  assert.equal(classTitle(lecture, 40), "what-is-a-neural-network-and-how-does-i…");
+});
+
+test("a class title that already fits, or has no path, is left alone or cut at a word", () => {
+  assert.equal(classTitle("Coursera - Deep Learning Specialization/Week 1/03_intro.mp4"), "Coursera - Deep Learning Specialization/Week 1/03_intro.mp4");
+  assert.equal(classTitle("  Live class  "), "Live class");
+  const long = "word ".repeat(50).trim();
+  const cut = classTitle(long, 30);
+  assert.ok(cut.length <= 30);
+  assert.equal(cut, "word word word word word word…");
+  // The player's own live title (context › title) shortens the same way.
+  assert.equal(classTitle("Microservices › 01 Getting Started › 02 Building › Maven", 40), "Microservices › 02 Building › Maven");
 });
