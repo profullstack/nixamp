@@ -1236,6 +1236,14 @@ body.tv .statusbar .tv-toggle { color: var(--green); }
 /* /directory is a page about what is live, not the player with a drawer open
    somewhere below the fold. */
 body.route-directory .player-only { display: none; }
+body.route-party .player-only { display: none; }
+.party-room .party-title { margin: 0 0 4px; font-size: 16px; overflow-wrap: anywhere; }
+.party-room-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-block: 6px; }
+.party-chat { list-style: none; margin: 8px 0; padding: 6px; max-block-size: 18rem; overflow-y: auto; overflow-anchor: none; border: 1px solid var(--edge); border-radius: 3px; font-size: 12px; }
+.party-chat li { padding: 2px 0; overflow-wrap: anywhere; }
+.party-chat li b { color: var(--accent); margin-inline-end: 6px; font-weight: 600; }
+.party-chat .hint { margin: 0; }
+body.tv .party-chat { max-block-size: none; overflow: visible; }
 
 /* A stream and its follow button sit on one row. The list's own rule makes
    every button full width, which is right for the one you click to listen and

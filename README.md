@@ -191,7 +191,12 @@ NIXAMP_OAUTH_CLIENTS='[{"id":"example","name":"Example","redirectUris":["https:/
 ```
 
 Once a party is bridged it is an ordinary live event with a room, so every
-surface already knows what to do with it:
+surface already knows what to do with it. Its room is a page,
+`nixamp.com/live/<slug>`: the host, where the film is (a clock that keeps
+counting), **Join party** to the site that plays it, and the chat, which is
+the same chat on the party's own page, in the terminal, in the desktop app
+and on a television. Reading one party needs no account, because the code or
+the link is the invitation; saying something does.
 
 ```
 nixamp party list                    the ones you could join right now

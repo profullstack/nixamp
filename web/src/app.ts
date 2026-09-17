@@ -230,6 +230,18 @@ export function start(): void {
     favoritesNote: need<HTMLParagraphElement>("favorites-note"),
     favoritesList: need<HTMLUListElement>("favorites-list"),
     favHere: need<HTMLButtonElement>("fav-here"),
+    partyRoom: need<HTMLElement>("party-room"),
+    partyTitle: need<HTMLHeadingElement>("party-title"),
+    partyMeta: need<HTMLParagraphElement>("party-meta"),
+    partyRoomNote: need<HTMLParagraphElement>("party-note"),
+    partyWatch: need<HTMLAnchorElement>("party-watch"),
+    partyCopy: need<HTMLButtonElement>("party-copy"),
+    partyEnd: need<HTMLButtonElement>("party-end"),
+    partyChat: need<HTMLOListElement>("party-chat"),
+    partyChatForm: need<HTMLFormElement>("party-chat-form"),
+    partyChatInput: need<HTMLInputElement>("party-chat-input"),
+    partyChatSend: need<HTMLButtonElement>("party-chat-send"),
+    partyChatNote: need<HTMLParagraphElement>("party-chat-note"),
     partiesPanel: need<HTMLElement>("parties-panel"),
     partiesNote: need<HTMLParagraphElement>("parties-note"),
     partiesList: need<HTMLUListElement>("parties-list"),
@@ -2792,6 +2804,166 @@ export function start(): void {
     const back = document.getElementById("directory-back");
     if (back) back.hidden = false;
     void loadDirectory();
+  }
+
+  // ---- a party's room: /live/<slug> ------------------------------------------
+  //
+  // A watch party lives on the site that has the film; what nixamp carries is
+  // the room. This is the room, as a page: who is hosting, where the film is
+  // (a clock that keeps counting between refreshes), Join party to the site
+  // that plays it, and the chat that the party's page, the terminal, the
+  // desktop app and a television all read. It is what "Open room" and the
+  // invite-code form land on, and what a share link opens on a TV.
+  const partyRoute = /^\/live\/([^/]+)\/?$/.exec(location.pathname);
+  if (partyRoute) {
+    document.body.classList.add("route-party");
+    dom.partyRoom.hidden = false;
+    const reference = decodeURIComponent(partyRoute[1] ?? "");
+    interface RoomParty {
+      party: { partyCode: string; partyUrl: string; mediaTitle: string; positionNow: number; playing: boolean; origin: string };
+      event: { id: string; title: string; status: string; chatEnabled: boolean };
+      links: { nixampUrl: string; partyUrl: string };
+      host: boolean;
+    }
+    let room: RoomParty | null = null;
+    let readAt = 0;
+    let chatAfter = "";
+    const seen = new Set<string>();
+    const clock = (seconds: number): string => {
+      const whole = Math.max(0, Math.floor(seconds));
+      const second = String(whole % 60).padStart(2, "0");
+      const minute = Math.floor(whole / 60) % 60;
+      const hour = Math.floor(whole / 3600);
+      return hour > 0 ? `${hour}:${String(minute).padStart(2, "0")}:${second}` : `${minute}:${second}`;
+    };
+    const say = (message: string, chat = false): void => {
+      const target = chat ? dom.partyChatNote : dom.partyRoomNote;
+      target.hidden = message === "";
+      target.textContent = message;
+    };
+    const drawMeta = (): void => {
+      if (!room) return;
+      const since = room.party.playing ? (Date.now() - readAt) / 1000 : 0;
+      const at = room.party.positionNow + since;
+      const parts = [
+        room.event.status === "live" ? (room.party.playing ? `▶ ${clock(at)}` : `❚❚ ${clock(at)}`) : "ended",
+        room.party.mediaTitle,
+        `code ${room.party.partyCode}`,
+        room.host ? "yours" : "",
+      ].filter(Boolean);
+      dom.partyMeta.textContent = parts.join(" · ");
+    };
+    const drawRoom = (): void => {
+      if (!room) return;
+      document.title = `${room.event.title} — nixamp`;
+      dom.partyTitle.textContent = room.event.title || room.party.partyCode;
+      const watch = room.links.partyUrl || room.party.partyUrl;
+      dom.partyWatch.href = watch || "#";
+      dom.partyWatch.hidden = watch === "";
+      let site = room.party.origin;
+      try { site = new URL(watch).hostname; } catch { /* An older bridge names its site. */ }
+      dom.partyWatch.title = `The film plays on ${site} (opens in a new tab)`;
+      dom.partyEnd.hidden = !room.host || room.event.status !== "live";
+      const chatOn = room.event.chatEnabled !== false && room.event.status === "live";
+      dom.partyChatForm.hidden = !chatOn;
+      dom.partyChatInput.disabled = !chatOn || meId === "";
+      dom.partyChatSend.disabled = !chatOn || meId === "";
+      if (!chatOn) say(room.event.status === "live" ? "Chat is off for this party." : "This party has ended.", true);
+      else if (meId === "") say("Sign in to say something; everybody can read.", true);
+      else say("", true);
+      drawMeta();
+    };
+    const loadRoom = async (): Promise<void> => {
+      try {
+        const answer = await fetch(`/api/v1/watch-parties/${encodeURIComponent(reference)}`, { cache: "no-store" });
+        if (!answer.ok) {
+          say(answer.status === 404 ? "No party here. It may have ended, or the link is not one." : "Could not open this party. Try again in a moment.");
+          return;
+        }
+        room = (await answer.json()) as RoomParty;
+        readAt = Date.now();
+        say("");
+        drawRoom();
+      } catch {
+        say("Could not open this party. Try again in a moment.");
+      }
+    };
+    const loadChat = async (): Promise<void> => {
+      if (!room || room.event.chatEnabled === false) return;
+      try {
+        const url = new URL(`/api/v1/events/${encodeURIComponent(room.event.id)}/chat`, location.origin);
+        if (chatAfter) url.searchParams.set("after", chatAfter);
+        const answer = await fetch(url.toString(), { cache: "no-store" });
+        if (!answer.ok) return;
+        const body = (await answer.json()) as { messages?: { id: string; authorName: string; body: string; createdAt: string }[] };
+        const fresh = (body.messages ?? []).filter((line) => !seen.has(line.id));
+        if (!fresh.length) {
+          if (!dom.partyChat.childElementCount) {
+            const empty = document.createElement("li"); empty.className = "hint";
+            empty.textContent = "No messages yet. Say hi!";
+            dom.partyChat.replaceChildren(empty);
+          }
+          return;
+        }
+        if (dom.partyChat.querySelector(".hint")) dom.partyChat.replaceChildren();
+        const nearBottom = dom.partyChat.scrollHeight - dom.partyChat.scrollTop - dom.partyChat.clientHeight < 60;
+        for (const line of fresh) {
+          seen.add(line.id);
+          chatAfter = line.createdAt;
+          const item = document.createElement("li");
+          const who = document.createElement("b"); who.textContent = line.authorName;
+          item.append(who, document.createTextNode(line.body));
+          dom.partyChat.append(item);
+        }
+        while (dom.partyChat.childElementCount > 200) dom.partyChat.firstElementChild?.remove();
+        if (nearBottom) dom.partyChat.scrollTop = dom.partyChat.scrollHeight;
+      } catch { /* The next poll says. */ }
+    };
+    dom.partyChatForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const text = dom.partyChatInput.value.trim();
+      if (!room || text === "") return;
+      dom.partyChatSend.disabled = true;
+      void (async () => {
+        try {
+          const answer = await fetch(`/api/v1/events/${encodeURIComponent(room!.event.id)}/chat`, {
+            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body: text }),
+          });
+          const body = (await answer.json().catch(() => ({}))) as { error?: string };
+          if (!answer.ok) { say(body.error ?? "That did not send.", true); return; }
+          dom.partyChatInput.value = "";
+          say("", true);
+          await loadChat();
+        } catch {
+          say("That did not send.", true);
+        } finally {
+          dom.partyChatSend.disabled = meId === "";
+        }
+      })();
+    });
+    dom.partyCopy.addEventListener("click", () => {
+      void navigator.clipboard?.writeText(room?.links.nixampUrl || location.href).then(
+        () => { dom.partyCopy.textContent = "Copied"; setTimeout(() => { dom.partyCopy.textContent = "Copy room link"; }, 2000); },
+        () => say("Could not copy that."),
+      );
+    });
+    dom.partyEnd.addEventListener("click", () => {
+      if (!room || !room.host) return;
+      void (async () => {
+        const answer = await fetch(`/api/v1/watch-parties/${encodeURIComponent(room!.party.partyCode)}/end`, { method: "POST" });
+        if (!answer.ok) { say("Could not end it."); return; }
+        await loadRoom();
+      })();
+    });
+    void (async () => {
+      await loadRoom();
+      await loadChat();
+    })();
+    setInterval(drawMeta, 1000);
+    setInterval(() => void loadRoom(), 10000);
+    setInterval(() => void loadChat(), 4000);
+    // Signing in or out changes who may say something.
+    document.addEventListener("nixamp:account", () => drawRoom());
   }
 
   // --- administering ----------------------------------------------------
@@ -5595,6 +5767,9 @@ export function start(): void {
   };
 
   const showAccount = (email: string | null): void => {
+    // Anything drawn from who is signed in -- a party room's chat box, say
+    // -- hears about it here rather than asking again.
+    document.dispatchEvent(new CustomEvent("nixamp:account", { detail: { email } }));
     const signedIn = email !== null;
     void purchase.refresh();
     voiceOptionsKey = ""; voiceGrant = null;

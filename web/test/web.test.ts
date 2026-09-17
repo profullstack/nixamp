@@ -1483,3 +1483,28 @@ test("a caption is held until this page's sound has reached it, and shown on the
   // A file's page is linked from the note once the server has said its hash.
   assert.match(app, /\/hash\/\$\{hello\.hash\}/);
 });
+
+test("a party's room is a page at /live/<slug>: join the film where it is, read and write the room's chat", () => {
+  const html = readFileSync(join(webDir, "index.html"), "utf8");
+  const app = readFileSync(join(webDir, "src/app.ts"), "utf8");
+  const css = readFileSync(join(webDir, "src/styles.css"), "utf8");
+  for (const id of ["party-room", "party-title", "party-meta", "party-watch", "party-copy", "party-end", "party-chat", "party-chat-form", "party-chat-input"]) {
+    assert.ok(html.includes(`id="${id}"`), id);
+  }
+  // The film opens on the site that has it, in a new tab; the room stays here.
+  assert.match(html, /id="party-watch"[^>]*target="_blank"/);
+  // A page like /directory, not a drawer under the player.
+  assert.match(app, /\/\^\\\/live\\\/\(\[\^\/\]\+\)\\\/\?\$\/\.exec\(location\.pathname\)/);
+  assert.match(app, /document\.body\.classList\.add\("route-party"\)/);
+  assert.match(css, /body\.route-party \.player-only \{ display: none; \}/);
+  const room = app.slice(app.indexOf("---- a party's room: /live/<slug>"), app.indexOf("// --- administering"));
+  // Read openly, chat through the event's room, and never build a line from HTML.
+  assert.match(room, /fetch\(`\/api\/v1\/watch-parties\/\$\{encodeURIComponent\(reference\)\}`/);
+  assert.match(room, /\/api\/v1\/events\/\$\{encodeURIComponent\(room\.event\.id\)\}\/chat/);
+  assert.doesNotMatch(room, /innerHTML/);
+  // The clock keeps counting between refreshes only while the film is playing.
+  assert.match(room, /room\.party\.playing \? \(Date\.now\(\) - readAt\) \/ 1000 : 0/);
+  // Signing in or out re-draws who may say something.
+  assert.match(room, /addEventListener\("nixamp:account"/);
+  assert.match(app, /dispatchEvent\(new CustomEvent\("nixamp:account"/);
+});
