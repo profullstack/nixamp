@@ -13,7 +13,7 @@
  *
  *   POST /api/v1/watch-parties               bridge one, idempotently
  *   GET  /api/v1/watch-parties               the ones you could join
- *   GET  /api/v1/watch-parties/<code>        one, with where playback is
+ *   GET  /api/v1/watch-parties/<code>        one, with where playback is (open: the code is the invitation)
  *   POST /api/v1/watch-parties/<code>/playback  the host moving everybody
  *   POST /api/v1/watch-parties/<code>/end       the host ending it
  *
@@ -189,12 +189,12 @@ async function callerFor(
   return account ? { account, clientId: "", scope: SCOPE_NAMES } : null;
 }
 
-function partyBody(parties: WatchParties, view: PartyView, caller: Caller): Record<string, unknown> {
+function partyBody(parties: WatchParties, view: PartyView, caller: Caller | null): Record<string, unknown> {
   return {
     party: { ...view.party, positionNow: parties.positionNow(view.party) },
     event: view.event,
     links: parties.links(view.party),
-    host: view.event.ownerId === caller.account.id,
+    host: caller !== null && view.event.ownerId === caller.account.id,
   };
 }
 
@@ -381,16 +381,29 @@ export async function handleOAuthApi(
         return true;
       }
       const caller = await callerFor(request, options, "parties");
-      if (caller === null) {
+      const rest = path.slice("/api/v1/watch-parties/".length).split("/");
+      const reference = decodeURIComponent(rest[0] ?? "");
+      const action = rest[1];
+      // Reading one party is open, the way its /live/<slug> page is: the code
+      // or the room link IS the invitation, and a person who was handed one
+      // on a television or in a terminal has no session on nixamp.com yet.
+      // Everything else -- the list, bridging, moving playback, ending --
+      // still needs a session or a token with the parties scope.
+      const openRead = path !== "/api/v1/watch-parties" && !action && request.method === "GET";
+      if (caller === null && !openRead) {
         json(response, 401, { error: "a session, or a token granted the parties scope, is needed here" });
         return true;
       }
       // A client bridges parties under its own origin, so two sites cannot
       // collide on a six-character code; a person acting directly is filed
       // under nixamp itself.
-      const origin = caller.clientId || "nixamp";
+      const origin = caller?.clientId || "nixamp";
 
       if (path === "/api/v1/watch-parties") {
+        if (caller === null) {
+          json(response, 401, { error: "a session, or a token granted the parties scope, is needed here" });
+          return true;
+        }
         if (request.method === "GET") {
           const wanted = url.searchParams.get("origin");
           const found = await parties.list({
@@ -424,20 +437,26 @@ export async function handleOAuthApi(
         return true;
       }
 
-      const rest = path.slice("/api/v1/watch-parties/".length).split("/");
-      const reference = decodeURIComponent(rest[0] ?? "");
-      const action = rest[1];
       // A party is findable by its code on the origin that bridged it, or by
       // the nixamp slug or room a client was handed, because a nixamp client
-      // arriving from a share link has only the latter.
-      const view = (await parties.byCode(origin, reference).catch(() => null)) ?? (await parties.byEvent(reference));
-      if (!view) {
+      // arriving from a share link has only the latter. A person on
+      // nixamp.com with only a code gets the party that code names on
+      // whichever site bridged it.
+      const view =
+        (await parties.byCode(origin, reference).catch(() => null)) ??
+        (await parties.byEvent(reference)) ??
+        (caller === null || caller.clientId === "" ? await parties.byAnyCode(reference).catch(() => null) : null);
+      if (!view || (caller === null && view.event.visibility === "private")) {
         json(response, 404, { error: "watch party not found" });
         return true;
       }
 
       if (!action && request.method === "GET") {
         json(response, 200, partyBody(parties, view, caller));
+        return true;
+      }
+      if (caller === null) {
+        json(response, 401, { error: "a session, or a token granted the parties scope, is needed here" });
         return true;
       }
       if (action === "playback" && request.method === "POST") {

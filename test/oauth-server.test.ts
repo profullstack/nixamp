@@ -117,6 +117,10 @@ function fakeDb(): Queryable & { events: Map<string, Record<string, unknown>> } 
     }
 
     // --- nixamp_watch_parties ----------------------------------------------
+    if (sql.startsWith("SELECT") && sql.includes("WHERE p.party_code = $1")) {
+      const row = [...parties.values()].find((one) => one["party_code"] === values[0]);
+      return { rows: row ? [row] : [] };
+    }
     if (sql.startsWith("SELECT") && sql.includes("FROM nixamp_watch_parties WHERE origin = $1")) {
       const row = [...parties.values()].find((one) => one["origin"] === values[0] && one["party_code"] === values[1]);
       return { rows: row ? [row] : [] };
@@ -593,6 +597,40 @@ test("a watch party bridges to a nixamp room, once, however many times it is ask
     const again = (await second.json()) as { party: { roomId: string }; event: { id: string } };
     assert.equal(again.event.id, made.event.id);
     assert.equal(again.party.roomId, made.party.roomId);
+  });
+});
+
+test("one party is readable with no session at all: the code or the room link is the invitation", async () => {
+  await withServer(async (harness) => {
+    const token = await connected(harness);
+    const made = (await (
+      await fetch(`${harness.base}/api/v1/watch-parties`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ partyCode: "OPEN01", title: "Open door", partyUrl: "https://bittorrented.com/watch-party?code=OPEN01" }),
+      })
+    ).json()) as { party: { slug: string; partyCode: string }; event: { id: string } };
+
+    // By slug, which is what nixamp.com/live/<slug> has, and by room id.
+    for (const reference of [made.party.slug, made.event.id]) {
+      const open = await fetch(`${harness.base}/api/v1/watch-parties/${encodeURIComponent(reference)}`);
+      assert.equal(open.status, 200, reference);
+      const body = (await open.json()) as { party: { partyCode: string }; links: { partyUrl: string }; host: boolean };
+      assert.equal(body.party.partyCode, "OPEN01");
+      assert.equal(body.links.partyUrl, "https://bittorrented.com/watch-party?code=OPEN01");
+      // Nobody is the host of a party they are not signed in to.
+      assert.equal(body.host, false);
+    }
+
+    // Reading is open; the list, and every write, still are not.
+    assert.equal((await fetch(`${harness.base}/api/v1/watch-parties`)).status, 401);
+    assert.equal(
+      (await fetch(`${harness.base}/api/v1/watch-parties/${made.party.partyCode}/playback`, { method: "POST", body: "{}" })).status,
+      401,
+    );
+    assert.equal((await fetch(`${harness.base}/api/v1/watch-parties/${made.party.partyCode}/end`, { method: "POST" })).status, 401);
+    const missing = await fetch(`${harness.base}/api/v1/watch-parties/nothing-here`);
+    assert.equal(missing.status, 404, await missing.text());
   });
 });
 

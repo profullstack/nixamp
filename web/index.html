@@ -276,6 +276,29 @@
           <p class="hint"><a href="/" id="directory-back" hidden data-i18n="Back to the player">Back to the player</a></p>
         </section>
 
+        <!-- A watch party's room: nixamp.com/live/<slug>. The film plays on the
+             site that has it (Join party); what is here is the room -- who
+             is hosting, where the film is, and the chat every nixamp client
+             reads. A page, like /directory, not a drawer under the player. -->
+        <section class="panel col-b party-room" data-title="Watch party" data-i18n-data-title="Watch party" id="party-room" hidden>
+          <h2 id="party-title" class="party-title"></h2>
+          <p class="hint" id="party-meta"></p>
+          <p class="hint" id="party-note" hidden></p>
+          <div class="onair-actions party-room-actions">
+            <a id="party-watch" class="button" href="#" rel="noopener" target="_blank" data-i18n="Join party">Join party</a>
+            <button id="party-copy" type="button" class="ghost" data-i18n="Copy room link">Copy room link</button>
+            <button id="party-end" type="button" class="ghost" hidden data-i18n="End party">End party</button>
+          </div>
+          <ol id="party-chat" class="party-chat" aria-live="polite" aria-label="Party chat" data-i18n-aria-label="Party chat"></ol>
+          <form id="party-chat-form" class="picker">
+            <label for="party-chat-input" data-i18n="Say something">Say something</label>
+            <input id="party-chat-input" type="text" maxlength="1000" autocomplete="off" placeholder="Everybody in the party reads this" data-i18n-placeholder="Everybody in the party reads this" />
+            <button id="party-chat-send" type="submit" class="button" data-i18n="Send">Send</button>
+          </form>
+          <p class="hint" id="party-chat-note" hidden></p>
+          <p class="hint"><a href="/" data-i18n="Back to the player">Back to the player</a></p>
+        </section>
+
         <section class="panel player-only col-a" data-title="Favourites" data-i18n-data-title="Favourites" id="favorites-panel" hidden>
           <p class="hint" id="favorites-note">Servers you hearted. Connect to one, or let it go.</p>
           <ul id="favorites-list" class="directory-list"></ul>

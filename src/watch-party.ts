@@ -284,6 +284,29 @@ export class WatchParties {
     return { party: partyFrom(row, event), event };
   }
 
+  /**
+   * A party by its code alone, for somebody who has only the code.
+   *
+   * A code is unique per origin, not across them; a person typing one into
+   * nixamp.com is not asked which site it came from. The one still live, or
+   * the most recently touched, is the one they mean.
+   */
+  async byAnyCode(partyCode: string): Promise<PartyView | null> {
+    await this.ensure();
+    const code = cleanPartyCode(partyCode);
+    const { rows } = await this.options.db.query(
+      `SELECT p.* FROM ${TABLE} p JOIN live_events e ON e.id = p.event_id
+        WHERE p.party_code = $1
+        ORDER BY (e.status = 'live') DESC, p.updated_at DESC LIMIT 1`,
+      [code],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    const event = await this.options.events.get(String(row["event_id"] ?? ""));
+    if (!event) return null;
+    return { party: partyFrom(row, event), event };
+  }
+
   /** The party behind a nixamp room or slug, for a client that has only that. */
   async byEvent(reference: string): Promise<PartyView | null> {
     await this.ensure();
