@@ -9,7 +9,7 @@
         "@profullstack/hqtui": "^0.5.0",
         "@profullstack/synconfig": "^0.1.2",
         "@profullstack/throttle": "0.2.2",
-        "@profullstack/x402-gateway": "0.6.0",
+        "@profullstack/x402-gateway": "^0.7.0",
         "acme-client": "5.4.0",
         "pg": "^8.23.0",
         "web-push": "^3.6.7",
@@ -198,6 +198,8 @@
 
     "@profullstack/hqtui": ["@profullstack/hqtui@0.5.0", "", { "bin": { "hqtui": "bin/hqtui.mjs" } }, "sha512-jDwILBmdQx8pQA0ao/tzzty8u5nFNS4XhvU9xXhZvdIaMeiF3HBJIVtP6cS6kigS4lXmHR7sztbb9QJpaWwhig=="],
 
+    "@profullstack/keys": ["@profullstack/keys@0.1.0", "", {}, "sha512-Vys47LvS5ivhdZu4SYOxh9Le3DEmWhjP0+CtrU45RhXAbY0ZFG/2Dk9V1bIIUGDp8UWMJqctvUD21JrNjfh04w=="],
+
     "@profullstack/long-string-scroller": ["@profullstack/long-string-scroller@workspace:packages/long-string-scroller"],
 
     "@profullstack/player": ["@profullstack/player@0.7.0", "", { "dependencies": { "hls.js": "^1.7.1", "mpegts.js": "^1.8.2" }, "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-DmshIcHTrWVl0A2p4DpuV7kI5hXPdaSL7zHesJVszA93cGyucaYppvvRm8S1eCC7GgyA8X0iRFKFdcF0P3LUrw=="],
@@ -206,7 +208,7 @@
 
     "@profullstack/throttle": ["@profullstack/throttle@0.2.2", "", { "dependencies": { "@profullstack/x402-gateway": "^0.6.0" } }, "sha512-qpb9yKE7frwTP29YILx+QePqyEPWGVZxPYve7ITqSfARzOl0ZKhfjeizxPKZUgYhFQfNk6kWCa6/53RVoj304g=="],
 
-    "@profullstack/x402-gateway": ["@profullstack/x402-gateway@0.6.0", "", {}, "sha512-n9/7NixIM9wVOMGWDc+3RtFsGABG+HAYfkZ11JxoEIlF/FDRGEXbvHFlNL/M97RNy01964FhAbQp34OMJoxqZg=="],
+    "@profullstack/x402-gateway": ["@profullstack/x402-gateway@0.7.0", "", { "dependencies": { "@profullstack/keys": "^0.1.0" } }, "sha512-xsZRWHdOD9Y9EuRS4PsRmykVS2geOu/luY0jBlliOF3SEgxiLhgmx7ks+2jOUtGlq+cIfSonnk5eEObRGCOJ9w=="],
 
     "@protobufjs/aspromise": ["@protobufjs/aspromise@1.1.2", "", {}, "sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ=="],
 
@@ -973,6 +975,8 @@
     "@electron/windows-sign/fs-extra": ["fs-extra@11.4.0", "", { "dependencies": { "graceful-fs": "^4.2.0", "jsonfile": "^6.0.1", "universalify": "^2.0.0" } }, "sha512-EQsFzMUJkCKGr1ePqlYADkIUmHW1s3ZXr5Yqy6wbGrfUCphpl2maM/kyOIRA2HpP3AaFQTZXD4ldjek+nccddA=="],
 
     "@malept/flatpak-bundler/fs-extra": ["fs-extra@9.1.0", "", { "dependencies": { "at-least-node": "^1.0.0", "graceful-fs": "^4.2.0", "jsonfile": "^6.0.1", "universalify": "^2.0.0" } }, "sha512-hcg3ZmepS30/7BSFqRvoo3DOMQu7IjqxO5nCDt+zM9XWjb33Wg7ziNT+Qvqbuc3+gWpzO02JubVyk2G4Zvo1OQ=="],
+
+    "@profullstack/throttle/@profullstack/x402-gateway": ["@profullstack/x402-gateway@0.6.0", "", {}, "sha512-n9/7NixIM9wVOMGWDc+3RtFsGABG+HAYfkZ11JxoEIlF/FDRGEXbvHFlNL/M97RNy01964FhAbQp34OMJoxqZg=="],
 
     "app-builder-lib/@electron/get": ["@electron/get@3.1.0", "", { "dependencies": { "debug": "^4.1.1", "env-paths": "^2.2.0", "fs-extra": "^8.1.0", "got": "^11.8.5", "progress": "^2.0.3", "semver": "^6.2.0", "sumchecker": "^3.0.1" }, "optionalDependencies": { "global-agent": "^3.0.0" } }, "sha512-F+nKc0xW+kVbBRhFzaMgPy3KwmuNTYX1fx6+FxxoSnNgwYX6LD7AKBTWkU0MQ6IBoe7dz069CNkR673sPAgkCQ=="],
 
