@@ -1,5 +1,5 @@
 import { i18n, t as uiMessage } from "../../src/i18n.ts";
-import { adSettings } from "./ads";
+import { adSettings } from "./ads.ts";
 import {
   getSubscription as getPushSubscription,
   PushError,
