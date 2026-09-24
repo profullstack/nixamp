@@ -1,4 +1,11 @@
 import { i18n, t as uiMessage } from "../../src/i18n.ts";
+import {
+  getSubscription as getPushSubscription,
+  PushError,
+  pushSupport,
+  subscribe as subscribePush,
+  unsubscribe as unsubscribePush,
+} from "@profullstack/notifications/client";
 import { uiText, uiAttribute } from "./i18n.ts";
 import { CONTROL_ICONS, drawControlIcon } from "./control-icons.ts";
 /**
@@ -5582,76 +5589,36 @@ export function start(): void {
   // browser will only ask in response to a click, so it cannot be turned on
   // from a page load however much the stored preference says it should be.
 
-  /** VAPID keys travel as base64url and the API wants bytes. */
-  const keyBytes = (base64: string): Uint8Array<ArrayBuffer> => {
-    const padded = (base64 + "=".repeat((4 - (base64.length % 4)) % 4))
-      .replace(/-/g, "+")
-      .replace(/_/g, "/");
-    const raw = atob(padded);
-    // Built on an explicit ArrayBuffer rather than Uint8Array.from: the push
-    // API wants a BufferSource, and a plain Uint8Array is typed over
-    // ArrayBufferLike, which admits SharedArrayBuffer and so is not assignable.
-    const bytes = new Uint8Array(new ArrayBuffer(raw.length));
-    for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
-    return bytes;
-  };
-
-  const pushable = (): boolean =>
-    "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
-
+  // The key is fetched from /api/v1/notify/key when a device subscribes, never
+  // built into the page, and pushSupport() says why push cannot work here
+  // (not HTTPS, an iPhone that has not added the site to its Home Screen,
+  // notifications blocked) instead of one sentence for every case.
   const subscribeThisDevice = async (): Promise<boolean> => {
-    if (!pushable()) {
-      dom.notifyNote.textContent = "This browser cannot show notifications.";
-      return false;
-    }
-    if (Notification.permission === "denied") {
-      dom.notifyNote.textContent = "This browser is blocking notifications. Allow them in site settings first.";
-      return false;
-    }
-    if ((await Notification.requestPermission()) !== "granted") {
-      dom.notifyNote.textContent = "Not allowed, so nothing will be sent here.";
+    const support = pushSupport();
+    if (!support.supported) {
+      dom.notifyNote.textContent = support.message;
       return false;
     }
     try {
-      const registration = await navigator.serviceWorker.ready;
-      const answer = await fetch("/api/v1/notify/key");
-      const { publicKey } = (await answer.json()) as { publicKey?: string };
-      if (!publicKey) {
-        dom.notifyNote.textContent = "This server is not set up to send notifications.";
-        return false;
-      }
-      const existing = await registration.pushManager.getSubscription();
-      const subscription =
-        existing ??
-        (await registration.pushManager.subscribe({
-          // Required by every browser: a push must result in something the
-          // person can see, which is exactly what this one does.
-          userVisibleOnly: true,
-          applicationServerKey: keyBytes(publicKey),
-        }));
-      const sent = await fetch("/api/v1/notify/subscribe", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(subscription.toJSON()),
+      await subscribePush({
+        vapidKeyUrl: "/api/v1/notify/key",
+        serviceWorkerUrl: "/sw.js",
+        saveUrl: "/api/v1/notify/subscribe",
       });
-      if (!sent.ok) throw new Error(String(sent.status));
       dom.notifyNote.textContent = "This device will be told.";
       return true;
-    } catch {
-      dom.notifyNote.textContent = "Could not set this device up.";
+    } catch (error) {
+      dom.notifyNote.textContent =
+        error instanceof PushError && error.reason !== "save-failed"
+          ? error.message
+          : "Could not set this device up.";
       return false;
     }
   };
 
   const forgetThisDevice = async (): Promise<void> => {
     try {
-      const registration = await navigator.serviceWorker.ready;
-      const subscription = await registration.pushManager.getSubscription();
-      if (!subscription) return;
-      await fetch(`/api/v1/notify/subscribe?endpoint=${encodeURIComponent(subscription.endpoint)}`, {
-        method: "DELETE",
-      });
-      await subscription.unsubscribe();
+      await unsubscribePush({ removeUrl: "/api/v1/notify/subscribe" });
     } catch {
       // Nothing to undo that matters: the server drops a dead endpoint on the
       // next push anyway.
@@ -5688,14 +5655,14 @@ export function start(): void {
       dom.notifyPhone.value = prefs.phone ?? "";
       // The preference is only half of it: a device is only really on when the
       // browser has also granted permission and we hold a subscription.
-      const granted = pushable() && Notification.permission === "granted";
-      const subscribed = granted
-        ? (await (await navigator.serviceWorker.ready).pushManager.getSubscription()) !== null
+      const support = pushSupport();
+      const subscribed = support.supported && support.permission === "granted"
+        ? (await getPushSubscription()) !== null
         : false;
       dom.notifyWeb.checked = prefs.wantsWeb !== false && subscribed;
       dom.notifyNote.textContent = subscribed
         ? "Get told when someone you follow goes live."
-        : "Turn on “On this device” to be told here.";
+        : support.message ?? "Turn on “On this device” to be told here.";
     } catch {
       // Leave the panel at its defaults rather than blanking it.
     }

@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Follows, phoneFrom, type Queryable, type Reachable } from "../src/follows.ts";
-import { notifyAll, resendEmail, type Notification } from "../src/notify.ts";
+import { generateVapidKeys } from "@profullstack/notifications/server";
+import { notifyAll, resendEmail, webPush, type Notification } from "../src/notify.ts";
 
 /**
  * A database that records what it was asked and answers what a test says.
@@ -346,4 +347,54 @@ test("a phone given on its own leaves the switches alone", async () => {
   // The switches were not mentioned, so they must not be overwritten.
   assert.deepEqual(upsert?.values.slice(2), [null, null, null]);
   assert.match(upsert?.text ?? "", /want_email = COALESCE\(\$3::boolean, notify_prefs.want_email\)/);
+});
+
+/**
+ * webPush over a fetch that answers what a test says, and a subscription with
+ * real keys so the payload really is encrypted to it.
+ */
+function pusher(status: number) {
+  const sent: { url: string; init: RequestInit }[] = [];
+  const events: string[] = [];
+  const browser = generateVapidKeys();
+  const target = {
+    endpoint: "https://push.example/device",
+    p256dh: browser.publicKey,
+    auth: Buffer.alloc(16, 7).toString("base64url"),
+  };
+  const push = webPush({
+    ...generateVapidKeys(),
+    subject: "https://nixamp.com",
+    onEvent: (message) => events.push(message),
+    fetch: (async (url: string, init: RequestInit) => {
+      sent.push({ url, init });
+      return new Response(null, { status });
+    }) as unknown as typeof fetch,
+  });
+  return { push, target, sent, events };
+}
+
+test("a push is VAPID-signed, encrypted and kept for half an hour", async () => {
+  const { push, target, sent } = pusher(201);
+  assert.equal(await push(target, { title: "t", body: "b", url: "https://nixamp.com/x" }), "sent");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.url, "https://push.example/device");
+  const headers = sent[0]?.init.headers as Record<string, string>;
+  assert.match(headers["authorization"] ?? "", /^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]+$/);
+  assert.equal(headers["content-encoding"], "aes128gcm");
+  assert.equal(headers["ttl"], String(60 * 30));
+});
+
+test("a retired push endpoint is gone, not failed", async () => {
+  for (const status of [404, 410]) {
+    const { push, target, events } = pusher(status);
+    assert.equal(await push(target, { title: "t", body: "b", url: "/" }), "gone");
+    assert.match(events[0] ?? "", /retired/);
+  }
+});
+
+test("any other refusal is a failure to report", async () => {
+  const { push, target, events } = pusher(500);
+  assert.equal(await push(target, { title: "t", body: "b", url: "/" }), "failed");
+  assert.match(events[0] ?? "", /push failed: 500/);
 });
