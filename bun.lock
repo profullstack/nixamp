@@ -68,7 +68,7 @@
     "electron",
   ],
   "overrides": {
-    "@profullstack/x402-gateway": "0.7.0",
+    "@profullstack/x402-gateway": "^0.7.0",
     "https-proxy-agent": "7.0.6",
     "tslib": "2.8.1",
   },
