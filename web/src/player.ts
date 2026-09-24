@@ -313,6 +313,11 @@ export class BrowserPlayer {
     return this.ads?.playing ?? false;
   }
 
+  /** Play a break now rather than at the next interval. */
+  async playAdNow(): Promise<void> {
+    await this.ads?.play();
+  }
+
   private rebindAds(): void {
     this.ads?.destroy();
     this.ads = null;

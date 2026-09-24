@@ -1,5 +1,5 @@
 import { i18n, t as uiMessage } from "../../src/i18n.ts";
-import { adSettings } from "./ads.ts";
+import { adNowRequested, adSettings } from "./ads.ts";
 import {
   getSubscription as getPushSubscription,
   PushError,
@@ -913,7 +913,16 @@ export function start(): void {
   // Adverts for listeners who are not paying. The "Now Playing" panel is the
   // stage: an MP3 advert shows only a badge there, leaving the artwork alone.
   const adStage = dom.video.closest("section") ?? dom.video.parentElement;
-  if (adStage) player.enableAds(adStage as HTMLElement, adSettings());
+  if (adStage) {
+    player.enableAds(adStage as HTMLElement, adSettings());
+    // ?adNow plays one straight away. Without it, seeing an advert means first
+    // finding something to play and then waiting out the interval, which is a
+    // lot to ask of somebody you have handed a link to.
+    if (adNowRequested()) {
+      adStage.scrollIntoView({ block: "center" });
+      void player.playAdNow();
+    }
+  }
 
 
   const remoteSpectrum = (): boolean => remoteDrives() && !player.jinglePlaying;

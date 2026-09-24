@@ -37,15 +37,24 @@ function fromQuery(search: string): {
   enabled: boolean | null;
   everySeconds: number | null;
   adUrl: string | null;
+  now: boolean;
 } {
   const params = new URLSearchParams(search);
   const ads = params.get("ads");
   const every = Number(params.get("adsEvery"));
+  const now = params.get("adNow");
   return {
-    enabled: ads === null ? null : ads !== "0" && ads !== "false",
+    // Asking for one immediately is asking for adverts.
+    enabled: now !== null ? true : ads === null ? null : ads !== "0" && ads !== "false",
     everySeconds: Number.isFinite(every) && every > 0 ? Math.min(3600, Math.max(5, every)) : null,
     adUrl: safeAdUrl(params.get("adUrl")),
+    now: now !== null && now !== "0" && now !== "false",
   };
+}
+
+/** Whether ?adNow was asked for, read without building the whole settings object. */
+export function adNowRequested(search = location.search): boolean {
+  return fromQuery(search).now;
 }
 
 /** Only https, so the parameter cannot smuggle in a javascript: or data: URL. */
