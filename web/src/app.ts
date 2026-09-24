@@ -919,8 +919,18 @@ export function start(): void {
     // finding something to play and then waiting out the interval, which is a
     // lot to ask of somebody you have handed a link to.
     if (adNowRequested()) {
-      adStage.scrollIntoView({ block: "center" });
-      void player.playAdNow();
+      // Not on load: a browser refuses to play sound before the page has been
+      // interacted with ("NotAllowedError: play() failed because the user
+      // didn't interact with the document first"), so the advert would fire,
+      // be blocked, and hide itself again. The first click is the gesture that
+      // makes it allowed. In normal use the gesture is whatever started the
+      // music, which is why the timed break needs none of this.
+      const playOnFirstGesture = (): void => {
+        adStage.scrollIntoView({ block: "center" });
+        void player.playAdNow();
+      };
+      addEventListener("pointerdown", playOnFirstGesture, { once: true });
+      addEventListener("keydown", playOnFirstGesture, { once: true });
     }
   }
 
