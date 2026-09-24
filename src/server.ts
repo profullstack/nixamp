@@ -90,6 +90,7 @@ import { forbiddenLibrary, readLibrary } from "./library.ts";
 import { createThrottle, presentedCredential, type Throttle } from "@profullstack/throttle";
 import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
+import { vapidKeysFromEnv, vapidPublicKeyResponse, type VapidKeys } from "@profullstack/notifications/server";
 import { inviteSubject, inviteText, isEmail, isPhone, watchLink } from "./invite.ts";
 import { EventWriter } from "./event-writer.ts";
 import { handleLiveApi } from "./live-api.ts";
@@ -1832,8 +1833,11 @@ export interface HandlerOptions {
    * Response it is refused with.
    */
   throttle?: Throttle;
-  /** The VAPID public key a browser needs before it can subscribe. */
-  vapidPublicKey?: string;
+  /**
+   * The VAPID pair, read from the environment when the server starts. Only the
+   * public half leaves: it is what a browser needs before it can subscribe.
+   */
+  vapidKeys?: VapidKeys | null;
 }
 
 /**
@@ -2312,9 +2316,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // --- where to reach a follower ----------------------------------------
     if (path.startsWith("/api/v1/notify") && options.follows && options.accounts) {
       // The key is public by design: it is what a browser needs before it can
-      // ask permission, and it is useless without the private half.
+      // ask permission, and it is useless without the private half. Served at
+      // run time, never built into the page: a key baked in at build time is
+      // how push quietly becomes "not supported" in production. 503 when this
+      // instance has no keys, so the browser can say so.
       if (path === "/api/v1/notify/key" && request.method === "GET") {
-        json(response, 200, { publicKey: options.vapidPublicKey ?? "" });
+        await answerWith(response, vapidPublicKeyResponse(options.vapidKeys));
         return;
       }
 
@@ -2359,7 +2366,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
 
       if (path === "/api/v1/notify/subscribe") {
         if (request.method === "DELETE") {
-          const endpoint = url.searchParams.get("endpoint") ?? "";
+          // The endpoint arrives in the query (older pages) or as the JSON
+          // body @profullstack/notifications sends: { endpoint }.
+          let endpoint = url.searchParams.get("endpoint") ?? "";
+          if (!endpoint) {
+            try {
+              const body = JSON.parse(await readBody(request)) as { endpoint?: unknown };
+              if (typeof body.endpoint === "string") endpoint = body.endpoint;
+            } catch {
+              // No body: nothing to forget.
+            }
+          }
           await follows.removePush(endpoint);
           json(response, 200, { ok: true });
           return;
@@ -6522,8 +6539,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // told they would be texted, and the ended stream a code still points at.
   const durable = pool ? new Durable(pool, (message) => console.log(message)) : undefined;
 
-  const vapidPublicKey = process.env["VAPID_PUBLIC_KEY"] ?? "";
-  const vapidPrivateKey = process.env["VAPID_PRIVATE_KEY"] ?? "";
+  // Read at run time, and null unless both halves are set.
+  const vapidKeys = vapidKeysFromEnv(process.env);
 
   /**
    * Tell a broadcaster's followers, on whatever they asked to be told on.
@@ -6562,11 +6579,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
                 }),
               }
             : {}),
-          ...(vapidPublicKey && vapidPrivateKey
+          ...(vapidKeys
             ? {
                 push: webPush({
-                  publicKey: vapidPublicKey,
-                  privateKey: vapidPrivateKey,
+                  ...vapidKeys,
                   subject: process.env["NIXAMP_SITE"] ?? DEFAULT_DIRECTORY,
                   onEvent: (message) => console.log(message),
                 }),
@@ -6601,7 +6617,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     };
     void follows.audience(event.ownerId).then((audience) => notifyAll(audience, note, {
       ...(eventMail ? { email: resendEmail({ ...eventMail, onEvent: (message) => console.log(message) }) } : {}),
-      ...(vapidPublicKey && vapidPrivateKey ? { push: webPush({ publicKey: vapidPublicKey, privateKey: vapidPrivateKey, subject: nixampSite, onEvent: (message) => console.log(message) }) } : {}),
+      ...(vapidKeys ? { push: webPush({ ...vapidKeys, subject: nixampSite, onEvent: (message) => console.log(message) }) } : {}),
       onGone: (endpoint) => follows.removePush(endpoint),
       onEvent: (message) => console.log(message),
     })).catch(() => undefined);
@@ -6925,7 +6941,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     load: (next) => loadSource(tools, next, false),
     tag: (next) => loadTagged(tools, next),
     ...(directory ? { directory } : {}),
-    ...(follows ? { follows, vapidPublicKey } : {}),
+    ...(follows ? { follows, vapidKeys } : {}),
     ...(favorites ? { favorites } : {}),
     ...(settingsSync ? { settingsSync } : {}),
     ...(events ? { events, eventWriter: new EventWriter({

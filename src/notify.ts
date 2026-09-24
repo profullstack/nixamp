@@ -1,3 +1,4 @@
+import { sendPush } from "@profullstack/notifications/server";
 import { mailSender, type BrandedMailSender } from "./mail-sender.ts";
 
 /**
@@ -168,53 +169,37 @@ function escapeHtml(value: string): string {
 /**
  * Web push, to a browser, a desktop app or an installed PWA.
  *
- * The library is imported lazily because it is only needed on the instance
- * that has VAPID keys -- which is nixamp.com and nowhere else. A laptop
- * running `nixamp serve` should not pay to load it.
+ * Sent with @profullstack/notifications, which does VAPID and the payload
+ * encryption with node:crypto and nothing else, so there is no library to load
+ * lazily on the one instance (nixamp.com) that has keys. The keys are the same
+ * base64url pair web-push used, so nothing had to be regenerated.
  *
  * 404 and 410 mean the vendor has retired the subscription. That is not a
  * failure to retry; it is a row to delete.
  */
 export function webPush(
-  { publicKey, privateKey, subject, onEvent }: {
+  { publicKey, privateKey, subject, onEvent, fetch }: {
     publicKey: string;
     privateKey: string;
     /** A mailto: or https: URL identifying us to the push service. */
     subject: string;
     onEvent?: (message: string) => void;
+    fetch?: typeof globalThis.fetch;
   },
 ): (target: PushTarget, note: Notification) => Promise<PushResult> {
-  let library: Promise<{ sendNotification: Function; setVapidDetails: Function }> | null = null;
-
-  const load = async () => {
-    library ??= import("web-push").then((mod) => {
-      const wp = ((mod as Record<string, unknown>)["default"] ?? mod) as {
-        sendNotification: Function;
-        setVapidDetails: Function;
-      };
-      wp.setVapidDetails(subject, publicKey, privateKey);
-      return wp;
-    });
-    return library;
-  };
-
+  const keys = { publicKey, privateKey };
   return async (target, note) => {
-    try {
-      const wp = await load();
-      await wp.sendNotification(
-        { endpoint: target.endpoint, keys: { p256dh: target.p256dh, auth: target.auth } },
-        JSON.stringify({ title: note.title, body: note.body, url: note.url }),
-        { TTL: 60 * 30 },
-      );
-      return "sent";
-    } catch (error) {
-      const status = (error as { statusCode?: number }).statusCode;
-      if (status === 404 || status === 410) {
-        onEvent?.(`  push endpoint retired by the vendor, dropping it`);
-        return "gone";
-      }
-      onEvent?.(`  push failed: ${status ?? (error as Error).message}`);
-      return "failed";
+    const result = await sendPush(
+      { endpoint: target.endpoint, keys: { p256dh: target.p256dh, auth: target.auth } },
+      { title: note.title, body: note.body, url: note.url },
+      { keys, subject, ttl: 60 * 30, ...(fetch ? { fetch } : {}) },
+    );
+    if (result.sent) return "sent";
+    if (result.gone) {
+      onEvent?.(`  push endpoint retired by the vendor, dropping it`);
+      return "gone";
     }
+    onEvent?.(`  push failed: ${result.status ?? result.error}`);
+    return "failed";
   };
 }
