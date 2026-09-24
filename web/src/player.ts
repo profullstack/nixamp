@@ -5,7 +5,14 @@
  */
 import { isVideoFile, titleFromFilename } from "./format.ts";
 
-import { attachSource, detectKind, type AttachedSource } from "@profullstack/player";
+import {
+  attachAds,
+  attachSource,
+  detectKind,
+  type AdBreakOptions,
+  type AdController,
+  type AttachedSource,
+} from "@profullstack/player";
 
 export interface LocalTrack {
   title: string;
@@ -179,6 +186,16 @@ export class BrowserPlayer {
   private readonly wired = new WeakSet<HTMLMediaElement>();
   private active: HTMLMediaElement;
   private jingle: HTMLAudioElement | null = null;
+  /**
+   * Adverts, when the host asked for them.
+   *
+   * They follow whichever element is playing. This player swaps between an
+   * <audio> and a <video> depending on the track, and a break counter bound to
+   * only one of them would stop counting the moment someone played the other.
+   */
+  private ads: AdController | null = null;
+  private adOptions: AdBreakOptions | null = null;
+  private adRoot: HTMLElement | null = null;
   private frequencies = new Uint8Array(0);
   /**
    * Whether the thing now loaded may go through the analyser. A file served
@@ -281,6 +298,28 @@ export class BrowserPlayer {
    * The audio graph is built on the first play, not at load: a browser will
    * not start an AudioContext until a person has clicked something.
    */
+  /**
+   * Turn adverts on. Call it with no options to turn them off again, which is
+   * what happens the moment someone pays.
+   */
+  enableAds(root: HTMLElement, options: AdBreakOptions | null): void {
+    this.adRoot = options ? root : null;
+    this.adOptions = options;
+    this.rebindAds();
+  }
+
+  /** True while an advert holds the screen, so the UI can sit still. */
+  get adPlaying(): boolean {
+    return this.ads?.playing ?? false;
+  }
+
+  private rebindAds(): void {
+    this.ads?.destroy();
+    this.ads = null;
+    if (!this.adOptions || !this.adRoot) return;
+    this.ads = attachAds(this.adRoot, this.active, this.adOptions);
+  }
+
   private ensureGraph(element: HTMLMediaElement): void {
     type WithWebkit = typeof globalThis & { webkitAudioContext?: typeof AudioContext };
     const Ctor = globalThis.AudioContext ?? (globalThis as WithWebkit).webkitAudioContext;
@@ -387,6 +426,7 @@ export class BrowserPlayer {
       this.active.removeAttribute("src");
       this.active.load();
       this.active = wanted;
+      this.rebindAds();
     }
 
     this.attached?.destroy();

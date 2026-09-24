@@ -1,0 +1,5 @@
+allowBuilds:
+  onnxruntime-node: set this to true or false
+  protobufjs: set this to true or false
+minimumReleaseAgeExclude:
+  - '@profullstack/notifications@0.1.0'

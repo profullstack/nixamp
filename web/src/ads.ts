@@ -1,0 +1,94 @@
+import type { AdBreakOptions, AdCreative } from "@profullstack/player";
+
+/**
+ * Adverts for listeners who are not paying.
+ *
+ * nixamp is a music player, so the creative is normally an MP3 and plays with
+ * no picture: the artwork stays where it is and only a badge sits over it.
+ *
+ * Nothing here decides entitlement beyond the obvious case. A listener with no
+ * session cannot be a paying one, which is the only claim this can make safely
+ * on its own; when the host knows better it says so through `paid`.
+ */
+
+const DEFAULT_EVERY_SECONDS = 300;
+
+/** Where the next creative comes from. Replaceable per deployment. */
+const AD_ENDPOINT = "/api/ads/next";
+
+export interface AdSettings {
+  /**
+   * Whether this listener is paying. Leave it undefined when that is not known
+   * yet: adverts run only on an explicit `false`, never on a guess.
+   */
+  paid?: boolean;
+  /** Overridden by ?adsEvery= for testing. */
+  everySeconds?: number;
+}
+
+/**
+ * Read the query string.
+ *
+ * Waiting five minutes to see whether a break fires is not a test anybody runs
+ * twice, so `?adsEvery=20` shortens it and `?ads=0` turns them off. Both are
+ * clamped: a query string must not be able to ask for an advert every second.
+ */
+function fromQuery(search: string): {
+  enabled: boolean | null;
+  everySeconds: number | null;
+  adUrl: string | null;
+} {
+  const params = new URLSearchParams(search);
+  const ads = params.get("ads");
+  const every = Number(params.get("adsEvery"));
+  return {
+    enabled: ads === null ? null : ads !== "0" && ads !== "false",
+    everySeconds: Number.isFinite(every) && every > 0 ? Math.min(3600, Math.max(5, every)) : null,
+    adUrl: safeAdUrl(params.get("adUrl")),
+  };
+}
+
+/** Only https, so the parameter cannot smuggle in a javascript: or data: URL. */
+function safeAdUrl(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw, location.origin);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function adSettings(settings: AdSettings = {}, search = location.search): AdBreakOptions | null {
+  const query = fromQuery(search);
+  // Off unless somebody said otherwise.
+  //
+  // `paid` is tri-state on purpose: adverts run only when the host has actually
+  // established that this listener is NOT paying. Undefined means unknown, and
+  // treating unknown as unpaid would put adverts in front of a subscriber the
+  // moment this shipped, which is the one mistake worth designing against.
+  const on = query.enabled ?? settings.paid === false;
+  if (!on) return null;
+
+  return {
+    everySeconds: query.everySeconds ?? settings.everySeconds ?? DEFAULT_EVERY_SECONDS,
+    next: async (): Promise<AdCreative | null> => {
+      // A creative named in the query string, so a break can be seen working
+      // without a serving backend behind it. Same-origin or https only: this
+      // must not become a way to make nixamp.com play an arbitrary javascript:
+      // or data: URL at somebody.
+      if (query.adUrl) return { url: query.adUrl };
+      try {
+        const res = await fetch(AD_ENDPOINT, { headers: { accept: "application/json" } });
+        if (!res.ok) return null;
+        const body = (await res.json()) as { url?: string; kind?: "audio" | "video" };
+        return body.url ? { url: body.url, kind: body.kind } : null;
+      } catch {
+        // A break nobody can fill is a break that does not happen. The listener
+        // keeps their music either way.
+        return null;
+      }
+    },
+    onError: (error) => console.warn("advert failed", error),
+  };
+}

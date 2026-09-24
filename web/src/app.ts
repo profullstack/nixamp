@@ -1,4 +1,5 @@
 import { i18n, t as uiMessage } from "../../src/i18n.ts";
+import { adSettings } from "./ads";
 import {
   getSubscription as getPushSubscription,
   PushError,
@@ -908,6 +909,12 @@ export function start(): void {
       void whyItWouldNotPlay();
     },
   });
+
+  // Adverts for listeners who are not paying. The "Now Playing" panel is the
+  // stage: an MP3 advert shows only a badge there, leaving the artwork alone.
+  const adStage = dom.video.closest("section") ?? dom.video.parentElement;
+  if (adStage) player.enableAds(adStage as HTMLElement, adSettings());
+
 
   const remoteSpectrum = (): boolean => remoteDrives() && !player.jinglePlaying;
   const remote = new RemoteClient({
