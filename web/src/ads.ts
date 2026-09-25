@@ -13,8 +13,21 @@ import type { AdBreakOptions, AdCreative } from "@profullstack/player";
 
 const DEFAULT_EVERY_SECONDS = 300;
 
-/** Where the next creative comes from. Replaceable per deployment. */
-const AD_ENDPOINT = "/api/ads/next";
+/**
+ * Where a break gets filled from.
+ *
+ * crawlproof runs the auction, meters the impression and answers with one file
+ * to play, exactly as it does for a banner. Asking it per break rather than
+ * carrying a URL is the difference between an advert that is counted and one
+ * that is not: a hardcoded file plays for nobody's campaign and bills nobody.
+ *
+ * An unfilled break comes back as `{url: null}`, which is a perfectly good
+ * answer: no advert, the listener keeps their music.
+ */
+const AD_SERVER = "https://crawlproof.com/api/ads/stream";
+
+/** nixamp.com's own inventory slot, format video_preroll_5s. */
+const AD_SLOT = "7e0ea02c-c40f-4cdd-b4d3-93b2baca8f2c";
 
 export interface AdSettings {
   /**
@@ -24,6 +37,8 @@ export interface AdSettings {
   paid?: boolean;
   /** Overridden by ?adsEvery= for testing. */
   everySeconds?: number;
+  /** A different inventory slot, for a surface that is not nixamp.com. */
+  slot?: string;
 }
 
 /**
@@ -88,9 +103,10 @@ export function adSettings(settings: AdSettings = {}, search = location.search):
       // or data: URL at somebody.
       if (query.adUrl) return { url: query.adUrl };
       try {
-        const res = await fetch(AD_ENDPOINT, { headers: { accept: "application/json" } });
+        const url = `${AD_SERVER}?slot=${encodeURIComponent(settings.slot ?? AD_SLOT)}&kind=video`;
+        const res = await fetch(url, { headers: { accept: "application/json" } });
         if (!res.ok) return null;
-        const body = (await res.json()) as { url?: string; kind?: "audio" | "video" };
+        const body = (await res.json()) as { url?: string | null; kind?: "audio" | "video" };
         return body.url ? { url: body.url, kind: body.kind } : null;
       } catch {
         // A break nobody can fill is a break that does not happen. The listener
