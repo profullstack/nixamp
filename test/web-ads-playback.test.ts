@@ -24,10 +24,26 @@ function captureBeacons(): Sent {
 // break should be audio or video. There is no DOM here and that question is not
 // what these cover, so it is answered "no video" — without this, next() throws
 // on `document` and its own catch turns every break into an unfilled one.
+//
+// Installed ONLY when there is no document at all, and torn down by deleting
+// rather than assigning undefined. Bun runs every test file in one process, so
+// a `document` written here outlives this file: assigning it back to undefined
+// took the DOM away from every suite that runs after this one and failed 28
+// tests that have nothing to do with adverts.
+let installedDocument = false;
+
 function stubDom() {
+  if ((globalThis as unknown as { document?: unknown }).document) return;
   (globalThis as unknown as { document: unknown }).document = {
     querySelector: () => null,
   };
+  installedDocument = true;
+}
+
+function restoreDom() {
+  if (!installedDocument) return;
+  delete (globalThis as unknown as { document?: unknown }).document;
+  installedDocument = false;
 }
 
 function stubBreak(body: unknown, ok = true) {
@@ -39,12 +55,11 @@ function stubBreak(body: unknown, ok = true) {
 
 const realFetch = globalThis.fetch;
 const realImage = (globalThis as unknown as { Image?: unknown }).Image;
-const realDocument = (globalThis as unknown as { document?: unknown }).document;
 
 afterEach(() => {
   (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
   (globalThis as unknown as { Image?: unknown }).Image = realImage;
-  (globalThis as unknown as { document?: unknown }).document = realDocument;
+  restoreDom();
 });
 
 const FILLED = {
