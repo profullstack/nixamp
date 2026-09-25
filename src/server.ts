@@ -151,6 +151,7 @@ import {
 import { Analyser, bandEdges, bands, decay } from "./fft.ts";
 import { loadSource, loadTagged, readRemoteIndex } from "./playlist.ts";
 import { nextAdvert } from "./ads.ts";
+import { remoteSubject } from "./remote-subject.ts";
 import {
   emptySnapshot, parseCommand,
   type Command, type RemoteTrack, type Snapshot,
@@ -5802,7 +5803,23 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           } catch {}
         }
         if (file.endsWith("index.html") && path === "/") {
-          const subject = joinSubject(url, options);
+          // The directory first: a listed server is named by the listing this
+          // site already holds, with no request to anybody.
+          let subject: JoinSubject | null = joinSubject(url, options);
+          if (subject === null) {
+            // Not listed. Ask the server the link points at what it is called,
+            // rather than reading a name out of the query — a name from the
+            // query would let whoever wrote the link choose how the card reads
+            // on this domain, which is a phishing primitive, not a feature.
+            const link = url.searchParams.get("url") ?? "";
+            const play = url.searchParams.get("play") ?? "";
+            if (link !== "") {
+              subject = await remoteSubject(
+                link,
+                play.startsWith("channel:") ? play.slice("channel:".length) : "",
+              );
+            }
+          }
           const shell = subject ? readIfPossible(file) : null;
           if (subject && shell !== null) {
             html(response, 200, joinDocument(shell, subject, eventSite ?? "https://nixamp.com"));
