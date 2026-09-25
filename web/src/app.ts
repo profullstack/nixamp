@@ -941,7 +941,7 @@ export function start(): void {
       } catch {
         paid = undefined;
       }
-      player.enableAds(adStage as HTMLElement, adSettings({ paid }));
+      player.enableAds(adStage as HTMLElement, await adSettings({ paid }));
 
       // ?adNow plays one straight away. Without it, seeing an advert means
       // first finding something to play and then waiting out the interval,

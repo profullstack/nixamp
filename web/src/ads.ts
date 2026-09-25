@@ -1,4 +1,9 @@
-import type { AdBreakOptions, AdCreative } from "@profullstack/player";
+import {
+  adsUnlessEntitled,
+  type AdBreakOptions,
+  type AdCreative,
+  type EntitlementLike,
+} from "@profullstack/player";
 
 /**
  * Adverts for listeners who are not paying.
@@ -11,6 +16,7 @@ import type { AdBreakOptions, AdCreative } from "@profullstack/player";
  * on its own; when the host knows better it says so through `paid`.
  */
 
+/** How often a break comes round. ?adsEvery= overrides it for a quick test. */
 const DEFAULT_EVERY_SECONDS = 300;
 
 /**
@@ -25,6 +31,34 @@ const DEFAULT_EVERY_SECONDS = 300;
  * answer: no advert, the listener keeps their music.
  */
 const AD_SERVER = "https://crawlproof.com/api/ads/stream";
+
+/** What an entitlement has to name for this listener to count as paying. */
+const PRODUCT = "nixamp.pro";
+
+/**
+ * What this listener has paid for.
+ *
+ * nixamp has no OpenAccess client yet, so this endpoint does not exist and the
+ * answer is "nothing" — which is correct, because there is no pass to hold.
+ * Written as the real request rather than a stub so that the day the hub is
+ * wired, adverts stop for subscribers without anything here changing.
+ *
+ * A miss is not an error. Signed out, no endpoint, no session: to this question
+ * they all mean the same thing.
+ */
+async function heldEntitlements(): Promise<EntitlementLike[]> {
+  try {
+    const res = await fetch("/api/entitlements", {
+      credentials: "include",
+      headers: { accept: "application/json" },
+    });
+    if (!res.ok) return [];
+    const body = (await res.json()) as EntitlementLike[] | { entitlements?: EntitlementLike[] };
+    return Array.isArray(body) ? body : (body.entitlements ?? []);
+  } catch {
+    return [];
+  }
+}
 
 /** nixamp.com's own inventory slot, format video_preroll_5s. */
 const AD_SLOT = "7e0ea02c-c40f-4cdd-b4d3-93b2baca8f2c";
@@ -80,22 +114,16 @@ function safeAdUrl(raw: string | null): string | null {
   }
 }
 
-export function adSettings(settings: AdSettings = {}, search = location.search): AdBreakOptions | null {
+export async function adSettings(
+  settings: AdSettings = {},
+  search = location.search,
+): Promise<AdBreakOptions | null> {
   const query = fromQuery(search);
-  // On unless this listener is known to be paying.
-  //
-  // It shipped the other way round — off unless someone was established as
-  // unpaid — which is the cautious default and was the wrong one: nixamp has no
-  // paid tier wired yet, so nobody was ever established as anything and no
-  // break ever ran. Every listener is unpaid until there is something to be
-  // paid for.
-  //
-  // `paid: true` suppresses them, so the day a pass exists this needs one call
-  // site changed and nothing here.
-  const on = query.enabled ?? !settings.paid;
-  if (!on) return null;
+  // ?ads=0 turns them off outright, for a demonstration that should not be
+  // interrupted. Otherwise the shared rule decides, against OpenAccess.
+  if (query.enabled === false) return null;
 
-  return {
+  const ads: AdBreakOptions = {
     everySeconds: query.everySeconds ?? settings.everySeconds ?? DEFAULT_EVERY_SECONDS,
     next: async (): Promise<AdCreative | null> => {
       // A creative named in the query string, so a break can be seen working
@@ -117,4 +145,12 @@ export function adSettings(settings: AdSettings = {}, search = location.search):
     },
     onError: (error) => console.warn("advert failed", error),
   };
+
+  // ?ads=1 is for demonstrating the break on an account that may well be
+  // paying, so it skips the question.
+  if (query.enabled === true) return ads;
+  // A caller that already knows this listener is paying has answered it.
+  if (settings.paid === true) return null;
+  // Otherwise OpenAccess decides, which is the same rule every player uses.
+  return adsUnlessEntitled({ product: PRODUCT, entitlements: heldEntitlements, ads });
 }

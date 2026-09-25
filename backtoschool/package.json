@@ -17,6 +17,6 @@
     "vite": "^8.2.2"
   },
   "dependencies": {
-    "@profullstack/player": "^0.12.0"
+    "@profullstack/player": "^0.13.0"
   }
 }
