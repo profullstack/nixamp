@@ -19,12 +19,17 @@ import {
 /**
  * How often a break comes round.
  *
- * TEMPORARY: ten seconds while the kinks are ironed out. Nobody would ship an
- * advert every ten seconds, and it goes back to 300 the moment the fills, the
- * audio, the entitlement check and the playback have all been watched working
- * together. ?adsEvery= overrides it either way.
+ * Ten minutes, against a five second spot: a listener gives up about one
+ * second in a hundred and twenty, which is the difference between a station
+ * that carries advertising and one that is mostly advertising.
+ *
+ * Back from the ten seconds it was turned down to while the chain was being
+ * watched. That is done: the fill, the audio at streaming level, the
+ * entitlement check and the playback have all been seen working together, so
+ * the reason for the short interval is gone. ?adsEvery= still overrides it for
+ * the next time something needs watching.
  */
-const DEFAULT_EVERY_SECONDS = 10;
+const DEFAULT_EVERY_SECONDS = 600;
 
 /**
  * Where a break gets filled from.
