@@ -914,34 +914,18 @@ export function start(): void {
   // stage: an MP3 advert shows only a badge there, leaving the artwork alone.
   const adStage = dom.video.closest("section") ?? dom.video.parentElement;
   if (adStage) {
-    // Establishing entitlement is the host's job, and adSettings will not guess
-    // at it: with `paid` left undefined it returns null and no break ever runs.
-    // Nothing here ever passed it, so adverts were off for every listener no
-    // matter what the network had to serve — ?ads=1 was the only way to see one.
+    // No entitlement lookup, because there is no entitlement to look up.
     //
-    // The only claim that can be made safely is the one ads.ts documents: a
-    // listener with no session cannot be a paying one. Signed in is deliberately
-    // NOT treated as unpaid, because nixamp has no subscription state to read
-    // and guessing the other way would put adverts in front of somebody who may
-    // be paying.
+    // This used to ask the account API whether anybody was signed in, back when
+    // adSettings refused to run a break unless the host had established that a
+    // listener was NOT paying. ads.ts now treats every listener as unpaid until
+    // there is something to be paid for, so the answer no longer changes
+    // anything — it was a request on every page load whose result was discarded.
     //
-    // Asked asynchronously, and enableAds is called when the answer arrives.
-    // The first timed break is five minutes out, so nothing is lost by knowing
-    // a moment later — and ?ads=1 still forces them on regardless of the answer.
+    // The day a pass exists, `paid: true` is what suppresses a break, and it
+    // gets passed from wherever that pass is known.
     void (async () => {
-      const accountApi = /(^|\.)nixamp\.com$/.test(globalThis.location.hostname)
-        ? ""
-        : "https://nixamp.com";
-      let paid: boolean | undefined;
-      try {
-        const answer = await fetch(`${accountApi}/api/v1/me/handle`);
-        // 401 is the useful answer: nobody is signed in, so nobody is paying.
-        // A 200, or anything unreadable, leaves it unknown and runs no adverts.
-        paid = answer.status === 401 ? false : undefined;
-      } catch {
-        paid = undefined;
-      }
-      player.enableAds(adStage as HTMLElement, await adSettings({ paid }));
+      player.enableAds(adStage as HTMLElement, await adSettings());
 
       // ?adNow plays one straight away. Without it, seeing an advert means
       // first finding something to play and then waiting out the interval,
