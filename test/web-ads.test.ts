@@ -34,13 +34,13 @@ describe("the link that opened the page still gets a say", () => {
     expect((await adSettings({}, "?ads=1&adsEvery=99999"))?.everySeconds).toBe(3600);
   });
 
-  it("leaves the interval to the default when the query says nothing", async () => {
-    // Not pinned to a number: the default is deliberately turned down while the
-    // network is being watched, and pinning it here would fail that change
-    // rather than test this one.
+  it("comes round every ten minutes when the query says nothing", async () => {
+    // Pinned again now that it is a decision rather than a value turned down
+    // to watch the chain work: ten minutes against a five second spot. If this
+    // is ever shortened for testing, it should be shortened here too,
+    // deliberately, rather than drift.
     const ads = await adSettings({}, "?ads=1");
-    expect(ads?.everySeconds).toBeGreaterThan(0);
-    expect(ads?.everySeconds).not.toBe(10_000);
+    expect(ads?.everySeconds).toBe(600);
   });
 
   it("?adNow is read from the query it is handed, not the address bar", () => {
