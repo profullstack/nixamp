@@ -687,6 +687,14 @@ test("the owner of a server can open it without hunting for its share link", asy
     // Health answers anybody, which is why it is not proof of anything.
     assert.equal((await fetch(`${base}/api/health`)).status, 200);
 
+    // Entitlements answers anybody too, for the reason adverts exist: the
+    // listener asking has no key and no session, and a 404 here was read as
+    // "holds nothing" — the right answer by the wrong road, and an error in
+    // everybody's console on every page load.
+    const held = await fetch(`${base}/api/entitlements`);
+    assert.equal(held.status, 200);
+    assert.deepEqual(await held.json(), { entitlements: [] });
+
     // No key, no account: still no.
     assert.equal((await fetch(`${base}/api/state`)).status, 401);
     // Somebody else's account: still no.
