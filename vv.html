@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>server1 — nixamp</title>
+    <meta name="description" content="server1 is live on nixamp. Tune in free, no account needed." />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#080c09" />
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64" />
+    <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="nixamp" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta property="og:title" content="server1" />
+    <meta property="og:description" content="server1 is live on nixamp. Tune in free, no account needed." />
+    <meta property="og:type" content="website" />
+    <script type="module" crossorigin src="/assets/index-CY3lAwM2.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-jLCo7PIA.css">
+  <meta name="nixamp-shell-title" content="nixamp: broadcast live radio, TV and film from your own machine" />
+  </head>
+  <body>
+    <nav class="skip-links" aria-label="Skip to a section" data-i18n-aria-label="Skip to a section">
+      <a href="#transport" data-i18n="Skip to playback controls">Skip to playback controls</a>
+      <a href="#playlist-panel" data-i18n="Skip to playlist">Skip to playlist</a>
+      <a href="#transcript-panel" data-i18n="Skip to transcript and translated audio">Skip to transcript and translated audio</a>
+    </nav>
+    <div id="sr-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+    <main id="app" aria-label="Nixamp player" data-i18n-aria-label="Nixamp player">
+      <h1 class="sr-only" data-i18n="Nixamp audio and video player">Nixamp audio and video player</h1>
+      <header class="bar">
+        <span class="brand"><img class="brand-mark" src="/logo.png" alt="" width="20" height="20" decoding="async" />NIXAMP</span>
+        <span id="status" class="status" data-playing="false" data-i18n="■ STOPPED">■ STOPPED</span>
+        <span id="source" class="chip" data-i18n="no source">no source</span>
+        <!-- The eye or the gear for the server you are on: step down to
+             viewing, or up to driving, without finding it in a list again. -->
+        <span id="way-in-here" class="way-in-here" hidden></span>
+        <button id="fav-here" type="button" class="heart" hidden
+                title="Add this server to your favourites" aria-label="Favourite this server">♡</button>
+        <!-- The panels themselves: which are on screen and in what order.
+             Winamp's windows were dragged about and snapped into place; the
+             grip on each panel does that here, and this lists them all. -->
+        <button id="panels-toggle" type="button" class="ghost" popovertarget="panels-panel" aria-controls="panels-panel" aria-expanded="false" title="Panels: show, hide, and reorder the panels on this page" data-i18n="Panels">Panels</button>
+        <label class="ui-language"><span class="sr-only" data-i18n="Interface language">Interface language</span><select data-ui-language class="transcript-language" aria-label="Interface language" data-i18n-aria-label="Interface language"></select></label>
+        <button id="install" type="button" class="ghost" hidden data-i18n="Install">Install</button>
+      </header>
+
+      <!-- The pitch, for somebody who has never seen this before. In the shell
+           so a crawler and a link preview read it; shown by app.ts only where
+           accounts live (nixamp.com), only signed out, and only until hidden.
+           On your own server you already know what this is. -->
+      <section class="panel welcome player-only" data-title="What this is" data-i18n-data-title="What this is" id="welcome" hidden>
+        <h2 class="welcome-title">Launch your own live radio, TV and film network in one command.</h2>
+        <p class="welcome-lead">
+          nixamp is the open source streaming platform that turns a folder on your
+          computer into a live radio station, a TV channel or a film night anyone can
+          tune in to. A terminal player, a web app and a desktop app
+          on one engine. The streaming service you would run yourself: nothing uploaded,
+          no platform in the middle, and the command line is a first class citizen.
+        </p>
+        <div class="welcome-grid">
+          <div>
+            <h2 data-i18n="Listen">Listen</h2>
+            <p>See what is on the air right now and press play. No account needed. Every
+               live stream has a room code you can dial from any phone.</p>
+          </div>
+          <div>
+            <h2 data-i18n="Publish">Publish</h2>
+            <p><code>nixamp serve ~/Music</code> and you are live with a link, a room code
+               and a phone number. Your recordings, a lecture, a podcast, or a link you paste.</p>
+          </div>
+          <div>
+            <h2>Get paid</h2>
+            <p>Past five listeners a stream can charge a dollar a day, paid to you through
+               x402. Only the audio is gated, so the page stays open to everyone.</p>
+          </div>
+        </div>
+        <div class="picker welcome-actions">
+          <button id="welcome-create" type="button" class="button primary" data-i18n="Create a free account">Create a free account</button>
+          <button id="welcome-browse" type="button" class="button" data-i18n="See what is live">See what is live</button>
+          <code class="welcome-install">curl -fsSL https://nixamp.com/install.sh | sh</code>
+          <button id="welcome-hide" type="button" class="ghost" title="Hide this, on this device" data-i18n="Hide this">Hide this</button>
+        </div>
+      </section>
+
+      <section class="panel player-only classroom-player" data-title="Now Playing" data-i18n-data-title="Now Playing" aria-label="Now Playing" data-i18n-aria-label="Now Playing">
+        <h2 class="panel-heading" data-i18n="Now Playing">Now Playing</h2>
+        <span class="panel-tools" id="translation-buy-tools"></span>
+        <video id="video" playsinline hidden></video>
+        <!-- What the picture is saying, on the picture: the current caption
+             line, held until this page's sound has got there. -->
+        <div id="subtitle" class="subtitle" hidden aria-live="off"></div>
+        <!-- A pasted YouTube, Vimeo or SoundCloud link, played by that site's
+             own player, here in this browser: the viewer's own address and
+             session, which the site will serve when it refuses a server's. -->
+        <div id="embed" class="embed" hidden>
+          <iframe id="embed-frame" title="The link, played" allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                  referrerpolicy="strict-origin-when-cross-origin"></iframe>
+        </div>
+        <audio id="audio"></audio>
+        <div id="title-line" class="track-title" data-i18n="Nothing loaded.">Nothing loaded.</div>
+        <div id="album-line" class="track-sub">—</div>
+        <!-- What is known about what is playing: live or on demand, the
+             picture's size, who else is watching, where in a catalog it came
+             from. Under the picture and above the controls, where the eye
+             goes after the title. -->
+        <!-- On a live stream: whose it is, what is on, and how to call in.
+             The same words the Share panel uses, here where the eye already
+             is, so a joiner knows the number and the code without hunting. -->
+        <div id="live-line" class="track-live" hidden></div>
+        <div id="meta-line" class="track-meta" hidden></div>
+        <!-- What nichedb knows about it, in a sentence or two: the film's
+             synopsis, the channel's network and country. -->
+        <p id="meta-blurb" class="track-blurb" hidden></p>
+        <div class="scrub">
+          <span id="elapsed" class="time">00:00</span>
+          <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" data-i18n-aria-label="Seek" disabled />
+          <span id="total" class="time muted">--:--</span>
+          <button id="copy-now" type="button" class="icon" hidden
+                  title="Copy this stream's URL, to play it in VLC or another player"
+                  aria-label="Copy this stream's URL" data-i18n-aria-label="Copy this stream's URL">⧉</button>
+          <button id="copy-nixamp" type="button" class="icon" hidden
+                  title="Copy a nixamp link to this live room"
+                  aria-label="Copy live room link" data-i18n-aria-label="Copy live room link">↗</button>
+          <button id="fullscreen" type="button" class="ghost" hidden
+                  title="Full screen" data-i18n-title="Full screen" aria-label="Full screen" data-i18n-aria-label="Full screen">⛶</button>
+          <button id="download-now" type="button" class="ghost" hidden
+                  title="Download now: the server fetches the whole thing with yt-dlp and hands it to this device" data-i18n="⤓ Download">⤓ Download</button>
+        </div>
+        <div class="audio-translation" role="group" aria-label="Audio language" data-i18n-aria-label="Audio language">
+          <label class="transcript-switch"><input type="checkbox" id="transcript-audio" disabled /><span data-i18n="Translate audio"> Translate audio</span></label>
+          <label class="audio-language"><span data-i18n="Language">Language </span><select id="transcript-language" class="transcript-language" aria-label="Translation language" data-i18n-aria-label="Translation language"></select></label>
+          <p class="hint" id="transcript-audio-note" data-i18n="Original audio.">Original audio.</p>
+          <p class="hint" id="translation-balance"></p>
+          <details id="transcript-voice-settings" hidden>
+            <summary data-i18n="Audio options">Audio options</summary>
+            <label class="transcript-switch"><input type="checkbox" id="transcript-background" checked /><span data-i18n="Keep source background audio"> Keep source background audio</span></label>
+            <label class="background-level"><span data-i18n="Background level">Background level </span><input id="transcript-background-level" type="range" min="0" max="200" step="5" value="100" aria-valuetext="100 percent" /> <output id="transcript-background-value" for="transcript-background-level">100%</output></label>
+            <p class="hint">Speech removal is approximate; turn this off if original voices bleed through.</p>
+            <div id="transcript-speakers" role="group" aria-label="Speaker voices" data-i18n-aria-label="Speaker voices"></div>
+          </details>
+        </div>
+
+        <!-- Any link, played here: YouTube, Vimeo and SoundCloud by their own
+             players in a frame, a file by the page's own. Anything else -- an
+             IPTV feed, a stream with no extension -- the connected server
+             fetches (yt-dlp, ffmpeg) and carries as a channel of its own, on
+             the air for everyone; the owner or any signed-in member may ask.
+             The picker says which server: the one connected, or another from
+             the directory. -->
+        <form id="link-form" class="picker link-form">
+          <input id="link-url" type="url" inputmode="url" placeholder="Paste a link: an audio or video file, an .m3u playlist, an IPTV feed, YouTube…"
+                 aria-label="A link to play" data-i18n-aria-label="A link to play" />
+          <select id="link-server" aria-label="Which server goes live with it" title="Which server goes live with it" hidden></select>
+          <button type="submit" class="button" title="Play it here, in this browser, where the browser can" data-i18n="Play link">Play link</button>
+          <!-- The one Go live for a link: the server fetches it and puts it on
+               the air for everyone, listed with Join party. A file, an .m3u
+               playlist played entry by entry, an IPTV feed, a page yt-dlp
+               reads. -->
+          <button id="link-go-live" type="button" class="button golive"
+                  title="Go live with this link: the server fetches it and puts it on the air for everyone, listed in the directory" data-i18n="● Go live">● Go live</button>
+        </form>
+        <!-- What just happened, where it happened: the same message as the
+             Status line at the foot of the page, but under the box the
+             person was using. "Connect to a server first" at the bottom of
+             the page went unread. -->
+        <p id="link-note" class="hint link-note" hidden></p>
+        <section class="transport" id="transport" role="group" aria-label="Playback controls" data-i18n-aria-label="Playback controls" aria-describedby="keyboard-help" tabindex="0">
+          <button id="prev" type="button" aria-label="Previous" data-i18n-aria-label="Previous">|◀◀</button>
+          <button id="play-pause" type="button" class="primary" aria-label="Play" data-i18n-aria-label="Play">▶</button>
+          <button id="go-live-now" type="button" class="golive" hidden
+                  title="Go live: put this on the air for everyone, list it in the directory with a phone code, and copy the link to share" data-i18n="● GO LIVE">● GO LIVE</button>
+          <button id="stop" type="button" aria-label="Stop" data-i18n-aria-label="Stop">■</button>
+          <button id="next" type="button" aria-label="Next" data-i18n-aria-label="Next">▶▶|</button>
+          <button id="share-now" type="button" class="share" hidden
+                  title="Share: a nixamp.com link that plays this" aria-label="Share what is playing" data-i18n-aria-label="Share what is playing" data-i18n="Share">Share</button>
+          <button id="refresh-player" type="button" class="ghost" title="Refresh player" data-i18n-title="Refresh player" aria-label="Refresh player" data-i18n-aria-label="Refresh player">↻</button>
+          <label class="volume player-volume">
+            <button id="volume-toggle" type="button" class="volume-toggle" aria-label="Mute" data-i18n-aria-label="Mute" aria-pressed="false">🔊</button>
+            <input id="volume" type="range" min="0" max="100" value="100" aria-label="Volume" data-i18n-aria-label="Volume" />
+          </label>
+        </section>
+      </section>
+
+      <div class="split" id="zone-top">
+        <section class="panel player-only" data-title="Spectrum Analyser" data-i18n-data-title="Spectrum Analyser" id="spectrum-panel">
+          <canvas id="spectrum" aria-hidden="true"></canvas>
+          <div class="meters" aria-hidden="true">
+            <span id="glyphs" class="glyphs"></span>
+            <span id="levels" class="levelmeter">L······ R······</span>
+          </div>
+        </section>
+
+        <!-- Connected to a server: its files to browse, and what is live on
+             it. The two things a visitor came for, beside the analyser,
+             before anything about accounts or sharing. -->
+          <section class="panel" id="playlist-panel" data-title="Playlist (0)" data-i18n-data-title="Playlist (0)" tabindex="-1">
+            <input id="filter" type="search" class="filter" placeholder="Filter these files" data-i18n-placeholder="Filter these files"
+                   aria-label="Filter the playlist" data-i18n-aria-label="Filter the playlist" />
+            <nav id="crumbs" class="crumbs" aria-label="Playlist folders" data-i18n-aria-label="Playlist folders" hidden></nav>
+            <ol id="playlist" class="playlist" aria-label="Tracks and folders" data-i18n-aria-label="Tracks and folders"></ol>
+            <!-- A page at a time. A television cannot scroll a box inside the
+                 page, and a folder of two hundred files is a list nobody
+                 wants in one go anyway. -->
+            <nav id="playlist-pager" class="pager" aria-label="Playlist pages" data-i18n-aria-label="Playlist pages" hidden></nav>
+          </section>
+
+          <!-- The queue for the live currently being watched. It is read-only;
+               the connected server's files remain in the Playlist panel. -->
+          <section class="panel player-only" id="live-playlist-panel" data-title="Live playlist" data-i18n-data-title="Live playlist" hidden>
+            <ol id="live-playlist" class="playlist" aria-label="Current live playlist" data-i18n-aria-label="Current live playlist"></ol>
+          </section>
+
+          <!-- One live list across servers and connected sites. -->
+          <section class="panel player-only" data-title="Parties" data-i18n-data-title="Parties" id="parties-panel">
+            <p class="hint" id="parties-note" data-i18n="Loading…">Loading…</p>
+            <ul id="parties-list" class="party-groups" aria-live="off"></ul>
+            <details class="party-invite">
+              <summary data-i18n="Invite code">Invite code</summary>
+          <form id="party-form" class="picker">
+            <label for="party-code" data-i18n="Invite code">Invite code</label>
+            <input id="party-code" type="text" inputmode="latin" autocomplete="off"
+                   autocapitalize="characters" spellcheck="false"
+                   placeholder="ABC123" />
+            <button id="party-join" type="submit" class="button" title="Join live" data-i18n-title="Join live" data-i18n="Join party">Join party</button>
+          </form>
+            </details>
+          </section>
+
+          <!-- The m3u catalogs a server keeps: IPTV lists of live channels and
+               lists of things on demand, browsed by group rather than dumped
+               as three thousand rows. Anyone with the link may browse and
+               play; adding and removing one is administering the server. -->
+          <section class="panel player-only" data-title="Catalogs on this server" data-i18n-data-title="Catalogs on this server" id="catalogs-panel" hidden>
+            <p class="hint" id="catalogs-note"></p>
+            <form id="catalogs-form" class="picker" hidden>
+              <input id="catalog-source" type="text" inputmode="url"
+                     placeholder="https://…/list.m3u or a path on the server"
+                     aria-label="An m3u catalog to add" data-i18n-aria-label="An m3u catalog to add" />
+              <input id="catalog-name" type="text" placeholder="call it something" data-i18n-placeholder="call it something"
+                     aria-label="What to call it" data-i18n-aria-label="What to call it" />
+              <button type="submit" class="button" data-i18n="Add catalog">Add catalog</button>
+            </form>
+            <nav id="catalogs-crumbs" class="crumbs" aria-label="Catalog folders" data-i18n-aria-label="Catalog folders" hidden></nav>
+            <ul id="catalogs-list" class="directory-list"></ul>
+            <input id="catalogs-filter" type="search" class="filter" placeholder="Filter these entries" data-i18n-placeholder="Filter these entries"
+                   aria-label="Filter the entries" data-i18n-aria-label="Filter the entries" hidden />
+            <ol id="catalogs-entries" class="playlist" hidden></ol>
+          </section>
+      </div>
+
+      <div class="split" id="zone-main">
+        <section class="panel player-only col-a" data-title="Files" data-i18n-data-title="Files" id="files-panel">
+          <p class="hint">Files play on this device. Live captions and translated audio send short audio clips only after you enable them.</p>
+          <div class="picker">
+            <label class="button"><span data-i18n="Open files">
+              Open files
+              </span><input id="files" type="file" multiple accept="audio/*,video/*" />
+            </label>
+            <label class="button"><span data-i18n="Open folder">
+              Open folder
+              </span><input id="folder" type="file" multiple webkitdirectory directory />
+            </label>
+          </div>
+        </section>
+
+        <section class="panel col-b" data-title="Servers streaming now" data-i18n-data-title="Servers streaming now" id="directory" hidden>
+          <p class="hint" id="directory-note" data-i18n="Looking for servers…">Looking for servers…</p>
+          <ul id="directory-list" class="directory-list"></ul>
+          <p class="hint" id="recent-note" hidden>Recently live &mdash; follow them to hear next time:</p>
+          <ul id="recent-list" class="directory-list"></ul>
+          <p class="hint"><a href="/" id="directory-back" hidden data-i18n="Back to the player">Back to the player</a></p>
+        </section>
+
+        <section class="panel player-only col-a" data-title="Favourites" data-i18n-data-title="Favourites" id="favorites-panel" hidden>
+          <p class="hint" id="favorites-note">Servers you hearted. Connect to one, or let it go.</p>
+          <ul id="favorites-list" class="directory-list"></ul>
+        </section>
+
+
+
+        <section class="panel player-only col-a" data-title="Account" data-i18n-data-title="Account" id="account-panel">
+          <p class="hint" id="account-note">Listening needs no account. Sign in to keep favourites, follow people, and publish.</p>
+          <div id="account-providers" class="picker" hidden></div>
+          <form id="account-form" class="picker">
+            <input id="account-email" type="email" autocomplete="email"
+                   placeholder="you@example.com" aria-label="Email" data-i18n-aria-label="Email" />
+            <input id="account-password" type="password" autocomplete="current-password"
+                   placeholder="password" data-i18n-placeholder="password" aria-label="Password" data-i18n-aria-label="Password" />
+            <button type="submit" class="button" id="account-submit" data-i18n="Sign in">Sign in</button>
+            <button id="account-toggle" type="button" class="ghost" data-i18n="Create one">Create one</button>
+          </form>
+          <!-- Outside the form, because signing out is the one thing you can do
+               once the form is gone. -->
+          <button id="account-signout" type="button" class="ghost" hidden data-i18n="Sign out">Sign out</button>
+          <!-- Who the rooms know you as: the handle on every line, the voice
+               your lines are read in on the phone, and the OpenProfile the
+               voice may be read from. Only once signed in. -->
+          <form id="persona-form" class="picker" hidden>
+            <input id="persona-handle" type="text" maxlength="30" autocomplete="nickname"
+                   placeholder="handle" data-i18n-placeholder="handle" aria-label="Your public handle" data-i18n-aria-label="Your public handle" />
+            <select id="persona-voice" aria-label="The voice your lines are read in on the phone">
+              <option value="" data-i18n="Any voice">Any voice</option>
+              <option value="female" data-i18n="A woman's voice">A woman's voice</option>
+              <option value="male" data-i18n="A man's voice">A man's voice</option>
+            </select>
+            <input id="persona-profile" type="url" autocomplete="url"
+                   placeholder="https://you.example/.well-known/openprofile.md" aria-label="Your OpenProfile URL" />
+            <button type="submit" class="button" data-i18n="Save">Save</button>
+          </form>
+          <p class="hint" id="persona-note" hidden></p>
+          <!-- The sites that hold a token for this account. Nothing is shown
+               until there is something connected, so an account with none
+               never sees an empty list asking to be understood. -->
+          <p class="hint" id="connections-note" hidden>Connected apps:</p>
+          <ul id="connections-list" class="directory-list" hidden></ul>
+        </section>
+
+        <p class="hint player-only col-a" id="account-elsewhere" hidden>
+          This nixamp keeps no accounts &mdash; it is somebody's own machine.
+          Accounts live at <a href="https://nixamp.com">nixamp.com</a>.
+        </p>
+
+        <section class="panel player-only col-b" data-title="Notifications" data-i18n-data-title="Notifications" id="notify-panel" hidden>
+          <p class="hint" id="notify-note">Get told when someone you follow goes live.</p>
+          <div class="picker">
+            <label class="toggle">
+              <input id="notify-web" type="checkbox" /><span data-i18n="On this device"> On this device
+            </span></label>
+            <label class="toggle">
+              <input id="notify-email" type="checkbox" /> By email
+            </label>
+            <label class="toggle">
+              <input id="notify-sms" type="checkbox" /> By text
+            </label>
+          </div>
+          <form id="notify-phone-form" class="picker">
+            <input id="notify-phone" type="tel" autocomplete="tel"
+                   placeholder="+1 555 555 0123" aria-label="Phone number for texts" data-i18n-aria-label="Phone number for texts" />
+            <button type="submit" class="button" data-i18n="Save number">Save number</button>
+          </form>
+          <p class="hint" id="notify-phone-note"></p>
+          <p class="hint" id="following-note" hidden>You follow:</p>
+          <ul id="following-list" class="directory-list"></ul>
+        </section>
+
+        <section class="panel player-only col-a" data-title="Your servers" data-i18n-data-title="Your servers" id="servers-panel" hidden>
+          <p class="hint" id="servers-note">The machines on your account. Open one, or forget it.</p>
+          <ul id="servers-list" class="directory-list"></ul>
+        </section>
+
+        <!-- The trollbox: the chat for whatever live you have joined. One box
+             per room, kept at nixamp.com, so everybody watching the same
+             channel is in it whichever page they came from. Reading needs
+             nobody; a line needs a nixamp.com sign-in, on nixamp.com. -->
+        <!-- Every message the page has shown, newest first, with the time:
+             what went wrong and when, in words, for whoever missed it as it
+             went by. Hide it from the Panels list if it is noise. -->
+        <section class="panel col-b" data-title="Log" data-i18n-data-title="Log" id="log-panel">
+          <p class="hint">What this page has said, newest first.</p>
+          <ul id="log-list" tabindex="0" aria-label="Activity log" data-i18n-aria-label="Activity log" class="log-list" aria-live="off"></ul>
+        </section>
+
+        <section class="panel col-b" data-title="Trollbox" data-i18n-data-title="Trollbox" id="trollbox-panel" hidden>
+          <p class="hint" id="trollbox-note">Join a live and the room's chat is here.</p>
+          <ul id="trollbox-list" tabindex="0" class="trollbox-list" aria-live="off" aria-label="The room's chat" data-i18n-aria-label="The room's chat"></ul>
+          <form id="trollbox-form" class="picker" hidden>
+            <input id="trollbox-input" type="text" maxlength="500" autocomplete="off"
+                   placeholder="Say something to the room…" data-i18n-placeholder="Say something to the room…" aria-label="A line for the trollbox" data-i18n-aria-label="A line for the trollbox" />
+            <!-- Tap, talk, tap: the words are posted to the room as you said
+                 them, no Send to click. Heard by nixamp.com's own ear (Whisper),
+                 so it only appears where a line can be sent from: signed in, on
+                 nixamp.com. -->
+            <button type="button" class="button mic" id="trollbox-mic" hidden aria-pressed="false"
+                    title="Say it instead: tap, talk, tap again, and it is sent">🎤</button>
+            <button type="submit" class="button" data-i18n="Send">Send</button>
+          </form>
+          <!-- Edit mode: a dictated line waits in the box for Send instead of
+               going straight to the room. Off unless this device turned it on. -->
+          <label class="transcript-switch" id="trollbox-edit-label" hidden>
+            <input type="checkbox" id="trollbox-edit" /> Edit before sending what I say
+          </label>
+        </section>
+
+        <!-- The transcript: what the live you have joined is saying, written
+             down as it says it by nixamp.com's ear on the server's behalf, and
+             held here until your own sound gets there. On by default; the
+             switch turns it off for this device, and the Panels list hides the
+             panel. -->
+        <section class="panel col-b" data-title="Transcript" data-i18n-data-title="Transcript" id="transcript-panel" tabindex="-1" hidden>
+          <label class="transcript-switch"><input type="checkbox" id="transcript-on" checked /><span data-i18n="Captions"> Captions</span></label>
+          <p class="hint" id="transcript-note" data-i18n="Original-language captions.">Original-language captions.</p>
+          <ul id="transcript-list" tabindex="0" class="transcript-list" aria-live="off" aria-label="What is being said" data-i18n-aria-label="What is being said"></ul>
+        </section>
+
+        <!-- What to send somebody who is not technical: one link, one number,
+             one code. Everything else about this page assumes you know what a
+             server is; this part must not. -->
+        <section class="panel player-only col-b" data-title="Share this stream" data-i18n-data-title="Share this stream" id="share-panel" hidden>
+          <p class="hint" id="share-note" data-i18n="Checking…">Checking…</p>
+          <label class="share-line">
+            <span class="share-what" data-i18n="Link">Link</span>
+            <input id="share-link" type="text" readonly aria-label="Link to this stream" data-i18n-aria-label="Link to this stream" />
+            <button id="share-copy" type="button" class="ghost" data-i18n="Copy">Copy</button>
+          </label>
+          <p class="hint" id="share-phone" hidden></p>
+          <div class="picker" id="live-controls" hidden>
+            <button id="go-live" type="button" class="button">List in the directory</button>
+            <button id="stop-live" type="button" class="ghost" hidden>Stop the listing</button>
+          </div>
+          <form id="share-send" class="picker" hidden>
+            <input id="share-to" type="text" inputmode="email"
+                   placeholder="a phone number or an email" aria-label="Who to send it to" />
+            <button type="submit" class="button" data-i18n="Send it">Send it</button>
+          </form>
+        </section>
+
+        <section class="panel player-only col-a" data-title="Admin" data-i18n-data-title="Admin" id="admin-panel" hidden>
+          <p class="hint" id="admin-note" data-i18n="Checking…">Checking…</p>
+          <p class="said" id="admin-said" hidden></p>
+          <table class="admin-table" id="admin-connections"></table>
+          <form id="admin-restream" class="picker">
+            <input id="admin-source" type="text" placeholder="a folder, an album URL, a channel"
+                   aria-label="Something to add" data-i18n-aria-label="Something to add" />
+            <input id="admin-name" type="text" placeholder="call it something (MLB Network)"
+                   aria-label="What to call it" data-i18n-aria-label="What to call it" />
+            <button type="submit" class="button" data-i18n="Go live">Go live</button>
+            <button type="button" id="admin-add" class="ghost" data-i18n="Add to library">Add to library</button>
+          </form>
+          <label class="check">
+            <input id="admin-replace" type="checkbox" />
+            Replace the playlist instead of adding to it
+          </label>
+          <p class="hint" id="home-note" hidden></p>
+          <button id="load-home" type="button" class="ghost" hidden>Load this server's own files</button>
+        </section>
+
+        <section class="panel player-only col-b" data-title="Publish into this server" id="publish-panel" hidden>
+          <p class="hint" id="publish-note"></p>
+          <ul id="publish-list" class="publish-list"></ul>
+        </section>
+
+        <!-- The panels: shown, hidden, reordered, from a list, for a keyboard,
+             a phone, or putting everything back where it started. -->
+        <section class="panel col-b" data-title="Panels" data-i18n-data-title="Panels" id="panels-panel" popover="auto" hidden>
+          <p class="hint">Every panel, on or off. Move a panel by dragging its ≡ handle, or focus that handle and press Alt + Up or Down. ▁ shades it to its title bar; ✕ hides it.</p>
+          <ul id="panels-list" class="directory-list panels-list"></ul>
+          <div class="picker">
+            <button id="panels-save" type="button" class="button" title="Save this panel setup on this device" data-i18n="Save setup">Save setup</button>
+            <button id="panels-reset" type="button" class="ghost" title="Every panel back where the page puts it" data-i18n="Reset layout">Reset layout</button>
+          </div>
+        </section>
+
+        <!-- Which server this page is on. Most people arrive from the
+             directory or a link somebody sent, and never type here; the box
+             is for a link, and the words say how a server of your own gets
+             into the directory: one command, a sign-in, and it names and
+             lists itself. A host flag and an IP were how it worked before
+             nixamp.com knew about servers at all. -->
+        <section class="panel player-only col-a" data-title="Server" data-i18n-data-title="Server" id="remote-panel">
+          <p class="hint" data-i18n="Pick a server in the directory, or paste its link here.">Pick a server in the directory, or paste its link here.</p>
+          <label class="picker" for="remote-server">
+            <span data-i18n="Choose a server">Choose a server</span>
+            <select id="remote-server" aria-label="Choose a server" data-i18n-aria-label="Choose a server">
+              <option value="">Select a server…</option>
+            </select>
+          </label>
+          <form id="remote-form" class="picker">
+            <input id="remote-url" type="text" inputmode="url" placeholder="a server's link, https://…:4321/view/…" aria-label="A server's link" data-i18n-aria-label="A server's link" />
+            <button type="submit" class="button" data-i18n="Connect">Connect</button>
+            <button id="disconnect" type="button" class="ghost" hidden data-i18n="Disconnect">Disconnect</button>
+            <button id="browse" type="button" class="ghost" data-i18n="Browse the directory">Browse the directory</button>
+          </form>
+
+          <label class="check">
+            <input id="listen-here" type="checkbox" checked /><span data-i18n="Play on this device">
+            Play on this device
+          </span></label>
+          <p class="hint">
+            Off means the server plays through its own speakers and this is only a
+            remote control for it.
+          </p>
+          <p class="hint"><span data-i18n="Status:">Status: </span><span id="remote-state" data-status="idle" data-i18n="not connected">not connected</span></p>
+          <p class="hint" id="listen-only" hidden></p>
+        </section>
+      </div>
+
+      <p id="note" class="note" hidden></p>
+
+      <footer class="statusbar">
+        <span id="keyboard-help">With playback controls focused: <b>Space</b><span data-i18n="Play"> Play</span></span>
+        <span><b>↑↓</b><span data-i18n="Select"> Select</span></span>
+        <span><b>n/p</b><span data-i18n="Next/Prev"> Next/Prev</span></span>
+        <span><b>s</b><span data-i18n="Stop"> Stop</span></span>
+        <span class="spacer"></span>
+        <!-- For a set whose browser does not say what it is: one press, and
+             the page is laid out for a remote and a sofa. -->
+        <button id="tv-toggle" type="button" class="ghost tv-toggle" data-i18n="TV mode">TV mode</button>
+        <span class="muted"> · </span>
+        <a href="https://github.com/profullstack/nixamp">github.com/profullstack/nixamp</a>
+        <span class="muted"> · </span>
+        <a href="https://www.reddit.com/r/nixamp">r/nixamp</a>
+        <span class="muted"> · </span>
+        <span class="muted" id="app-version" aria-label="Nixamp version"></span>
+      </footer>
+    </main>
+    <dialog id="translation-purchase" aria-labelledby="translation-purchase-title" aria-describedby="translation-purchase-summary">
+      <div class="purchase-heading"><h2 id="translation-purchase-title" data-i18n="Buy translated audio">Buy translated audio</h2><button type="button" id="translation-purchase-close" aria-label="Close translated audio purchase" data-i18n-aria-label="Close translated audio purchase">✕</button></div>
+      <p id="translation-purchase-summary">Prepaid translation for live channels, video and audio.</p>
+      <p id="translation-purchase-balance"></p>
+      <p class="hint" id="translation-free-description"></p>
+      <label for="translation-plan" data-i18n="Pass">Pass</label><select id="translation-plan"></select>
+      <p class="hint" id="translation-plan-description"></p>
+      <label for="translation-coin" data-i18n="Pay with">Pay with</label><select id="translation-coin"></select>
+      <p class="hint">Crypto checkout through CoinPay. Any network fees are shown at checkout.</p>
+      <a href="#account-panel" id="translation-sign-in">Sign in for free sessions or to purchase</a>
+      <div class="purchase-actions"><button type="button" class="button" id="translation-checkout" disabled data-i18n="Buy pass">Buy pass</button><a id="translation-checkout-link" target="_blank" rel="noopener noreferrer" hidden data-i18n="Open secure checkout ↗ (new tab)">Open secure checkout ↗ (new tab)</a><button type="button" id="translation-check-payment" hidden data-i18n="Check payment">Check payment</button></div>
+      <details class="purchase-terms"><summary data-i18n="Usage rates and expiry">Usage rates and expiry</summary>
+      <p class="hint">After the ten free sessions, new sessions draw from purchased credit at 5× the base speech API rates: $0.25 per 1,000 voice characters plus $1.10 per submitted audio hour. Live recognition includes repeated context, usually three submitted hours per listening hour. Shared live audio has the same paid access price for every listener.</p>
+      <p class="hint">Unused credit expires. Buying before expiry adds credit and keeps the later expiry date. Your pass works across players on this account.</p>
+      </details>
+      <p id="translation-purchase-note" role="status" aria-live="polite" aria-atomic="true"></p>
+    </dialog>
+      <script data-site="f6b791a3-13e0-4212-a2c9-abafc3b7aff0" src="https://crawlproof.com/stats.js" async></script>
+  </body>
+</html>

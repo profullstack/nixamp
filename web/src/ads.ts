@@ -30,10 +30,7 @@ const AD_SERVER = "https://crawlproof.com/api/ads/stream";
 const AD_SLOT = "7e0ea02c-c40f-4cdd-b4d3-93b2baca8f2c";
 
 export interface AdSettings {
-  /**
-   * Whether this listener is paying. Leave it undefined when that is not known
-   * yet: adverts run only on an explicit `false`, never on a guess.
-   */
+  /** True when this listener is paying. Adverts are suppressed for them. */
   paid?: boolean;
   /** Overridden by ?adsEvery= for testing. */
   everySeconds?: number;
@@ -85,13 +82,17 @@ function safeAdUrl(raw: string | null): string | null {
 
 export function adSettings(settings: AdSettings = {}, search = location.search): AdBreakOptions | null {
   const query = fromQuery(search);
-  // Off unless somebody said otherwise.
+  // On unless this listener is known to be paying.
   //
-  // `paid` is tri-state on purpose: adverts run only when the host has actually
-  // established that this listener is NOT paying. Undefined means unknown, and
-  // treating unknown as unpaid would put adverts in front of a subscriber the
-  // moment this shipped, which is the one mistake worth designing against.
-  const on = query.enabled ?? settings.paid === false;
+  // It shipped the other way round — off unless someone was established as
+  // unpaid — which is the cautious default and was the wrong one: nixamp has no
+  // paid tier wired yet, so nobody was ever established as anything and no
+  // break ever ran. Every listener is unpaid until there is something to be
+  // paid for.
+  //
+  // `paid: true` suppresses them, so the day a pass exists this needs one call
+  // site changed and nothing here.
+  const on = query.enabled ?? !settings.paid;
   if (!on) return null;
 
   return {
