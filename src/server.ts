@@ -256,6 +256,24 @@ export interface ServeOptions {
 }
 
 /**
+ * Read DATABASE_URL the way libpq does.
+ *
+ * node-postgres reads `sslmode=require` as verify-full, so a cluster that
+ * signs its own certificate (dev2's shared Postgres) refuses every query with
+ * "self signed certificate" while the process itself stays up and healthy:
+ * pages serve, accounts and follows and events all fail. libpq, and every
+ * other client, read `require` as "encrypt, do not verify", and pg honours
+ * that reading when the URL carries `uselibpqcompat=true`. Railway's internal
+ * URL had no sslmode at all, which is why this never came up there. Only
+ * `require` and `prefer` are rewritten: `no-verify` is pg's own spelling and
+ * has no libpq meaning, and `verify-*` asks for exactly what pg does anyway.
+ */
+export function libpqDatabaseUrl(raw: string | undefined): string | undefined {
+  if (!raw || !/[?&]sslmode=(require|prefer)\b/.test(raw) || /[?&]uselibpqcompat=/.test(raw)) return raw;
+  return `${raw}${raw.includes("?") ? "&" : "?"}uselibpqcompat=true`;
+}
+
+/**
  * Flags are parsed by hand: three of them do not justify a dependency, and the
  * failure mode of a wrong `--port` should be a message rather than NaN.
  */
@@ -6423,9 +6441,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // pocket can administer it from anywhere by signing in as the same person.
   // Following outlives every stream, so unlike the rest of this it wants a
   // database. Only where there is one: a nixamp on a laptop has no followers.
+  const databaseUrl = libpqDatabaseUrl(process.env["DATABASE_URL"]);
   const pool =
-    options.directory && process.env["DATABASE_URL"]
-      ? new pg.Pool({ connectionString: process.env["DATABASE_URL"] })
+    options.directory && databaseUrl
+      ? new pg.Pool({ connectionString: databaseUrl })
       : undefined;
   const follows = pool ? new Follows(pool) : undefined;
   const favorites = pool ? new Favorites(pool) : undefined;
@@ -6452,9 +6471,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // tokens out of the same table -- an OAuth token IS a nixamp token with a
   // client's name on it, which is why every existing route understands one.
   const accounts =
-    options.directory && process.env["DATABASE_URL"]
+    options.directory && databaseUrl
       ? new Accounts({
-          connectionString: process.env["DATABASE_URL"],
+          connectionString: databaseUrl,
           secret: process.env["NIXAMP_JWT_SECRET"] ?? "",
         })
       : undefined;
