@@ -43,6 +43,24 @@ const AD_SERVER = "https://crawlproof.com/api/ads/stream";
 const PRODUCT = "nixamp.pro";
 
 /**
+ * Which kind of break to ask for.
+ *
+ * A radio station is audio and has nowhere to put a picture, so asking for
+ * video hands a music listener a film to interrupt their music. The serving
+ * side already understands the difference and will answer with the audible
+ * companion when a creative has one; it just has to be asked the right
+ * question.
+ *
+ * Decided per break rather than once, because nixamp swaps between audio and
+ * video as the listener moves between a station and a film.
+ */
+function breakKind(): "audio" | "video" {
+  const video = document.querySelector<HTMLVideoElement>("#video");
+  const playing = video && !video.hidden && video.currentSrc && !video.paused;
+  return playing ? "video" : "audio";
+}
+
+/**
  * What this listener has paid for.
  *
  * nixamp has no OpenAccess client yet, so this endpoint does not exist and the
@@ -139,7 +157,9 @@ export async function adSettings(
       // or data: URL at somebody.
       if (query.adUrl) return { url: query.adUrl };
       try {
-        const url = `${AD_SERVER}?slot=${encodeURIComponent(settings.slot ?? AD_SLOT)}&kind=video`;
+        const url =
+          `${AD_SERVER}?slot=${encodeURIComponent(settings.slot ?? AD_SLOT)}` +
+          `&kind=${breakKind()}`;
         const res = await fetch(url, { headers: { accept: "application/json" } });
         if (!res.ok) return null;
         const body = (await res.json()) as { url?: string | null; kind?: "audio" | "video" };
