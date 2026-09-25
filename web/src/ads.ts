@@ -144,6 +144,41 @@ function safeAdUrl(raw: string | null): string | null {
   }
 }
 
+/**
+ * Telling the network what the listener actually did.
+ *
+ * The break endpoint meters that an advert was CHOSEN. Only the player knows
+ * whether it then ran, and the difference between those two numbers is the
+ * whole question — an advert selected for a listener who never heard a second
+ * of it is not an advert that played, and without this it is indistinguishable
+ * from one that did.
+ *
+ * Reported with an image request rather than fetch or sendBeacon. It needs no
+ * CORS preflight, it survives the page being torn down, and it is the same
+ * pixel the network's own units use, so there is one endpoint and one
+ * definition of "started" rather than two that drift.
+ *
+ * What is NOT reported here is quartiles. The player exposes the start and the
+ * end of a break, not its progress, so a quarter-watched advert is honestly
+ * unknown rather than guessed at from a timer. Reporting a midpoint we did not
+ * observe would be worse than reporting nothing.
+ */
+type BreakReport = { decision: string; endpoint: string; url: string };
+
+let current: BreakReport | null = null;
+
+function report(type: string): void {
+  if (!current) return;
+  try {
+    const q =
+      `${current.endpoint}?d=${encodeURIComponent(current.decision)}` +
+      `&t=${encodeURIComponent(type)}&s=player`;
+    new Image().src = q;
+  } catch {
+    // A measurement we could not send is not the listener's problem.
+  }
+}
+
 export async function adSettings(
   settings: AdSettings = {},
   search = location.search,
@@ -167,15 +202,45 @@ export async function adSettings(
           `&kind=${breakKind()}`;
         const res = await fetch(url, { headers: { accept: "application/json" } });
         if (!res.ok) return null;
-        const body = (await res.json()) as { url?: string | null; kind?: "audio" | "video" };
-        return body.url ? { url: body.url, kind: body.kind } : null;
+        const body = (await res.json()) as {
+          url?: string | null;
+          kind?: "audio" | "video";
+          decisionId?: string | null;
+          eventsUrl?: string | null;
+        };
+        if (!body.url) return null;
+        // Kept so the break's outcome can be reported against the same
+        // decision the network handed out. Null when the network could not
+        // record one, which means measurement is off for this break and the
+        // advert plays exactly as it would have.
+        current =
+          body.decisionId && body.eventsUrl
+            ? { decision: body.decisionId, endpoint: body.eventsUrl, url: body.url }
+            : null;
+        return { url: body.url, kind: body.kind };
       } catch {
         // A break nobody can fill is a break that does not happen. The listener
         // keeps their music either way.
         return null;
       }
     },
-    onError: (error) => console.warn("advert failed", error),
+    onBreakStart: (info) => {
+      // Guard on the url: a break that started is only this decision's if it
+      // is playing this decision's file.
+      if (current && current.url !== info.url) current = null;
+      report("start");
+    },
+    onBreakEnd: (info) => {
+      // `skipped` is the listener choosing to leave; anything else reaching
+      // the end is the advert having played through.
+      report(info.skipped ? "abandon" : "complete");
+      current = null;
+    },
+    onError: (error) => {
+      report("error");
+      current = null;
+      console.warn("advert failed", error);
+    },
   };
 
   // ?ads=1 is for demonstrating the break on an account that may well be
