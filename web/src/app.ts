@@ -407,6 +407,19 @@ export function start(): void {
    * where a server you own offers both ways in.
    */
   let viewerOnly = false;
+  /**
+   * The query string this page was opened with, kept.
+   *
+   * A link carrying `url=` has its whole query stripped from the address bar
+   * on the way in, because it holds a share key. That happens synchronously at
+   * startup, while the advert settings are read after an await, so by the time
+   * they looked at `location.search` it was already empty: `?ads=1`,
+   * `?adsEvery=` and `?adNow` were silently dropped on exactly the shared
+   * stream links a listener actually opens, which is every one of them.
+   *
+   * Read once, here, before anything can rewrite it.
+   */
+  const openedWith = globalThis.location?.search ?? "";
   /** What the link that opened this page asked to play, until it has been. */
   let askedToPlay = "";
   /** And from what second, for a file. */
@@ -925,7 +938,7 @@ export function start(): void {
     // The day a pass exists, `paid: true` is what suppresses a break, and it
     // gets passed from wherever that pass is known.
     void (async () => {
-      player.enableAds(adStage as HTMLElement, await adSettings());
+      player.enableAds(adStage as HTMLElement, await adSettings({}, openedWith));
 
       // ?adNow plays one straight away. Without it, seeing an advert means
       // first finding something to play and then waiting out the interval,
@@ -935,7 +948,7 @@ export function start(): void {
       // listener wired before it would let the first click call playAdNow on a
       // player that has no break configured yet, and the once:true listener
       // would be spent on nothing.
-      if (adNowRequested()) {
+      if (adNowRequested(openedWith)) {
         // Not on load: a browser refuses to play sound before the page has been
         // interacted with ("NotAllowedError: play() failed because the user
         // didn't interact with the document first"), so the advert would fire,
