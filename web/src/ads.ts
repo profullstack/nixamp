@@ -16,8 +16,15 @@ import {
  * on its own; when the host knows better it says so through `paid`.
  */
 
-/** How often a break comes round. ?adsEvery= overrides it for a quick test. */
-const DEFAULT_EVERY_SECONDS = 300;
+/**
+ * How often a break comes round.
+ *
+ * TEMPORARY: 10 seconds while the network is being tested end to end. Nobody
+ * would ship this — it is an advert every ten seconds — and it goes back to 300
+ * once the fills, the impressions and the playback have been watched working.
+ * ?adsEvery= still overrides it either way.
+ */
+const DEFAULT_EVERY_SECONDS = 10;
 
 /**
  * Where a break gets filled from.
