@@ -914,24 +914,58 @@ export function start(): void {
   // stage: an MP3 advert shows only a badge there, leaving the artwork alone.
   const adStage = dom.video.closest("section") ?? dom.video.parentElement;
   if (adStage) {
-    player.enableAds(adStage as HTMLElement, adSettings());
-    // ?adNow plays one straight away. Without it, seeing an advert means first
-    // finding something to play and then waiting out the interval, which is a
-    // lot to ask of somebody you have handed a link to.
-    if (adNowRequested()) {
-      // Not on load: a browser refuses to play sound before the page has been
-      // interacted with ("NotAllowedError: play() failed because the user
-      // didn't interact with the document first"), so the advert would fire,
-      // be blocked, and hide itself again. The first click is the gesture that
-      // makes it allowed. In normal use the gesture is whatever started the
-      // music, which is why the timed break needs none of this.
-      const playOnFirstGesture = (): void => {
-        adStage.scrollIntoView({ block: "center" });
-        void player.playAdNow();
-      };
-      addEventListener("pointerdown", playOnFirstGesture, { once: true });
-      addEventListener("keydown", playOnFirstGesture, { once: true });
-    }
+    // Establishing entitlement is the host's job, and adSettings will not guess
+    // at it: with `paid` left undefined it returns null and no break ever runs.
+    // Nothing here ever passed it, so adverts were off for every listener no
+    // matter what the network had to serve — ?ads=1 was the only way to see one.
+    //
+    // The only claim that can be made safely is the one ads.ts documents: a
+    // listener with no session cannot be a paying one. Signed in is deliberately
+    // NOT treated as unpaid, because nixamp has no subscription state to read
+    // and guessing the other way would put adverts in front of somebody who may
+    // be paying.
+    //
+    // Asked asynchronously, and enableAds is called when the answer arrives.
+    // The first timed break is five minutes out, so nothing is lost by knowing
+    // a moment later — and ?ads=1 still forces them on regardless of the answer.
+    void (async () => {
+      const accountApi = /(^|\.)nixamp\.com$/.test(globalThis.location.hostname)
+        ? ""
+        : "https://nixamp.com";
+      let paid: boolean | undefined;
+      try {
+        const answer = await fetch(`${accountApi}/api/v1/me/handle`);
+        // 401 is the useful answer: nobody is signed in, so nobody is paying.
+        // A 200, or anything unreadable, leaves it unknown and runs no adverts.
+        paid = answer.status === 401 ? false : undefined;
+      } catch {
+        paid = undefined;
+      }
+      player.enableAds(adStage as HTMLElement, adSettings({ paid }));
+
+      // ?adNow plays one straight away. Without it, seeing an advert means
+      // first finding something to play and then waiting out the interval,
+      // which is a lot to ask of somebody you have handed a link to.
+      //
+      // Registered here rather than above, because enableAds is now awaited: a
+      // listener wired before it would let the first click call playAdNow on a
+      // player that has no break configured yet, and the once:true listener
+      // would be spent on nothing.
+      if (adNowRequested()) {
+        // Not on load: a browser refuses to play sound before the page has been
+        // interacted with ("NotAllowedError: play() failed because the user
+        // didn't interact with the document first"), so the advert would fire,
+        // be blocked, and hide itself again. The first click is the gesture that
+        // makes it allowed. In normal use the gesture is whatever started the
+        // music, which is why the timed break needs none of this.
+        const playOnFirstGesture = (): void => {
+          adStage.scrollIntoView({ block: "center" });
+          void player.playAdNow();
+        };
+        addEventListener("pointerdown", playOnFirstGesture, { once: true });
+        addEventListener("keydown", playOnFirstGesture, { once: true });
+      }
+    })();
   }
 
 
