@@ -53,7 +53,7 @@
       "dependencies": {
         "@profullstack/long-string-scroller": "workspace:*",
         "@profullstack/notifications": "^0.1.0",
-        "@profullstack/player": "^0.13.1",
+        "@profullstack/player": "^0.13.2",
         "fastenhancer-web": "^0.1.1",
         "fft.js": "4.0.4",
       },
@@ -205,7 +205,7 @@
 
     "@profullstack/notifications": ["@profullstack/notifications@0.1.0", "", {}, "sha512-17jiBCRiZVDcIyWnWKYr5E2eVog/1iHgXaruGbmlw7j7Ob4zd6oOqGjh8BP8wm13iFwikczYObQwSrGadBdnGw=="],
 
-    "@profullstack/player": ["@profullstack/player@0.13.1", "", { "dependencies": { "hls.js": "^1.7.1", "mpegts.js": "^1.8.2" }, "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-LUE3ktIMhCP9QgAEVdsSyxl578sovJv3L+VXtwrHDyNNL6MeaUxPCgPoCzOJI/gDNrOdSrp1ZFVdtwVqL18WRg=="],
+    "@profullstack/player": ["@profullstack/player@0.13.2", "", { "dependencies": { "hls.js": "^1.7.1", "mpegts.js": "^1.8.2" }, "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-NcNbgPtIUB7pQ7Jdio82KrYU6/YSPNgkywVyRX916n0dqkPHhdFlTqKvrCs3SZ9h/m4wLLdCnL+V+0+6YLwysQ=="],
 
     "@profullstack/synconfig": ["@profullstack/synconfig@0.1.2", "", {}, "sha512-t1Pdms+k/+A7tgFCAcNx8Dry0kwboPEue9Pw2pbn/chXSMfp1dxrcFz672zWkDgvcB7YBmYpIjnvW4NkNkE4Rg=="],
 
