@@ -1401,6 +1401,9 @@ export function isSignInPath(path: string): boolean {
     // reason it exists: the listeners who get adverts are the ones who have
     // not signed in or paid.
     path === "/api/ads/next" ||
+    // What this listener has paid for, asked before every break by the same
+    // people and for the same reason, so it answers on the same terms.
+    path === "/api/entitlements" ||
     // "Connect nixamp" on a site that is a client of nixamp.com.
     nixampLinkPath(path) ||
     // Public to read, so it must not be behind a share key either.
@@ -2487,6 +2490,23 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // ask twice for one break.
     if (path === "/api/ads/next" && request.method === "GET") {
       json(response, 200, await nextAdvert(url.searchParams.get("kind")));
+      return;
+    }
+
+    // What this listener has paid for.
+    //
+    // Nothing yet, and saying so is the point. The player asks this before
+    // every break to decide whether to run one; with no route it asked, got a
+    // 404 on every page load, and read the miss as "holds nothing" — the right
+    // answer by the wrong road, and a console error that looked like a fault
+    // to anybody who opened the devtools.
+    //
+    // An empty list is the honest reply while nixamp has no OpenAccess client:
+    // there is no pass to hold, so nobody holds one. The shape is the one the
+    // player already reads, so wiring the hub later is a change here and
+    // nowhere else.
+    if (path === "/api/entitlements" && request.method === "GET") {
+      json(response, 200, { entitlements: [] });
       return;
     }
 
