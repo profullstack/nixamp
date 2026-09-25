@@ -150,6 +150,7 @@ import {
 } from "./audio.ts";
 import { Analyser, bandEdges, bands, decay } from "./fft.ts";
 import { loadSource, loadTagged, readRemoteIndex } from "./playlist.ts";
+import { nextAdvert } from "./ads.ts";
 import {
   emptySnapshot, parseCommand,
   type Command, type RemoteTrack, type Snapshot,
@@ -1395,6 +1396,10 @@ export function isSignInPath(path: string): boolean {
     path.startsWith("/api/v1/me/profile/") ||
     // A stored photo is public: it is on every class the host runs.
     path.startsWith("/api/v1/profiles/") ||
+    // An advert for a break. It has to answer without a key for the same
+    // reason it exists: the listeners who get adverts are the ones who have
+    // not signed in or paid.
+    path === "/api/ads/next" ||
     // "Connect nixamp" on a site that is a client of nixamp.com.
     nixampLinkPath(path) ||
     // Public to read, so it must not be behind a share key either.
@@ -2465,6 +2470,22 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // which room they wanted twice.
       json(response, 200, { ok: true });
       void partyLine.handle(event.data ?? {}).catch(() => {});
+      return;
+    }
+
+    // An advert for a break.
+    //
+    // Answered here, before the key check, because the listeners who get
+    // adverts are precisely the ones with no key and no session. The player
+    // asks for this when a break is due and treats anything but a url as "no
+    // advert", so every failure below is a silent null: a break nobody can
+    // fill simply does not happen and the listener keeps their music.
+    //
+    // Nothing about which advert to play is decided here. That is crawlproof's
+    // auction, and it meters the impression — so this must not cache, retry, or
+    // ask twice for one break.
+    if (path === "/api/ads/next" && request.method === "GET") {
+      json(response, 200, await nextAdvert(url.searchParams.get("kind")));
       return;
     }
 
