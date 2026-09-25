@@ -19,12 +19,12 @@ import {
 /**
  * How often a break comes round.
  *
- * Five minutes. The ten-second interval this carried was for watching the
- * network end to end — the fill, the impression, the playback — and that has
- * now been watched working. ?adsEvery= still shortens it for a quick look
- * without anyone editing this.
+ * TEMPORARY: ten seconds while the kinks are ironed out. Nobody would ship an
+ * advert every ten seconds, and it goes back to 300 the moment the fills, the
+ * audio, the entitlement check and the playback have all been watched working
+ * together. ?adsEvery= overrides it either way.
  */
-const DEFAULT_EVERY_SECONDS = 300;
+const DEFAULT_EVERY_SECONDS = 10;
 
 /**
  * Where a break gets filled from.
