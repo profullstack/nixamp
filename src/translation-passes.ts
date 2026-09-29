@@ -1,6 +1,6 @@
 /** Account-bound, prepaid translation credit. Money is integer micro-USD;
  * each listening account reserves 5x base provider cost for paid access. */
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Queryable } from "./follows.ts";
 import { SpeechError } from "./speech.ts";
 import { UpgradeAllowances, type UpgradeAllowance } from "./upgrade-allowance.ts";
@@ -51,6 +51,44 @@ function cents(value: unknown): number {
 export function verifyTranslationPayment(payment: Record<string, unknown>, id: string, priceCents: number): boolean {
   return payment["id"] === id && PAID.has(String(payment["status"])) &&
     String(payment["currency"]).toUpperCase() === "USD" && cents(payment["amount"]) === priceCents;
+}
+
+/** Which CoinPay key this deployment sells with. `COINPAY_API_KEY` is nixamp's
+ * own business; `COINPAY_X402_KEY` is the older name, still honoured so a box
+ * that has only it keeps selling. The own key wins, because the fleet-wide
+ * x402 key belongs to another site's business and would book nixamp's sales
+ * (and send its webhooks) there. */
+export function coinpayKeyFrom(env: NodeJS.ProcessEnv = process.env): string {
+  return env["COINPAY_API_KEY"] || env["COINPAY_X402_KEY"] || "";
+}
+
+/** CoinPay signs `t=<unix>,v1=<hex HMAC-SHA256 of "t.rawBody">` and allows
+ * 300 s of skew. Computed over the raw bytes: reserialising changes them. */
+export function verifyCoinpaySignature(raw: string, header: string | undefined, secret: string, nowMs = Date.now()): boolean {
+  if (!secret || !header) return false;
+  let t = "", v1 = "";
+  for (const part of header.split(",")) {
+    const at = part.indexOf("=");
+    const name = part.slice(0, at).trim(), value = part.slice(at + 1).trim();
+    if (name === "t") t = value; else if (name === "v1") v1 = value;
+  }
+  if (!/^\d{1,12}$/.test(t) || !/^[a-f0-9]{64}$/i.test(v1)) return false;
+  if (Math.abs(nowMs / 1000 - Number(t)) > 300) return false;
+  const expected = createHmac("sha256", secret).update(`${t}.${raw}`).digest();
+  return timingSafeEqual(expected, Buffer.from(v1, "hex"));
+}
+
+/** CoinPay's webhook nests the payment under `data`, and its top-level `id` is
+ * the EVENT (`evt_…`), not the payment. Read `data` first; the flat shape is
+ * only the older test sender's. */
+export function readCoinpayWebhook(payload: unknown): { type: string; paymentId: string; status: string } {
+  const body = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const data = body["data"] && typeof body["data"] === "object" ? body["data"] as Record<string, unknown> : body;
+  return {
+    type: String(body["type"] ?? ""),
+    paymentId: String(data["payment_id"] ?? data["id"] ?? ""),
+    status: String(data["status"] ?? "").toLowerCase(),
+  };
 }
 
 export class TranslationPasses implements TranslationMeter {
@@ -208,6 +246,21 @@ export class TranslationPasses implements TranslationMeter {
       await this.options.db.query("UPDATE translation_orders SET payment_id = $2 WHERE id = $1 AND payment_id IS NULL", [order["id"], paymentId]);
     }
     return { id: String(order["id"]), url: `https://coinpayportal.com/pay/${paymentId}` };
+  }
+  /**
+   * A CoinPay webhook only says "look again". The order is settled by asking
+   * CoinPay, exactly as a returning buyer's check does, so a replayed or
+   * stale body cannot credit anything and a second delivery (confirmed, then
+   * forwarded) credits nothing twice. A payment that is not ours is answered,
+   * not failed: CoinPay would otherwise retry it forever.
+   */
+  async settle(paymentId: string): Promise<{ settled: boolean; status?: string; reason?: string }> {
+    if (!ID.test(paymentId)) return { settled: false, reason: "unknown payment" };
+    await this.ensure();
+    const order = (await this.options.db.query("SELECT id, by_account FROM translation_orders WHERE payment_id = $1", [paymentId])).rows[0];
+    if (!order) return { settled: false, reason: "unknown payment" };
+    const { status } = await this.check(String(order["by_account"]), String(order["id"]));
+    return { settled: status === "paid", status };
   }
   async check(by: string, id: string): Promise<{ status: string; access: TranslationAccess }> {
     if (!ID.test(id)) throw new SpeechError("Purchase not found.", 404);

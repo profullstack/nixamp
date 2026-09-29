@@ -168,7 +168,7 @@ export function paywallFromEnv(env: NodeJS.ProcessEnv = process.env): PaywallCon
   return {
     enabled: env["NIXAMP_X402"] === "1",
     payTo: env["NIXAMP_PAY_TO"] ?? "",
-    coinpayKey: env["COINPAY_X402_KEY"] ?? "",
+    coinpayKey: env["COINPAY_API_KEY"] || env["COINPAY_X402_KEY"] || "",
     priceCents: Number.isFinite(price) && price > 0 ? Math.floor(price) : DEFAULT_PAYWALL.priceCents,
     passMinutes:
       Number.isFinite(minutes) && minutes > 0 ? Math.floor(minutes) : DEFAULT_PAYWALL.passMinutes,

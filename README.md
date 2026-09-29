@@ -619,9 +619,14 @@ multiplied by five. Credentials and balances never travel in checkout URLs.
 New checkout creation is capped at five per account and fifty per account server
 per UTC day, plus IP and request throttles; retries reuse the original invoice.
 
-After the ten free sessions, new sessions require purchased credit. Configure `COINPAY_X402_KEY`
-with `payments:create` permission and at least one business wallet; the scoped
-key supplies the merchant identity. Free sessions and existing credit still work during a
+After the ten free sessions, new sessions require purchased credit. Configure `COINPAY_API_KEY`
+(the older name `COINPAY_X402_KEY` still works; `COINPAY_API_KEY` wins when both are set)
+with `payments:create` and `payments:read` permission and at least one business wallet. The scoped
+key supplies the merchant identity, so it must belong to nixamp's own CoinPay business. Set
+`COINPAY_WEBHOOK_SECRET` to that business's webhook secret and its webhook URL to
+`https://<site>/api/v1/webhooks/coinpay`, and a paid order is credited even if the buyer never
+comes back to the page. The webhook body is only a nudge: the order is re-checked with CoinPay
+before anything is credited, and it is credited once however many times it is delivered. Free sessions and existing credit still work during a
 checkout outage. A self-hosted operator explicitly sponsoring API usage may set
 `NIXAMP_TRANSLATION_BILLING=off`.
 
