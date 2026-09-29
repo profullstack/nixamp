@@ -20,7 +20,7 @@ import { Readable } from "node:stream";
 import { pipeline as pipeStream } from "node:stream/promises";
 import { relative } from "node:path";
 import { SharedTranslations, type SharedEvent } from "./shared-translation.ts";
-import { TranslationPasses } from "./translation-passes.ts";
+import { TranslationPasses, coinpayKeyFrom, readCoinpayWebhook, verifyCoinpaySignature } from "./translation-passes.ts";
 import { LiveVoice, LIVE_VOICE_LANGUAGES, LIVE_VOICE_MODEL, type VoiceRequest } from "./live-voice.ts";
 import { Connections, type Kind } from "./connections.ts";
 import {
@@ -1814,6 +1814,8 @@ export interface HandlerOptions {
   speech?: Speech;
   liveVoice?: LiveVoice;
   translationPasses?: TranslationPasses;
+  /** Signing secret of nixamp's CoinPay business, for /api/v1/webhooks/coinpay. */
+  coinpayWebhookSecret?: string;
   sharedTranslations?: SharedTranslations;
   /** Translation: texts in another language, by a model here. The same optional library. */
   translator?: Translator;
@@ -2432,6 +2434,35 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
 
       json(response, 404, { error: "no such endpoint" });
+      return;
+    }
+
+    // --- CoinPay ----------------------------------------------------------
+    //
+    // Ahead of the share-key check because the caller is CoinPay, which signs
+    // the body instead. The body is only a nudge: settle() asks CoinPay for the
+    // payment itself before anything is credited.
+    if (path === "/api/v1/webhooks/coinpay") {
+      if (request.method !== "POST") { json(response, 405, { error: "POST only" }); return; }
+      const secret = options.coinpayWebhookSecret ?? "";
+      if (!secret) { json(response, 503, { error: "CoinPay webhooks are not configured here." }); return; }
+      let raw: string;
+      try { raw = await readBody(request); } catch { json(response, 413, { error: "body too large" }); return; }
+      const signature = request.headers["x-coinpay-signature"];
+      if (!verifyCoinpaySignature(raw, Array.isArray(signature) ? signature[0] : signature, secret)) {
+        json(response, 401, { error: "invalid signature" }); return;
+      }
+      let event: ReturnType<typeof readCoinpayWebhook>;
+      try { event = readCoinpayWebhook(JSON.parse(raw)); } catch { json(response, 400, { error: "invalid JSON" }); return; }
+      if (!options.translationPasses) { json(response, 200, { settled: false, reason: "billing is off here" }); return; }
+      try {
+        json(response, 200, await options.translationPasses.settle(event.paymentId));
+      } catch (error) {
+        // A 5xx makes CoinPay deliver it again, which is what an unreachable
+        // CoinPay or database needs.
+        console.error(`nixamp: CoinPay webhook for ${event.paymentId} could not settle: ${error instanceof Error ? error.message : String(error)}`);
+        json(response, 500, { error: "could not settle; retry" });
+      }
       return;
     }
 
@@ -6484,7 +6515,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // Account servers meter paid providers by default, including when checkout
   // is temporarily unconfigured. Self-hosters can explicitly sponsor usage.
   const translationPasses = accounts && pool && process.env["NIXAMP_TRANSLATION_BILLING"] !== "off"
-    ? new TranslationPasses({ db: pool, key: process.env["COINPAY_X402_KEY"] ?? "", site: nixampSite }) : undefined;
+    ? new TranslationPasses({ db: pool, key: coinpayKeyFrom(), site: nixampSite }) : undefined;
   if (translationPasses) void translationPasses.access().catch(() => console.error("nixamp: translation checkout could not warm; it will retry on demand"));
   const liveVoice = accounts && process.env["NIXAMP_DUBBING"] !== "off" ? new LiveVoice({
     ...(pool ? { db: pool } : {}),
@@ -7034,6 +7065,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(speech ? { speech } : {}),
     ...(liveVoice ? { liveVoice } : {}),
     ...(translationPasses ? { translationPasses } : {}),
+    ...(process.env["COINPAY_WEBHOOK_SECRET"] ? { coinpayWebhookSecret: process.env["COINPAY_WEBHOOK_SECRET"] } : {}),
     ...(sharedTranslations ? { sharedTranslations } : {}),
     ...(translator ? { translator } : {}),
     ...(transcripts ? { transcripts } : {}),

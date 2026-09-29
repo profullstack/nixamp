@@ -185,7 +185,7 @@ export function ticketsFromEnv(
   site: string,
   env: NodeJS.ProcessEnv = process.env,
 ): TicketOptions | null {
-  const coinpayKey = env["COINPAY_X402_KEY"] ?? "";
+  const coinpayKey = env["COINPAY_API_KEY"] || env["COINPAY_X402_KEY"] || "";
   if (!coinpayKey) return null;
   return {
     coinpayKey,
