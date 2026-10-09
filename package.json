@@ -1,6 +1,6 @@
 {
   "name": "nixamp",
-  "version": "0.28.43",
+  "version": "0.28.44",
   "description": "It really whips the terminal's ass. A Winamp-shaped audio player for your terminal.",
   "license": "MIT",
   "type": "module",
@@ -45,7 +45,7 @@
     "pack:cli": "bun scripts/pack-cli.ts"
   },
   "dependencies": {
-    "@profullstack/auth-system": "^0.6.0",
+    "@profullstack/auth-system": "^0.8.3",
     "@profullstack/hqtui": "^0.5.0",
     "@profullstack/notifications": "^0.1.0",
     "@profullstack/synconfig": "^0.1.2",
@@ -60,6 +60,7 @@
   "devDependencies": {
     "@types/node": "^26",
     "@types/pg": "^8.23.1",
+    "jsonwebtoken": "^9.0.2",
     "typescript": "^7.0.2"
   },
   "trustedDependencies": [

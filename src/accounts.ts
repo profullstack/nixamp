@@ -142,11 +142,19 @@ export class Accounts {
       (options.system
         ? null
         : (new PostgresAdapter({ connectionString: options.connectionString }) as unknown as AdapterLike));
+    // Without a secret the module signs with a public default, and anyone can
+    // mint a session for any account. Refuse rather than run that way.
+    if (!options.system && !options.secret) {
+      throw new Error("NIXAMP_JWT_SECRET is required for accounts");
+    }
     this.system =
       options.system ??
       (createAuthSystem({
         adapter,
-        jwtSecret: options.secret,
+        // tokenOptions.secret, not jwtSecret: the module has no top-level
+        // jwtSecret, and until 2026-10-09 this passed one, so every JWT was
+        // signed with the module's public default secret.
+        tokenOptions: { secret: options.secret },
         // The module defaults to requiring an uppercase and a lowercase
         // letter. Its rules have to match the ones checked above, or a password
         // this accepts is refused a layer down in a different sentence.

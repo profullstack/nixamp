@@ -80,9 +80,18 @@ declare module "@profullstack/auth-system" {
 
   export function createAuthSystem(options?: {
     adapter?: unknown;
-    jwtSecret?: string;
-    accessTokenExpiry?: string | number;
-    refreshTokenExpiry?: string | number;
+    /**
+     * Signing for the module's JWTs. The secret goes HERE: the module has no
+     * top-level jwtSecret, and one there is silently ignored, leaving tokens
+     * signed with its public default ('default-secret-change-me').
+     */
+    tokenOptions?: {
+      secret?: string;
+      /** Seconds. */
+      accessTokenExpiry?: number;
+      /** Seconds. */
+      refreshTokenExpiry?: number;
+    };
     /**
      * Composition rules. Every "require" defaults to true except
      * requireSpecialChars, so leaving this out is stricter than passing it.
