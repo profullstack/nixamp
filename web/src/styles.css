@@ -1073,7 +1073,6 @@ button.golive:disabled { opacity: 0.5; cursor: progress; }
 body.tv .statusbar .tv-toggle { color: var(--green); }
 .statusbar .spacer { flex: 1; }
 .statusbar a { color: var(--muted); }
-.statusbar .webring { display: inline-flex; gap: 0.5rem; }
 
 /* The public directory, inside the Remote panel rather than over the top of
    it: a modal here would hide the address field you are about to fill in. */
