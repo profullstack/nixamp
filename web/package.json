@@ -19,6 +19,7 @@
     "vite": "^8.2.2"
   },
   "dependencies": {
+    "@profullstack/footer": "latest",
     "@profullstack/long-string-scroller": "workspace:*",
     "@profullstack/notifications": "^0.1.0",
     "@profullstack/player": "^0.13.2",
