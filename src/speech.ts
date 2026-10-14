@@ -43,11 +43,10 @@ export const DEFAULT_MODEL = "onnx-community/whisper-base";
 /** Stored live lines from older recognition settings must be heard again. */
 export const NATIVE_REVISION = "native-v2";
 
-export class SpeechError extends Error {
-  constructor(message: string, readonly status: number) {
-    super(message);
-  }
-}
+/** The package's class, so an error thrown inside @profullstack/live-translate
+ * is still `instanceof SpeechError` to the server's handlers. */
+export { SpeechError } from "@profullstack/live-translate/core";
+import { SpeechError } from "@profullstack/live-translate/core";
 
 /** A stretch of the clip and what was said in it, seconds from the clip's start. */
 export interface Segment {
