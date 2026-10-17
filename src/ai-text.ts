@@ -59,15 +59,18 @@ export function hasModel(env: Record<string, string | undefined> = process.env):
 export async function askJson(options: AskOptions): Promise<Answer> {
   const env = options.env ?? process.env;
   const send = options.fetcher ?? fetch;
-  const signal = AbortSignal.timeout(options.timeoutMs ?? 30_000);
   const gemini = aiKey("GEMINI_API_KEY", env);
   const openai = aiKey("OPENAI_API_KEY", env);
   const anthropic = aiKey("ANTHROPIC_API_KEY", env);
-  if (gemini) {
+  // Each model with a key, in turn: one that refuses this server (Gemini
+  // answers 400 "User location is not supported" from some networks) or is
+  // down is not a reason to go without when another can answer.
+  const tries: Array<() => Promise<Answer>> = [];
+  if (gemini) tries.push(async () => {
     const model = env["NIXAMP_GEMINI_MODEL"] || "gemini-flash-latest";
     const response = await send(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: "POST",
-      signal,
+      signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
       headers: { "content-type": "application/json", "x-goog-api-key": gemini },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: options.system }] },
@@ -75,16 +78,19 @@ export async function askJson(options: AskOptions): Promise<Answer> {
         generationConfig: { responseMimeType: "application/json", temperature: 0.9 },
       }),
     });
-    if (!response.ok) throw new Error(`gemini answered HTTP ${response.status}`);
+    if (!response.ok) {
+      const said = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+      throw new Error(`gemini answered HTTP ${response.status}${said.error?.message ? `: ${said.error.message}` : ""}`);
+    }
     const body = (await response.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
     const text = body.candidates?.[0]?.content?.parts?.map((one) => one.text ?? "").join("") ?? "";
     return { model, value: firstObject(text) };
-  }
-  if (openai) {
+  });
+  if (openai) tries.push(async () => {
     const model = env["NIXAMP_OPENAI_MODEL"] || "gpt-4.1-mini";
     const response = await send("https://api.openai.com/v1/chat/completions", {
       method: "POST",
-      signal,
+      signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
       headers: { "content-type": "application/json", authorization: `Bearer ${openai}` },
       body: JSON.stringify({
         model,
@@ -95,12 +101,12 @@ export async function askJson(options: AskOptions): Promise<Answer> {
     if (!response.ok) throw new Error(`openai answered HTTP ${response.status}`);
     const body = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     return { model, value: firstObject(body.choices?.[0]?.message?.content ?? "") };
-  }
-  if (anthropic) {
+  });
+  if (anthropic) tries.push(async () => {
     const model = env["NIXAMP_ANTHROPIC_MODEL"] || "claude-haiku-5-5";
     const response = await send("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      signal,
+      signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
       headers: { "content-type": "application/json", "x-api-key": anthropic, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model,
@@ -112,6 +118,15 @@ export async function askJson(options: AskOptions): Promise<Answer> {
     if (!response.ok) throw new Error(`anthropic answered HTTP ${response.status}`);
     const body = (await response.json()) as { content?: Array<{ type: string; text?: string }> };
     return { model, value: firstObject(body.content?.filter((one) => one.type === "text").map((one) => one.text ?? "").join("") ?? "") };
+  });
+  if (tries.length === 0) throw new NoModel();
+  const failures: string[] = [];
+  for (const attempt of tries) {
+    try {
+      return await attempt();
+    } catch (error) {
+      failures.push((error as Error).message);
+    }
   }
-  throw new NoModel();
+  throw new Error(failures.join("; "));
 }

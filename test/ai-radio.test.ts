@@ -156,3 +156,20 @@ test("AI radio over HTTP is the owner's, and keys are never shown back", async (
     rmSync(top, { recursive: true, force: true });
   }
 });
+
+test("a model that refuses this server hands over to the next one with a key", async () => {
+  const { askJson } = await import("../src/ai-text.ts");
+  const asked: string[] = [];
+  const fetcher = (async (url: string) => {
+    asked.push(new URL(url).host);
+    if (url.includes("googleapis")) return new Response(JSON.stringify({ error: { message: "User location is not supported for the API use." } }), { status: 400 });
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"title":"T","prompt":"P"}' } }] }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const env = { GEMINI_API_KEY: "g", OPENAI_API_KEY: "o" };
+  const answer = await askJson({ system: "s", prompt: "p", fetcher, env });
+  assert.deepEqual(asked, ["generativelanguage.googleapis.com", "api.openai.com"]);
+  assert.equal(answer.model, "gpt-4.1-mini");
+  assert.deepEqual(answer.value, { title: "T", prompt: "P" });
+  const failing = (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
+  await assert.rejects(askJson({ system: "s", prompt: "p", fetcher: failing, env }), /gemini answered HTTP 500; openai answered HTTP 500/);
+});
