@@ -179,7 +179,11 @@ async function withServer(
   try {
     await body(`http://127.0.0.1:${port}`);
   } finally {
-    await new Promise<void>((done) => server.close(() => done()));
+    // fetch keeps its connections for the next request, and close() waits
+    // for every one of them: let them go, or a test waits out the keep-alive.
+    const closing = new Promise<void>((done) => server.close(() => done()));
+    (server as { closeAllConnections?: () => void }).closeAllConnections?.();
+    await closing;
   }
 }
 
@@ -277,6 +281,9 @@ test("the built PWA is served, and an unknown path falls back to its shell", asy
 
       const asset = await fetch(`${base}/app.js`);
       assert.match(asset.headers.get("content-type") ?? "", /javascript/);
+      // Read, so the connection is let go: an unread body holds the socket
+      // open and server.close() waits for it until the test times out.
+      assert.match(await asset.text(), /export const a/);
 
       const deep = await fetch(`${base}/library/anything`);
       assert.equal(deep.status, 200);
