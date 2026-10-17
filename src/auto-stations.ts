@@ -43,6 +43,26 @@ const NOT_MUSIC = /lecture|interview|audiobook|podcast|speech|spoken|talk|course
 /** Never on a genre TV station, whatever nichedb calls it. */
 const ADULT = /\b(xxx|porn|nsfw|onlyfans|brazzers|blacked|bangbros|milf|hentai|sex|erotic|adult)\b/i;
 
+/**
+ * A film genre as one name, whatever case or spelling nichedb's sources
+ * used: "action" and "Action" are one station, and so are "Science Fiction",
+ * "Science-Fiction" and "Sci-Fi".
+ */
+export function filmGenre(raw: string): string {
+  const word = raw.trim().toLowerCase().replace(/[\s_-]+/g, " ");
+  const synonyms: Record<string, string> = {
+    "science fiction": "Sci-Fi", "sci fi": "Sci-Fi", "scifi": "Sci-Fi",
+    "documentary": "Documentary", "docu": "Documentary",
+    "animation": "Animation", "animated": "Animation", "anime": "Animation",
+    "musical": "Music", "music": "Music",
+    "kids": "Family", "children": "Family", "family": "Family",
+    "war & politics": "War", "war": "War",
+    "action & adventure": "Action", "sci fi & fantasy": "Sci-Fi",
+  };
+  if (synonyms[word]) return synonyms[word];
+  return word.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export function adultTitle(title: string, genres: string[] = []): boolean {
   return ADULT.test(title) || genres.some((one) => /adult|erotic|porn/i.test(one));
 }
@@ -156,7 +176,7 @@ export async function syncAutoStations(deps: AutoDeps, options: AutoOptions = DE
       const title = shown(item).title;
       const genres = await deps.filmGenres(title).catch(() => []);
       if (adultTitle(`${title} ${item.rel}`, genres)) continue;
-      for (const genre of genres.slice(0, 2)) {
+      for (const genre of [...new Set(genres.map(filmGenre))].slice(0, 2)) {
         const list = tv.get(genre) ?? [];
         list.push(item);
         tv.set(genre, list);

@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adultTitle, genreBuckets, syncAutoStations, DEFAULT_AUTO } from "../src/auto-stations.ts";
+import { adultTitle, filmGenre, genreBuckets, syncAutoStations, DEFAULT_AUTO } from "../src/auto-stations.ts";
 import { LibraryIndex, type Probed } from "../src/library-index.ts";
 import { PlaylistInputStream } from "../src/playlist-input.ts";
 import { StationBreaks } from "../src/station-breaks.ts";
@@ -26,6 +26,15 @@ test("server1's genre tags fold into genres a listener knows", () => {
   assert.deepEqual(genreBuckets("Industrial/Heavy Metal/Hard Rock"), ["Industrial", "Metal", "Rock"]);
   assert.deepEqual(genreBuckets("MIT Faculty Lecture"), []);
   assert.deepEqual(genreBuckets(""), []);
+});
+
+test("film genres are one name whatever the spelling", () => {
+  assert.equal(filmGenre("action"), "Action");
+  assert.equal(filmGenre("Action"), "Action");
+  assert.equal(filmGenre("Science-Fiction"), "Sci-Fi");
+  assert.equal(filmGenre("Science Fiction"), "Sci-Fi");
+  assert.equal(filmGenre("science_fiction"), "Sci-Fi");
+  assert.equal(filmGenre("drama"), "Drama");
 });
 
 test("adult titles are recognised by name or by nichedb's genres", () => {
@@ -60,7 +69,7 @@ test("a station per genre, unlisted, kept in step with the library; TV from film
     const runner = { start: async (id: string) => { started.push(id); store.setDesired(id, "running"); return store.get(id)!; } } as unknown as StationRunner;
     const deps = {
       index, store, runner, owner: "acct", mayStart: () => true,
-      filmGenres: async (title: string) => (title.includes("comedy") ? ["Comedy", "Romance"] : ["Drama"]),
+      filmGenres: async (title: string) => (title.includes("comedy") ? ["Comedy", "romance"] : title.includes("drama1") ? ["drama"] : ["Drama"]),
     };
     const first = await syncAutoStations(deps, { ...DEFAULT_AUTO, maxVideoRunning: 1 });
     assert.deepEqual(first.radio.map((one) => [one.genre, one.files, one.made, one.running]), [["Punk", 12, true, true], ["Hip-Hop", 11, true, true]]);
