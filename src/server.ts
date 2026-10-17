@@ -6048,7 +6048,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       let file: string | null = null;
-      if (isFile(direct)) file = direct;
+      // The library and radio console is a page of its own, at its own names.
+      if (/^\/(radio|library)\/?$/.test(path) && isFile(join(web, "radio.html"))) file = join(web, "radio.html");
+      else if (isFile(direct)) file = direct;
       else if (isFile(join(direct, "index.html"))) file = join(direct, "index.html");
       // A single-page app: any unknown path is the shell, and the client routes.
       else if (isFile(join(web, "index.html"))) file = join(web, "index.html");

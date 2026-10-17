@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Library and Radio · nixamp</title>
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#080c09" />
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64" />
+  </head>
+  <body>
+    <nav class="skip-links" aria-label="Skip to a section">
+      <a href="#stations">Skip to stations</a>
+      <a href="#library">Skip to library</a>
+    </nav>
+    <div id="sr-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+    <main id="radio-app" class="radio-app">
+      <h1 class="sr-only">nixamp library and radio</h1>
+      <header class="bar">
+        <a class="brand" href="/"><img class="brand-mark" src="/logo.png" alt="" width="20" height="20" decoding="async" />NIXAMP</a>
+        <nav class="radio-nav" aria-label="Sections">
+          <a href="/">Player</a>
+          <a href="#library" data-tab="library">Library</a>
+          <a href="#stations" data-tab="stations">Radio</a>
+        </nav>
+        <span id="who" class="chip"></span>
+      </header>
+
+      <p id="notice" class="radio-notice" role="alert" hidden></p>
+
+      <section id="stations" class="panel radio-section" aria-labelledby="stations-title">
+        <h2 id="stations-title" class="radio-title">My stations</h2>
+        <p class="hint">A station plays a folder or a playlist from this server, round and round, for anyone with its link. New stations are private and stopped; starting one does not publish it.</p>
+        <div id="station-list" class="station-list" aria-live="polite"></div>
+        <details id="new-station" class="radio-form">
+          <summary>New station</summary>
+          <form id="station-form">
+            <label>Name <input name="name" required maxlength="120" autocomplete="off" /></label>
+            <label>From
+              <select name="from" id="station-from"></select>
+            </label>
+            <label class="inline"><input type="checkbox" name="shuffle" /> Shuffle</label>
+            <label class="inline"><input type="checkbox" name="repeat" checked /> Repeat</label>
+            <label>Quality
+              <select name="bitrate">
+                <option value="96">96 kbps</option>
+                <option value="128" selected>128 kbps</option>
+                <option value="192">192 kbps</option>
+                <option value="256">256 kbps</option>
+              </select>
+            </label>
+            <button type="submit">Make station</button>
+          </form>
+        </details>
+      </section>
+
+      <dialog id="publish-dialog" class="radio-dialog" aria-labelledby="publish-title">
+        <form method="dialog" id="publish-form">
+          <h3 id="publish-title">Who can listen</h3>
+          <fieldset>
+            <legend class="sr-only">Visibility</legend>
+            <label class="inline"><input type="radio" name="visibility" value="private" /> Private: only you</label>
+            <label class="inline"><input type="radio" name="visibility" value="unlisted" /> Unlisted: anyone with the link</label>
+            <label class="inline"><input type="radio" name="visibility" value="public" /> Public: the link, and listed if you choose</label>
+          </fieldset>
+          <div id="public-only">
+            <label class="inline"><input type="checkbox" name="listed" checked /> List it in the nixamp.com directory</label>
+            <label>On what basis may this be broadcast?
+              <select name="basis">
+                <option value="">Choose…</option>
+                <option value="owned">I own the recordings and compositions</option>
+                <option value="permission">I have the rights holders' permission</option>
+                <option value="licensed">It is covered by a licence I hold</option>
+                <option value="public-domain">It is in the public domain</option>
+              </select>
+            </label>
+            <label>Note (optional) <input name="note" maxlength="500" /></label>
+            <p class="hint">This is your declaration, kept with the station. It is not legal clearance. Making a station private again stops every link handed out so far.</p>
+          </div>
+          <menu>
+            <button value="cancel" type="submit" class="ghost">Cancel</button>
+            <button value="save" type="submit">Save</button>
+          </menu>
+        </form>
+      </dialog>
+
+      <section id="library" class="panel radio-section" aria-labelledby="library-title">
+        <h2 id="library-title" class="radio-title">Library</h2>
+        <p id="library-summary" class="hint" aria-live="polite"></p>
+        <div id="resume" class="resume" hidden></div>
+        <form id="search-form" class="search-row" role="search">
+          <label class="grow"><span class="sr-only">Search the library</span>
+            <input type="search" name="q" placeholder="Search title, artist, album, folder" autocomplete="off" /></label>
+          <select name="browse" aria-label="Browse by">
+            <option value="">Browse…</option>
+            <option value="artists">Artists</option>
+            <option value="albums">Albums</option>
+            <option value="genres">Genres</option>
+            <option value="folders">Folders</option>
+          </select>
+          <button type="submit">Search</button>
+        </form>
+        <div id="groups" class="groups" hidden></div>
+        <div id="selection" class="selection" hidden>
+          <span id="selection-count"></span>
+          <button type="button" id="play-selection">Play</button>
+          <button type="button" id="new-playlist">New playlist</button>
+          <select id="add-to" aria-label="Add to playlist"></select>
+          <button type="button" id="add-selection">Add</button>
+        </div>
+        <div id="results" aria-live="polite"></div>
+        <h3 class="radio-subtitle">Playlists</h3>
+        <div id="playlists"></div>
+        <details class="radio-form">
+          <summary>Sources</summary>
+          <div id="sources"></div>
+          <form id="source-form">
+            <label>Add a folder on this server <input name="root" placeholder="/home/you/Music/More" autocomplete="off" /></label>
+            <button type="submit">Add and scan</button>
+          </form>
+        </details>
+      </section>
+
+      <footer class="now-bar" aria-label="Now playing">
+        <audio id="audio" controls preload="none"></audio>
+        <span id="now" class="now"></span>
+      </footer>
+    </main>
+    <script type="module" src="/src/radio.ts"></script>
+  </body>
+</html>

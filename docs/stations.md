@@ -17,6 +17,10 @@ listeners join where it is. It is the PRD's RAD-01..05 ([prd-library-radio.md](p
   not in a loop.
 - **Recovery.** An unexpected end restarts after 2, 4, 8, 16, 32, 60 s, then every 5 minutes
   while still wanted, so a source that comes back brings the station back under the same link.
+- **Skip** moves to the entry after the one listeners hear (the decoder reads ahead, so ending
+  the entry being decoded would skip the wrong song). Audio listeners stay connected.
+- **Now playing** on the page follows `/events`, and each new title waits for the sound the
+  player has buffered, so it changes when the song does.
 - **Audio.** MP3, 128 kbps by default (`bitrate`: 64-320), 48 kHz stereo; one encoder per
   station whatever the number of listeners.
 
@@ -48,7 +52,9 @@ Owner (control key as `?k=` or the `x-nixamp-key` header, or an owner session):
 | `POST /api/v1/stations/:id/start` `/stop` `/skip` `/retry` `/rotate-link` | |
 | `POST /api/v1/stations/:id/access` | `{visibility?, listed?, rights?: {basis, note?}}` |
 
-Listener (`?t=TOKEN`): `GET /api/v1/stations/:id/stream`, `/state`, `/listen.m3u`, and the page
+Listener (`?t=TOKEN`): `GET /api/v1/stations/:id/stream`, `/state`, `/listen.m3u`, `/events` (server-sent
+`hello`, `now` when the station's encoder moves to the next file, `state`; closed when the link is
+revoked), and the page
 `/station/:id?t=TOKEN`. A wrong token and a missing station are the same 404.
 
 Errors are `{error, code}` with stable codes: `name_required`, `empty_station`, `items_required`,

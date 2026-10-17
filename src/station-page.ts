@@ -44,7 +44,7 @@ const SCRIPT = `
   const $ = (s) => document.querySelector(s);
   const audio = new Audio();
   audio.preload = "none";
-  let wanted = false, retry = 0, timer = 0, last = null;
+  let wanted = false, retry = 0, timer = 0, last = null, live = false;
   const chip = (state, text) => { const c = $("#state"); c.className = "chip " + state; c.textContent = text; };
   const say = (text) => { $("#announce").textContent = text; };
   const draw = (s) => {
@@ -53,9 +53,7 @@ const SCRIPT = `
     $("#name").textContent = s.name;
     $("#about").textContent = s.description || "";
     $("#about").hidden = !s.description;
-    const playing = s.nowPlaying;
-    $("#title").textContent = playing ? (playing.title || "Untitled") : (s.state === "live" ? "On the air" : "");
-    $("#by").textContent = playing ? [playing.artist, playing.album].filter(Boolean).join(" · ") : "";
+    if (!live) title(s);
     if (wanted && retry > 0) chip("reconnecting", "Reconnecting");
     else if (s.state === "live") chip("live", "Live");
     else if (s.state === "starting" || s.state === "recovering") chip("reconnecting", "Coming back");
@@ -63,6 +61,28 @@ const SCRIPT = `
     else chip("unavailable", "Unavailable");
     $("#play").disabled = !(s.state === "live" || s.state === "recovering" || s.state === "starting");
     $("#m3u").href = api + "/listen.m3u" + q;
+  };
+  const title = (s) => {
+    const playing = s.nowPlaying;
+    $("#title").textContent = playing ? (playing.title || "Untitled") : (s.state === "live" ? "On the air" : "");
+    $("#by").textContent = playing ? [playing.artist, playing.album].filter(Boolean).join(" · ") : "";
+  };
+  // What is ahead of the speaker: the sound the player holds and has not
+  // played yet. A new title waits that long, so it changes with the song.
+  const ahead = () => {
+    if (!wanted || audio.paused || audio.buffered.length === 0) return 0;
+    return Math.max(0, Math.min(30, audio.buffered.end(audio.buffered.length - 1) - audio.currentTime));
+  };
+  const listen = () => {
+    if (!window.EventSource) return;
+    const events = new EventSource(api + "/events" + q);
+    events.addEventListener("hello", (e) => { live = true; title(JSON.parse(e.data)); });
+    events.addEventListener("now", (e) => {
+      const s = JSON.parse(e.data);
+      setTimeout(() => { title(s); say(s.nowPlaying ? "Now playing " + (s.nowPlaying.title || "") : ""); }, ahead() * 1000);
+    });
+    events.addEventListener("state", () => poll());
+    events.onerror = () => { live = false; };
   };
   const poll = async () => {
     try {
@@ -89,6 +109,7 @@ const SCRIPT = `
   $("#play").addEventListener("click", () => { if (wanted) { stop(); say("Stopped"); } else { wanted = true; retry = 0; button(); join(); say("Playing"); } });
   $("#volume").addEventListener("input", (e) => { audio.volume = Number(e.target.value); });
   poll();
+  listen();
   setInterval(poll, 5000);
 })();
 `;

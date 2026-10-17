@@ -295,9 +295,28 @@ export class Channel {
   /** The list being played entry by entry, when it is one; what skip() moves on. */
   private playlistInput: PlaylistInputStream | null = null;
 
-  /** On to the next entry of a list of files. False when this is not one. */
+  /**
+   * On to the entry after the one listeners hear now. False when this is
+   * not a list of files.
+   *
+   * The list's decoder runs ahead of the speaker by whatever the pipes hold,
+   * so ending the entry it is decoding would skip the wrong song -- usually
+   * the next one, while this one plays on. Instead the channel is dialled
+   * again from the next entry, which also drops what was read ahead. Not a
+   * failure, so it does not count as a redial.
+   */
   skip(): boolean {
-    return this.playlistInput?.skip() ?? false;
+    const list = this.info.playlist;
+    if (!this.playlistInput || !list?.length) return false;
+    const redials = this.info.redials;
+    this.info.playlistAt = ((this.info.playlistAt ?? 0) + 1) % list.length;
+    this.info.position = 0;
+    // MP3 frames carry on into the same connections, as a list advancing
+    // does; a picture needs a fresh start, and the player rejoins on its own.
+    const done = this.restart(this.info.kind === "audio");
+    if (redials === undefined) delete this.info.redials;
+    else this.info.redials = redials;
+    return done;
   }
 
   /** An entry's tags, as read when it was put on. */
@@ -635,7 +654,7 @@ export class Channel {
    * decided the thing is worth another go, and should not inherit the four
    * strikes a dead CDN ran up an hour ago.
    */
-  restart(): boolean {
+  restart(preserveListeners = false): boolean {
     if (this.closing) return false;
     // Started over from the outro: the show itself, from its beginning.
     if (this.outroOn && this.dialed) {
@@ -666,7 +685,7 @@ export class Channel {
     const old = this.child;
     this.child = null;
     old?.kill("SIGKILL");
-    this.startOver();
+    this.startOver(preserveListeners);
     dial();
     return true;
   }

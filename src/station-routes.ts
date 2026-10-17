@@ -20,7 +20,7 @@ import {
 } from "./stations.ts";
 
 /** The three things a station's link opens. */
-const LISTEN = /^\/api\/v1\/stations\/([a-z0-9]{10})\/(stream|state|listen\.m3u)$/;
+const LISTEN = /^\/api\/v1\/stations\/([a-z0-9]{10})\/(stream|state|listen\.m3u|events)$/;
 
 /** Whether this path is one a station's own link may open, without the server's key. */
 export function isStationListenPath(path: string): boolean {
@@ -132,6 +132,58 @@ export async function handleStations(
       return true;
     }
     const what = listen[2];
+    if (what === "events") {
+      // Now playing as it changes, for a player to show when its own sound
+      // gets there: each "now" is sent when the station's encoder moves on to
+      // the next file, and a listener is behind that by its own buffer.
+      response.writeHead(200, {
+        ...ctx.headers,
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
+      let instance = 0;
+      let lastFile = nowPlayingFile(ctx, station);
+      let lastState = ctx.runner.observed(station.id);
+      const send = (event: string, data: unknown): void => {
+        response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+      const now = (): Record<string, unknown> => {
+        const view = publicView(ctx, station);
+        return { station: station.id, playback: `${station.id}:${ctx.channels.info(channelOf(station.id))?.startedAt ?? 0}`, track: `${station.id}:${instance}`, at: Date.now(), state: view.state, nowPlaying: view.nowPlaying };
+      };
+      send("hello", now());
+      const tick = setInterval(() => {
+        const current = ctx.store.get(station.id);
+        if (!current) {
+          response.end();
+          return;
+        }
+        const file = nowPlayingFile(ctx, current);
+        const state = ctx.runner.observed(current.id);
+        if (file !== lastFile) {
+          lastFile = file;
+          instance += 1;
+          send("now", now());
+        } else if (state !== lastState) {
+          send("state", now());
+        }
+        lastState = state;
+      }, 500);
+      tick.unref?.();
+      const beat = setInterval(() => response.write(": beat\n\n"), 20_000);
+      beat.unref?.();
+      const untrack = ctx.runner.track(station.id, { end: () => response.end() });
+      const leave = (): void => {
+        clearInterval(tick);
+        clearInterval(beat);
+        untrack();
+      };
+      request.on("close", leave);
+      response.on("close", leave);
+      return true;
+    }
     if (what === "state") {
       ctx.json(response, 200, publicView(ctx, station));
       return true;
