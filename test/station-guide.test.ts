@@ -10,7 +10,7 @@ import { emptySnapshot } from "../src/protocol.ts";
 import { createServer, type Engine } from "../src/server.ts";
 import { StationRunner } from "../src/station-runner.ts";
 import { StationStore } from "../src/stations.ts";
-import { PeerGuides, peerBase } from "../src/station-guide.ts";
+import { GUIDE_CSP, PeerGuides, nowLine, peerBase, renderGuide } from "../src/station-guide.ts";
 
 const memory = () => ({ read: () => null, write: () => undefined });
 
@@ -113,4 +113,18 @@ test("a peer that is down drops out of the guide instead of holding it up", asyn
   assert.deepEqual(await peers.entries(), []);
   assert.equal(peerBase("http://plain.example:4321"), "", "https only");
   assert.equal(peerBase("https://server2.example:4321/admin/key"), "https://server2.example:4321");
+});
+
+test("a card's now-playing line drops pasted links and reads ';' artists as a list", () => {
+  assert.equal(nowLine({ title: "His Girl Friday - http://www.archive.org/details/his_girl_friday", artist: "Howard Hawks" }), "His Girl Friday — Howard Hawks");
+  assert.equal(nowLine({ title: "A LA PAREE", artist: "REGA DANCE ORCHESTRA;Henri Verdin" }), "A LA PAREE — REGA DANCE ORCHESTRA, Henri Verdin");
+  assert.equal(nowLine(null), "");
+  const page = renderGuide([{ name: "TV", kind: "video", state: "live", page: "https://x.example/station/abcdefghij", nowPlaying: { title: "Film https://a.example/b", artist: "" } }]);
+  assert.match(page, /<div class="now">Film<\/div>/);
+  // The page's own script tidies the same way when it refreshes.
+  assert.ok(page.includes("const nowLine = "));
+});
+
+test("a gateway's own stylesheet may style its notice on the guide", () => {
+  assert.match(GUIDE_CSP, /style-src 'self' 'sha256-/);
 });
