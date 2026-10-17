@@ -351,3 +351,30 @@ test("a station whose renderer dies comes back under the same id", { skip: !avai
     rmSync(state, { recursive: true, force: true });
   }
 });
+
+test("a station says it is video when its channel carries video, and PATCH can set it", async () => {
+  const { publicView } = await import("../src/station-routes.ts");
+  const dir = mkdtempSync(join(tmpdir(), "nixamp-stations-"));
+  try {
+    const store = new StationStore(StationStore.fileFor(dir, 4321));
+    const made = store.create({ name: "Lessons" }, ["/media/lesson1.mp4"], "");
+    assert.equal(made.video, false);
+    let kind: "audio" | "video" | undefined = "video";
+    const ctx = {
+      store,
+      runner: { observed: () => "live", listeners: () => 0 },
+      channels: { info: () => undefined, tagsOf: () => undefined, kindOf: () => kind },
+      trackFor: () => null,
+    } as unknown as Parameters<typeof publicView>[0];
+    // Made by hand without the flag, but the channel is moving picture.
+    assert.equal(publicView(ctx, made).kind, "video");
+    assert.equal(publicView(ctx, made).format?.codec, "h264+aac");
+    kind = "audio";
+    assert.equal(publicView(ctx, made).kind, "audio");
+    assert.equal(store.update(made.id, { video: true }, null).video, true);
+    assert.equal(publicView(ctx, store.get(made.id)!).kind, "video");
+    assert.equal(new StationStore(StationStore.fileFor(dir, 4321)).get(made.id)?.video, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

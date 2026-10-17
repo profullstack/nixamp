@@ -284,6 +284,7 @@ export class StationStore {
     if (input.repeat !== undefined) station.repeat = input.repeat !== false;
     if (input.bitrate !== undefined) station.bitrate = this.bitrateFrom(input.bitrate);
     if (input.breaksEvery !== undefined) station.breaksEvery = this.breaksFrom(input.breaksEvery);
+    if (input.video !== undefined) station.video = input.video === true;
     if (items !== null) {
       if (items.length === 0) throw new StationError("empty_station", "a station needs at least one file that plays");
       if (items.length > MAX_ITEMS) throw new StationError("too_many_items", `a station holds at most ${MAX_ITEMS} files`);
