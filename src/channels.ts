@@ -19,7 +19,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { PlaylistInputStream } from "./playlist-input.ts";
+import { PlaylistInputStream, type PlaylistInput } from "./playlist-input.ts";
 import type { Readable } from "node:stream";
 import { FragmentClock, Fragments, isOpening } from "./fragments.ts";
 
@@ -123,6 +123,13 @@ export interface PullResume {
   /** For a list of things rather than one: every entry, in order. */
   playlist?: string[];
   playlistAt?: number;
+  /**
+   * How a station plays its list: round and round, in a shuffled order, with
+   * edits landing on the next track and broken entries passed over. Only for
+   * lists of files on this machine; not remembered, because whoever owns the
+   * rotation (the station) puts it back.
+   */
+  rotation?: Pick<PlaylistInput, "repeat" | "order" | "current" | "excluded" | "onFailure" | "passOver">;
 }
 
 /**
@@ -285,6 +292,13 @@ export class Channel {
   private redial: (() => void) | null = null;
   /** For a channel playing a list: move to the next entry. Null when there is no list. */
   private advance: (() => boolean) | null = null;
+  /** The list being played entry by entry, when it is one; what skip() moves on. */
+  private playlistInput: PlaylistInputStream | null = null;
+
+  /** On to the next entry of a list of files. False when this is not one. */
+  skip(): boolean {
+    return this.playlistInput?.skip() ?? false;
+  }
   private failures = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** Fires when a pulled source has said nothing for STALL. */
@@ -401,7 +415,7 @@ export class Channel {
     // A list plays entry by entry: the one that is on is what gets dialled,
     // and an entry that ended is followed by the next, at once.
     const list = resume.playlist && resume.playlist.length > 0 ? resume.playlist : null;
-    const localPlaylist = list && list.length > 1 && list.every(one => !/^https?:\/\//i.test(one)) ? list : null;
+    const localPlaylist = list && (list.length > 1 || resume.rotation) && list.every(one => !/^https?:\/\//i.test(one)) ? list : null;
     let at = 0;
     if (list) {
       this.info.playlist = list;
@@ -451,7 +465,9 @@ export class Channel {
         ffprobe: this.options.ffprobe ?? this.options.ffmpeg.map(one => one.replace(/ffmpeg(?=(?:\.exe)?$)/, "ffprobe")),
         files: localPlaylist, at: this.info.playlistAt ?? 0, position: from,
         video: this.info.kind === "video", width: this.info.codecs?.width, height: this.info.codecs?.height,
+        ...resume.rotation,
       }) : null;
+      this.playlistInput = playlistInput;
       const through = this.outroOn ? null : playlistInput
         ? { format: "mpegts", open: async (signal: AbortSignal) => playlistInput.open(signal) }
         : this.options.through?.(this.info, from, input, audio) ?? null;
@@ -1323,6 +1339,11 @@ export class Channels {
   /** The kind of a channel, for a relay to say what it is carrying. */
   kindOf(id: string): "audio" | "video" | undefined {
     return this.open.get(id)?.info.kind;
+  }
+
+  /** The next entry, now, on a channel playing a list of files. */
+  skip(id: string): boolean {
+    return this.open.get(id)?.skip() ?? false;
   }
 
   stop(id: string): boolean {
