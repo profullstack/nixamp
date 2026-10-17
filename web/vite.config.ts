@@ -100,8 +100,8 @@ export default defineConfig(({ mode }) => ({
     sourcemap: mode !== "production",
     // Hashed filenames, so the service worker's precache list is exact.
     assetsDir: "assets",
-    // The player, and the owner's library and radio console beside it.
-    rollupOptions: { input: { main: resolve(here, "index.html"), radio: resolve(here, "radio.html") } },
+    // The player, the owner's library and radio console beside it, and a station's own page.
+    rollupOptions: { input: { main: resolve(here, "index.html"), radio: resolve(here, "radio.html"), station: resolve(here, "station.html") } },
   },
   server: {
     port: 5173,
