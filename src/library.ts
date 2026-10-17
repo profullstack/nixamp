@@ -29,6 +29,8 @@ export interface Config {
   autoStations?: Record<string, unknown>;
   /** Hosts (e.g. Moshpit names) whose front page is the public station guide. */
   guideHosts?: string[];
+  /** Station limits kept across restarts (station-metering.ts). */
+  limits?: Record<string, unknown>;
 }
 
 export function configPath(): string {
@@ -44,6 +46,7 @@ export function readConfig(): Config {
       ...(typeof record["library"] === "string" ? { library: record["library"] } : {}),
       ...(typeof record["publish"] === "boolean" ? { publish: record["publish"] } : {}),
       ...(typeof record["autoStations"] === "object" && record["autoStations"] !== null ? { autoStations: record["autoStations"] as Record<string, unknown> } : {}),
+      ...(typeof record["limits"] === "object" && record["limits"] !== null ? { limits: record["limits"] as Record<string, unknown> } : {}),
       ...(Array.isArray(record["guideHosts"]) ? { guideHosts: (record["guideHosts"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
     };
   } catch {
