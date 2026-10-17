@@ -68,6 +68,9 @@ artist, album, year, genre; **made with AI** (yes, and with what, only on eviden
 Udio, ElevenLabs, MusicGen..., or AI radio's own files; otherwise "not stated"); **copyright**
 (the file's copyright tag, else a registered holder, else a listener share's declaration, else the
 station's declared basis); a licence; and a **Support** button to the holder's link.
+The track's own cover (the picture inside the file) shows beside it, from
+`GET /api/v1/stations/:id/art?t=` (the `art` field, which changes with the track), and is handed to
+the browser's media session, so a phone's lock screen and media keys show it too.
 `GET /api/v1/stations/:id/now?t=` answers the same as JSON, and every `now` event carries it as `facts`.
 
 Holders are the owner's to register:

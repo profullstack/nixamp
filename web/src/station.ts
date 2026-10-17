@@ -15,6 +15,7 @@ interface TrackFacts {
   ai: { generated: boolean | null; by: string; evidence: string };
   rights: { holder: string; basis: string; note: string; license: string; source: string };
   support: { holder: string; url: string; label: string } | null;
+  art?: string;
 }
 const BASIS: Record<string, string> = {
   owned: "owned by the station", permission: "broadcast with permission", licensed: "licensed for broadcast",
@@ -79,6 +80,22 @@ const showFacts = (f: TrackFacts | null | undefined): void => {
     const dd = document.createElement("dd"); dd.textContent = value;
     return [dt, dd];
   }));
+  // The track's own cover, here and on the lock screen / media keys.
+  const cover = $<HTMLImageElement>("#cover");
+  const art = typeof f.art === "string" && f.art.startsWith("/api/v1/stations/") ? f.art : "";
+  cover.hidden = !art;
+  if (art && cover.getAttribute("src") !== art) {
+    cover.src = art;
+    cover.alt = `Cover of ${f.title || "this track"}`;
+  }
+  if ("mediaSession" in navigator && typeof MediaMetadata !== "undefined") {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: f.title || last?.name || "nixamp",
+      artist: f.artist,
+      album: f.album || last?.name || "",
+      ...(art ? { artwork: [{ src: new URL(art, location.href).href, sizes: "512x512", type: "image/jpeg" }] } : {}),
+    });
+  }
   const badge = $("#ai-badge");
   badge.hidden = f.ai.generated !== true;
   badge.textContent = f.ai.generated === true ? "AI-generated" : "";

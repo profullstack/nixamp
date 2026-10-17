@@ -22,7 +22,7 @@ import {
 } from "./stations.ts";
 
 /** The three things a station's link opens. */
-const LISTEN = /^\/api\/v1\/stations\/([a-z0-9]{10})\/(stream|state|listen\.m3u|events|now)$/;
+const LISTEN = /^\/api\/v1\/stations\/([a-z0-9]{10})\/(stream|state|listen\.m3u|events|now|art)$/;
 
 /** Whether this path is one a station's own link may open, without the server's key. */
 export function isStationListenPath(path: string): boolean {
@@ -62,6 +62,8 @@ export interface StationContext {
   throttle?: () => { retryAfter: number } | null;
   /** What a listener may know about the track on the air (track-facts.ts). */
   facts?: (station: Station, file: string) => Promise<TrackFacts>;
+  /** The cover picture inside a file (JPEG/PNG bytes), or null. */
+  cover?: (file: string) => Promise<{ bytes: Buffer; type: string } | null>;
   /** Auto stations: run a sync with these settings (and keep them), or read them. */
   auto?: { sync: (input: Record<string, unknown>) => Promise<unknown>; setting: () => unknown };
   /** The public stations other servers list (guide peers); absent when there are none. */
@@ -256,6 +258,18 @@ export async function handleStations(
       };
       request.on("close", leave);
       response.on("close", leave);
+      return true;
+    }
+    if (what === "art") {
+      const file = nowPlayingFile(ctx, station);
+      const picture = file && ctx.cover ? await ctx.cover(file).catch(() => null) : null;
+      if (!picture) {
+        ctx.json(response, 404, { error: "no cover for what is playing", code: "not_found" });
+        return true;
+      }
+      // The address carries which track (?f=), so a cover may be kept a while.
+      response.writeHead(200, { ...ctx.headers, "content-type": picture.type, "content-length": picture.bytes.length, "cache-control": "public, max-age=3600" });
+      response.end(method === "HEAD" ? undefined : picture.bytes);
       return true;
     }
     if (what === "now") {
