@@ -120,6 +120,28 @@ test("a break plays between entries, never inside one", { skip: !available, time
   }
 });
 
+test("breaks switched on mid-stream land at the next boundary", { skip: !available, timeout: 60_000 }, async () => {
+  const top = mkdtempSync(join(tmpdir(), "nixamp-break-live-"));
+  try {
+    const tone = (file: string, seconds: number, hz: number) => execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", `sine=frequency=${hz}:duration=${seconds}`, "-c:a", "libmp3lame", file]);
+    const a = join(top, "a.mp3"), b = join(top, "b.mp3"), spot = join(top, "spot.mp3");
+    tone(a, 2, 440); tone(b, 2, 660); tone(spot, 1, 880);
+    let every = 0;
+    const list = new PlaylistInputStream({
+      ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], files: [a, b], at: 0, position: 0, video: false, repeat: true, passOver: true,
+      breaks: { everySeconds: () => every, next: async () => spot },
+    });
+    const abort = new AbortController();
+    for await (const _chunk of list.open(abort.signal)) {
+      if (list.history.length >= 2) every = 1;
+      if (list.history.length >= 4) { abort.abort(); break; }
+    }
+    assert.deepEqual(list.history.slice(0, 4).map((one) => one.file), [a, b, spot, a]);
+  } finally {
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
 test("a break comes from the network, else the house spot, else none", async () => {
   const top = mkdtempSync(join(tmpdir(), "nixamp-spot-"));
   try {

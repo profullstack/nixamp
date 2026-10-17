@@ -42,7 +42,9 @@ after every library scan the stations are re-synced (new files join, ids and lin
 - **Breaks** every `--breaks` seconds (600), between songs or films and never inside one: the ad
   network's spot (this server's `AD_SLOT`, else nixamp.com's), else a house spot you put at
   `$XDG_STATE_HOME/nixamp/ads/spot.mp4` (TV) or `spot.mp3` (radio), else no break.
-  `breaksEvery` can be set on any station (120-86400, 0 for none).
+  `breaksEvery` can be set on any station (120-86400, 0 for none): `station create --breaks 600`, or
+  `nixamp station breaks ID 600` on one that exists. A hand-made station has none unless you ask;
+  the interval is read at every boundary, so a change lands without a restart.
 
 ## AI radio and listener shares
 

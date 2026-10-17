@@ -2,12 +2,13 @@
 export const USAGE = `nixamp station — make a collection into a station
 
   nixamp station list
-  nixamp station create --name NAME (--folder PATH | --playlist ID | --items 0,1,2) [--shuffle] [--no-repeat] [--bitrate 128]
+  nixamp station create --name NAME (--folder PATH | --playlist ID | --items 0,1,2) [--shuffle] [--no-repeat] [--bitrate 128] [--breaks 600]
   nixamp station show ID
   nixamp station status ID
   nixamp station start ID
   nixamp station stop ID
   nixamp station skip ID
+  nixamp station breaks ID SECONDS a spot between entries every SECONDS (120..86400; --off for none)
   nixamp station retry ID          try every left-out file again
   nixamp station publish ID --basis owned|permission|licensed|public-domain [--note TEXT] [--unlisted] [--no-list]
   nixamp station unpublish ID [--private]
