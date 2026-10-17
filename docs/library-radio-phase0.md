@@ -181,8 +181,9 @@ These must be handled as migrations, never as silent default flips (PRD RAD-02):
    station's stream, art and now-playing, with library endpoints behind the owner.
 3. **Public filenames.** Directory `nowPlaying` falls back to the bare filename, alongside the
    library `tracks` count, and survives 24 h in "recent". Fix: public metadata allowlist.
-4. **The control link leaves the machine.** It goes to the directory and `/api/v1/servers`,
-   contradicting the comment at `src/directory.ts:12-13`. Verify and stop.
+4. ~~The control link leaves the machine.~~ Checked in P1a: it goes to nixamp.com so the owner
+   can administer from the site, and `/api/directory` returns it only to the owning account
+   (`src/server.ts:4048-4060`). By design; not a leak.
 5. **Index-based IDs** (`/api/media/N`, `/api/tracks/N/live`) shift with the list. Stable
    LibraryItem IDs must be introduced alongside, without breaking existing links.
 6. **Content-derived channel IDs.** Moving a file changes its channel. Stations get a random ID
@@ -205,6 +206,19 @@ These must be handled as migrations, never as silent default flips (PRD RAD-02):
 
 That comes to roughly 13 weeks without the handoff and 15-16 weeks with it. Calendar time depends on how many agents
 run in parallel. P1a should ship first because it fixes behavior that is live today.
+
+## P1a status (0.29.0)
+
+- Done: folders/live admin gate (0.28.45); absolute `root` hidden from listen-key requests
+  (`/api/state`, `/api/events`); key cookie `Secure` over https; `-protocol_whitelist` on probe,
+  folder/playlist stations, channel inputs and per-listener transcodes (local = file,pipe,fd;
+  links = network only, never file); member link plays must resolve to public addresses at
+  the link, each playlist redirect hop, and every resolved media URL; directory publication is
+  a recorded choice in `config.json` (existing servers stay listed, new daemons are not listed
+  until asked).
+- Left for P1b (needs the station model): per-station listen tokens so a station link does not
+  open the library; public now-playing allowlist; redirects followed inside yt-dlp/ffmpeg and
+  DNS rebinding for member links.
 
 ## Phase 0 items still open
 

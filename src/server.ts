@@ -9,7 +9,9 @@
  * a WebSocket because SSE is plain HTTP: no dependency, and it reconnects on
  * its own when the laptop running the remote goes to sleep.
  */
-import { createReadStream, statSync } from "node:fs";
+import { publishChoice, shouldRecord } from "./publish-choice.ts";
+import { protocolArgs } from "./decoder-policy.ts";
+import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { randomBytes } from "node:crypto";
@@ -68,6 +70,7 @@ import { Directory, ENDED_TTL_MS, parseAnnouncement, type LineupEntry, type List
 import { ArtCache, coverArtOf, stillFrom } from "./art.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
 import { HlsPackagers, segmentType, withKey } from "./hls.ts";
+import { refusedDestination } from "./destinations.ts";
 import { CompressionService } from "./compression/service.ts";
 import { handleChannelCompression, handleCompressionApi, handleStaticRelay, type RouteContext } from "./compression/routes.ts";
 import { DEFAULT_SITE as NICHEDB, Enricher, type EnrichKind, FIXTURE_TTL_MS } from "./enrich.ts";
@@ -86,7 +89,7 @@ import { Porkbun, isIPv4, isIPv6, type DnsZone } from "./dns.ts";
 import { NameError, Names } from "./names.ts";
 import { AcmeIssuer, Certs } from "./certs.ts";
 import { claimName, fetchCert, humanizeSource, labelFor, readCertFiles, writeCertFiles } from "./naming.ts";
-import { forbiddenLibrary, readLibrary } from "./library.ts";
+import { forbiddenLibrary, readConfig, readLibrary, writeConfig } from "./library.ts";
 import { createThrottle, presentedCredential, type Throttle } from "@profullstack/throttle";
 import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
@@ -1976,7 +1979,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 404, { error: "not found" });
         return;
       }
-      response.writeHead(302, { ...CORS, "set-cookie": keyCookie(offered), location: "/" });
+      response.writeHead(302, { ...CORS, "set-cookie": keyCookie(offered, (request.socket as { encrypted?: boolean }).encrypted === true || (options.secureCookies ?? false)), location: "/" });
       response.end();
       return;
     }
@@ -2563,6 +2566,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // port is open from another device before wondering whether the link is
     // wrong, and it says nothing about the library.
     const eventChannelRequest = Boolean(channelId && await eventForChannel());
+    // Whether this request holds only the listen key. A listener may browse
+    // and hear the library, but where it lives on this machine is the
+    // owner's business: the absolute path names the user account and the disk.
+    let listening = false;
     if (
       key !== null &&
       path !== "/api/health" &&
@@ -2571,6 +2578,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !eventChannelRequest
     ) {
       let scope = scopeOf(keyFrom(request, url), key, listenKey);
+      // Kept for the routes below that answer a listener with less.
+      const settle = (): void => { listening = scope === "listen"; };
       // A key is how somebody who was invited proves it. It is not the only way
       // to be allowed in: the person who owns this server is allowed in whether
       // or not they still have the link, and their nixamp.com session says who
@@ -2596,6 +2605,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         });
         return;
       }
+      settle();
       if (scope === "listen" && !allowedForListening(path)) {
         json(response, 403, { error: "this link can listen, not drive" });
         return;
@@ -4631,10 +4641,31 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 429, { error: `this server is already carrying ${MAX_ON_DEMAND} channels on demand; try again in a minute` });
         return;
       }
-      const resolved = known ?? await resolveLink(options.ytdlp ?? null, link, { cookies: options.cookies ?? "" });
+      // A member's link is fetched from inside the owner's network, so it has
+      // to lead somewhere public: the link, every hop of a playlist, and
+      // whatever yt-dlp says the media is. The owner's is theirs to aim.
+      const guard = liveBy && !known ? (one: string) => refusedDestination(one) : undefined;
+      if (guard) {
+        const refused = await guard(link);
+        if (refused) {
+          json(response, 403, { error: refused });
+          return;
+        }
+      }
+      const resolved = known ?? await resolveLink(options.ytdlp ?? null, link, { cookies: options.cookies ?? "", guard });
       if ("error" in resolved) {
-        json(response, 422, { error: resolved.error });
+        json(response, guard && resolved.error.includes("private network") ? 403 : 422, { error: resolved.error });
         return;
+      }
+      if (guard) {
+        const reached = [resolved.media, resolved.audio, ...(resolved.playlist ?? [])].filter((one) => one && /^(https?|rtmps?):\/\//i.test(one));
+        for (const one of [...new Set(reached)].slice(0, 200)) {
+          const refused = await guard(one);
+          if (refused) {
+            json(response, 403, { error: refused });
+            return;
+          }
+        }
       }
       links.set(link, resolved);
       // A channel already on -- put back by a restart, which forgets where
@@ -5494,7 +5525,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     }
 
     if (path === "/api/state") {
-      json(response, 200, engine.snapshot());
+      json(response, 200, listening ? { ...engine.snapshot(), root: "" } : engine.snapshot());
       return;
     }
 
@@ -5562,7 +5593,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         "x-accel-buffering": "no",
       });
       const send = (snapshot: Snapshot): void => {
-        response.write(`data: ${JSON.stringify(snapshot)}\n\n`);
+        response.write(`data: ${JSON.stringify(listening ? { ...snapshot, root: "" } : snapshot)}\n\n`);
       };
       const unsubscribe = engine.subscribe(send);
       // A comment line keeps proxies from closing an idle stream.
@@ -6039,6 +6070,7 @@ async function liveAudio(
         // A live source has no beginning to seek from.
         ...(from > 1 && !isRemote(source) ? ["-ss", String(from)] : []),
         "-re",
+        ...protocolArgs(source),
         "-i", source,
         ...(asVideo
           // Copied where it can be, because a room full of viewers is a room
@@ -6157,6 +6189,7 @@ function pipeFfmpeg(
       // when they are handed to it for a file on disk.
       ...(isRemote(source) ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] : []),
       ...inputArgs,
+      ...protocolArgs(source),
       "-i", source,
       ...outputArgs,
       "-",
@@ -6341,6 +6374,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // still works after a restart -- and a server is restarted to pick up a new
   // version, which is to say often. `--new-key` mints a fresh pair and forgets
   // the old one, which is the way to revoke a link that got out.
+  // Whether this port had keys before this start: a server that has run
+  // here before, whose directory listing (see publishChoice) is kept.
+  const established = existsSync(join(stateDir(), "keys.json")) &&
+    (() => { try { return String(options.port) in (JSON.parse(readFileSync(join(stateDir(), "keys.json"), "utf8")) as object); } catch { return false; } })();
   const remembered = options.key ? rememberedKeys(stateDir(), options.port, options.newKey) : null;
   const key = remembered?.key ?? null;
   // Kept whether or not it is published, so `nixamp admin` and the operator
@@ -7475,10 +7512,20 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     // public at all.
     //
     // Still asked when a person is at the terminal to answer, because that is
-    // somebody who can say no.
-    const wanted = options.publish === "yes" || !process.stdin.isTTY
-      ? true
-      : await confirm(`\n  List this stream at ${DEFAULT_DIRECTORY}/directory so anyone can find it?\n  It publishes ${listen} — listen only, not the controls.`);
+    // somebody who can say no -- and since 0.29 the answer is kept, so a
+    // daemon started later does what the person said, not what it guesses.
+    const recorded = readConfig().publish;
+    const choice = publishChoice(options.publish, recorded, Boolean(process.stdin.isTTY), established);
+    const wanted = choice === "ask"
+      ? await confirm(`\n  List this stream at ${DEFAULT_DIRECTORY}/directory so anyone can find it?\n  It publishes ${listen} — listen only, not the controls.`)
+      : choice === "yes";
+    if (shouldRecord(options.publish, recorded)) {
+      try { writeConfig({ publish: wanted }); } catch { /* unwritable state: asked again next time */ }
+    }
+    if (!wanted && options.publish === "ask") {
+      console.log("");
+      console.log(`  Not listed at ${DEFAULT_DIRECTORY}/directory. Start with --publish to list it.`);
+    }
 
     if (wanted) {
       publisher = makePublisher();

@@ -549,7 +549,9 @@ test("a pulled film knows where it is, starts a little before it, and a redial g
   assert.ok(film);
   await new Promise((done) => setTimeout(done, 300));
   const first = readFileSync(argsFile, "utf8");
-  assert.match(first, /-ss 97 -i http:\/\/x\.test\/film\.mp4/, "started REWIND seconds before the saved place");
+  assert.match(first, /-ss 97 (?:-protocol_whitelist \S+ )?-i http:\/\/x\.test\/film\.mp4/, "started REWIND seconds before the saved place");
+  // And a link may not reach the file system through what it references.
+  assert.match(first, /-protocol_whitelist (?![^ ]*\bfile\b)\S*https\S* -i http:\/\/x\.test\/film\.mp4/);
   assert.match(first, /-progress pipe:3/);
   assert.equal(film?.info.live, false);
   assert.equal(film?.info.position, 102);

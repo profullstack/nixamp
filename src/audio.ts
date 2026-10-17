@@ -6,6 +6,7 @@
  * same bytes to the output process. Running two decoders instead would drift
  * apart within seconds and the bars would stop matching what you hear.
  */
+import { protocolArgs } from "./decoder-policy.ts";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -136,6 +137,7 @@ export function probe(tools: Tools, path: string): Track {
     ...rest,
     "-v", "quiet", "-print_format", "json",
     "-show_format", "-show_entries", "format_tags=title,artist,album",
+    ...protocolArgs(path),
     path,
   ], { encoding: "utf8", timeout: 20_000, maxBuffer: 4 * 1024 * 1024 });
   if (result.error || result.status !== 0) return fallback;
@@ -224,6 +226,7 @@ export class Stream {
       // being on disk. Measured with that condition in place: still 13.8x.
       "-re",
       ...(from > 0 ? ["-ss", String(from)] : []),
+      ...protocolArgs(track.path),
       "-i", track.path,
       "-f", "f32le", "-ac", String(CHANNELS), "-ar", String(RATE), "-",
     ], { stdio: ["ignore", "pipe", "pipe"] });

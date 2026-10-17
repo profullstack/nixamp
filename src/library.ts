@@ -23,6 +23,8 @@ import { stateDir } from "./daemon.ts";
 export interface Config {
   /** The folder the daemon serves when it is not told which. */
   library?: string;
+  /** Whether this machine is listed in the public directory; unset until chosen. */
+  publish?: boolean;
 }
 
 export function configPath(): string {
@@ -34,7 +36,10 @@ export function readConfig(): Config {
     const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as unknown;
     if (typeof parsed !== "object" || parsed === null) return {};
     const record = parsed as Record<string, unknown>;
-    return { ...(typeof record["library"] === "string" ? { library: record["library"] } : {}) };
+    return {
+      ...(typeof record["library"] === "string" ? { library: record["library"] } : {}),
+      ...(typeof record["publish"] === "boolean" ? { publish: record["publish"] } : {}),
+    };
   } catch {
     return {};
   }

@@ -156,6 +156,11 @@ export function playlistFrom(text: string, base: string): { hls: boolean; source
   return { hls: false, sources: entries.map((entry) => entry.source), image };
 }
 
+/** Asked of every address before it is fetched: "" to go ahead, else why not. */
+export type Guard = (url: string) => Promise<string>;
+
+const PLAYLIST_MAX_REDIRECTS = 5;
+
 /**
  * A pasted .m3u, read and turned into a channel's worth of entries. Fetched
  * here rather than by yt-dlp, which would take the first entry and stop, or
@@ -163,14 +168,28 @@ export function playlistFrom(text: string, base: string): { hls: boolean; source
  */
 export async function resolvePlaylist(
   url: string,
-  options: { timeoutMs?: number; fetcher?: typeof fetch } = {},
+  options: { timeoutMs?: number; fetcher?: typeof fetch; guard?: Guard } = {},
 ): Promise<ResolvedLink | { error: string }> {
   const get = options.fetcher ?? fetch;
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), options.timeoutMs ?? PLAYLIST_FETCH_TIMEOUT_MS);
   let text = "";
   try {
-    const answer = await get(url, { signal: abort.signal, headers: { "user-agent": "nixamp" }, redirect: "follow" });
+    // Followed here, one hop at a time, when there is a guard: a public
+    // address that redirects to the router is the router.
+    let at = url;
+    let answer: Response;
+    for (let hop = 0; ; hop += 1) {
+      if (options.guard) {
+        const refused = await options.guard(at);
+        if (refused) return { error: refused };
+      }
+      answer = await get(at, { signal: abort.signal, headers: { "user-agent": "nixamp" }, redirect: options.guard ? "manual" : "follow" });
+      const next = answer.headers.get("location");
+      if (!options.guard || answer.status < 300 || answer.status >= 400 || !next) break;
+      if (hop >= PLAYLIST_MAX_REDIRECTS) return { error: "that playlist redirects too many times" };
+      at = new URL(next, at).toString();
+    }
     if (!answer.ok) return { error: `that playlist could not be fetched (HTTP ${answer.status})` };
     text = (await answer.text()).slice(0, PLAYLIST_MAX_BYTES);
   } catch (error) {
@@ -493,10 +512,10 @@ export const RESOLVE_TIMEOUT_MS = 60_000;
 export async function resolveLink(
   ytdlp: string[] | null,
   url: string,
-  options: { cookies?: string; timeoutMs?: number; format?: string } = {},
+  options: { cookies?: string; timeoutMs?: number; format?: string; guard?: Guard } = {},
 ): Promise<ResolvedLink | { error: string }> {
   if (isDirectMedia(url)) return directLink(url);
-  if (isPlaylistLink(url)) return resolvePlaylist(url, { timeoutMs: options.timeoutMs });
+  if (isPlaylistLink(url)) return resolvePlaylist(url, { timeoutMs: options.timeoutMs, guard: options.guard });
   // Without yt-dlp, a link is taken as the media it may well be: an IPTV
   // feed has no extension and no page behind it, and ffprobe -- asked next,
   // before anything goes on the air -- tells a stream from a web page in a
