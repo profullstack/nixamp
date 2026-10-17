@@ -81,11 +81,13 @@ Holders are the owner's to register:
     nixamp station holder remove profullstack
 
 (`/api/v1/stations/holders`, MCP `station_holders`.) A holder who collects for themselves gives
-their own https link. **nixamp.com/support/<holder>** takes a one-time crypto payment through
-nixamp.com's own CoinPay business for the holders it collects for (`NIXAMP_SUPPORT_HOLDERS`,
-"id=Name,...", default `profullstack=Profullstack`). There is no monthly option: CoinPay's only
-merchant subscription API runs on Stripe, which we do not use; recurring crypto invoices would need
-the listener's email and are not built.
+their own https link. **nixamp.com/support/<holder>** takes crypto through nixamp.com's own CoinPay
+business for the holders it collects for (`NIXAMP_SUPPORT_HOLDERS`, "id=Name,...", default
+`profullstack=Profullstack`), **once or monthly**. Monthly is run by nixamp.com, not CoinPay (its
+merchant subscriptions are Stripe's; its recurring invoices refuse a scoped key): the first month is
+paid at once, then each month nixamp.com makes a new payment and emails its link (Resend), with a
+one-click cancel (`/support/cancel?s=&t=`). Nothing is taken until the listener pays a link; a month
+left unpaid ends the subscription (lapsed) and says so. Table `support_subscriptions`; renewals run hourly.
 
 ## Every station, on nixamp.com
 
