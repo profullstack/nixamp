@@ -81,7 +81,7 @@ import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
 import { HolderStore, TagReader, factsFor } from "./track-facts.ts";
-import { SUPPORT_CSP, SUPPORT_PAGE, Support, SupportError, supportHoldersFrom } from "./support.ts";
+import { SUPPORT_CSP, SUPPORT_PAGE, Support, SupportError, SupportSubscriptions, supportHoldersFrom } from "./support.ts";
 import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
 import { GUIDE_CSP, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
@@ -1924,6 +1924,8 @@ export interface HandlerOptions {
   translationPasses?: TranslationPasses;
   /** Payments to copyright holders nixamp.com collects for (support.ts). */
   support?: Support;
+  /** Monthly support, run by nixamp.com (support.ts). */
+  supportSubscriptions?: SupportSubscriptions;
   /** Signing secret of nixamp's CoinPay business, for /api/v1/webhooks/coinpay. */
   coinpayWebhookSecret?: string;
   sharedTranslations?: SharedTranslations;
@@ -2698,7 +2700,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // What is on, as MCP, for anybody.
       path !== "/mcp/public" &&
       // Supporting a copyright holder is for anybody listening.
-      !/^\/support\/[a-z0-9-]{1,40}$/.test(path) && !/^\/api\/v1\/support\/[a-z0-9-]{1,40}$/.test(path) &&
+      !/^\/support\/[a-z0-9-]{1,40}$/.test(path) && path !== "/support/cancel" && !/^\/api\/v1\/support\/[a-z0-9-]{1,40}$/.test(path) &&
       // A station's short link, which sends the browser to wherever it plays.
       !/^\/watch\/[a-z0-9]{10}$/.test(path) &&
       !STATION_PAGE.test(path) &&
@@ -2765,6 +2767,22 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
      * in the directory). It sends the browser to the station's own page, on
      * the server that plays it. Nothing private or unlisted is ever found.
      */
+    /* A monthly support's cancel link, from any of its emails. */
+    if (path === "/support/cancel" && options.supportSubscriptions && (request.method === "GET" || request.method === "HEAD")) {
+      let words: string;
+      try {
+        const done = await options.supportSubscriptions.cancel(url.searchParams.get("s") ?? "", url.searchParams.get("t") ?? "");
+        const name = options.support?.holder(done.holder)?.name ?? done.holder;
+        words = `Your monthly support for ${name} is cancelled. No more payment links will be sent.`;
+      } catch (error) {
+        words = error instanceof SupportError ? error.message : "That did not work; try the link again.";
+      }
+      const safe = words.replace(/[&<>"']/g, (one) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[one]!);
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'", "referrer-policy": "no-referrer" });
+      response.end(request.method === "HEAD" ? undefined : `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Support · nixamp</title><body style="margin:0;background:#080c09;color:#e8efe9;font:16px/1.5 system-ui,sans-serif"><main style="max-width:520px;margin:0 auto;padding:48px 16px"><h1 style="font-size:1.4rem">Monthly support</h1><p>${safe}</p><p><a style="color:#3ddc84" href="https://nixamp.com/guide">Back to the stations</a></p></main></body>`);
+      return;
+    }
+
     /* Support a copyright holder: the page, the coins, and a CoinPay checkout. */
     const supportPage = /^\/support\/([a-z0-9-]{1,40})$/.exec(path);
     if (supportPage && options.support && (request.method === "GET" || request.method === "HEAD")) {
@@ -2798,7 +2816,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           }
           let body: Record<string, unknown> = {};
           try { body = JSON.parse(await readBody(request)) as Record<string, unknown>; } catch { body = {}; }
-          json(response, 200, await support.checkout({ ...body, holder: holder.id }));
+          if (body["monthly"] === true) {
+            if (!options.supportSubscriptions) throw new SupportError("Monthly support is not set up here.", 503, "unavailable");
+            json(response, 200, await options.supportSubscriptions.start({ ...body, holder: holder.id }));
+          } else {
+            json(response, 200, await support.checkout({ ...body, holder: holder.id }));
+          }
           return;
         }
         json(response, 405, { error: "GET or POST", code: "method_not_allowed" });
@@ -7234,6 +7257,15 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ? new TranslationPasses({ db: pool, key: coinpayKeyFrom(), site: nixampSite }) : undefined;
   // Payments to the copyright holders nixamp.com collects for, on its own CoinPay business.
   const supportPayments = accounts ? new Support({ key: coinpayKeyFrom(), site: nixampSite, holders: supportHoldersFrom() }) : undefined;
+  // Monthly support: each month a new CoinPay payment and its link by email.
+  const supportMonthly = supportPayments && supportPayments.enabled && pool ? new SupportSubscriptions({
+    db: pool as unknown as import("./support.ts").Db,
+    support: supportPayments,
+    mail: process.env["RESEND_API_KEY"] ? { apiKey: process.env["RESEND_API_KEY"], from: process.env["NIXAMP_MAIL_FROM"] ?? "nixamp <notifications@nixamp.com>" } : null,
+    site: nixampSite,
+    log: (line) => console.log(line),
+  }) : undefined;
+  supportMonthly?.startSchedule();
   if (translationPasses) void translationPasses.access().catch(() => console.error("nixamp: translation checkout could not warm; it will retry on demand"));
   const liveVoice = accounts && process.env["NIXAMP_DUBBING"] !== "off" ? new LiveVoice({
     ...(pool ? { db: pool } : {}),
@@ -7787,6 +7819,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(liveVoice ? { liveVoice } : {}),
     ...(translationPasses ? { translationPasses } : {}),
     ...(supportPayments ? { support: supportPayments } : {}),
+    ...(supportMonthly ? { supportSubscriptions: supportMonthly } : {}),
     ...(process.env["COINPAY_WEBHOOK_SECRET"] ? { coinpayWebhookSecret: process.env["COINPAY_WEBHOOK_SECRET"] } : {}),
     ...(sharedTranslations ? { sharedTranslations } : {}),
     ...(translator ? { translator } : {}),

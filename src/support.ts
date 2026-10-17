@@ -41,6 +41,11 @@ export class Support {
 
   constructor(private readonly options: { key: string; site: string; holders: SupportHolder[]; fetcher?: typeof fetch; now?: () => number }) {}
 
+  /** For a subscription's renewals, which ask CoinPay about their payments. */
+  get key(): string {
+    return this.options.key;
+  }
+
   holder(id: string): SupportHolder | undefined {
     return this.options.holders.find((one) => one.id === id.toLowerCase());
   }
@@ -80,7 +85,7 @@ export class Support {
   }
 
   /** A CoinPay checkout for this much, to this holder; the address to send the payer to. */
-  async checkout(input: { holder?: unknown; amountUsd?: unknown; coin?: unknown; station?: unknown; track?: unknown }): Promise<{ url: string }> {
+  async checkout(input: { holder?: unknown; amountUsd?: unknown; coin?: unknown; station?: unknown; track?: unknown; metadata?: Record<string, unknown> }): Promise<{ url: string; paymentId: string }> {
     const holder = typeof input.holder === "string" ? this.holder(input.holder) : undefined;
     if (!holder) throw new SupportError("Nobody by that name is supported here.", 404, "not_found");
     const amount = Number(input.amountUsd);
@@ -99,14 +104,14 @@ export class Support {
         currency: coin.toLowerCase(),
         payment_method: "crypto",
         description: `Support ${holder.name} on nixamp`,
-        metadata: { app: "nixamp", product: "support", holder: holder.id, order, station: clean(input.station), track: clean(input.track) },
+        metadata: { app: "nixamp", product: "support", holder: holder.id, order, station: clean(input.station), track: clean(input.track), ...(input.metadata ?? {}) },
         redirect_url: `${this.options.site}/support/${holder.id}?thanks=1`,
       }),
     });
     const payment = created["payment"] as { id?: unknown } | undefined;
     const id = typeof payment?.id === "string" ? payment.id : "";
     if (!/^[A-Za-z0-9_-]{6,80}$/.test(id)) throw new SupportError("The checkout did not start; nothing was charged. Try again.", 502, "provider");
-    return { url: `https://coinpayportal.com/pay/${id}` };
+    return { url: `https://coinpayportal.com/pay/${id}`, paymentId: id };
   }
 }
 
@@ -125,6 +130,8 @@ button.go{margin-top:18px;width:100%;padding:12px;border:0;border-radius:999px;b
 button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 #status{min-height:1.4em;margin-top:12px;color:var(--muted)}
 .thanks{color:var(--accent);font-weight:700}
+.often{display:flex;gap:8px;margin:0 0 14px}.often label{flex:1;margin:0;display:flex;gap:8px;align-items:center;justify-content:center;padding:10px;border:1px solid var(--line);border-radius:10px;color:var(--fg);cursor:pointer}
+.often input{width:auto}
 small{display:block;margin-top:18px;color:var(--muted)}small a{color:inherit}
 `;
 
@@ -141,6 +148,11 @@ const SCRIPT = `
       for (const o of document.querySelectorAll(".amounts button")) o.setAttribute("aria-pressed", String(o === b));
     });
   }
+  const monthly = () => document.querySelector("input[name=often]:checked").value === "monthly";
+  for (const r of document.querySelectorAll("input[name=often]")) r.addEventListener("change", () => {
+    $("#email-box").hidden = !monthly();
+    $("#go").textContent = monthly() ? "Pay the first month" : "Continue to payment";
+  });
   if (params.get("thanks")) { $("#status").className = "thanks"; $("#status").textContent = "Thank you. Your payment is on its way."; }
   try {
     const info = await (await fetch("/api/v1/support/" + encodeURIComponent(holder), { cache: "no-store" })).json();
@@ -157,7 +169,8 @@ const SCRIPT = `
     $("#status").textContent = "Starting the checkout…";
     try {
       const r = await fetch("/api/v1/support/" + encodeURIComponent(holder), { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ amountUsd: usd, coin: $("#coin").value, station: params.get("station") || "", track: params.get("track") || "" }) });
+        body: JSON.stringify({ amountUsd: usd, coin: $("#coin").value, station: params.get("station") || "", track: params.get("track") || "",
+          ...(monthly() ? { monthly: true, email: $("#email").value } : {}) }) });
       const body = await r.json();
       if (r.ok && body.url) { location.href = body.url; return; }
       $("#status").textContent = body.error || "That did not work.";
@@ -182,17 +195,22 @@ export const SUPPORT_PAGE = `<!doctype html>
 <main>
   <div class="card">
     <h1>Support <span id="who">the artist</span></h1>
-    <p>Pay the copyright holder of the music you are listening to, directly. One payment, in crypto, through CoinPay.</p>
+    <p>Pay the copyright holder of the music you are listening to, directly, in crypto through CoinPay. Once, or every month.</p>
     <form id="form">
+      <div class="often"><label><input type="radio" name="often" value="once" checked> One time</label><label><input type="radio" name="often" value="monthly"> Monthly</label></div>
       <div class="amounts">${AMOUNTS.map((usd, at) => `<button type="button" data-usd="${usd}" aria-pressed="${at === 1}">$${usd}</button>`).join("")}</div>
       <label for="other">Or another amount (US$)</label>
       <input id="other" type="number" min="1" max="1000" step="1" inputmode="numeric">
+      <div id="email-box" hidden>
+        <label for="email">Email, for each month's payment link (and the cancel link)</label>
+        <input id="email" type="email" autocomplete="email" maxlength="254">
+      </div>
       <label for="coin">Pay with</label>
       <select id="coin"></select>
       <button id="go" class="go" type="submit">Continue to payment</button>
       <div id="status" role="status" aria-live="polite"></div>
     </form>
-    <small>Payments go through <a href="https://coinpayportal.com">CoinPay</a> to nixamp.com, which pays the holder. Nothing recurs.</small>
+    <small>Payments go through <a href="https://coinpayportal.com">CoinPay</a> to nixamp.com, which pays the holder. Monthly: each month we email a new payment link; nothing is taken until you pay it, and every email has a one-click cancel.</small>
   </div>
 </main>
 <script>${SCRIPT}</script>
@@ -204,3 +222,180 @@ export const SUPPORT_CSP = [
   "default-src 'none'", `script-src ${hash(SCRIPT)}`, `style-src ${hash(STYLE)}`, "connect-src 'self'",
   "img-src 'self' data:", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
 ].join("; ");
+
+/** Postgres, as nixamp.com's pool offers it. */
+export interface Db { query: (text: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }> }
+
+/** What CoinPay calls a payment that has been made. */
+const PAID = new Set(["confirmed", "forwarding", "forwarded", "forwarding_failed", "completed"]);
+const EMAIL = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[a-z]{2,24}$/i;
+
+/** One month on from a time, on the same day where the month has it. */
+export function nextMonth(at: number): number {
+  const date = new Date(at);
+  const day = date.getUTCDate();
+  date.setUTCDate(1);
+  date.setUTCMonth(date.getUTCMonth() + 1);
+  const last = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  date.setUTCDate(Math.min(day, last));
+  return date.getTime();
+}
+
+/**
+ * Monthly support, run here rather than by CoinPay: CoinPay's only merchant
+ * subscriptions are Stripe's, and its recurring invoices refuse a scoped key.
+ * A subscription is an email, an amount, a coin and a holder. Month one is
+ * paid at once on CoinPay's checkout; each month after, a new payment is made
+ * and its link emailed, with a one-click cancel. A month left unpaid ends it
+ * (lapsed) rather than emailing forever.
+ */
+export class SupportSubscriptions {
+  private schema: Promise<void> | null = null;
+  private timer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(private readonly options: {
+    db: Db;
+    support: Support;
+    /** Resend; null leaves renewals unsent (and says so in the log). */
+    mail: { apiKey: string; from: string } | null;
+    site: string;
+    fetcher?: typeof fetch;
+    now?: () => number;
+    log?: (line: string) => void;
+  }) {}
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  private ready(): Promise<void> {
+    this.schema ??= (async () => {
+      await this.options.db.query(`CREATE TABLE IF NOT EXISTS support_subscriptions (
+        id TEXT PRIMARY KEY, token TEXT NOT NULL, holder TEXT NOT NULL, email TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL, coin TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+        cycles INTEGER NOT NULL DEFAULT 0, last_payment_id TEXT, next_due TIMESTAMPTZ NOT NULL,
+        station TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL, canceled_at TIMESTAMPTZ)`);
+      await this.options.db.query("CREATE INDEX IF NOT EXISTS support_subscriptions_due ON support_subscriptions (status, next_due)");
+    })().catch((error: unknown) => { this.schema = null; throw error; });
+    return this.schema;
+  }
+
+  /** Month one: a subscription and its first checkout. */
+  async start(input: { holder?: unknown; amountUsd?: unknown; coin?: unknown; email?: unknown; station?: unknown; track?: unknown }): Promise<{ url: string; id: string }> {
+    const email = typeof input.email === "string" ? input.email.trim().toLowerCase() : "";
+    if (!EMAIL.test(email)) throw new SupportError("Give an email for the monthly payment links.", 400, "invalid_email");
+    const holder = typeof input.holder === "string" ? this.options.support.holder(input.holder) : undefined;
+    if (!holder) throw new SupportError("Nobody by that name is supported here.", 404, "not_found");
+    await this.ready();
+    const live = await this.options.db.query("SELECT count(*)::int AS n FROM support_subscriptions WHERE email = $1 AND status = 'active'", [email]);
+    if (Number(live.rows[0]?.["n"] ?? 0) >= 10) throw new SupportError("That email already has ten monthly supports.", 409, "too_many");
+    const id = randomUUID();
+    const token = randomUUID().replace(/-/g, "");
+    const checkout = await this.options.support.checkout({ ...input, holder: holder.id, metadata: { subscription: id, cycle: 1 } } as Parameters<Support["checkout"]>[0]);
+    const now = this.now();
+    await this.options.db.query(`INSERT INTO support_subscriptions (id, token, holder, email, amount_cents, coin, cycles, last_payment_id, next_due, station, created_at)
+      VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10)`,
+    [id, token, holder.id, email, Math.round(Number(input.amountUsd) * 100), String(input.coin).toUpperCase(), checkout.paymentId, new Date(nextMonth(now)), typeof input.station === "string" ? input.station.slice(0, 20) : "", new Date(now)]);
+    await this.mail(email, `Your monthly support for ${holder.name}`, [
+      `Thank you for supporting ${holder.name} on nixamp, $${Number(input.amountUsd).toFixed(2)} a month in ${String(input.coin).toUpperCase()}.`,
+      `This month: ${checkout.url}`,
+      `Each month we email you a new payment link like this one. Nothing is taken without you paying it.`,
+      `Stop at any time: ${this.cancelLink(id, token)}`,
+    ]);
+    return { url: checkout.url, id };
+  }
+
+  cancelLink(id: string, token: string): string {
+    return `${this.options.site}/support/cancel?s=${encodeURIComponent(id)}&t=${encodeURIComponent(token)}`;
+  }
+
+  async cancel(id: string, token: string): Promise<{ canceled: boolean; holder: string }> {
+    await this.ready();
+    const found = await this.options.db.query("UPDATE support_subscriptions SET status = 'canceled', canceled_at = $3 WHERE id = $1 AND token = $2 AND status <> 'canceled' RETURNING holder", [id, token, new Date(this.now())]);
+    const row = found.rows[0];
+    if (!row) {
+      const known = await this.options.db.query("SELECT holder FROM support_subscriptions WHERE id = $1 AND token = $2", [id, token]);
+      if (!known.rows[0]) throw new SupportError("That cancel link is not one of ours.", 404, "not_found");
+      return { canceled: true, holder: String(known.rows[0]["holder"]) };
+    }
+    return { canceled: true, holder: String(row["holder"]) };
+  }
+
+  private async paid(paymentId: string): Promise<boolean | null> {
+    try {
+      const response = await (this.options.fetcher ?? fetch)(`https://coinpayportal.com/api/payments/${encodeURIComponent(paymentId)}`, {
+        signal: AbortSignal.timeout(15_000),
+        headers: { authorization: `Bearer ${this.options.support.key}` },
+      });
+      if (!response.ok) return null;
+      const body = (await response.json()) as { payment?: { status?: string } };
+      return PAID.has(String(body.payment?.status ?? ""));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Every subscription now due: a new month's payment and its link, or lapsed when last month went unpaid. */
+  async renew(): Promise<{ renewed: number; lapsed: number }> {
+    await this.ready();
+    const due = await this.options.db.query("SELECT * FROM support_subscriptions WHERE status = 'active' AND next_due <= $1 ORDER BY next_due LIMIT 200", [new Date(this.now())]);
+    let renewed = 0;
+    let lapsed = 0;
+    for (const row of due.rows) {
+      const id = String(row["id"]);
+      const last = String(row["last_payment_id"] ?? "");
+      const paid = last ? await this.paid(last) : false;
+      if (paid === null) continue; // CoinPay did not answer: ask again next time.
+      const holder = this.options.support.holder(String(row["holder"]));
+      if (!paid || !holder) {
+        await this.options.db.query("UPDATE support_subscriptions SET status = 'lapsed' WHERE id = $1 AND status = 'active'", [id]);
+        lapsed += 1;
+        if (holder) await this.mail(String(row["email"]), `Your monthly support for ${holder.name} has stopped`, [
+          `Last month's payment was not made, so we have stopped sending payment links. Nothing more will be asked.`,
+          `Start again any time: ${this.options.site}/support/${holder.id}`,
+        ]);
+        continue;
+      }
+      const amountUsd = Number(row["amount_cents"]) / 100;
+      const cycle = Number(row["cycles"]) + 1;
+      let checkout: { url: string; paymentId: string };
+      try {
+        checkout = await this.options.support.checkout({ holder: holder.id, amountUsd, coin: String(row["coin"]), station: String(row["station"] ?? ""), metadata: { subscription: id, cycle } } as Parameters<Support["checkout"]>[0]);
+      } catch (error) {
+        this.options.log?.(`  support: renewal ${id} could not start a payment: ${(error as Error).message}`);
+        continue;
+      }
+      await this.options.db.query("UPDATE support_subscriptions SET cycles = $2, last_payment_id = $3, next_due = $4 WHERE id = $1", [id, cycle, checkout.paymentId, new Date(nextMonth(new Date(String(row["next_due"])).getTime()))]);
+      await this.mail(String(row["email"]), `This month's support for ${holder.name}`, [
+        `Your monthly support for ${holder.name}: $${amountUsd.toFixed(2)} in ${String(row["coin"])}.`,
+        `Pay this month: ${checkout.url}`,
+        `Stop at any time: ${this.cancelLink(id, String(row["token"]))}`,
+      ]);
+      renewed += 1;
+    }
+    return { renewed, lapsed };
+  }
+
+  startSchedule(everyMs = 3600_000): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => void this.renew().catch((error: unknown) => this.options.log?.(`  support: renewals failed: ${(error as Error).message}`)), everyMs);
+    this.timer.unref?.();
+  }
+
+  private async mail(to: string, subject: string, lines: string[]): Promise<void> {
+    if (!this.options.mail) {
+      this.options.log?.(`  support: no RESEND_API_KEY, so "${subject}" to ${to} was not sent`);
+      return;
+    }
+    try {
+      await (this.options.fetcher ?? fetch)("https://api.resend.com/emails", {
+        method: "POST",
+        signal: AbortSignal.timeout(15_000),
+        headers: { authorization: `Bearer ${this.options.mail.apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({ from: this.options.mail.from, to: [to], subject, text: `${lines.join("\n\n")}\n\nnixamp.com` }),
+      });
+    } catch (error) {
+      this.options.log?.(`  support: mail to ${to} failed: ${(error as Error).message}`);
+    }
+  }
+}
