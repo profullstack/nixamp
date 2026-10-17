@@ -116,14 +116,15 @@ export async function station(argv: string[]): Promise<number> {
           const root = readState()?.source ?? "";
           if (root && folder.startsWith(root)) folder = folder.slice(root.length);
         }
-        if (items === undefined && folder === undefined) {
-          console.error("nixamp station create needs --folder PATH or --items 0,1,2");
+        const playlist = flag(argv, "--playlist");
+        if (items === undefined && folder === undefined && playlist === undefined) {
+          console.error("nixamp station create needs --folder PATH, --playlist ID or --items 0,1,2");
           return 2;
         }
         const bitrate = flag(argv, "--bitrate");
         const answer = await call("POST", "/api/v1/stations", {
           name,
-          ...(items !== undefined ? { items: items.split(",").map((one) => Number(one.trim())) } : { folder }),
+          ...(playlist !== undefined ? { playlist } : items !== undefined ? { items: items.split(",").map((one) => Number(one.trim())) } : { folder }),
           shuffle: has(argv, "--shuffle"),
           repeat: !has(argv, "--no-repeat"),
           ...(bitrate ? { bitrate: Number(bitrate) } : {}),

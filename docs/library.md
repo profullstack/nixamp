@@ -46,6 +46,29 @@ owner changes anything. A station's link reaches none of it.
 Errors are `{error, code}`: `forbidden_root`, `overlapping_source`, `not_a_folder`, `root_required`,
 `source_disabled`, `invalid_field`, `invalid_value`, `not_ready`, `not_found`, `forbidden`, `bad_json`.
 
+## Playlists and the queue
+
+They belong to a listener this server can recognise from another device: a nixamp.com account
+signed in on it, or the owner with the control key. With only the listen link there is a player
+and no memory (`401 sign_in_required`).
+
+- **Playlists** hold item ids in order. An item that goes missing stays, shown `unavailable`,
+  until it is taken out. Every change bumps `revision`; a `PATCH` naming an older one gets
+  `409 stale_revision` instead of overwriting another device's edit.
+- **The queue** is one per listener: items, `at`, `position` (seconds), `shuffle`, `repeat`
+  (`off`, `all`, `one`) and the `device` that moved it last. Where you are is last-writer-wins,
+  which is what picking up on another device means; replacing the list names the revision it
+  replaces.
+- A **station** can be made from a playlist: `{"name": ..., "playlist": ID}` plays its ready items
+  in its order.
+
+| | |
+| --- | --- |
+| `GET/POST /api/v1/library/playlists` | mine; create `{name, items?}` |
+| `GET/PATCH/DELETE /api/v1/library/playlists/:id` | with items resolved; `{name?, items?, revision?}` |
+| `POST /api/v1/library/playlists/:id/items` | `{items, at?}` |
+| `GET/PUT/PATCH /api/v1/library/queue` | `{items?, revision?, at?, position?, shuffle?, repeat?, device?}` |
+
 ## CLI and MCP
 
     nixamp library status
@@ -54,5 +77,8 @@ Errors are `{error, code}`: `forbidden_root`, `overlapping_source`, `not_a_folde
     nixamp library search late night --artist "Some Band"
     nixamp library fix ITEM --title "Correct Title" --year 1979
 
-MCP: `library_status`, `library_search`, `library_browse`, `library_scan`, with the same
-target rules as the station tools.
+    nixamp library playlist new "Road trip" ITEM ITEM
+    nixamp station create --name "Road trip FM" --playlist PLAYLIST
+
+MCP: `library_status`, `library_search`, `library_browse`, `library_scan`, `playlist_list`,
+`playlist_create`, `playlist_add`, with the same target rules as the station tools.

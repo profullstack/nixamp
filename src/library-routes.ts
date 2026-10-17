@@ -14,6 +14,7 @@ import {
   LibraryError, shown, trackOf, type Browse, type ItemState, type LibraryIndex, type LibraryItem, type Probed, type SearchQuery,
 } from "./library-index.ts";
 import type { Track } from "./audio.ts";
+import type { ListenerStore, Playlist, Queue } from "./library-user.ts";
 
 export interface LibraryContext {
   index: LibraryIndex;
@@ -22,6 +23,9 @@ export interface LibraryContext {
   /** The control key or the owner: may change things. */
   canWrite: boolean;
   account: string;
+  /** Who this is, for their playlists and queue; null when nobody in particular. */
+  principal: string | null;
+  listeners?: ListenerStore;
   probe: (path: string) => Promise<Probed>;
   /** Tell the player about tags that changed. */
   retag: (tracks: Track[]) => void;
@@ -145,6 +149,68 @@ export async function handleLibrary(
       if (method === "DELETE") {
         const forgotten = index.removeSource(id);
         ctx.json(response, 200, { deleted: id, forgotten, filesTouched: 0 });
+        return true;
+      }
+      return fail(405, "method_not_allowed", "GET, PATCH or DELETE");
+    }
+
+    if (path === "/api/v1/library/queue" || path === "/api/v1/library/playlists" || path.startsWith("/api/v1/library/playlists/")) {
+      const listeners = ctx.listeners;
+      if (!listeners) return fail(404, "not_found", "nothing here");
+      const who = ctx.principal;
+      if (who === null) return fail(401, "sign_in_required", "sign in to nixamp.com to keep playlists and pick up where you left off");
+      const known = (id: string): boolean => index.item(id) !== undefined;
+      const resolved = (ids: string[]): Array<Record<string, unknown>> => ids.map((id) => {
+        const item = index.item(id);
+        return item ? itemView(item, ctx.canWrite) : { id, state: "unavailable" };
+      });
+      const playlistView = (one: Playlist, withItems: boolean): Record<string, unknown> => ({
+        id: one.id, name: one.name, count: one.items.length, revision: one.revision, createdAt: one.createdAt, updatedAt: one.updatedAt,
+        ...(withItems ? { items: resolved(one.items) } : {}),
+      });
+      const queueView = (queue: Queue): Record<string, unknown> => ({ ...queue, items: resolved(queue.items), current: queue.items[queue.at] ?? null });
+
+      if (path === "/api/v1/library/queue") {
+        if (method === "GET") {
+          ctx.json(response, 200, { queue: queueView(listeners.queueOf(who)) });
+          return true;
+        }
+        if (method === "PUT" || method === "PATCH") {
+          ctx.json(response, 200, { queue: queueView(listeners.setQueue(who, await body(), known)) });
+          return true;
+        }
+        return fail(405, "method_not_allowed", "GET, PUT or PATCH");
+      }
+      if (path === "/api/v1/library/playlists") {
+        if (method === "GET") {
+          ctx.json(response, 200, { playlists: listeners.playlistsOf(who).map((one) => playlistView(one, false)) });
+          return true;
+        }
+        if (method === "POST") {
+          ctx.json(response, 201, { playlist: playlistView(listeners.create(who, await body(), known), true) });
+          return true;
+        }
+        return fail(405, "method_not_allowed", "GET or POST");
+      }
+      const playlistMatch = /^\/api\/v1\/library\/playlists\/([0-9a-f]{16})(?:\/(items))?$/.exec(path);
+      if (!playlistMatch) return fail(404, "not_found", "no such playlist");
+      const id = playlistMatch[1]!;
+      if (playlistMatch[2] === "items") {
+        if (method !== "POST") return fail(405, "method_not_allowed", "POST");
+        ctx.json(response, 200, { playlist: playlistView(listeners.add(who, id, await body(), known), true) });
+        return true;
+      }
+      if (method === "GET") {
+        ctx.json(response, 200, { playlist: playlistView(listeners.playlist(who, id), true) });
+        return true;
+      }
+      if (method === "PATCH") {
+        ctx.json(response, 200, { playlist: playlistView(listeners.update(who, id, await body(), known), true) });
+        return true;
+      }
+      if (method === "DELETE") {
+        listeners.remove(who, id);
+        ctx.json(response, 200, { deleted: id });
         return true;
       }
       return fail(405, "method_not_allowed", "GET, PATCH or DELETE");

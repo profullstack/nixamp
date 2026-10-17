@@ -1,5 +1,5 @@
 /** `nixamp library` subcommands and usage, apart so help does not load the client. */
-export const LIBRARY_COMMANDS = new Set(["status", "sources", "add", "scan", "search", "show", "fix", "remove"]);
+export const LIBRARY_COMMANDS = new Set(["status", "sources", "add", "scan", "search", "show", "fix", "remove", "playlists", "playlist"]);
 
 export const LIBRARY_USAGE = `nixamp library — what this server has, indexed
 
@@ -12,6 +12,10 @@ export const LIBRARY_USAGE = `nixamp library — what this server has, indexed
   nixamp library show ITEM
   nixamp library fix ITEM --title T [--artist A] [--album A] [--genre G] [--track N] [--year N]
   nixamp library remove SOURCE        forget a folder; its files are not touched
+  nixamp library playlists
+  nixamp library playlist new NAME [ITEM...]
+  nixamp library playlist show|delete PLAYLIST
+  nixamp library playlist add PLAYLIST ITEM...
 
   --json        machine-readable output
   --url, --key  another server, as with \`nixamp admin\``;

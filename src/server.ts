@@ -74,6 +74,7 @@ import { refusedDestination } from "./destinations.ts";
 import { handleStations, isStationListenPath } from "./station-routes.ts";
 import { handleLibrary } from "./library-routes.ts";
 import { LibraryIndex, probeItem, trackOf, type Probed } from "./library-index.ts";
+import { ListenerStore } from "./library-user.ts";
 import { STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
@@ -1709,7 +1710,7 @@ async function readBytes(request: IncomingMessage, limit: number): Promise<Uint8
 
 export interface HandlerOptions {
   /** The library as an index: sources, items, search. */
-  library?: { index: LibraryIndex; probe: (path: string) => Promise<Probed>; retag: (tracks: Track[]) => void };
+  library?: { index: LibraryIndex; probe: (path: string) => Promise<Probed>; retag: (tracks: Track[]) => void; listeners?: ListenerStore };
   /** This server's stations and what keeps them on the air. */
   stations?: { store: StationStore; runner: StationRunner };
   web: string | null;
@@ -2716,11 +2717,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // link, may read the library; only the owner may change it.
     if (options.library && (path === "/api/v1/library" || path.startsWith("/api/v1/library/"))) {
       const control = await controlOf();
+      // Who this is: the owner's account, "owner" for the control key, or
+      // any other signed-in nixamp.com account that has the link.
+      const session = tokenFrom(request.headers) || url.searchParams.get("session") || "";
+      const principal = control.account || (control.allowed ? "owner" : (session && options.owner ? (await options.owner.accountFor(session)) || null : null));
       await handleLibrary(request, response, path, url, {
         index: options.library.index,
         canRead: true,
         canWrite: control.allowed,
         account: control.account,
+        principal,
+        ...(options.library.listeners ? { listeners: options.library.listeners } : {}),
         probe: options.library.probe,
         retag: options.library.retag,
         sendFile,
@@ -2741,7 +2748,22 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         channels: options.channels!,
         canControl: control.allowed,
         account: control.account,
-        select: (body) => selectStationFiles(engine, body),
+        select: (body) => {
+          // A playlist of the owner's, as the station's files: its ready items, in its order.
+          if (typeof (body as { playlist?: unknown }).playlist === "string" && options.library?.listeners) {
+            const owner = control.account || "owner";
+            let list;
+            try {
+              list = options.library.listeners.playlist(owner, (body as { playlist: string }).playlist);
+            } catch (error) {
+              throw new StationError("playlist_not_found", (error as Error).message, 404);
+            }
+            const files = list.items.map((id) => options.library!.index.item(id)).filter((one) => one?.state === "ready").map((one) => one!.path);
+            if (files.length === 0) throw new StationError("empty_playlist", "none of that playlist's items are ready to play");
+            return files;
+          }
+          return selectStationFiles(engine, body);
+        },
         trackFor: (file) => trackFor(engine, file),
         base: `${scheme}://${request.headers.host ?? "localhost"}`,
         json,
@@ -6587,7 +6609,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const retagPlayer = (tracks: Track[]): void => {
     if (tracks.length > 0) engine.retag(tracks, root);
   };
-  const library = { index: libraryIndex, probe: probeFile, retag: retagPlayer };
+  const listeners = new ListenerStore(ListenerStore.fileFor(stateDir(), options.port));
+  const library = { index: libraryIndex, probe: probeFile, retag: retagPlayer, listeners };
   const stationStore = new StationStore(StationStore.fileFor(stateDir(), options.port));
   stationRunner = new StationRunner({
     store: stationStore,

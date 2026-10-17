@@ -2,7 +2,7 @@
 export const USAGE = `nixamp station — make a collection into a station
 
   nixamp station list
-  nixamp station create --name NAME (--folder PATH | --items 0,1,2) [--shuffle] [--no-repeat] [--bitrate 128]
+  nixamp station create --name NAME (--folder PATH | --playlist ID | --items 0,1,2) [--shuffle] [--no-repeat] [--bitrate 128]
   nixamp station show ID
   nixamp station status ID
   nixamp station start ID
