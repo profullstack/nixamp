@@ -67,3 +67,11 @@ Errors are `{error, code}` with stable codes: `name_required`, `empty_station`, 
     nixamp station stop ID
 
 Exit codes: 0 done, 1 refused by the server (code printed), 2 usage, 3 unreachable.
+
+## MCP
+
+`nixamp mcp` offers `station_list`, `station_get`, `station_create`, `station_update`,
+`station_control` (start, stop, skip, retry), `station_publish` and `station_unpublish`. Without
+`server` they use this machine's daemon and its control key; with `server` they send this
+machine's nixamp.com session, which that server accepts only from its owner. `station_publish`
+with `visibility: "public"` needs `basis`, as everywhere else.
