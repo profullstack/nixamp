@@ -16,7 +16,7 @@ export function publicWebUrl(value: unknown): string | null {
   } catch { return null; }
 }
 
-export function classroomBroadcast(value: unknown): { provider: "pairux" | "nixamp" | "media"; url: string; embed: string; join: string } | null {
+export function classroomBroadcast(value: unknown): { provider: "pairux" | "nixamp" | "station" | "media"; url: string; embed: string; join: string } | null {
   const safe = publicWebUrl(value);
   if (!safe) return null;
   const url = new URL(safe);
@@ -40,6 +40,17 @@ export function classroomBroadcast(value: unknown): { provider: "pairux" | "nixa
     const original = clean.href;
     clean.searchParams.set("embed", "1");
     return { provider: "nixamp", url: original, embed: clean.href, join: original };
+  }
+  // A station's listening link: its page, opened with the station's own
+  // token. The token opens that one stream and nothing else on the server, so
+  // it may be published; any other query (a server key) may not.
+  if (url.hostname.endsWith(".nixamp.com")) {
+    const id = /^\/station\/([a-z0-9]{10})\/?$/.exec(url.pathname)?.[1];
+    const token = url.searchParams.get("t") ?? "";
+    if (id && /^[A-Za-z0-9_-]{16,64}$/.test(token) && [...url.searchParams.keys()].every((name) => name === "t")) {
+      const page = `${url.origin}/station/${id}?t=${token}`;
+      return { provider: "station", url: page, embed: `${url.origin}/api/v1/stations/${id}/stream?t=${token}`, join: page };
+    }
   }
   // A self-hosted Nixamp viewer link can be played through the shared client.
   if (url.hostname.endsWith(".nixamp.com") && /^\/view\/[A-Za-z0-9_-]+\/?$/.test(url.pathname) && !url.search) {

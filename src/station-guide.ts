@@ -60,7 +60,7 @@ const SCRIPT = `
         a.append(el("div", "live", s.state === "live" ? "● LIVE" : "off the air"), el("div", "name", s.name),
           el("div", "now", s.nowPlaying ? [s.nowPlaying.title, s.nowPlaying.artist].filter(Boolean).join(" — ") : ""));
         card.append(a);
-        if (group === "shared") {
+        if (group === "shared" && !s.peer) {
           const b = el("button", "report", "Report this track");
           b.type = "button";
           b.addEventListener("click", () => report(s.id, b));
@@ -138,6 +138,8 @@ export interface GuideEntry {
   state: string;
   page: string;
   nowPlaying: { title: string; artist: string } | null;
+  /** Listed by another server (a guide peer); its own page, its own reports. */
+  peer?: boolean;
 }
 
 const GROUPS = ["ai", "shared", "radio", "tv"] as const;
@@ -228,4 +230,104 @@ export const GUIDE_CSP = [
 export function guideHosts(env: Record<string, string | undefined> = process.env): Set<string> {
   const saved = (() => { try { return readConfig().guideHosts ?? []; } catch { return []; } })();
   return new Set([...(env["NIXAMP_GUIDE_HOSTS"] ?? "").split(","), ...saved].map((one) => one.trim().toLowerCase()).filter(Boolean));
+}
+
+/**
+ * The other servers whose public, listed stations this guide shows beside
+ * its own: `guidePeers` in config.json (`nixamp station guide-peer URL`), plus
+ * NIXAMP_GUIDE_PEERS, comma-separated. One Moshpit name (live.streaming) points
+ * at one server; this is how a station on any of the owner's servers gets on it.
+ */
+export function guidePeers(env: Record<string, string | undefined> = process.env): string[] {
+  const saved = (() => { try { return readConfig().guidePeers ?? []; } catch { return []; } })();
+  const peers = new Set<string>();
+  for (const one of [...(env["NIXAMP_GUIDE_PEERS"] ?? "").split(","), ...saved]) {
+    const base = peerBase(one);
+    if (base) peers.add(base);
+  }
+  return [...peers];
+}
+
+/** An https server address as a bare origin, or "" when it is not one. */
+export function peerBase(value: string): string {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" && !url.username && !url.password ? url.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+const PEER_FRESH_MS = 15_000;
+const PEER_TIMEOUT_MS = 4_000;
+
+function peerEntry(value: unknown, origin: string): GuideEntry | null {
+  if (typeof value !== "object" || value === null) return null;
+  const one = value as Record<string, unknown>;
+  const page = typeof one["page"] === "string" ? one["page"] : "";
+  // A peer lists its own stations, on its own address, and nothing else.
+  try { if (new URL(page).origin !== origin) return null; } catch { return null; }
+  if (typeof one["name"] !== "string") return null;
+  const now = one["nowPlaying"] as Record<string, unknown> | null | undefined;
+  const group = one["group"];
+  return {
+    ...(typeof one["id"] === "string" ? { id: one["id"] } : {}),
+    name: one["name"].slice(0, 120),
+    kind: one["kind"] === "video" ? "video" : "audio",
+    ...(group === "ai" || group === "shared" || group === "radio" || group === "tv" ? { group } : {}),
+    state: typeof one["state"] === "string" ? one["state"] : "offline",
+    page,
+    nowPlaying: now && typeof now === "object"
+      ? { title: String(now["title"] ?? "").slice(0, 200), artist: String(now["artist"] ?? "").slice(0, 200) }
+      : null,
+    peer: true,
+  };
+}
+
+/**
+ * What the peers' guides list, asked at most every 15 seconds each and never
+ * waited on for more than 4: a peer that is down drops out of the guide, it
+ * does not hold the guide up. Each peer is asked for its own stations only
+ * (?local=1), so two servers that list each other do not ask round in a ring.
+ */
+export class PeerGuides {
+  private readonly held = new Map<string, { at: number; entries: GuideEntry[] }>();
+  private readonly asking = new Map<string, Promise<void>>();
+
+  constructor(
+    private readonly peers: () => string[] = () => guidePeers(),
+    private readonly fetcher: typeof fetch = fetch,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  async entries(): Promise<GuideEntry[]> {
+    const peers = this.peers();
+    await Promise.all(peers.map((peer) => {
+      const kept = this.held.get(peer);
+      return kept && this.now() - kept.at < PEER_FRESH_MS ? undefined : this.ask(peer);
+    }));
+    return peers.flatMap((peer) => this.held.get(peer)?.entries ?? []);
+  }
+
+  private ask(peer: string): Promise<void> {
+    const pending = this.asking.get(peer);
+    if (pending) return pending;
+    const work = (async () => {
+      let entries: GuideEntry[] = [];
+      try {
+        const answer = await this.fetcher(`${peer}/api/v1/stations/guide?local=1`, { signal: AbortSignal.timeout(PEER_TIMEOUT_MS) });
+        if (answer.ok) {
+          const body = (await answer.json()) as { stations?: unknown };
+          entries = Array.isArray(body.stations)
+            ? body.stations.map((one) => peerEntry(one, peer)).filter((one): one is GuideEntry => one !== null).slice(0, 500)
+            : [];
+        }
+      } catch {
+        entries = [];
+      }
+      this.held.set(peer, { at: this.now(), entries });
+    })().finally(() => this.asking.delete(peer));
+    this.asking.set(peer, work);
+    return work;
+  }
 }

@@ -2,14 +2,17 @@
  * Library and Radio: the owner's console for what this server has and the
  * stations it runs.
  *
- * A page of its own beside the player, on the same origin, so it is driven by
- * the same key cookie the player's admin link set. Everything it shows comes
+ * A page of its own beside the player. On a server's own address it drives
+ * that server with the key cookie the admin link set; on nixamp.com it drives
+ * whichever of the signed-in owner's servers is picked at the top, with the
+ * owner's session (each server asks nixamp.com who that is). Everything it shows comes
  * from /api/v1/library and /api/v1/stations; everything it writes into the
  * page that came from a file (titles, names, folders) goes in as text, never
  * as markup, because tags are whatever somebody's ripper put there.
  */
 import "./styles.css";
 import "./radio.css";
+import { splitShareLink } from "./remote.ts";
 
 type Json = Record<string, unknown>;
 
@@ -88,11 +91,41 @@ class ApiError extends Error {
   }
 }
 
+/* ---- which server ------------------------------------------------------- */
+
+/**
+ * The server this page drives: "" base for the one serving the page, else
+ * another origin, reached with the owner's nixamp.com session or, failing
+ * that, the key kept with the server in the account's list.
+ */
+interface Target { id: string; name: string; base: string; session: string; key: string; }
+
+let target: Target = { id: "here", name: location.host, base: "", session: "", key: "" };
+/** Bumped on every switch, so an answer from the server just left is dropped. */
+let generation = 0;
+
+/**
+ * A path on the target server. A kept key always rides in the query; the
+ * session only when asked (an <audio> src cannot send a header, a fetch can).
+ */
+function address(path: string, sessionInQuery = false): string {
+  if (!target.base) return path;
+  const url = new URL(target.base + path);
+  if (target.session) {
+    if (sessionInQuery) url.searchParams.set("session", target.session);
+  } else if (target.key) url.searchParams.set("k", target.key);
+  return url.href;
+}
+
 async function api<T = Json>(method: string, path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, {
+  const remote = target.base !== "";
+  const response = await fetch(address(path), {
     method,
-    credentials: "same-origin",
-    headers: body === undefined ? {} : { "content-type": "application/json" },
+    credentials: remote ? "omit" : "same-origin",
+    headers: {
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+      ...(remote && target.session ? { authorization: `Bearer ${target.session}` } : {}),
+    },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const parsed = (await response.json().catch(() => ({}))) as Json;
@@ -126,9 +159,128 @@ let stations: Station[] = [];
 let editing: Station | null = null;
 
 async function loadStations(): Promise<void> {
+  const mine = generation;
   const answer = await api<{ stations: Station[] }>("GET", "/api/v1/stations?limit=200");
+  if (mine !== generation) return;
   stations = answer.stations;
   drawStations();
+}
+
+/* ---- where a station is on the air ---------------------------------------- */
+
+/**
+ * live.streaming is the public guide: a station is on it when it is public
+ * and listed (server1 is the guide, and lists its guide peers' stations too).
+ * backtoschool.help is a live class whose broadcast is the station's link,
+ * made with the school's own events API, so only where that API is: on
+ * nixamp.com, signed in.
+ */
+const SCHOOL_SITE = "https://backtoschool.help";
+
+interface SchoolClass { id: string; slug: string; version: number; broadcastUrl?: string; }
+
+/** The school's events API answers here, for someone signed in. */
+let schoolOpen = false;
+/** Live classes of mine, by the station link they play. */
+let classes = new Map<string, SchoolClass>();
+
+/** A station link as the school keeps it: origin, path and token, nothing else. */
+function stationLink(link: string): string {
+  try {
+    const url = new URL(link);
+    return `${url.origin}${url.pathname.replace(/\/+$/, "")}?t=${url.searchParams.get("t") ?? ""}`;
+  } catch {
+    return link;
+  }
+}
+
+async function loadClasses(): Promise<void> {
+  if (!schoolOpen) return;
+  const answer = await fetch("/api/v1/events?mine=true&kind=class&status=live&limit=100", { credentials: "same-origin" });
+  if (!answer.ok) return;
+  const body = (await answer.json().catch(() => ({}))) as { events?: SchoolClass[] };
+  classes = new Map((body.events ?? []).filter((one) => one.broadcastUrl).map((one) => [stationLink(one.broadcastUrl!), one]));
+}
+
+async function schoolCall(path: string, body: unknown): Promise<Json> {
+  const answer = await fetch(path, {
+    method: "POST", credentials: "same-origin",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const parsed = (await answer.json().catch(() => ({}))) as Json;
+  if (!answer.ok) throw new Error(String(parsed["error"] ?? `HTTP ${answer.status}`));
+  return parsed;
+}
+
+/** On the air: start it if it is stopped. */
+async function ensureRunning(station: Station): Promise<void> {
+  if (station.desired !== "running") await api("POST", `/api/v1/stations/${station.id}/start`, {});
+}
+
+async function setStreaming(station: Station, on: boolean): Promise<void> {
+  if (on && !station.rights) {
+    // Public needs a declared basis: the dialog asks, with live.streaming ticked.
+    openPublish(station, { visibility: "public", listed: true });
+    return;
+  }
+  await api("POST", `/api/v1/stations/${station.id}/access`, on
+    ? { visibility: "public", listed: true }
+    : { visibility: station.visibility, listed: false });
+  if (on) await ensureRunning(station);
+  say(on ? `${station.name} is on live.streaming` : `${station.name} is off live.streaming`);
+  await loadStations();
+}
+
+async function setSchool(station: Station, on: boolean): Promise<void> {
+  const held = classes.get(stationLink(station.links.page));
+  if (!on) {
+    if (held) await schoolCall(`/api/v1/events/${encodeURIComponent(held.id)}/end`, { version: held.version });
+    say(`${station.name} is off backtoschool.help`);
+    await loadClasses();
+    drawStations();
+    return;
+  }
+  // A private station's link opens nothing: unlisted is the least that plays.
+  let current = station;
+  if (station.visibility === "private") {
+    current = (await api<{ station: Station }>("POST", `/api/v1/stations/${station.id}/access`, { visibility: "unlisted" })).station;
+  }
+  await ensureRunning(current);
+  const made = await schoolCall("/api/v1/events", { kind: "class", title: current.name, broadcastUrl: current.links.page, visibility: "public" });
+  const event = made["event"] as SchoolClass;
+  await schoolCall(`/api/v1/events/${encodeURIComponent(event.id)}/start`, { version: event.version });
+  say(`${current.name} is live on backtoschool.help`);
+  await loadClasses();
+  await loadStations();
+}
+
+/** Classes that play this station end with it going private: their link stops working. */
+async function endClassesFor(station: Station): Promise<void> {
+  const held = classes.get(stationLink(station.links.page));
+  if (held) await schoolCall(`/api/v1/events/${encodeURIComponent(held.id)}/end`, { version: held.version }).catch(() => undefined);
+}
+
+function targetsFor(station: Station): HTMLElement {
+  const box = el("div", { class: "targets" });
+  const streaming = el("input", { type: "checkbox" }) as HTMLInputElement;
+  streaming.checked = station.visibility === "public" && station.listed;
+  streaming.addEventListener("change", () => {
+    streaming.disabled = true;
+    void act("live.streaming", () => setStreaming(station, streaming.checked)).finally(() => { streaming.disabled = false; void loadStations().catch(() => undefined); });
+  });
+  box.append(el("label", { title: "Public and listed in the live.streaming guide" }, streaming, "On live.streaming"));
+  if (streaming.checked) box.append(el("a", { href: "https://live.streaming/", target: "_blank", rel: "noopener" }, "open"));
+
+  const held = classes.get(stationLink(station.links.page));
+  const school = el("input", { type: "checkbox", disabled: !schoolOpen }) as HTMLInputElement;
+  school.checked = held !== undefined;
+  school.addEventListener("change", () => {
+    school.disabled = true;
+    void act("backtoschool.help", () => setSchool(station, school.checked)).finally(() => { school.disabled = !schoolOpen; drawStations(); });
+  });
+  box.append(el("label", { title: schoolOpen ? "A live class on backtoschool.help that plays this station" : "Open nixamp.com/radio signed in to put stations on backtoschool.help" }, school, "On backtoschool.help"));
+  if (held) box.append(el("a", { href: `${SCHOOL_SITE}/live/${encodeURIComponent(held.slug)}`, target: "_blank", rel: "noopener" }, "open"));
+  return box;
 }
 
 function drawStations(): void {
@@ -189,17 +341,18 @@ function drawStations(): void {
       station.metrics ? el("p", { class: "muted" },
         `This month: ${(station.metrics.month.bytes / 1024 ** 2).toFixed(1)} MB delivered · ${Math.round(station.metrics.month.listenerSeconds / 3600 * 10) / 10} listener-hours · peak ${station.metrics.month.peakListeners}`,
       ) : null,
+      targetsFor(station),
       shareable ? el("p", { class: "link" }, el("a", { href: station.links.page, target: "_blank", rel: "noopener" }, "Open the listening page")) : null,
       el("div", { class: "actions" }, toggle, skip, copy, access, retry, remove),
     ));
   }
 }
 
-function openPublish(station: Station): void {
+function openPublish(station: Station, preset?: { visibility: string; listed: boolean }): void {
   editing = station;
   const form = $<HTMLFormElement>("#publish-form");
-  (form.elements.namedItem("visibility") as RadioNodeList).value = station.visibility;
-  (form.elements.namedItem("listed") as HTMLInputElement).checked = station.visibility === "public" ? station.listed : true;
+  (form.elements.namedItem("visibility") as RadioNodeList).value = preset?.visibility ?? station.visibility;
+  (form.elements.namedItem("listed") as HTMLInputElement).checked = preset?.listed ?? (station.visibility === "public" ? station.listed : true);
   (form.elements.namedItem("basis") as HTMLSelectElement).value = station.rights?.basis ?? "";
   (form.elements.namedItem("note") as HTMLInputElement).value = station.rights?.note ?? "";
   syncPublic();
@@ -222,7 +375,10 @@ async function savePublish(): Promise<void> {
     listed: visibility === "public" && (form.elements.namedItem("listed") as HTMLInputElement).checked,
     ...(basis ? { rights: { basis, note } } : {}),
   });
+  if (visibility === "private") await endClassesFor(editing);
+  else if (visibility === "public" && (form.elements.namedItem("listed") as HTMLInputElement).checked) await ensureRunning(editing);
   say(answer.dropped ? `Saved; ${answer.dropped} listeners disconnected` : "Saved");
+  await loadClasses();
   await loadStations();
 }
 
@@ -234,7 +390,9 @@ let playlists: Playlist[] = [];
 let signedIn = true;
 
 async function loadSummary(): Promise<void> {
+  const mine = generation;
   const summary = await api<{ items: number; counts: Record<string, number>; sources: Array<Json> }>("GET", "/api/v1/library");
+  if (mine !== generation) return;
   const counts = Object.entries(summary.counts).filter(([state, count]) => count > 0 && state !== "ready").map(([state, count]) => `${count} ${state}`);
   const running = summary.sources.some((one) => (one["lastScan"] as Json | null)?.["status"] === "running");
   $("#library-summary").textContent = `${summary.counts["ready"] ?? 0} ready to play${counts.length ? ` (${counts.join(", ")})` : ""}${running ? " · reading new files…" : ""}`;
@@ -438,7 +596,7 @@ async function playCurrent(position = 0): Promise<void> {
   const id = queue[at];
   if (!id) return;
   const audio = $<HTMLAudioElement>("#audio");
-  audio.src = `/api/v1/library/items/${id}/stream`;
+  audio.src = address(`/api/v1/library/items/${id}/stream`, true);
   if (position > 0) audio.currentTime = position;
   const item = results.find((one) => one.id === id) ?? (await api<{ item: Item }>("GET", `/api/v1/library/items/${id}`).then((one) => one.item).catch(() => null));
   $("#now").textContent = item ? `${item.title}${item.artist ? ` — ${item.artist}` : ""}` : "";
@@ -512,7 +670,6 @@ async function makeStation(form: HTMLFormElement): Promise<void> {
 
 async function start(): Promise<void> {
   wirePlayer();
-  $("#who").textContent = location.host;
   $<HTMLFormElement>("#search-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
@@ -560,23 +717,124 @@ async function start(): Promise<void> {
     if ($<HTMLDialogElement>("#publish-dialog").returnValue === "save") void act("Who can listen", savePublish);
   });
 
+  const choices = await serverChoices();
+  const picker = $<HTMLSelectElement>("#server");
+  picker.replaceChildren(...choices.map((one) => el("option", { value: one.id }, one.name)));
+  if (choices.length === 0) picker.append(el("option", { value: "" }, "No servers"));
+  const remembered = (() => { try { return localStorage.getItem(PICKED) ?? ""; } catch { return ""; } })();
+  const first = choices.find((one) => one.id === remembered) ?? choices[0];
+  picker.addEventListener("change", () => {
+    const next = choices.find((one) => one.id === picker.value);
+    if (next) void use(next);
+  });
+  // Stations change on their own: live, recovering, listeners.
+  setInterval(() => void loadStations().catch(() => undefined), 5_000);
+  setInterval(() => void loadSummary().catch(() => undefined), 15_000);
+  setInterval(() => void loadClasses().then(drawStations).catch(() => undefined), 15_000);
+  if (!first) {
+    notice(onDirectory()
+      ? "Sign in to nixamp.com to see your servers here. A server shows up once it has run signed in to your account (nixamp login on that machine)."
+      : "This page manages the server it is on.");
+    return;
+  }
+  picker.value = first.id;
+  await use(first);
+  if (location.hash === "#stations") document.querySelector("#stations")?.scrollIntoView();
+}
+
+const PICKED = "nixamp.radio.server";
+
+/** nixamp.com itself keeps accounts and the server list, not a library. */
+function onDirectory(): boolean {
+  return /^(www\.)?nixamp\.com$/i.test(location.hostname);
+}
+
+/**
+ * The servers this page can drive: the one serving it (unless that is
+ * nixamp.com), then every server in the signed-in account's list. The
+ * session is the account's own, read from the host that set the cookie
+ * and handed only to the servers in that list.
+ */
+async function serverChoices(): Promise<Target[]> {
+  const choices: Target[] = onDirectory() ? [] : [{ id: "here", name: `This server (${location.host})`, base: "", session: "", key: "" }];
+  let session = "";
   try {
-    await Promise.all([loadSummary(), loadStations(), loadPlaylists(), search("")]);
+    const answer = await fetch("/api/v1/auth/token", { credentials: "same-origin" });
+    const body = (await answer.json().catch(() => ({}))) as { token?: string };
+    session = answer.ok && typeof body.token === "string" ? body.token : "";
+  } catch {
+    session = "";
+  }
+  if (!session) return choices;
+  try {
+    const events = await fetch("/api/v1/events?mine=true&kind=class&status=live&limit=1", { credentials: "same-origin" });
+    schoolOpen = events.ok;
+  } catch {
+    schoolOpen = false;
+  }
+  try {
+    const answer = await fetch("/api/v1/servers", { credentials: "same-origin" });
+    const body = (await answer.json().catch(() => ({}))) as { servers?: Array<{ id: string; name: string; url: string; key: string }> };
+    for (const one of body.servers ?? []) {
+      const { base, key } = splitShareLink(one.url);
+      if (!/^https?:\/\//.test(base) || base.replace(/\/+$/, "") === location.origin) continue;
+      choices.push({ id: one.id, name: one.name || new URL(base).host, base: base.replace(/\/+$/, ""), session, key: one.key || key });
+    }
+  } catch {
+    // No list: only this server, if it is one.
+  }
+  return choices;
+}
+
+/** Drive this server from now on: everything on the page is read again from it. */
+async function use(next: Target): Promise<void> {
+  generation += 1;
+  asked += 1;
+  target = next;
+  try { localStorage.setItem(PICKED, next.id); } catch { /* a private window keeps nothing */ }
+  stations = [];
+  results = [];
+  selected.clear();
+  queue = [];
+  const audio = $<HTMLAudioElement>("#audio");
+  audio.pause();
+  audio.removeAttribute("src");
+  $("#now").textContent = "";
+  $("#resume").hidden = true;
+  $("#groups").hidden = true;
+  drawStations();
+  notice("");
+  try {
+    await loadClasses().catch(() => undefined);
+    await connect(next);
   } catch (error) {
     if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-      notice("This page manages the server it is on. Open it from your server's admin link (nixamp admin prints it), or sign in as its owner.");
+      notice(next.base
+        ? `${next.name} did not accept your nixamp.com sign-in. Is it running signed in as you? (on that machine: nixamp login, then nixamp daemon restart)`
+        : "This page manages the server it is on. Open it from your server's admin link (nixamp admin prints it), or sign in as its owner.");
     } else if (error instanceof ApiError && error.status === 404) {
-      notice("This server has no library or stations here: it needs nixamp 0.32 or later.");
+      notice(`${next.name} has no library or stations: it needs nixamp 0.32 or later (nixamp update on that machine).`);
+    } else if (error instanceof TypeError) {
+      notice(`Could not reach ${next.name} at ${next.base || location.origin}. Is it on?`);
     } else {
       notice(error instanceof Error ? error.message : String(error));
     }
     return;
   }
   await offerResume();
-  // Stations change on their own: live, recovering, listeners.
-  setInterval(() => void loadStations().catch(() => undefined), 5_000);
-  setInterval(() => void loadSummary().catch(() => undefined), 15_000);
-  if (location.hash === "#stations") document.querySelector("#stations")?.scrollIntoView();
+}
+
+/** The session first; if the server will not have it and a key was kept for it, the key. */
+async function connect(next: Target): Promise<void> {
+  const mine = generation;
+  try {
+    await Promise.all([loadSummary(), loadStations(), loadPlaylists(), search("")]);
+  } catch (error) {
+    const refused = error instanceof ApiError && (error.status === 401 || error.status === 403);
+    if (!(refused && next.session && next.key) || mine !== generation) throw error;
+    target = { ...next, session: "" };
+    await Promise.all([loadSummary(), loadStations(), loadPlaylists(), search("")]);
+  }
 }
 
 void start();
