@@ -179,3 +179,16 @@ export const STATION_PAGE_CSP = [
   "form-action 'none'",
   "frame-ancestors 'none'",
 ].join("; ");
+
+/** The built page: its own bundle, styles and player engines, only this server, never framed. */
+export const STATION_APP_CSP = [
+  "default-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "media-src 'self' blob:",
+  "worker-src 'self' blob:",
+  "img-src 'self' data: blob:",
+  "connect-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");

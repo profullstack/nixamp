@@ -1,0 +1,14 @@
+/* A station's own page: the player, what is on, and nothing else. */
+.station-app{max-width:880px;margin:0 auto;padding:24px 16px}
+.station-card{background:var(--panel,#0e1410);border:1px solid var(--line,#1f2a22);border-radius:14px;padding:20px}
+.station-card h1{font-size:1.6rem;line-height:1.2;margin:12px 0 4px}
+.station-about{opacity:.75;margin:0 0 12px}
+.station-chip{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;font-weight:600;padding:4px 10px;border-radius:999px;border:1px solid var(--line,#1f2a22)}
+.station-chip::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+.station-chip.live{color:#3ddc84}.station-chip.reconnecting{color:#f5b942}.station-chip.unavailable,.station-chip.stopped{color:#8a948c}
+.station-stage{margin:12px 0}
+.station-stage:empty{display:none}
+.station-now{margin:12px 0;min-height:3em}.station-title{font-weight:600}.station-by{opacity:.75}
+.station-small{margin-top:16px;font-size:.85rem;opacity:.75}.station-small a{color:inherit}
+@media (prefers-reduced-motion:no-preference){.station-chip.live::before{animation:station-pulse 2s ease-in-out infinite}}
+@keyframes station-pulse{50%{opacity:.35}}

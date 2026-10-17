@@ -378,3 +378,28 @@ test("a station says it is video when its channel carries video, and PATCH can s
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a station's link opens the built page, with the player, when the server has the web build", async () => {
+  const web = mkdtempSync(join(tmpdir(), "nixamp-station-web-"));
+  const state = mkdtempSync(join(tmpdir(), "nixamp-station-state-"));
+  writeFileSync(join(web, "station.html"), "<!doctype html><div id=\"stage\"></div>");
+  const channels = new Channels({ ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"] });
+  const store = new StationStore(StationStore.fileFor(state, 1));
+  const runner = new StationRunner({ store, channels, pull: async () => false, roots: () => [web] });
+  const server = createServer(libraryEngine(web, []), { web, media: true, version: "test", key: CONTROL, listenKey: LISTEN, channels, stations: { store, runner } });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const page = await fetch(`${base}/station/abcdefghij?t=x`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /id="stage"/);
+    const policy = page.headers.get("content-security-policy") ?? "";
+    assert.match(policy, /default-src 'self'/);
+    assert.match(policy, /media-src 'self' blob:/);
+    assert.match(policy, /frame-ancestors 'none'/);
+  } finally {
+    await new Promise((done) => server.close(done));
+    rmSync(web, { recursive: true, force: true });
+    rmSync(state, { recursive: true, force: true });
+  }
+});

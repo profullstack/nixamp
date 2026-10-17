@@ -80,7 +80,7 @@ import { handleHandoffs } from "./handoff-routes.ts";
 import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
-import { STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
+import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
 import { GUIDE_CSP, guideHosts, renderGuide } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
@@ -2665,6 +2665,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     const requestHost = String(request.headers["x-forwarded-host"] ?? request.headers.host ?? "").split(",")[0]!.trim().replace(/:\d+$/, "").toLowerCase();
     const isGuidePage = Boolean(options.stations) && (request.method === "GET" || request.method === "HEAD") &&
       (path === "/guide" || (path === "/" && guideHosts().has(requestHost)));
+    // The built web bundle is the same public code nixamp.com hands anyone;
+    // a station's page loads it, and a station link carries no server key.
+    const isPublicAsset = (request.method === "GET" || request.method === "HEAD") &&
+      (/^\/assets\/[A-Za-z0-9._-]+$/.test(path) || path === "/favicon.png");
     // Whether this request holds only the listen key. A listener may browse
     // and hear the library, but where it lives on this machine is the
     // owner's business: the absolute path names the user account and the disk.
@@ -2679,6 +2683,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // Sharing a track and reporting one are for anybody the guide reaches.
       !isPublicSharePath(path) &&
       !STATION_PAGE.test(path) &&
+      !isPublicAsset &&
       !isGuidePage &&
       !eventChannelRequest
     ) {
@@ -2763,14 +2768,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // The page a station's link opens. The same bytes for every station: it
     // reads its id and token from its own address.
     if (options.stations && STATION_PAGE.test(path) && (request.method === "GET" || request.method === "HEAD")) {
+      // The built page plays in @profullstack/player; the inline one is for a
+      // server started without the web build.
+      const built = web !== null && isFile(join(web, "station.html")) ? readFileSync(join(web, "station.html")) : null;
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-cache",
-        "content-security-policy": STATION_PAGE_CSP,
+        "content-security-policy": built ? STATION_APP_CSP : STATION_PAGE_CSP,
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
       });
-      response.end(request.method === "HEAD" ? undefined : STATION_PAGE_HTML);
+      response.end(request.method === "HEAD" ? undefined : built ?? STATION_PAGE_HTML);
       return;
     }
 

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Station · nixamp</title>
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#080c09" />
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64" />
+  </head>
+  <body>
+    <main class="station-app">
+      <div class="station-card">
+        <span id="state" class="station-chip unavailable" role="status">Loading</span>
+        <div id="stage" class="station-stage"></div>
+        <h1 id="name">&nbsp;</h1>
+        <p id="about" class="station-about" hidden></p>
+        <div class="station-now" aria-live="polite"><div id="title" class="station-title"></div><div id="by" class="station-by"></div></div>
+        <p class="station-small"><a id="m3u" href="#">Open in another player (.m3u)</a> · Pausing here does not pause the station.</p>
+      </div>
+      <p class="station-small">Played by <a href="https://nixamp.com">nixamp</a>.</p>
+      <div id="announce" class="sr-only" aria-live="assertive"></div>
+    </main>
+    <script type="module" src="/src/station.ts"></script>
+  </body>
+</html>
