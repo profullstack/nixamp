@@ -47,6 +47,9 @@ let timer = 0;
 let pausedAt = 0;
 /** The listener pressed play and has not paused: a dropped stream is joined again. */
 let wanted = false;
+/** The listener's own mute: the player mutes anything it autoplays, a rejoin must not stay silent. */
+let listenerMuted = false;
+let blockedTimer = 0;
 
 const chip = (state: string, text: string): void => {
   const c = $("#state");
@@ -174,37 +177,68 @@ const loadFacts = async (): Promise<void> => {
   }
 };
 
+/** Let go of the player. It is forgotten first, so the pause its teardown fires is not taken for the listener's. */
+const unmount = (): void => {
+  const old = player;
+  player = null;
+  old?.destroy();
+};
+
 /** A fresh request is always the live edge: never a cached or paused one. */
 const mount = (autoplay: boolean): void => {
-  player?.destroy();
+  unmount();
   const video = kind === "video";
-  player = createPlayer($("#stage"), {
+  const current = createPlayer($("#stage"), {
     src: api + "/stream" + q + "&n=" + Date.now(),
     kind: video ? "mp4" : "audio",
     audio: !video,
     live: true,
     autoplay,
   });
-  const media = player.media;
-  media.addEventListener("playing", () => { if (retry) say("Back on"); retry = 0; if (last) draw(last); });
-  media.addEventListener("error", again);
-  media.addEventListener("ended", again);
-  media.addEventListener("stalled", () => { if (media.readyState < 3) again(); });
+  player = current;
+  const media = current.media;
+  // Events from a player already replaced (a rejoin, a teardown) say nothing about this one.
+  const mine = (): boolean => player === current;
+  // The player mutes what it autoplays; a listener rejoining hears it as they left it.
+  let restoring = autoplay;
+  media.addEventListener("volumechange", () => { if (mine() && !restoring) listenerMuted = media.muted; });
+  media.addEventListener("playing", () => {
+    if (!mine()) return;
+    clearTimeout(blockedTimer);
+    if (restoring) { restoring = false; media.muted = listenerMuted; }
+    if (retry) say("Back on");
+    retry = 0;
+    if (last) draw(last);
+  });
+  media.addEventListener("error", () => { if (mine()) again(); });
+  media.addEventListener("ended", () => { if (mine()) again(); });
+  media.addEventListener("stalled", () => { if (mine() && media.readyState < 3) again(); });
   // A station does not wait for anyone: playing again after a pause joins
   // where it is now, not where this page left it.
   media.addEventListener("pause", () => {
-    if (media.ended || media.error) return;
+    if (!mine() || media.ended || media.error) return;
+    if (restoring) return; // a refused autoplay, not the listener
     wanted = false;
     pausedAt = Date.now();
   });
   media.addEventListener("play", () => {
+    if (!mine()) return;
     wanted = true;
     if (pausedAt && Date.now() - pausedAt > 3000) { pausedAt = 0; mount(true); }
   });
+  // A browser that refuses to start sound on its own (iPhone) needs one tap; say so instead of spinning.
+  clearTimeout(blockedTimer);
+  if (autoplay) {
+    blockedTimer = window.setTimeout(() => {
+      if (!mine() || !media.paused) return;
+      chip("reconnecting", "Tap play to rejoin");
+      say("The station is back. Press play to rejoin.");
+    }, 8000);
+  }
 };
 
 function again(): void {
-  if (!player || !wanted) return;
+  if (!wanted) return;
   retry += 1;
   if (last) draw(last);
   clearTimeout(timer);
@@ -246,8 +280,8 @@ const poll = async (): Promise<void> => {
     if (r.status === 404) {
       $("#name").textContent = "This station is not available";
       chip("unavailable", "Unavailable");
-      player?.destroy();
-      player = null;
+      // Also what a restarting server says for a moment: keep wanting it, so it is joined when it is back.
+      unmount();
       kind = null;
       return;
     }
