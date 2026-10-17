@@ -91,3 +91,44 @@ test("/mcp/public answers anybody with the station tools, even on a server with 
     rmSync(top, { recursive: true, force: true });
   }
 });
+
+test("/watch/<id> sends anybody to a public station's own page, and finds nothing else", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { Channels } = await import("../src/channels.ts");
+  const { emptySnapshot } = await import("../src/protocol.ts");
+  const { createServer } = await import("../src/server.ts");
+  const { StationRunner } = await import("../src/station-runner.ts");
+  const { StationStore } = await import("../src/stations.ts");
+  const { PeerGuides } = await import("../src/station-guide.ts");
+  const top = mkdtempSync(join(tmpdir(), "nixamp-watch-"));
+  const store = new StationStore(join(top, "s.json"), { read: () => null, write: () => undefined });
+  const channels = new Channels({ ffmpeg: ["ffmpeg"] });
+  const runner = new StationRunner({ store, channels, pull: async () => false, roots: () => [top] });
+  const mine = store.create({ name: "Mine" }, ["/x.mp3"], "");
+  store.setAccess(mine.id, { visibility: "public", listed: true, rights: { basis: "owned" } }, "acct");
+  const hidden = store.create({ name: "Hidden" }, ["/y.mp3"], "");
+  store.setAccess(hidden.id, { visibility: "unlisted" }, "acct");
+  const peerPage = "https://server2.example:4321/station/24uy7gidfu?t=abc";
+  const peerFetch = (async () => new Response(JSON.stringify({ stations: [{ id: "24uy7gidfu", name: "DSA", kind: "video", state: "live", page: peerPage, nowPlaying: null }] }), { status: 200 })) as unknown as typeof fetch;
+  const peers = new PeerGuides(() => ["https://server2.example:4321"], peerFetch);
+  const engine = { snapshot: () => ({ ...emptySnapshot(), root: top }), command: () => undefined, subscribe: () => () => undefined, trackPath: () => undefined } as never;
+  const server = createServer(engine, { web: null, media: true, version: "test", key: "ctl", listenKey: "lst", channels, stations: { store, runner, peers, publicBase: () => "https://s1.example:4321" } });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const own = await fetch(`${base}/watch/${mine.id}`, { redirect: "manual" });
+    assert.equal(own.status, 302, "no key needed");
+    assert.match(own.headers.get("location") ?? "", new RegExp(`^https://s1\\.example:4321/station/${mine.id}\\?t=`));
+    const peer = await fetch(`${base}/watch/24uy7gidfu`, { redirect: "manual" });
+    assert.equal(peer.headers.get("location"), peerPage, "a peer's station, at its own server");
+    assert.equal((await fetch(`${base}/watch/${hidden.id}`, { redirect: "manual" })).status, 404, "unlisted is never found");
+    assert.equal((await fetch(`${base}/watch/zzzzzzzzzz`, { redirect: "manual" })).status, 404);
+  } finally {
+    const closing = new Promise<void>((done) => server.close(() => done()));
+    (server as { closeAllConnections?: () => void }).closeAllConnections?.();
+    await closing;
+    rmSync(top, { recursive: true, force: true });
+  }
+});
