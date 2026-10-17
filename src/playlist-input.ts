@@ -53,6 +53,12 @@ export class PlaylistInputStream {
   private entries: { at: number; file: string; start: number; position: number }[] = [];
   error: Error | null = null;
   complete = false;
+  /**
+   * What each entry's own tags say, read when it was probed to be played --
+   * so a station can say what is on before the library has got round to
+   * reading the file, which on a big library is a while.
+   */
+  readonly tags = new Map<string, { title: string; artist: string; album: string }>();
   constructor(private readonly options: PlaylistInput) {}
 
   /** Every entry that has started, in the order it started, with where it sits in the stream. */
@@ -134,6 +140,9 @@ export class PlaylistInputStream {
             const codecs = await codecsOf({ ffmpeg: o.ffmpeg, ffprobe: o.ffprobe, play: null }, file, [], AbortSignal.any([signal, AbortSignal.timeout(10_000)]));
             if (signal.aborted) return;
             if (!codecs.audio && !codecs.video) throw new Error(`Cannot decode playlist entry ${at + 1}`);
+            if (codecs.tags && (codecs.tags.title || codecs.tags.artist)) {
+              this.tags.set(file, { title: codecs.tags.title ?? "", artist: codecs.tags.artist ?? "", album: codecs.tags.album ?? "" });
+            }
             const duration = (codecs.duration ?? 0) - position;
             if (duration <= 0) throw new Error(`No playable duration for playlist entry ${at + 1}`);
             this.entries.push({ at, file, start: offset, position });

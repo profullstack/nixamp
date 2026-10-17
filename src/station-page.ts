@@ -101,6 +101,7 @@ const PAGE = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<link rel="icon" href="data:,">
 <title>Station · nixamp</title>
 <style>${STYLE}</style>
 </head>
@@ -137,7 +138,7 @@ export const STATION_PAGE_CSP = [
   `style-src ${hash(STYLE)}`,
   "connect-src 'self'",
   "media-src 'self'",
-  "img-src 'self'",
+  "img-src 'self' data:",
   "base-uri 'none'",
   "form-action 'none'",
   "frame-ancestors 'none'",

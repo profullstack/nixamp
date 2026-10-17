@@ -299,6 +299,11 @@ export class Channel {
   skip(): boolean {
     return this.playlistInput?.skip() ?? false;
   }
+
+  /** An entry's tags, as read when it was put on. */
+  tagsOf(file: string): { title: string; artist: string; album: string } | undefined {
+    return this.playlistInput?.tags.get(file);
+  }
   private failures = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** Fires when a pulled source has said nothing for STALL. */
@@ -1339,6 +1344,11 @@ export class Channels {
   /** The kind of a channel, for a relay to say what it is carrying. */
   kindOf(id: string): "audio" | "video" | undefined {
     return this.open.get(id)?.info.kind;
+  }
+
+  /** An entry's tags on a channel playing a list of files. */
+  tagsOf(id: string, file: string): { title: string; artist: string; album: string } | undefined {
+    return this.open.get(id)?.tagsOf(file);
   }
 
   /** The next entry, now, on a channel playing a list of files. */
