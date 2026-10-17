@@ -79,10 +79,25 @@ function say(text: string): void {
   $("#sr-status").textContent = text;
 }
 
-function notice(text: string): void {
+/**
+ * The page's one visible message. It is pinned to the bottom of the window, so
+ * an error from a button far down the library is seen, not left at the top.
+ * Good news fades on its own; an error stays until it is closed or replaced.
+ */
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+function notice(text: string, tone: "error" | "ok" = "error"): void {
   const box = $("#notice");
-  box.textContent = text;
+  clearTimeout(noticeTimer);
+  box.classList.toggle("ok", tone === "ok");
+  box.setAttribute("role", tone === "ok" ? "status" : "alert");
+  box.replaceChildren();
+  if (text !== "") {
+    const close = el("button", { type: "button", class: "ghost notice-close", "aria-label": "Dismiss" }, "×");
+    close.addEventListener("click", () => notice(""));
+    box.append(el("span", {}, text), close);
+  }
   box.hidden = text === "";
+  if (tone === "ok" && text) noticeTimer = setTimeout(() => notice(""), 6000);
 }
 
 class ApiError extends Error {
@@ -133,13 +148,20 @@ async function api<T = Json>(method: string, path: string, body?: unknown): Prom
   return parsed as T;
 }
 
-/** Run something the person asked for; say what went wrong in words if it did. */
-async function act(label: string, work: () => Promise<unknown>): Promise<void> {
+/**
+ * Run something the person asked for; say what went wrong in words if it did.
+ * The button that asked is disabled until it is done, so a second click while
+ * the first is on its way cannot make a second station.
+ */
+async function act(label: string, work: () => Promise<unknown>, button?: HTMLButtonElement): Promise<void> {
+  if (button?.disabled) return;
+  if (button) button.disabled = true;
   try {
     await work();
-    notice("");
   } catch (error) {
-    notice(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+    notice(`${label} failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -327,7 +349,7 @@ function drawStations(): void {
       await api("POST", `/api/v1/stations/${station.id}/retry`, {});
       await loadStations();
     }));
-    list.append(el("article", { class: "station", "aria-label": station.name },
+    list.append(el("article", { class: "station", id: `station-${station.id}`, "aria-label": station.name },
       el("div", { class: "station-head" },
         el("span", { class: `state state-${station.state}` }, STATE_WORDS[station.state] ?? station.state),
         el("h3", {}, station.name),
@@ -361,7 +383,10 @@ function openPublish(station: Station, preset?: { visibility: string; listed: bo
 
 function syncPublic(): void {
   const form = $<HTMLFormElement>("#publish-form");
-  $("#public-only").hidden = (form.elements.namedItem("visibility") as RadioNodeList).value !== "public";
+  const isPublic = (form.elements.namedItem("visibility") as RadioNodeList).value === "public";
+  $("#public-only").hidden = !isPublic;
+  // Public needs a basis; the server refuses without one, so ask before Save closes the dialog.
+  (form.elements.namedItem("basis") as HTMLSelectElement).required = isPublic;
 }
 
 async function savePublish(): Promise<void> {
@@ -377,9 +402,20 @@ async function savePublish(): Promise<void> {
   });
   if (visibility === "private") await endClassesFor(editing);
   else if (visibility === "public" && (form.elements.namedItem("listed") as HTMLInputElement).checked) await ensureRunning(editing);
-  say(answer.dropped ? `Saved; ${answer.dropped} listeners disconnected` : "Saved");
+  const words = visibility === "private" ? `${editing.name} is private` : visibility === "unlisted" ? `${editing.name} is unlisted: anyone with the link can listen` : `${editing.name} is public${(form.elements.namedItem("listed") as HTMLInputElement).checked ? " and on the air on live.streaming" : ""}`;
+  notice(answer.dropped ? `${words}; ${answer.dropped} listeners disconnected` : words, "ok");
   await loadClasses();
   await loadStations();
+  showStation(editing.id);
+}
+
+/** Bring one station's card into view, briefly marked, instead of the top of the page. */
+function showStation(id: string): void {
+  const card = document.getElementById(`station-${id}`);
+  if (!card) return;
+  card.scrollIntoView({ block: "center" });
+  card.classList.add("just-changed");
+  setTimeout(() => card.classList.remove("just-changed"), 2500);
 }
 
 /* ---- library ------------------------------------------------------------- */
@@ -522,13 +558,15 @@ async function loadPlaylists(): Promise<void> {
       const full = (await api<{ playlist: Playlist }>("GET", `/api/v1/library/playlists/${list.id}`)).playlist;
       await playList((full.items ?? []).filter((one) => one.state === "ready").map((one) => one.id), 0);
     }));
-    const station = el("button", { type: "button", class: "ghost" }, "Make a station");
-    station.addEventListener("click", () => void act("Make station", async () => {
-      await api("POST", "/api/v1/stations", { name: list.name, playlist: list.id });
-      say(`Station ${list.name} made; it is private and stopped`);
+    const station = el("button", { type: "button", class: "ghost" }, "Publish as a station");
+    station.addEventListener("click", () => void act("Publish as a station", async () => {
+      // One station per playlist: asking again finds the one already made.
+      const made = await api<{ station: Station; created: boolean }>("POST", "/api/v1/stations", { name: list.name, playlist: list.id, idempotencyKey: `playlist:${list.id}` });
       await loadStations();
-      document.querySelector("#stations")?.scrollIntoView();
-    }));
+      showStation(made.station.id);
+      notice(made.created ? `Station ${list.name} made. Choose who can listen to put it on the air.` : `${list.name} already has a station. Choose who can listen.`, "ok");
+      openPublish(stations.find((one) => one.id === made.station.id) ?? made.station, { visibility: "public", listed: true });
+    }, station));
     const remove = el("button", { type: "button", class: "ghost danger" }, "Delete");
     remove.addEventListener("click", () => void act("Delete playlist", async () => {
       if (!confirm(`Delete the playlist "${list.name}"?`)) return;
@@ -653,7 +691,7 @@ async function drawStationSources(): Promise<void> {
 async function makeStation(form: HTMLFormElement): Promise<void> {
   const data = new FormData(form);
   const [kind, value] = String(data.get("from") ?? "folder:").split(/:(.*)/s);
-  await api("POST", "/api/v1/stations", {
+  const made = await api<{ station: Station }>("POST", "/api/v1/stations", {
     name: String(data.get("name") ?? ""),
     ...(kind === "playlist" ? { playlist: value } : { folder: value ?? "" }),
     shuffle: data.get("shuffle") === "on",
@@ -662,8 +700,9 @@ async function makeStation(form: HTMLFormElement): Promise<void> {
   });
   form.reset();
   ($("#new-station") as HTMLDetailsElement).open = false;
-  say("Station made; it is private and stopped");
   await loadStations();
+  showStation(made.station.id);
+  notice(`Station ${made.station.name} made; it is private and stopped. Use "Who can listen" to put it on the air.`, "ok");
 }
 
 /* ---- start --------------------------------------------------------------- */
@@ -698,7 +737,8 @@ async function start(): Promise<void> {
   }));
   $<HTMLFormElement>("#station-form").addEventListener("submit", (event) => {
     event.preventDefault();
-    void act("Make station", () => makeStation(event.currentTarget as HTMLFormElement));
+    const form = event.currentTarget as HTMLFormElement;
+    void act("Make station", () => makeStation(form), form.querySelector<HTMLButtonElement>("button[type=submit]") ?? undefined);
   });
   $<HTMLFormElement>("#source-form").addEventListener("submit", (event) => {
     event.preventDefault();
