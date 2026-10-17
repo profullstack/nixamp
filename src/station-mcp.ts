@@ -100,6 +100,22 @@ export interface StationToolOptions {
   session?: { site: string; token: string } | null;
 }
 
+/** Where to send a tool's request, and with which credential. */
+export function connect(args: Record<string, unknown>, options: StationToolOptions): { base: string; headers: Record<string, string> } | { error: string } {
+  const server = typeof args["server"] === "string" ? args["server"].replace(/\/+$/, "") : "";
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (server === "") {
+    const local = options.local === undefined ? (() => { const state = readState(); return state ? { url: daemonUrl(state), key: state.key } : null; })() : options.local;
+    if (!local) return { error: "No nixamp daemon runs on this machine. Start one (nixamp daemon start ~/Music) or pass `server`." };
+    if (local.key) headers[KEY_HEADER] = local.key;
+    return { base: local.url, headers };
+  }
+  const session = options.session === undefined ? readSession() : options.session;
+  if (!session) return { error: "Another server needs this machine signed in as its owner: nixamp login." };
+  headers["authorization"] = `Bearer ${session.token}`;
+  return { base: server, headers };
+}
+
 export function isStationTool(name: string): boolean {
   return STATION_TOOLS.some((tool) => tool.name === name);
 }
@@ -113,19 +129,9 @@ function line(station: Record<string, unknown>): string {
 
 export async function callStationTool(name: string, args: Record<string, unknown>, options: StationToolOptions = {}): Promise<Result> {
   const send = options.fetcher ?? fetch;
-  const server = typeof args["server"] === "string" ? args["server"].replace(/\/+$/, "") : "";
-  let base = server;
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (server === "") {
-    const local = options.local === undefined ? (() => { const state = readState(); return state ? { url: daemonUrl(state), key: state.key } : null; })() : options.local;
-    if (!local) return say("No nixamp daemon runs on this machine. Start one (nixamp daemon start ~/Music) or pass `server`.", true);
-    base = local.url;
-    if (local.key) headers[KEY_HEADER] = local.key;
-  } else {
-    const session = options.session === undefined ? readSession() : options.session;
-    if (!session) return say("Another server's stations need this machine signed in as its owner: nixamp login.", true);
-    headers["authorization"] = `Bearer ${session.token}`;
-  }
+  const target = connect(args, options);
+  if ("error" in target) return say(target.error, true);
+  const { base, headers } = target;
   const id = typeof args["id"] === "string" ? args["id"] : "";
   const call = async (method: string, path: string, body?: unknown): Promise<{ ok: boolean; body: Record<string, unknown> }> => {
     const response = await send(`${base}${path}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });

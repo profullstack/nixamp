@@ -1,0 +1,158 @@
+/**
+ * `nixamp library <command>`: the index, from a terminal or a script.
+ *
+ * `nixamp library ~/Music` still sets the folder a daemon serves (library.ts);
+ * these are the questions you ask once it is running. Same conventions as
+ * `nixamp station`: the daemon on this machine unless --url/--key, --json for
+ * scripts, exit 0 done, 1 refused, 2 usage, 3 unreachable.
+ */
+import { resolveTarget } from "./admin.ts";
+import { KEY_HEADER } from "./share.ts";
+
+import { LIBRARY_COMMANDS, LIBRARY_USAGE } from "./library-usage.ts";
+
+export { LIBRARY_COMMANDS, LIBRARY_USAGE };
+
+function flag(argv: string[], name: string): string | undefined {
+  const at = argv.indexOf(name);
+  return at === -1 ? undefined : argv[at + 1];
+}
+
+/** Words that are not flags or flag values. */
+function words(argv: string[]): string[] {
+  const out: string[] = [];
+  for (let at = 0; at < argv.length; at++) {
+    const one = argv[at]!;
+    if (one.startsWith("--")) {
+      if (!["--json", "--force", "--wait"].includes(one)) at += 1;
+      continue;
+    }
+    out.push(one);
+  }
+  return out;
+}
+
+export async function libraryTool(argv: string[]): Promise<number> {
+  const [command] = argv;
+  const json = argv.includes("--json");
+  let target;
+  try {
+    target = resolveTarget(argv);
+  } catch (error) {
+    console.error((error as Error).message);
+    return 3;
+  }
+  const headers: Record<string, string> = { "content-type": "application/json", ...(target.key ? { [KEY_HEADER]: target.key } : {}) };
+  const call = async (method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> => {
+    let response: Response;
+    try {
+      response = await fetch(`${target.url}${path}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    } catch (error) {
+      throw Object.assign(new Error(`could not reach ${target.url}: ${(error as Error).message}`), { unreachable: true });
+    }
+    const parsed = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    return { status: response.status, body: parsed };
+  };
+  const out = (answer: { status: number; body: Record<string, unknown> }, line: (body: Record<string, unknown>) => string): number => {
+    if (json) console.log(JSON.stringify(answer.body, null, 2));
+    else if (answer.status < 400) console.log(line(answer.body));
+    if (answer.status >= 400) {
+      if (!json) console.error(`nixamp: ${String(answer.body["error"] ?? "refused")} (${String(answer.body["code"] ?? answer.status)})`);
+      return 1;
+    }
+    return 0;
+  };
+  const scanLine = (scan: Record<string, unknown> | null | undefined): string =>
+    scan ? `${String(scan["status"])}: ${String(scan["found"])} found, ${String(scan["unchanged"])} unchanged, ${String(scan["probed"])} read, ${String(scan["failed"])} failed, ${String(scan["missing"])} gone` : "never scanned";
+  const itemLine = (item: Record<string, unknown>): string =>
+    `${String(item["id"])}  ${String(item["artist"] || "?")} — ${String(item["title"])}${item["album"] ? `  (${String(item["album"])})` : ""}${item["state"] !== "ready" ? `  [${String(item["state"])}]` : ""}`;
+  const rest = words(argv.slice(1));
+
+  try {
+    switch (command) {
+      case "status":
+        return out(await call("GET", "/api/v1/library"), (body) => {
+          const counts = body["counts"] as Record<string, number>;
+          const sources = (body["sources"] as Record<string, unknown>[]) ?? [];
+          return [
+            `${String(body["items"])} items: ${Object.entries(counts).filter(([, n]) => n > 0).map(([state, n]) => `${n} ${state}`).join(", ") || "none"}`,
+            ...sources.map((one) => `  ${String(one["id"])}  ${String(one["root"] ?? "")}${one["enabled"] ? "" : " (off)"}\n    last scan ${scanLine(one["lastScan"] as Record<string, unknown> | null)}`),
+          ].join("\n");
+        });
+      case "sources":
+        return out(await call("GET", "/api/v1/library/sources"), (body) =>
+          ((body["sources"] as Record<string, unknown>[]) ?? []).map((one) => `${String(one["id"])}  ${String(one["root"] ?? "")}${one["enabled"] ? "" : " (off)"}`).join("\n") || "No sources.");
+      case "add": {
+        const [path] = rest;
+        if (!path) { console.error("nixamp library add needs a folder"); return 2; }
+        const { resolve } = await import("node:path");
+        const { homedir } = await import("node:os");
+        return out(await call("POST", "/api/v1/library/sources", { root: resolve(path.replace(/^~(?=$|\/)/, homedir())) }), (body) =>
+          `Indexing ${String((body["source"] as Record<string, unknown>)["root"])} as ${String((body["source"] as Record<string, unknown>)["id"])}.`);
+      }
+      case "scan": {
+        let [source] = rest;
+        if (!source) {
+          const listed = await call("GET", "/api/v1/library/sources");
+          const all = (listed.body["sources"] as Record<string, unknown>[]) ?? [];
+          if (all.length !== 1) { console.error("Which source? `nixamp library sources` lists them."); return 2; }
+          source = String(all[0]!["id"]);
+        }
+        const started = await call("POST", `/api/v1/library/sources/${source}/scan`, { force: argv.includes("--force") });
+        if (started.status >= 400 || !argv.includes("--wait")) return out(started, (body) => `Scanning: job ${String((body["job"] as Record<string, unknown>)["jobId"])}.`);
+        const jobId = String((started.body["job"] as Record<string, unknown>)["jobId"]);
+        for (;;) {
+          const polled = await call("GET", `/api/v1/library/jobs/${jobId}`);
+          const job = polled.body["job"] as Record<string, unknown> | undefined;
+          if (polled.status >= 400 || !job || job["status"] !== "running") return out(polled, () => scanLine(job));
+          await new Promise((next) => setTimeout(next, 1000));
+        }
+      }
+      case "search": {
+        const query = new URLSearchParams({ q: rest.join(" "), limit: flag(argv, "--limit") ?? "20", sort: "artist" });
+        for (const name of ["artist", "album", "genre", "state", "folder"]) {
+          const value = flag(argv, `--${name}`);
+          if (value) query.set(name, value);
+        }
+        return out(await call("GET", `/api/v1/library/items?${query}`), (body) => {
+          const items = (body["items"] as Record<string, unknown>[]) ?? [];
+          return items.length ? `${items.map(itemLine).join("\n")}\n${String(body["total"])} in all` : "Nothing matches.";
+        });
+      }
+      case "show": {
+        const [item] = rest;
+        if (!item) { console.error("nixamp library show needs an item id"); return 2; }
+        return out(await call("GET", `/api/v1/library/items/${item}`), (body) => JSON.stringify(body["item"], null, 2));
+      }
+      case "fix": {
+        const [item] = rest;
+        if (!item) { console.error("nixamp library fix needs an item id"); return 2; }
+        const patch: Record<string, unknown> = {};
+        for (const name of ["title", "artist", "album", "albumArtist", "genre"]) {
+          const value = flag(argv, `--${name}`);
+          if (value !== undefined) patch[name] = value;
+        }
+        for (const name of ["track", "disc", "year"]) {
+          const value = flag(argv, `--${name}`);
+          if (value !== undefined) patch[name] = Number(value);
+        }
+        if (Object.keys(patch).length === 0) { console.error("nixamp library fix needs at least one of --title --artist --album --genre --track --disc --year"); return 2; }
+        return out(await call("PATCH", `/api/v1/library/items/${item}`, patch), (body) => itemLine(body["item"] as Record<string, unknown>));
+      }
+      case "remove": {
+        const [source] = rest;
+        if (!source) { console.error("nixamp library remove needs a source id"); return 2; }
+        return out(await call("DELETE", `/api/v1/library/sources/${source}`), (body) => `Forgot ${String(body["forgotten"])} items. No file was touched.`);
+      }
+      default:
+        console.log(LIBRARY_USAGE);
+        return 2;
+    }
+  } catch (error) {
+    if ((error as { unreachable?: boolean }).unreachable) {
+      console.error(`nixamp: ${(error as Error).message}`);
+      return 3;
+    }
+    throw error;
+  }
+}

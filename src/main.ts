@@ -8,6 +8,7 @@ import { t as uiMessage, i18n, terminalUiLanguage, uiLanguage } from "./i18n.ts"
  * ffmpeg decodes; we read every sample on its way to the speakers and draw it.
  */
 import { USAGE as STATION_USAGE } from "./station-usage.ts";
+import { LIBRARY_COMMANDS, LIBRARY_USAGE } from "./library-usage.ts";
 import { createApp, themes, type BrailleCanvas, type Container, type KeyEvent, type Theme } from "@profullstack/hqtui";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -397,6 +398,7 @@ q or d leaves; neither stops anything. \`nixamp daemon stop\` is what stops it.
 
 export function helpFor(topic: string | undefined): string {
   if (topic === "station" || topic === "stations") return STATION_USAGE;
+  if (topic === "library") return LIBRARY_USAGE;
   return (topic ? TOPICS[topic] : undefined) ?? HELP;
 }
 
@@ -646,6 +648,11 @@ export async function main(): Promise<void> {
   if (first === "sync") {
     const { syncCommand } = await import("./sync.ts");
     process.exitCode = await syncCommand(rest);
+    return;
+  }
+  if (first === "library" && LIBRARY_COMMANDS.has(rest[0] ?? "")) {
+    const { libraryTool } = await import("./library-cli.ts");
+    process.exitCode = await libraryTool(rest);
     return;
   }
   if (first === "library") {
