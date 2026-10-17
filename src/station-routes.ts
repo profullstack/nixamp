@@ -42,6 +42,12 @@ export interface StationContext {
   trackFor: (file: string) => { title: string; artist: string; album: string } | null;
   /** This server's address as the asker reached it, for links. */
   base: string;
+  /**
+   * This server's public https address, for links that leave this request's
+   * host: the guide is often shown under another name (a Moshpit name through
+   * a gateway), and a station is listened to here, not there.
+   */
+  publicBase?: string;
   json: (response: ServerResponse, status: number, body: unknown) => void;
   readBody: (request: IncomingMessage) => Promise<string>;
   /** Headers every answer carries (CORS). */
@@ -63,11 +69,11 @@ function fail(ctx: StationContext, response: ServerResponse, error: unknown): vo
   ctx.json(response, 500, { error: error instanceof Error ? error.message : String(error), code: "internal" });
 }
 
-function links(ctx: StationContext, station: Station): { page: string; stream: string; m3u: string; state: string } {
+function links(ctx: StationContext, station: Station, base = ctx.base): { page: string; stream: string; m3u: string; state: string } {
   const query = `t=${encodeURIComponent(station.listenToken)}`;
-  const at = `${ctx.base}/api/v1/stations/${station.id}`;
+  const at = `${base}/api/v1/stations/${station.id}`;
   return {
-    page: `${ctx.base}/station/${station.id}?${query}`,
+    page: `${base}/station/${station.id}?${query}`,
     stream: `${at}/stream?${query}`,
     m3u: `${at}/listen.m3u?${query}`,
     state: `${at}/state?${query}`,
@@ -102,6 +108,14 @@ export function publicView(ctx: StationContext, station: Station): PublicStation
   };
 }
 
+/** What the public guide shows: public, listed stations, linked at this server's public address. */
+export function guideEntries(ctx: StationContext): Array<PublicStation & { page: string; m3u: string }> {
+  const base = ctx.publicBase || ctx.base;
+  return ctx.store.list()
+    .filter((one) => one.visibility === "public" && one.listed)
+    .map((one) => ({ ...publicView(ctx, one), page: links(ctx, one, base).page, m3u: links(ctx, one, base).m3u }));
+}
+
 export function ownerView(ctx: StationContext, station: Station): OwnerStation & { links: ReturnType<typeof links>; nowPlaying: string } {
   const { failures, idempotencyKey: _key, ...rest } = station;
   return {
@@ -133,10 +147,7 @@ export async function handleStations(
   // The public guide: only stations their owner made public and listed, with
   // their links, because public is what that means. Nothing else, ever.
   if (path === "/api/v1/stations/guide" && (method === "GET" || method === "HEAD")) {
-    const listed = ctx.store.list().filter((one) => one.visibility === "public" && one.listed);
-    ctx.json(response, 200, {
-      stations: listed.map((one) => ({ ...publicView(ctx, one), page: links(ctx, one).page, m3u: links(ctx, one).m3u })),
-    });
+    ctx.json(response, 200, { stations: guideEntries(ctx) });
     return true;
   }
 
