@@ -20,7 +20,7 @@ h2{font-size:1rem;letter-spacing:.06em;text-transform:uppercase;color:var(--mute
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;position:relative}
 .card:hover,.card:focus-within{border-color:var(--accent)}
 a.station{color:inherit;text-decoration:none;display:block}a.station:focus-visible{outline:2px solid var(--accent);outline-offset:4px;border-radius:6px}
-.name{font-weight:700;font-size:1.05rem}.now{color:var(--muted);font-size:.9rem;margin-top:6px;min-height:1.4em}
+.name{font-weight:700;font-size:1.05rem;overflow-wrap:anywhere}.now{color:var(--muted);font-size:.9rem;margin-top:6px;min-height:1.4em;overflow-wrap:anywhere}
 .live{color:var(--live);font-size:.8rem;font-weight:700}.empty{color:var(--muted)}
 button.report{margin-top:10px;background:none;border:0;padding:0;color:var(--muted);font:inherit;font-size:.8rem;text-decoration:underline;cursor:pointer}
 button.report:hover{color:var(--warn)}
@@ -34,8 +34,21 @@ button.report:hover{color:var(--warn)}
 footer{margin-top:40px;color:var(--muted);font-size:.85rem}footer a{color:inherit}
 `;
 
+/**
+ * A card's now-playing line from tags as they come: links pasted into a title
+ * (archive.org films carry their item URL) go, and "A;B" artists read "A, B".
+ * The page's script carries this same function, so both renders agree.
+ */
+export function nowLine(now: { title: string; artist: string } | null | undefined): string {
+  if (!now) return "";
+  const title = String(now.title || "").replace(/\s*[-–—|]?\s*https?:\/\/\S+/g, "").trim();
+  const artist = String(now.artist || "").split(/\s*;\s*/).filter(Boolean).join(", ");
+  return [title, artist].filter(Boolean).join(" — ");
+}
+
 const SCRIPT = `
 (async () => {
+  const nowLine = ${nowLine.toString()};
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
   const say = (text) => { document.querySelector("#status").textContent = text; };
   // This server's own address: through a gateway (pit.moshcode.sh/n/...) the
@@ -62,7 +75,7 @@ const SCRIPT = `
         const a = el("a", "station");
         a.href = s.page;
         a.append(el("div", "live", s.state === "live" ? "● LIVE" : "off the air"), el("div", "name", s.name),
-          el("div", "now", s.nowPlaying ? [s.nowPlaying.title, s.nowPlaying.artist].filter(Boolean).join(" — ") : ""));
+          el("div", "now", nowLine(s.nowPlaying)));
         card.append(a);
         if (group === "shared") {
           const b = el("button", "report", "Report this track");
@@ -157,7 +170,7 @@ export function renderGuide(entries: GuideEntry[], apiBase = ""): string {
   const groupOf = (one: GuideEntry): string => one.group ?? (one.kind === "video" ? "tv" : "radio");
   const cards = (group: string): string => entries
     .filter((one) => groupOf(one) === group && /^https?:\/\//.test(one.page))
-    .map((one) => `<div class="card"><a class="station" href="${escape(one.page)}"><div class="live">${one.state === "live" ? "● LIVE" : "off the air"}</div><div class="name">${escape(one.name)}</div><div class="now">${one.nowPlaying ? escape([one.nowPlaying.title, one.nowPlaying.artist].filter(Boolean).join(" — ")) : ""}</div></a></div>`)
+    .map((one) => `<div class="card"><a class="station" href="${escape(one.page)}"><div class="live">${one.state === "live" ? "● LIVE" : "off the air"}</div><div class="name">${escape(one.name)}</div><div class="now">${escape(nowLine(one.nowPlaying))}</div></a></div>`)
     .join("");
   let page = GUIDE_HTML;
   for (const group of GROUPS) {
@@ -223,7 +236,7 @@ export const GUIDE_HTML = `<!doctype html>
 `;
 
 export const GUIDE_CSP = [
-  "default-src 'none'", `script-src ${hash(SCRIPT)}`, `style-src ${hash(STYLE)}`, "connect-src 'self' https:",
+  "default-src 'none'", `script-src ${hash(SCRIPT)}`, `style-src 'self' ${hash(STYLE)}`, "connect-src 'self' https:",
   "img-src 'self' data:", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
 ].join("; ");
 
