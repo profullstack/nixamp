@@ -6708,7 +6708,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const stationStore = new StationStore(StationStore.fileFor(stateDir(), options.port));
   // What stations deliver, per month, and the operator's limits on it.
   const stationUsage = new StationUsage(StationUsage.fileFor(stateDir(), options.port));
-  const stationLimits = limitsFromEnv();
+  const stationLimits = limitsFromEnv(process.env, readConfig().limits ?? {});
   process.once("exit", () => stationUsage.flush());
   // Breaks between songs and films: the network's spot, or a house one.
   const stationBreaks = new StationBreaks({

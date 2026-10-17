@@ -12,7 +12,12 @@
  *
  *   NIXAMP_STATION_MAX_LISTENERS   per station (default 200)
  *   NIXAMP_MAX_LISTENERS           across every station (default 500)
- *   NIXAMP_MAX_RUNNING_STATIONS    stations on the air at once (default 10)
+ *   NIXAMP_MAX_RUNNING_STATIONS    stations on the air at once (default 20)
+ *
+ * The same names, lower-cased without the prefix, can be kept in config.json
+ * under "limits" (e.g. {"limits": {"runningStations": 30}}); the environment
+ * wins when both are set. A daemon is restarted by every update, and an
+ * environment variable typed at a terminal does not survive that.
  *   NIXAMP_STATION_MONTHLY_GB      delivered per station per month (default 0: no allowance)
  *
  * When an allowance runs out the policy is "pause": nobody new is admitted
@@ -32,16 +37,21 @@ export interface Limits {
   monthlyBytes: number;
 }
 
-export function limitsFromEnv(env: Record<string, string | undefined> = process.env): Limits {
-  const whole = (name: string, fallback: number): number => {
-    const value = Number(env[name]);
-    return Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
+export function limitsFromEnv(env: Record<string, string | undefined> = process.env, saved: Partial<Record<keyof Limits | "monthlyGb", unknown>> = {}): Limits {
+  const whole = (name: string, key: keyof typeof saved, fallback: number): number => {
+    for (const raw of [env[name], saved[key]]) {
+      if (raw === undefined || raw === "") continue;
+      const value = Number(raw);
+      if (Number.isFinite(value) && value >= 0) return Math.floor(value);
+    }
+    return fallback;
   };
+  const gb = env["NIXAMP_STATION_MONTHLY_GB"] ?? saved.monthlyGb;
   return {
-    stationListeners: whole("NIXAMP_STATION_MAX_LISTENERS", 200),
-    totalListeners: whole("NIXAMP_MAX_LISTENERS", 500),
-    runningStations: whole("NIXAMP_MAX_RUNNING_STATIONS", 10),
-    monthlyBytes: Math.round(Number(env["NIXAMP_STATION_MONTHLY_GB"] ?? 0) * 1024 ** 3) || 0,
+    stationListeners: whole("NIXAMP_STATION_MAX_LISTENERS", "stationListeners", 200),
+    totalListeners: whole("NIXAMP_MAX_LISTENERS", "totalListeners", 500),
+    runningStations: whole("NIXAMP_MAX_RUNNING_STATIONS", "runningStations", 20),
+    monthlyBytes: Math.round(Number(gb ?? 0) * 1024 ** 3) || 0,
   };
 }
 

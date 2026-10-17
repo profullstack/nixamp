@@ -65,8 +65,10 @@ The operator sets the limits:
 | --- | --- | --- |
 | `NIXAMP_STATION_MAX_LISTENERS` | 200 per station | `503 station_full`, `Retry-After: 60` |
 | `NIXAMP_MAX_LISTENERS` | 500 across stations | `503 server_full`, so one station cannot take the server |
-| `NIXAMP_MAX_RUNNING_STATIONS` | 10 | `409 too_many_running` on start |
+| `NIXAMP_MAX_RUNNING_STATIONS` | 20 | `409 too_many_running` on start |
 | `NIXAMP_STATION_MONTHLY_GB` | 0 (no allowance) | `429 allowance_exhausted` until the month turns; nobody already listening is cut off |
+
+The same limits can be kept in `config.json` as `"limits": {"runningStations": 30, "stationListeners": 300, "totalListeners": 800, "monthlyGb": 50}` so they survive the restart every update does; the environment wins when both are set.
 
 Changes (anything but GET under `/api/v1/stations`) are limited to 30 a minute per caller
 (`429 rate_limited`), apart from listening, so neither can starve the other.
