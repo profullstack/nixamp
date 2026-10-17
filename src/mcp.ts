@@ -30,6 +30,7 @@ import { describeRecord } from "./hash.ts";
 import { describeFile, keepFile, type Described } from "./media-local.ts";
 import { fileFingerprint, idFrom, languageCode, mediaOfUrl, transcriptIdOf } from "./transcripts.ts";
 import { personaLines, readPersona, readVoices, writePersona } from "./profile.ts";
+import { STATION_TOOLS, callStationTool, isStationTool, type StationToolOptions } from "./station-mcp.ts";
 
 export const PROTOCOL_VERSION = "2025-06-18";
 
@@ -242,6 +243,7 @@ export const TOOLS: ToolDefinition[] = [
       required: ["server"],
     },
   },
+  ...STATION_TOOLS,
 ];
 
 interface TrollboxLine {
@@ -257,6 +259,8 @@ function said(line: TrollboxLine): string {
 
 export interface McpOptions {
   fetcher?: typeof fetch;
+  /** Where stations are asked; the tests hand in a local daemon. */
+  stations?: StationToolOptions;
   /** Injected by the tests; the session on disk otherwise. */
   session?: { site: string; token: string } | null;
   /** How a recording becomes a WAV; the tests hand in a fake. */
@@ -309,6 +313,10 @@ function describe(row: PartyRow): string {
  * pipe, and so the same call is reachable from anywhere else that wants it.
  */
 export async function callTool(name: string, args: Record<string, unknown>, options: McpOptions = {}): Promise<ToolResult> {
+  // Stations first: on this machine they need the daemon, not a sign-in.
+  if (isStationTool(name)) {
+    return callStationTool(name, args, { ...(options.fetcher ? { fetcher: options.fetcher } : {}), ...(options.session !== undefined ? { session: options.session } : {}), ...(options.stations ?? {}) });
+  }
   const session = options.session === undefined ? readSession() : options.session;
   if (!session) {
     return failed("This machine is not signed in to nixamp. Run `nixamp login`, or set NIXAMP_TOKEN.");
@@ -592,7 +600,7 @@ export async function handleMessage(message: Request, options: McpOptions = {}):
     return reply({
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "nixamp", title: "nixamp: watch parties, rooms and transcripts", version: "2" },
+      serverInfo: { name: "nixamp", title: "nixamp: stations, watch parties, rooms and transcripts", version: "2" },
       instructions:
         "Watch parties on nixamp: a party lives on the site hosting the film and is bridged here as a room every nixamp client can join; codes are the ones that site shows, positions are seconds into the film. Rooms: say and read trollbox lines, hear a recording. Transcripts: a file, a link or a live is written down once by nixamp.com's own ear and kept under what it is; ask for it in another language and it is translated once and kept too.",
     });
