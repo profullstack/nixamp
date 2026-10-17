@@ -107,6 +107,8 @@ export interface LibrarySource {
   enabled: boolean;
   createdAt: number;
   lastScan: ScanReport | null;
+  /** A folder Nixamp fills itself (imports), allowed where a library may not be. */
+  managed?: boolean;
 }
 
 /** What one probe found. */
@@ -417,6 +419,25 @@ export class LibraryIndex {
       enabled: true,
       createdAt: this.now(),
       lastScan: null,
+    };
+    this.sourceList.set(source.id, source);
+    this.touch();
+    return source;
+  }
+
+  /**
+   * A folder Nixamp fills itself -- copies handed over from BitTorrented --
+   * as a source. It lives beside the state, which is hidden and so refused
+   * as a library; it is allowed here because nothing in it was put there by
+   * anybody but Nixamp.
+   */
+  addManagedSource(root: string, host = hostname()): LibrarySource {
+    const full = resolve(root);
+    const existing = this.sources().find((one) => one.root === full);
+    if (existing) return existing;
+    const source: LibrarySource = {
+      id: idOf("source", host, full), kind: "folder", root: full, owner: "", host,
+      enabled: true, createdAt: this.now(), lastScan: null, managed: true,
     };
     this.sourceList.set(source.id, source);
     this.touch();
