@@ -54,6 +54,12 @@ export interface Station {
   listenToken: string;
   /** Audio bitrate of the station's rendition, in kbps. */
   bitrate: number;
+  /** A TV station: pictures as well as sound. */
+  video: boolean;
+  /** A break (advert or ident) at most this often, in seconds; 0 for none. */
+  breaksEvery: number;
+  /** Made and kept up to date by auto stations (e.g. "genre:audio:rock"); "" for one a person made. */
+  auto: string;
   rights: Rights | null;
   /** nixamp.com account that made it, "" when made with the control key. */
   owner: string;
@@ -131,6 +137,8 @@ export interface StationInput {
   shuffle?: unknown;
   repeat?: unknown;
   bitrate?: unknown;
+  video?: unknown;
+  breaksEvery?: unknown;
 }
 
 function text(value: unknown, max: number, field: string): string {
@@ -168,6 +176,9 @@ export class StationStore {
             owner: one.owner ?? "",
             description: one.description ?? "",
             idempotencyKey: one.idempotencyKey ?? "",
+            video: one.video ?? false,
+            breaksEvery: one.breaksEvery ?? 0,
+            auto: one.auto ?? "",
           });
         }
       }
@@ -217,6 +228,9 @@ export class StationStore {
       desired: "stopped",
       listenToken: newToken(),
       bitrate: this.bitrateFrom(input.bitrate),
+      video: input.video === true,
+      breaksEvery: this.breaksFrom(input.breaksEvery),
+      auto: "",
       rights: null,
       owner,
       failures: {},
@@ -227,6 +241,26 @@ export class StationStore {
     this.stations.set(station.id, station);
     this.save();
     return station;
+  }
+
+  private breaksFrom(value: unknown): number {
+    if (value === undefined || value === null || value === 0) return 0;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 120 || value > 86_400) {
+      throw new StationError("invalid_breaks", "breaksEvery is seconds between breaks, from 120 to 86400, or 0 for none");
+    }
+    return value;
+  }
+
+  /** Mark a station as made by auto stations, so a later sync updates it rather than making another. */
+  markAuto(id: string, key: string): Station {
+    const station = this.require(id);
+    station.auto = key;
+    this.save();
+    return station;
+  }
+
+  byAuto(key: string): Station | undefined {
+    return [...this.stations.values()].find((one) => one.auto === key);
   }
 
   private bitrateFrom(value: unknown): number {
@@ -249,6 +283,7 @@ export class StationStore {
     if (input.shuffle !== undefined) station.shuffle = input.shuffle === true;
     if (input.repeat !== undefined) station.repeat = input.repeat !== false;
     if (input.bitrate !== undefined) station.bitrate = this.bitrateFrom(input.bitrate);
+    if (input.breaksEvery !== undefined) station.breaksEvery = this.breaksFrom(input.breaksEvery);
     if (items !== null) {
       if (items.length === 0) throw new StationError("empty_station", "a station needs at least one file that plays");
       if (items.length > MAX_ITEMS) throw new StationError("too_many_items", `a station holds at most ${MAX_ITEMS} files`);
@@ -393,6 +428,8 @@ export interface PublicStation {
   description: string;
   visibility: Visibility;
   state: Observed;
+  /** Radio or TV. */
+  kind: "audio" | "video";
   nowPlaying: { title: string; artist: string; album: string } | null;
   format: { codec: string; bitrateKbps: number; sampleRate: number; channels: number } | null;
   listeners: number;

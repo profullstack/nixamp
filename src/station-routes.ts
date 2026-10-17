@@ -25,7 +25,7 @@ const LISTEN = /^\/api\/v1\/stations\/([a-z0-9]{10})\/(stream|state|listen\.m3u|
 
 /** Whether this path is one a station's own link may open, without the server's key. */
 export function isStationListenPath(path: string): boolean {
-  return LISTEN.test(path);
+  return LISTEN.test(path) || path === "/api/v1/stations/guide";
 }
 
 export interface StationContext {
@@ -51,6 +51,8 @@ export interface StationContext {
   limits?: Limits;
   /** Null to go ahead with a change, or how long to wait (control rate limit). */
   throttle?: () => { retryAfter: number } | null;
+  /** Auto stations: run a sync with these settings (and keep them), or read them. */
+  auto?: { sync: (input: Record<string, unknown>) => Promise<unknown>; setting: () => unknown };
 }
 
 function fail(ctx: StationContext, response: ServerResponse, error: unknown): void {
@@ -92,7 +94,10 @@ export function publicView(ctx: StationContext, station: Station): PublicStation
     state,
     // Tags, or nothing: a bare file name is the owner's, not the public's.
     nowPlaying: track && (track.title || track.artist) ? track : null,
-    format: state === "stopped" || state === "offline" ? null : { codec: "mp3", bitrateKbps: station.bitrate, sampleRate: 48_000, channels: 2 },
+    kind: station.video ? "video" : "audio",
+    format: state === "stopped" || state === "offline" ? null : station.video
+      ? { codec: "h264+aac", bitrateKbps: station.bitrate, sampleRate: 48_000, channels: 2 }
+      : { codec: "mp3", bitrateKbps: station.bitrate, sampleRate: 48_000, channels: 2 },
     listeners: ctx.runner.listeners(station.id),
   };
 }
@@ -124,6 +129,16 @@ export async function handleStations(
 ): Promise<boolean> {
   if (path !== "/api/v1/stations" && !path.startsWith("/api/v1/stations/")) return false;
   const method = request.method ?? "GET";
+
+  // The public guide: only stations their owner made public and listed, with
+  // their links, because public is what that means. Nothing else, ever.
+  if (path === "/api/v1/stations/guide" && (method === "GET" || method === "HEAD")) {
+    const listed = ctx.store.list().filter((one) => one.visibility === "public" && one.listed);
+    ctx.json(response, 200, {
+      stations: listed.map((one) => ({ ...publicView(ctx, one), page: links(ctx, one).page, m3u: links(ctx, one).m3u })),
+    });
+    return true;
+  }
 
   const listen = LISTEN.exec(path);
   if (listen) {
@@ -309,6 +324,23 @@ export async function handleStations(
         if (items === null) throw new StationError("items_required", "choose files by track index (items) or a folder");
         const station = ctx.store.create(input, items, ctx.account, Date.now(), key);
         ctx.json(response, 201, { station: ownerView(ctx, station), created: true });
+        return true;
+      }
+      ctx.json(response, 405, { error: "GET or POST", code: "method_not_allowed" });
+      return true;
+    }
+
+    if (path === "/api/v1/stations/auto") {
+      if (!ctx.auto) {
+        ctx.json(response, 404, { error: "auto stations are not available here", code: "not_found" });
+        return true;
+      }
+      if (method === "GET") {
+        ctx.json(response, 200, { setting: ctx.auto.setting() });
+        return true;
+      }
+      if (method === "POST") {
+        ctx.json(response, 200, { report: await ctx.auto.sync(await body()) });
         return true;
       }
       ctx.json(response, 405, { error: "GET or POST", code: "method_not_allowed" });

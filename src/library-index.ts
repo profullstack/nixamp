@@ -335,6 +335,8 @@ export class LibraryIndex {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
   private jobs = new Map<string, { report: ScanReport; abort: AbortController }>();
+  /** Told when any scan finishes, for whatever keeps up with the library (auto stations). */
+  onScanned: ((report: ScanReport) => void) | null = null;
 
   constructor(
     private readonly file: string,
@@ -622,6 +624,9 @@ export class LibraryIndex {
     report.status = signal.aborted ? "cancelled" : "done";
     report.finishedAt = this.now();
     this.touch();
+    if (report.status === "done") {
+      try { this.onScanned?.(report); } catch { /* a listener's trouble is not the scan's */ }
+    }
     return report;
   }
 

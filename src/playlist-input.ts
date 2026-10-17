@@ -34,6 +34,12 @@ export interface PlaylistInput {
    * still arriving, and the channel redials and waits for it.
    */
   passOver?: boolean;
+  /**
+   * A break every so often, between entries and never in the middle of one:
+   * `next` answers a file to play (an advert, an ident) or null for no break
+   * this time. The break is outside the rotation and the station's history.
+   */
+  breaks?: { everySeconds: number; next: () => Promise<string | null> };
   /** Told when an entry is passed over because it would not play. */
   onFailure?: (event: { at: number; file: string; reason: string }) => void;
 }
@@ -99,9 +105,10 @@ export class PlaylistInputStream {
       let files = o.current?.() ?? o.files;
       if (files.length === 0) throw new Error("The playlist is empty");
       let order = orderFor(files);
-      let step = Math.min(o.at, order.length);
+      let step = Math.min(Math.max(0, o.at), order.length);
       let played = 0;
       let last = "";
+      let lastBreak = 0;
       for (;;) {
         if (signal.aborted) break;
         // Asked at every boundary, so an edit lands on the next track. The
@@ -128,11 +135,20 @@ export class PlaylistInputStream {
           continue;
         }
         {
-          const at = order[step]!;
-          step += 1;
-          const file = files[at]!;
-          last = file;
-          if (o.excluded?.(file)) continue;
+          // A break, when one is due: in place of the next entry, which stays
+          // next. Not at the very start, and never inside an entry.
+          let breakFile: string | null = null;
+          if (o.breaks && !first && offset - lastBreak >= o.breaks.everySeconds) {
+            lastBreak = offset;
+            breakFile = await o.breaks.next().catch(() => null);
+            if (signal.aborted) return;
+          }
+          const isBreak = breakFile !== null;
+          const at = isBreak ? -1 : order[step]!;
+          if (!isBreak) step += 1;
+          const file = isBreak ? breakFile! : files[at]!;
+          if (!isBreak) last = file;
+          if (!isBreak && o.excluded?.(file)) continue;
           const position = first && step - 1 === o.at ? o.position : 0;
           first = false;
           let reached = 0;
@@ -200,13 +216,20 @@ export class PlaylistInputStream {
               abort();
               await closed;
             }
-            failuresInARow = 0;
-            played += 1;
+            if (!isBreak) {
+              failuresInARow = 0;
+              played += 1;
+            }
             // Match the frame grid used above so rounding cannot accumulate a
             // backwards timestamp over hundreds of short files.
             const length = skipped ? Math.min(duration, reached) : duration;
             offset += o.video ? Math.ceil(length * 30) / 30 : length;
+            // The next break is counted from the end of this one, so a spot
+            // longer than the gap cannot follow itself.
+            if (isBreak) lastBreak = offset;
           } catch (error) {
+            // A break that would not play is simply no break.
+            if (isBreak && !signal.aborted) continue;
             if (signal.aborted || !o.passOver) throw error;
             // Passed over, not dialled again: the next entry is what a
             // listener should hear, and a file that will not decode now will
