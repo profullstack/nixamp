@@ -77,6 +77,9 @@ import { LibraryIndex, probeItem, trackOf, type Probed } from "./library-index.t
 import { ListenerStore } from "./library-user.ts";
 import { Importer } from "./handoff.ts";
 import { handleHandoffs } from "./handoff-routes.ts";
+import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
+import { AiRadio } from "./ai-radio.ts";
+import { ListenerShares } from "./listener-shares.ts";
 import { STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
 import { GUIDE_CSP, guideHosts, renderGuide } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
@@ -1728,6 +1731,12 @@ export interface HandlerOptions {
     auto?: { sync: (input: Record<string, unknown>) => Promise<unknown>; setting: () => unknown };
     /** This server's public https address, once it is known. */
     publicBase?: () => string;
+    /** Stations whose music is composed by AI. */
+    ai?: AiRadio;
+    /** Tracks anybody may share, sorted onto the air by AI. */
+    shares?: ListenerShares;
+    /** Proxies (by address) whose X-Forwarded-For is believed, for per-sharer limits. */
+    trustedProxies?: () => Set<string>;
   };
   web: string | null;
   /** Branded clients on this same backend, keyed by an explicitly configured host. */
@@ -2667,6 +2676,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !isSignInPath(path) &&
       // A station's link is its own key, checked by the station.
       !isStationListenPath(path) &&
+      // Sharing a track and reporting one are for anybody the guide reaches.
+      !isPublicSharePath(path) &&
       !STATION_PAGE.test(path) &&
       !isGuidePage &&
       !eventChannelRequest
@@ -2797,6 +2808,29 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         readBody,
       });
       return;
+    }
+
+    if (options.stations && (isPublicSharePath(path) || path.startsWith("/api/v1/stations/ai") || path.startsWith("/api/v1/stations/shares"))) {
+      const control = await controlOf();
+      // Behind a proxy we trust (dev2 for live.streaming), the sharer is the
+      // first address it names; otherwise whoever connected.
+      const socket = (request.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
+      const trusted = behindProxy || (options.stations.trustedProxies?.().has(socket) ?? false);
+      const caller = callerOf(request.headers, socket, trusted);
+      const handled = await handleAiRoutes(request, response, path, url, {
+        ...(options.stations.ai ? { ai: options.stations.ai } : {}),
+        ...(options.stations.shares ? { shares: options.stations.shares } : {}),
+        canControl: control.allowed,
+        caller,
+        json,
+        readBody,
+        headers: CORS,
+        throttle: () => {
+          const verdict = guard.check(`shares:${caller}`, STATION_CONTROL_LIMIT);
+          return verdict.ok ? null : { retryAfter: verdict.retryAfter };
+        },
+      });
+      if (handled) return;
     }
 
     if (options.stations && (path === "/api/v1/stations" || path.startsWith("/api/v1/stations/"))) {
@@ -6796,8 +6830,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       return { started: true, settings };
     },
   };
-  const stations = {
+  const stations: NonNullable<HandlerOptions["stations"]> = {
     store: stationStore, runner: stationRunner, usage: stationUsage, limits: stationLimits, auto: stationAuto,
+    trustedProxies: () => new Set([...(process.env["NIXAMP_TRUSTED_PROXIES"] ?? "").split(","), ...(readConfig().trustedProxies ?? [])].map((one) => one.trim()).filter(Boolean)),
     // Known once the server has worked out its addresses, after it is listening.
     publicBase: () => (publishable_?.url ?? "").replace(/\/+$/, ""),
   };
@@ -6811,6 +6846,39 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     log: (line) => console.log(line),
   });
   importer.resume();
+  const mayStartStation = (): boolean =>
+    stationLimits.runningStations === 0 || stationStore.list().filter((one) => one.desired === "running").length < stationLimits.runningStations;
+  // AI radio: music composed for its stations, a few tracks a day, in a folder of our own.
+  const aiRadio = new AiRadio(AiRadio.fileFor(stateDir(), options.port), {
+    index: libraryIndex,
+    store: stationStore,
+    runner: stationRunner,
+    probe: probeFile,
+    ffmpeg: tools.ffmpeg,
+    root: join(stateDir(), "ai-music"),
+    owner: options.owner || "",
+    mayStart: mayStartStation,
+    log: (line) => console.log(line),
+  });
+  aiRadio.startSchedule();
+  // Tracks anybody shares from the guide, checked by AI before they air.
+  const listenerShares = new ListenerShares(ListenerShares.fileFor(stateDir(), options.port), {
+    index: libraryIndex,
+    store: stationStore,
+    runner: stationRunner,
+    probe: probeFile,
+    guard: (url) => refusedDestination(url),
+    root: join(stateDir(), "shares"),
+    owner: options.owner || "",
+    mayStart: mayStartStation,
+    nowPlaying: (id) => {
+      const info = channels.info(channelOf(id));
+      return info?.playlist?.[info.playlistAt ?? 0] ?? "";
+    },
+    log: (line) => console.log(line),
+  });
+  stations.ai = aiRadio;
+  stations.shares = listenerShares;
   // Channels as HLS, on demand, for Safari on a phone: one ffmpeg copying a
   // channel's fragments into short files while somebody is asking for them.
   // What things are, from nichedb.dev, remembered beside the keys so a

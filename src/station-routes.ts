@@ -108,12 +108,21 @@ export function publicView(ctx: StationContext, station: Station): PublicStation
   };
 }
 
+/** Where the guide puts a station: composed by AI, shared by listeners, or the owner's radio or TV. */
+export type GuideGroup = "ai" | "shared" | "radio" | "tv";
+
+export function guideGroup(station: Station): GuideGroup {
+  if (station.auto.startsWith("ai:")) return "ai";
+  if (station.auto.startsWith("share:")) return "shared";
+  return station.video ? "tv" : "radio";
+}
+
 /** What the public guide shows: public, listed stations, linked at this server's public address. */
-export function guideEntries(ctx: StationContext): Array<PublicStation & { page: string; m3u: string }> {
+export function guideEntries(ctx: StationContext): Array<PublicStation & { page: string; m3u: string; group: GuideGroup }> {
   const base = ctx.publicBase || ctx.base;
   return ctx.store.list()
     .filter((one) => one.visibility === "public" && one.listed)
-    .map((one) => ({ ...publicView(ctx, one), page: links(ctx, one, base).page, m3u: links(ctx, one, base).m3u }));
+    .map((one) => ({ ...publicView(ctx, one), page: links(ctx, one, base).page, m3u: links(ctx, one, base).m3u, group: guideGroup(one) }));
 }
 
 export function ownerView(ctx: StationContext, station: Station): OwnerStation & { links: ReturnType<typeof links>; nowPlaying: string } {

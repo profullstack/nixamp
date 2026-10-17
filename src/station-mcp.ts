@@ -93,6 +93,37 @@ export const STATION_TOOLS = [
     },
   },
   {
+    name: "station_ai",
+    description: "AI radio: stations whose music is composed by AI (ElevenLabs Music or a local model) a few tracks a day, within a monthly budget of seconds. action status (default), create (preset lofi|synthwave|ambient|chiptune|punk|jazz, or name + style), generate (one track now), update, remove, budget (monthlySeconds), resume. A created station is public on the guide with basis owned unless publish is false.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server: SERVER,
+        action: { type: "string", enum: ["status", "create", "generate", "update", "remove", "budget", "resume"] },
+        key: { ...STRING, description: "The AI station's key (10 hex characters), from status." },
+        preset: STRING, name: STRING, style: { ...STRING, description: "The music in words: genre, instruments, mood, tempo. Name no artist." },
+        description: STRING, vocals: { type: "boolean" }, trackSeconds: { type: "integer" }, perDay: { type: "integer" },
+        enabled: { type: "boolean" }, publish: { type: "boolean" }, monthlySeconds: { type: "integer" },
+      },
+    },
+  },
+  {
+    name: "station_shares",
+    description: "Listener shares: anybody may share an MP3 link or file from the public guide; AI files it under a genre and holds anything that looks like a commercial release. action status (default; waiting shares), list (state), configure (open, moderation ai|owner, publish, maxMb, perHour), approve, reject, delete.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server: SERVER,
+        action: { type: "string", enum: ["status", "list", "configure", "approve", "reject", "delete"] },
+        id: { ...STRING, description: "A share's id (12 hex characters)." },
+        state: { type: "string", enum: ["held", "approved", "reported", "rejected", "failed", "withdrawn"] },
+        reason: STRING,
+        open: { type: "boolean" }, moderation: { type: "string", enum: ["ai", "owner"] }, publish: { type: "boolean" },
+        maxMb: { type: "integer" }, perHour: { type: "integer" },
+      },
+    },
+  },
+  {
     name: "station_unpublish",
     description: "Take a station out of the directory, or make it private: its links stop working and listeners are disconnected.",
     inputSchema: { type: "object", properties: { server: SERVER, id: ID, private: { type: "boolean" } }, required: ["id"] },
@@ -164,6 +195,37 @@ export async function callStationTool(name: string, args: Record<string, unknown
     if (name === "station_auto") {
       const answer = await call("POST", "/api/v1/stations/auto", pick(["video", "minItems", "minFilms", "maxVideoRunning", "breaksEvery", "start", "off"]));
       return answer.ok ? say(JSON.stringify(answer.body["report"], null, 2)) : refused(answer.body);
+    }
+    if (name === "station_ai") {
+      const action = String(args["action"] ?? "status");
+      const key = typeof args["key"] === "string" && /^[a-f0-9]{10}$/.test(args["key"]) ? args["key"] : "";
+      const fields = ["preset", "name", "style", "description", "vocals", "trackSeconds", "perDay", "enabled", "publish"];
+      const answer = action === "status" ? await call("GET", "/api/v1/stations/ai")
+        : action === "create" ? await call("POST", "/api/v1/stations/ai/stations", pick(fields))
+        : action === "budget" ? await call("POST", "/api/v1/stations/ai", pick(["monthlySeconds"]))
+        : action === "resume" ? await call("POST", "/api/v1/stations/ai", { resume: true })
+        : !key ? null
+        : action === "generate" ? await call("POST", `/api/v1/stations/ai/stations/${key}/generate`, {})
+        : action === "update" ? await call("PATCH", `/api/v1/stations/ai/stations/${key}`, pick(fields))
+        : action === "remove" ? await call("DELETE", `/api/v1/stations/ai/stations/${key}`)
+        : undefined;
+      if (answer === null) return say("Which AI station? Pass its key from action status.", true);
+      if (answer === undefined) return say("action is status, create, generate, update, remove, budget or resume", true);
+      return answer.ok ? say(JSON.stringify(answer.body, null, 2)) : refused(answer.body);
+    }
+    if (name === "station_shares") {
+      const action = String(args["action"] ?? "status");
+      const share = typeof args["id"] === "string" && /^[a-f0-9]{12}$/.test(args["id"]) ? args["id"] : "";
+      const answer = action === "status" ? await call("GET", "/api/v1/stations/shares?state=held")
+        : action === "list" ? await call("GET", `/api/v1/stations/shares${typeof args["state"] === "string" ? `?state=${encodeURIComponent(args["state"])}` : ""}`)
+        : action === "configure" ? await call("POST", "/api/v1/stations/shares", pick(["open", "moderation", "publish", "maxMb", "perHour"]))
+        : !share ? null
+        : action === "approve" || action === "reject" ? await call("POST", `/api/v1/stations/shares/${share}/${action}`, pick(["reason"]))
+        : action === "delete" ? await call("DELETE", `/api/v1/stations/shares/${share}`)
+        : undefined;
+      if (answer === null) return say("Which share? Pass its id from action status or list.", true);
+      if (answer === undefined) return say("action is status, list, configure, approve, reject or delete", true);
+      return answer.ok ? say(JSON.stringify(answer.body, null, 2)) : refused(answer.body);
     }
     if (!/^[a-z0-9]{10}$/.test(id) && name !== "station_create") return say("Which station? Pass its id from station_list.", true);
     if (name === "station_get") {
