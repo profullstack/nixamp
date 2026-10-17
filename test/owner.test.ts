@@ -183,3 +183,18 @@ test("the paths that need an administrator, and the ones that do not", () => {
   // office.
   assert.equal(needsAdmin("/api/live"), false);
 });
+
+test("an app's token is the owner only if the owner gave that app the stations scope", async () => {
+  const site = (grant: unknown) => (async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ account: { id: "acct-owner" }, ...(grant === undefined ? {} : { grant }) }),
+  })) as unknown as typeof fetch;
+  const person = new Owner({ ownerId: "acct-owner", site: "https://x", fetcher: site(undefined) });
+  assert.equal((await person.check(false, "session-token")).allowed, true);
+  const watchPartyApp = new Owner({ ownerId: "acct-owner", site: "https://x", fetcher: site({ clientId: "bittorrented", scope: ["profile", "parties"] }) });
+  assert.equal((await watchPartyApp.check(false, "nxa_app")).allowed, false);
+  assert.equal(await watchPartyApp.accountFor("nxa_app"), "");
+  const stationsApp = new Owner({ ownerId: "acct-owner", site: "https://x", fetcher: site({ clientId: "bittorrented", scope: ["profile", "stations"] }) });
+  assert.equal((await stationsApp.check(false, "nxa_app2")).allowed, true);
+});

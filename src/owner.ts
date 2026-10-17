@@ -69,8 +69,11 @@ export class Owner {
         this.cache.set(token, { id: "", at: now });
         return "";
       }
-      const body = (await answer.json()) as { account?: { id?: string } };
-      const id = typeof body.account?.id === "string" ? body.account.id : "";
+      const body = (await answer.json()) as { account?: { id?: string }; grant?: { scope?: unknown } };
+      // A token some app holds for the person counts here only if they gave
+      // that app the stations scope; otherwise it is not them at this door.
+      const scoped = body.grant === undefined || (Array.isArray(body.grant.scope) && body.grant.scope.includes("stations"));
+      const id = scoped && typeof body.account?.id === "string" ? body.account.id : "";
       this.cache.set(token, { id, at: now });
       return id;
     } catch {

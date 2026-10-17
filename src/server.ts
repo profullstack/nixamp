@@ -75,6 +75,8 @@ import { handleStations, isStationListenPath } from "./station-routes.ts";
 import { handleLibrary } from "./library-routes.ts";
 import { LibraryIndex, probeItem, trackOf, type Probed } from "./library-index.ts";
 import { ListenerStore } from "./library-user.ts";
+import { Importer } from "./handoff.ts";
+import { handleHandoffs } from "./handoff-routes.ts";
 import { STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
@@ -1711,6 +1713,8 @@ async function readBytes(request: IncomingMessage, limit: number): Promise<Uint8
 export interface HandlerOptions {
   /** The library as an index: sources, items, search. */
   library?: { index: LibraryIndex; probe: (path: string) => Promise<Probed>; retag: (tracks: Track[]) => void; listeners?: ListenerStore };
+  /** Music handed over from BitTorrented. */
+  importer?: Importer;
   /** This server's stations and what keeps them on the air. */
   stations?: { store: StationStore; runner: StationRunner };
   web: string | null;
@@ -2737,6 +2741,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    if (options.importer && path.startsWith("/api/v1/integrations/bittorrented/")) {
+      const control = await controlOf();
+      await handleHandoffs(request, response, path, {
+        importer: options.importer,
+        canWrite: control.allowed,
+        owner: control.account || "owner",
+        json,
+        readBody,
+      });
+      return;
+    }
+
     if (options.stations && (path === "/api/v1/stations" || path.startsWith("/api/v1/stations/"))) {
       const control = await controlOf();
       const encrypted = (request.socket as { encrypted?: boolean }).encrypted === true;
@@ -2842,12 +2858,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
 
       if (path === "/api/v1/auth/me") {
-        const who = await accounts.whoIs(tokenFrom(request.headers));
+        const token = tokenFrom(request.headers);
+        const who = await accounts.whoIs(token);
         if (who === null) {
           json(response, 401, { error: "not signed in" });
           return;
         }
-        json(response, 200, { account: who });
+        // An app acting for the person says so, with what it was allowed:
+        // a server asking "is this my owner?" must not take a token handed to
+        // some other app as the owner themselves.
+        const grant = options.authServer ? await options.authServer.grantFor(token) : null;
+        json(response, 200, { account: who, ...(grant ? { grant: { clientId: grant.clientId, scope: grant.scope } } : {}) });
         return;
       }
 
@@ -3995,9 +4016,26 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // point: a share link in a terminal you closed is a server you have lost.
     if ((path === "/api/v1/servers" || path.startsWith("/api/v1/servers/")) && options.servers && options.accounts) {
       const servers = options.servers;
-      const who = await options.accounts.whoIs(tokenFrom(request.headers));
+      const token = tokenFrom(request.headers);
+      const who = await options.accounts.whoIs(token);
       if (who === null) {
         json(response, 401, { error: "not signed in" });
+        return;
+      }
+      // An app acting for the person sees the list only with a scope that
+      // says so, may not change it, and never gets a control key: those are
+      // the person's, and an app that held one could drive the machine.
+      const grant = options.authServer ? await options.authServer.grantFor(token) : null;
+      if (grant) {
+        if (!(grant.scope.includes("streams") || grant.scope.includes("stations"))) {
+          json(response, 403, { error: "this app was not given access to your servers", code: "insufficient_scope" });
+          return;
+        }
+        if (!(path === "/api/v1/servers" && request.method === "GET")) {
+          json(response, 403, { error: "an app may list your servers, not change them", code: "insufficient_scope" });
+          return;
+        }
+        json(response, 200, { servers: (await servers.list(who.id)).map(({ key: _key, ...shown }) => shown) });
         return;
       }
 
@@ -6629,6 +6667,16 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     log: (line) => console.log(line),
   });
   const stations = { store: stationStore, runner: stationRunner };
+  // Music handed over from BitTorrented, copied into a folder of our own.
+  const importer = new Importer(join(stateDir(), `handoffs-${options.port}.json`), {
+    index: libraryIndex,
+    stations: stationStore,
+    root: join(stateDir(), "imports", "bittorrented"),
+    probe: probeFile,
+    guard: (url) => refusedDestination(url),
+    log: (line) => console.log(line),
+  });
+  importer.resume();
   // Channels as HLS, on demand, for Safari on a phone: one ffmpeg copying a
   // channel's fragments into short files while somebody is asking for them.
   // What things are, from nichedb.dev, remembered beside the keys so a
@@ -7222,6 +7270,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     channels,
     stations,
     library,
+    importer,
     rememberChannels: remembering,
     catalogs,
     publishUrls: () => publishUrls,

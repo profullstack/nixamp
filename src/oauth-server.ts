@@ -53,6 +53,7 @@ export const SCOPES = {
   email: "the address on your account",
   parties: "host and join watch parties as you",
   streams: "see the servers you run on nixamp, and what is live on them",
+  stations: "manage the library and stations on servers you run, and send them music to play",
   offline_access: "stay connected without asking again",
 } as const;
 

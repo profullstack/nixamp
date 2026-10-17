@@ -257,6 +257,14 @@ run in parallel. P1a should ship first because it fixes behavior that is live to
   moves past what listeners hear and keeps them connected (found while testing: it skipped
   the read-ahead entry and hung up listeners).
 
+## P1g status (nixamp 0.34.0)
+
+- Done on the Nixamp side ([handoff.md](handoff.md)): `stations` OAuth scope; OAuth tokens
+  can no longer act as a server's owner without it, and can no longer read servers' control
+  keys from `/api/v1/servers` (both were possible before); the handoff endpoint with
+  idempotency, per-file grants, copies with size + SHA-256, expiry, retry, private draft.
+- BitTorrented side: grant route, scope, handoff call and UI (media-streamer PR).
+
 ## Phase 0 items still open
 
 - [x] One external listener: dev2 pulled 12 s of server1 `/api/live` over https with the listen key
