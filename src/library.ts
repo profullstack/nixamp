@@ -31,6 +31,8 @@ export interface Config {
   guideHosts?: string[];
   /** Station limits kept across restarts (station-metering.ts). */
   limits?: Record<string, unknown>;
+  /** Proxies whose X-Forwarded-For is believed for listener shares (`nixamp station shares trust ADDRESS`). */
+  trustedProxies?: string[];
 }
 
 export function configPath(): string {
@@ -47,6 +49,7 @@ export function readConfig(): Config {
       ...(typeof record["publish"] === "boolean" ? { publish: record["publish"] } : {}),
       ...(typeof record["autoStations"] === "object" && record["autoStations"] !== null ? { autoStations: record["autoStations"] as Record<string, unknown> } : {}),
       ...(typeof record["limits"] === "object" && record["limits"] !== null ? { limits: record["limits"] as Record<string, unknown> } : {}),
+      ...(Array.isArray(record["trustedProxies"]) ? { trustedProxies: (record["trustedProxies"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
       ...(Array.isArray(record["guideHosts"]) ? { guideHosts: (record["guideHosts"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
     };
   } catch {

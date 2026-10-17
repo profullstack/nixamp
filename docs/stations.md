@@ -44,10 +44,18 @@ after every library scan the stations are re-synced (new files join, ids and lin
   `$XDG_STATE_HOME/nixamp/ads/spot.mp4` (TV) or `spot.mp3` (radio), else no break.
   `breaksEvery` can be set on any station (120-86400, 0 for none).
 
+## AI radio and listener shares
+
+Stations whose music is composed by AI a few tracks a day (`nixamp station ai`), and stations of
+tracks anybody shares from the guide, filed and checked by AI (`nixamp station shares`): see
+[ai-radio.md](ai-radio.md).
+
 ## The guide
 
 `/guide` (and `/` on a host listed in `NIXAMP_GUIDE_HOSTS`, such as a Moshpit name) is a public
-page of the stations on this server that are **public and listed**, radio and TV, with what is on.
+page of the stations on this server that are **public and listed**, with what is on, in four groups:
+AI Radio, Shared by listeners (with a Report button), Radio and TV. When shares are open it also
+carries the Share a track form.
 `GET /api/v1/stations/guide` is the same list as JSON. No key is needed; nothing private or
 unlisted ever appears.
 
@@ -126,7 +134,8 @@ Exit codes: 0 done, 1 refused by the server (code printed), 2 usage, 3 unreachab
 ## MCP
 
 `nixamp mcp` offers `station_list`, `station_get`, `station_create`, `station_update`,
-`station_control` (start, stop, skip, retry), `station_publish` and `station_unpublish`. Without
+`station_control` (start, stop, skip, retry), `station_publish`, `station_unpublish`, `station_auto`,
+`station_ai` and `station_shares`. Without
 `server` they use this machine's daemon and its control key; with `server` they send this
 machine's nixamp.com session, which that server accepts only from its owner. `station_publish`
 with `visibility: "public"` needs `basis`, as everywhere else.

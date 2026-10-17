@@ -222,6 +222,10 @@ export async function station(argv: string[]): Promise<number> {
           ].join("\n");
         });
       }
+      case "ai":
+        return await aiCommand(argv.slice(1), call, show, json);
+      case "shares":
+        return await sharesCommand(argv.slice(1), call, show);
       case "delete": {
         const station = needId();
         if (!station) return 2;
@@ -237,5 +241,154 @@ export async function station(argv: string[]): Promise<number> {
       return 3;
     }
     throw error;
+  }
+}
+
+type Call = (method: string, path: string, body?: unknown) => Promise<Answer>;
+type Show = (answer: Answer, line: (body: Record<string, unknown>) => string) => number;
+
+async function readStdin(): Promise<string> {
+  let text = "";
+  for await (const chunk of process.stdin) text += String(chunk);
+  return text.trim();
+}
+
+/** `nixamp station ai ...` */
+async function aiCommand(argv: string[], call: Call, show: Show, json: boolean): Promise<number> {
+  const [sub, key] = argv;
+  const describe = (one: Record<string, unknown>): string => [
+    `${String(one["name"])}  [${String(one["key"])}]${one["enabled"] ? "" : "  (off)"}`,
+    `  style      ${String(one["style"])}`,
+    `  tracks     ${String(one["tracks"] ?? (one["tracks"] as unknown[] | undefined)?.length ?? 0)} of ${String(one["trackSeconds"])} s, ${String(one["perDay"])} a day${one["vocals"] ? ", with vocals" : ""}`,
+    `  station    ${one["stationId"] ? String(one["stationId"]) : "made with its first track"}${one["publish"] ? ", public on the guide" : ", unlisted"}`,
+    ...(one["lastError"] ? [`  problem    ${String(one["lastError"])}`] : []),
+  ].join("\n");
+  switch (sub) {
+    case undefined:
+    case "status":
+    case "list":
+      return show(await call("GET", "/api/v1/stations/ai"), (body) => {
+        const keys = (body["keys"] ?? {}) as Record<string, boolean>;
+        const stations = (body["stations"] as Record<string, unknown>[] | undefined) ?? [];
+        return [
+          `composer   ${String(body["composer"] ?? "none")}; briefs by ${String(body["writer"])}`,
+          `this month ${String(body["secondsThisMonth"])} of ${Number(body["monthlySeconds"]) === 0 ? "unlimited" : String(body["monthlySeconds"])} s${body["busy"] ? `; composing for ${String(body["busy"])}` : ""}`,
+          ...(body["paused"] ? [`paused     ${String(body["paused"])}`] : []),
+          `keys       ${Object.entries(keys).map(([name, set]) => `${name} ${set ? "set" : "-"}`).join(", ")}`,
+          "",
+          ...(stations.length ? stations.map(describe) : [`No AI stations yet. nixamp station ai create --preset ${((body["presets"] as string[] | undefined) ?? ["lofi"])[0]}`]),
+        ].join("\n");
+      });
+    case "create": {
+      const seconds = flag(argv, "--seconds");
+      const perDay = flag(argv, "--per-day");
+      const body = {
+        ...(flag(argv, "--preset") ? { preset: flag(argv, "--preset") } : {}),
+        ...(flag(argv, "--name") ? { name: flag(argv, "--name") } : {}),
+        ...(flag(argv, "--style") ? { style: flag(argv, "--style") } : {}),
+        ...(flag(argv, "--description") ? { description: flag(argv, "--description") } : {}),
+        ...(has(argv, "--vocals") ? { vocals: true } : has(argv, "--instrumental") ? { vocals: false } : {}),
+        ...(seconds ? { trackSeconds: Number(seconds) } : {}),
+        ...(perDay ? { perDay: Number(perDay) } : {}),
+        publish: !has(argv, "--unlisted"),
+      };
+      return show(await call("POST", "/api/v1/stations/ai/stations", body), (answer) =>
+        `Made. Its first tracks are being composed now; the station appears with the first.\n${describe(answer["station"] as Record<string, unknown>)}`);
+    }
+    case "generate": {
+      if (!key) { console.error("nixamp station ai generate needs the AI station's key (nixamp station ai)"); return 2; }
+      if (!json) console.log("Composing; this takes a minute or two…");
+      return show(await call("POST", `/api/v1/stations/ai/stations/${key}/generate`, {}), (answer) => {
+        const track = answer["track"] as Record<string, unknown>;
+        return `"${String(track["title"])}" (${String(track["seconds"])} s, ${String(track["made"])}) is on the station.`;
+      });
+    }
+    case "set": {
+      if (!key) { console.error("nixamp station ai set needs the AI station's key"); return 2; }
+      const body = {
+        ...(flag(argv, "--style") ? { style: flag(argv, "--style") } : {}),
+        ...(flag(argv, "--name") ? { name: flag(argv, "--name") } : {}),
+        ...(flag(argv, "--per-day") ? { perDay: Number(flag(argv, "--per-day")) } : {}),
+        ...(flag(argv, "--seconds") ? { trackSeconds: Number(flag(argv, "--seconds")) } : {}),
+        ...(has(argv, "--off") ? { enabled: false } : has(argv, "--on") ? { enabled: true } : {}),
+        ...(has(argv, "--vocals") ? { vocals: true } : has(argv, "--instrumental") ? { vocals: false } : {}),
+      };
+      return show(await call("PATCH", `/api/v1/stations/ai/stations/${key}`, body), (answer) => describe({ ...(answer["station"] as Record<string, unknown>), tracks: ((answer["station"] as Record<string, unknown>)["tracks"] as unknown[]).length }));
+    }
+    case "remove": {
+      if (!key) { console.error("nixamp station ai remove needs the AI station's key"); return 2; }
+      const files = has(argv, "--files");
+      return show(await call("DELETE", `/api/v1/stations/ai/stations/${key}${files ? "?files=1" : ""}`), () =>
+        files ? "Removed, with its station and its music." : "Removed. Its station and its music stay; nothing new will be composed.");
+    }
+    case "budget":
+      return show(await call("POST", "/api/v1/stations/ai", { monthlySeconds: Number(key) }), (answer) => {
+        const settings = answer["settings"] as Record<string, unknown>;
+        return `AI music: at most ${Number(settings["monthlySeconds"]) === 0 ? "unlimited" : `${String(settings["monthlySeconds"])} s`} a month.`;
+      });
+    case "resume":
+      return show(await call("POST", "/api/v1/stations/ai", { resume: true }), () => "Composing again.");
+    case "key": {
+      if (!key) { console.error("nixamp station ai key needs a name, e.g. ELEVENLABS_API_KEY, and the value on stdin"); return 2; }
+      const value = has(argv, "--clear") ? "" : await readStdin();
+      return show(await call("POST", "/api/v1/stations/ai/keys", { name: key, value }), (answer) =>
+        `Keys: ${Object.entries((answer["keys"] ?? {}) as Record<string, boolean>).map(([name, set]) => `${name} ${set ? "set" : "-"}`).join(", ")}`);
+    }
+    default:
+      console.error(`nixamp station ai: no command "${sub}".\n\n${USAGE}`);
+      return 2;
+  }
+}
+
+/** `nixamp station shares ...` */
+async function sharesCommand(argv: string[], call: Call, show: Show): Promise<number> {
+  const [sub, id] = argv;
+  const line = (one: Record<string, unknown>): string =>
+    `  ${String(one["id"])}  ${String(one["state"]).padEnd(9)} ${String(one["genre"] || "?").padEnd(14)} ${String(one["title"] || one["name"])}${one["artist"] ? ` — ${String(one["artist"])}` : ""}  [${String((one["rights"] as Record<string, unknown> | undefined)?.["basis"] ?? "")}]${one["reason"] ? `\n      ${String(one["reason"])}` : ""}`;
+  const summary = (body: Record<string, unknown>): string => {
+    const setting = (body["setting"] ?? {}) as Record<string, unknown>;
+    const shares = (body["shares"] as Record<string, unknown>[] | undefined) ?? [];
+    return [
+      `shares     ${setting["open"] ? "open" : "closed"}; moderation ${String(setting["moderation"])}${setting["model"] ? "" : " (no AI key: everything waits for you)"}; ${setting["publish"] ? "public on the guide" : "unlisted"}; ${Math.round(Number(setting["maxBytes"]) / 1048576)} MB, ${String(setting["perHour"])} an hour each`,
+      ...(shares.length ? ["", ...shares.map(line)] : []),
+    ].join("\n");
+  };
+  switch (sub) {
+    case undefined:
+    case "list": {
+      const state = flag(argv, "--state");
+      return show(await call("GET", `/api/v1/stations/shares${state ? `?state=${encodeURIComponent(state)}` : sub === undefined ? "?state=held" : ""}`), summary);
+    }
+    case "on":
+    case "off": {
+      const body = sub === "off" ? { open: false } : {
+        open: true,
+        moderation: has(argv, "--owner-moderation") ? "owner" : "ai",
+        publish: !has(argv, "--unlisted"),
+        ...(flag(argv, "--max-mb") ? { maxMb: Number(flag(argv, "--max-mb")) } : {}),
+        ...(flag(argv, "--per-hour") ? { perHour: Number(flag(argv, "--per-hour")) } : {}),
+      };
+      return show(await call("POST", "/api/v1/stations/shares", body), (answer) => summary(answer));
+    }
+    case "approve":
+    case "reject": {
+      if (!id) { console.error(`nixamp station shares ${sub} needs a share id`); return 2; }
+      return show(await call("POST", `/api/v1/stations/shares/${id}/${sub}`, { reason: flag(argv, "--reason") ?? "" }), (answer) => line(answer["share"] as Record<string, unknown>));
+    }
+    case "delete": {
+      if (!id) { console.error("nixamp station shares delete needs a share id"); return 2; }
+      return show(await call("DELETE", `/api/v1/stations/shares/${id}`), () => `Deleted ${id} and its copy.`);
+    }
+    case "trust": {
+      const { readConfig, writeConfig } = await import("./library.ts");
+      const proxies = new Set(readConfig().trustedProxies ?? []);
+      if (argv.includes("--remove")) proxies.delete(id ?? ""); else if (id) proxies.add(id);
+      writeConfig({ trustedProxies: [...proxies] });
+      console.log(proxies.size ? `X-Forwarded-For believed from: ${[...proxies].join(", ")}` : "No proxy is trusted.");
+      return 0;
+    }
+    default:
+      console.error(`nixamp station shares: no command "${sub}".\n\n${USAGE}`);
+      return 2;
   }
 }

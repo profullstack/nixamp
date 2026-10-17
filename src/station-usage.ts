@@ -18,6 +18,25 @@ export const USAGE = `nixamp station — make a collection into a station
   nixamp station auto [--no-video] [--min 10] [--films 3] [--tv 2] [--breaks 600] [--no-start]
                      a station per genre, kept in step with the library (--off stops it)
 
+  AI radio (music composed for a station, a few tracks a day):
+  nixamp station ai                          what is composing, this month's seconds, the stations
+  nixamp station ai create (--preset lofi|synthwave|ambient|chiptune|punk|jazz | --name NAME --style TEXT)
+                     [--vocals] [--seconds 120] [--per-day 2] [--unlisted]   public on the guide unless --unlisted
+  nixamp station ai generate KEY             compose one now
+  nixamp station ai set KEY [--style TEXT] [--per-day N] [--seconds N] [--off|--on]
+  nixamp station ai remove KEY [--files]
+  nixamp station ai budget SECONDS           seconds of music a month across AI stations (0: no cap)
+  nixamp station ai resume                   after the provider ran out of credit
+  nixamp station ai key NAME                 ELEVENLABS_API_KEY | GEMINI_API_KEY | OPENAI_API_KEY | ANTHROPIC_API_KEY, from stdin
+
+  Listener shares (anybody shares an MP3 link or file from the guide; AI files and checks it):
+  nixamp station shares                      the setting and what is waiting
+  nixamp station shares on [--owner-moderation] [--unlisted] [--max-mb 60] [--per-hour 6]
+  nixamp station shares off
+  nixamp station shares list [--state held|approved|reported|rejected]
+  nixamp station shares approve|reject|delete SHARE
+  nixamp station shares trust ADDRESS [--remove]   believe this proxy's X-Forwarded-For
+
   --json        machine-readable output
   --url, --key  another server, as with \`nixamp admin\`
 
