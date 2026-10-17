@@ -88,6 +88,7 @@ export async function station(argv: string[]): Promise<number> {
       `  state       ${String(station["state"])} (wanted ${String(station["desired"])})`,
       `  visibility  ${String(station["visibility"])}${station["listed"] ? ", listed in the directory" : ""}`,
       `  rotation    ${station["shuffle"] ? "shuffle" : "in order"}${station["repeat"] ? ", repeating" : ", once"}; ${(station["items"] as unknown[] | undefined)?.length ?? 0} files at ${String(station["bitrate"])} kbps`,
+      `  breaks      ${Number(station["breaksEvery"] ?? 0) > 0 ? `a spot every ${Math.round(Number(station["breaksEvery"]) / 60)} min, between entries` : "none"}`,
       ...(station["error"] ? [`  problem     ${String(station["error"])}`] : []),
       ...((station["excluded"] as unknown[] | undefined)?.length ? [`  left out   ${(station["excluded"] as unknown[]).length} files (nixamp station retry)`] : []),
       ...(station["visibility"] !== "private" && links["page"] ? [`  listen      ${links["page"]}`] : []),
@@ -128,6 +129,7 @@ export async function station(argv: string[]): Promise<number> {
           shuffle: has(argv, "--shuffle"),
           repeat: !has(argv, "--no-repeat"),
           ...(bitrate ? { bitrate: Number(bitrate) } : {}),
+          ...(flag(argv, "--breaks") ? { breaksEvery: Number(flag(argv, "--breaks")) } : {}),
         });
         return show(answer, (body) => `Made (private, stopped):\n${describe(body["station"] as Record<string, unknown>)}`);
       }
@@ -144,6 +146,16 @@ export async function station(argv: string[]): Promise<number> {
         const station = needId();
         if (!station) return 2;
         return show(await call("POST", `/api/v1/stations/${station}/${command}`, {}), (body) => describe(body["station"] as Record<string, unknown>));
+      }
+      case "breaks": {
+        const station = needId();
+        if (!station) return 2;
+        const seconds = argv.includes("--off") ? 0 : Number(argv[argv.indexOf(station) + 1]);
+        if (!Number.isFinite(seconds)) {
+          console.error("nixamp station breaks ID SECONDS (or --off)");
+          return 2;
+        }
+        return show(await call("PATCH", `/api/v1/stations/${station}`, { breaksEvery: seconds }), (body) => describe(body["station"] as Record<string, unknown>));
       }
       case "publish": {
         const station = needId();

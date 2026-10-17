@@ -145,8 +145,10 @@ export class StationRunner {
             return now ? this.playable(now) : [];
           },
           excluded: (file) => store.isExcluded(id, file),
-          ...(station.breaksEvery > 0 && this.deps.breaks
-            ? { breaks: { everySeconds: station.breaksEvery, next: () => this.deps.breaks!(station.video) } }
+          // Read at every boundary, so setting breaks on a running station
+          // lands without a restart; 0 is none.
+          ...(this.deps.breaks
+            ? { breaks: { everySeconds: () => store.get(id)?.breaksEvery ?? 0, next: () => this.deps.breaks!(station.video) } }
             : {}),
           onFailure: ({ file, reason }) => {
             this.errors.set(id, reason);

@@ -39,7 +39,7 @@ export interface PlaylistInput {
    * `next` answers a file to play (an advert, an ident) or null for no break
    * this time. The break is outside the rotation and the station's history.
    */
-  breaks?: { everySeconds: number; next: () => Promise<string | null> };
+  breaks?: { everySeconds: number | (() => number); next: () => Promise<string | null> };
   /** Told when an entry is passed over because it would not play. */
   onFailure?: (event: { at: number; file: string; reason: string }) => void;
 }
@@ -138,7 +138,8 @@ export class PlaylistInputStream {
           // A break, when one is due: in place of the next entry, which stays
           // next. Not at the very start, and never inside an entry.
           let breakFile: string | null = null;
-          if (o.breaks && !first && offset - lastBreak >= o.breaks.everySeconds) {
+          const every = typeof o.breaks?.everySeconds === "function" ? o.breaks.everySeconds() : (o.breaks?.everySeconds ?? 0);
+          if (o.breaks && every > 0 && !first && offset - lastBreak >= every) {
             lastBreak = offset;
             breakFile = await o.breaks.next().catch(() => null);
             if (signal.aborted) return;
