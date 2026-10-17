@@ -245,6 +245,18 @@ run in parallel. P1a should ship first because it fixes behavior that is live to
   across devices; stations from playlists. P1d complete at the API, CLI and MCP; the PWA's
   Library/Radio screens are P1f.
 
+## P1f/P1e status (0.33.0)
+
+- Done: `/radio` (also `/library`) console in the PWA, linked from the player header: stations
+  (state, listeners, start/stop/skip, copy link, who-can-listen dialog with rights basis,
+  retry left-out files, delete, new station from a folder or playlist), library (summary,
+  search, browse, play in the page, select into playlists), playlists (play, reorder, remove,
+  make a station), sources (add, rescan), resume where you left off. Verified end to end in
+  headless Chrome against a real server, including phone width (no horizontal scroll).
+- Done: station `/events` SSE and audible-aligned titles on the station page; skip now
+  moves past what listeners hear and keeps them connected (found while testing: it skipped
+  the read-ahead entry and hung up listeners).
+
 ## Phase 0 items still open
 
 - [x] One external listener: dev2 pulled 12 s of server1 `/api/live` over https with the listen key

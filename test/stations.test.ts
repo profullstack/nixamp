@@ -195,7 +195,37 @@ test("stations over HTTP: owner manages, a link only listens, private means priv
     // Skip is the owner's: a station's link does not even reach it.
     assert.equal((await fetch(`${base}/api/v1/stations/${station.id}/skip?t=${encodeURIComponent(station.listenToken)}`, post({}))).status, 401);
     assert.equal((await fetch(`${base}/api/v1/stations/${station.id}/stream?t=${encodeURIComponent(station.listenToken)}`, post({}))).status, 405);
+    // Now playing as it changes, over the station's own link.
+    const events = await fetch(`${base}/api/v1/stations/${station.id}/events?t=${encodeURIComponent(station.listenToken)}`);
+    assert.match(events.headers.get("content-type") ?? "", /text\/event-stream/);
+    const eventReader = events.body!.getReader();
+    let eventText = "";
+    let pending: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+    const nextEvent = async (name: string, ms: number): Promise<Record<string, unknown> | null> => {
+      const until = Date.now() + ms;
+      while (Date.now() < until) {
+        const match = new RegExp(`event: ${name}\\ndata: (.*)\\n\\n`).exec(eventText);
+        if (match) {
+          eventText = eventText.slice(match.index + match[0].length);
+          return JSON.parse(match[1]!) as Record<string, unknown>;
+        }
+        // One read at a time: a read that loses the race still lands later.
+        pending ??= eventReader.read();
+        const raced = await Promise.race([pending, new Promise<null>((r) => setTimeout(() => r(null), 250))]);
+        if (raced === null) continue;
+        pending = null;
+        if (raced.done) return null;
+        if (raced.value) eventText += new TextDecoder().decode(raced.value);
+      }
+      return null;
+    };
+    const hello = await nextEvent("hello", 5000);
+    assert.equal(hello?.["station"], station.id);
     assert.equal((await asOwner(`/api/v1/stations/${station.id}/skip`, post({}))).status, 200);
+    const moved = await nextEvent("now", 10_000);
+    assert.ok(moved, "a now event after the skip");
+    assert.match(String((moved!["nowPlaying"] as { title?: string } | null)?.title ?? ""), /^(First|Second) Song$/);
+    await eventReader.cancel();
 
     // An m3u for another player, naming the stream.
     const m3u = await fetch(`${base}/api/v1/stations/${station.id}/listen.m3u?t=${encodeURIComponent(station.listenToken)}`);

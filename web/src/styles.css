@@ -127,6 +127,8 @@ body {
 .brand-mark { width: 1.15em; height: 1.15em; flex: 0 0 auto; }
 
 .status { color: var(--muted); }
+.ghost-link { color: var(--fg); text-decoration: none; border: 1px solid var(--edge); border-radius: 4px; padding: 1px 8px; }
+.ghost-link:hover, .ghost-link:focus-visible { border-color: var(--green-dim); color: var(--green); }
 .status[data-playing="true"] { color: var(--green); }
 /* Loading: a ring that turns, in front of the word. A stream on its way is
    neither playing nor stopped, and STOPPED over a long wait read as broken. */

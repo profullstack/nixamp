@@ -1,0 +1,72 @@
+/* Library and Radio: the player's look, laid out as a page of sections. */
+
+.radio-app { max-width: 1100px; margin: 0 auto; padding: 12px 16px 96px; display: grid; gap: 14px; }
+.radio-app a { color: var(--accent); }
+.radio-app .brand { text-decoration: none; }
+.radio-nav { display: flex; gap: 14px; }
+.radio-nav a { color: var(--fg); text-decoration: none; padding: 4px 2px; border-bottom: 2px solid transparent; }
+.radio-nav a:hover, .radio-nav a:focus-visible { border-bottom-color: var(--green); }
+.radio-title { margin: 0 0 6px; font-size: 15px; letter-spacing: 0.08em; color: var(--green); text-transform: uppercase; }
+.radio-subtitle { margin: 18px 0 6px; font-size: 13px; color: var(--green-dim); text-transform: uppercase; letter-spacing: 0.08em; }
+.radio-notice { border: 1px solid var(--warn); color: var(--warn); padding: 8px 12px; border-radius: 6px; margin: 0; }
+.radio-app .hint, .radio-app .muted { color: var(--muted); }
+.radio-app .warn { color: var(--warn); }
+.radio-app button { font: inherit; color: var(--bg); background: var(--green); border: 1px solid var(--green); border-radius: 4px; padding: 4px 12px; cursor: pointer; min-height: 32px; }
+.radio-app button.ghost { color: var(--fg); background: transparent; border-color: var(--edge); }
+.radio-app button.danger { color: var(--warn); }
+.radio-app button:disabled { opacity: 0.45; cursor: not-allowed; }
+.radio-app button:focus-visible, .radio-app a:focus-visible, .radio-app input:focus-visible, .radio-app select:focus-visible, .radio-app summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.radio-app input, .radio-app select { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--edge); border-radius: 4px; padding: 4px 8px; }
+
+.station-list { display: grid; gap: 10px; }
+.station { border: 1px solid var(--edge); border-radius: 6px; padding: 10px 12px; }
+.station h3 { margin: 0; font-size: 15px; color: var(--fg); }
+.station p { margin: 6px 0; }
+.station-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.state { font-size: 12px; font-weight: 700; border: 1px solid currentColor; border-radius: 999px; padding: 0 8px; }
+.state-live { color: var(--green); }
+.state-starting, .state-recovering { color: var(--accent); }
+.state-offline { color: var(--warn); }
+.state-stopped { color: var(--muted); }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.radio-form { margin-top: 12px; }
+.radio-form summary { cursor: pointer; color: var(--green); }
+.radio-form form { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin-top: 8px; }
+.radio-form label { display: grid; gap: 2px; }
+.radio-app label.inline { display: inline-flex; gap: 6px; align-items: center; }
+
+.search-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.search-row .grow { flex: 1 1 260px; }
+.search-row .grow input { width: 100%; }
+.groups { display: flex; gap: 6px; flex-wrap: wrap; max-height: 220px; overflow: auto; margin-bottom: 8px; }
+.radio-app button.group { background: transparent; color: var(--fg); border-color: var(--edge); font-size: 12px; min-height: 28px; }
+
+.items { width: 100%; border-collapse: collapse; }
+.items th { text-align: left; color: var(--muted); font-weight: 400; border-bottom: 1px solid var(--edge); padding: 4px 6px; }
+.items td { padding: 3px 6px; border-bottom: 1px solid color-mix(in srgb, var(--edge) 50%, transparent); vertical-align: middle; overflow-wrap: anywhere; }
+.selection { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--green-dim); border-radius: 6px; padding: 6px 10px; margin-top: 8px; }
+.playlist { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--edge); }
+.playlist .actions { margin-left: auto; }
+.playlist-items { flex-basis: 100%; margin: 6px 0 0; }
+.playlist-items li { padding: 2px 0; }
+.source { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.resume { border: 1px solid var(--accent); border-radius: 6px; padding: 6px 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.radio-dialog { color: var(--fg); background: var(--panel); border: 1px solid var(--green-dim); border-radius: 8px; max-width: min(520px, calc(100vw - 32px)); }
+.radio-dialog::backdrop { background: #000a; }
+.radio-dialog form { display: grid; gap: 10px; }
+.radio-dialog fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
+.radio-dialog label { display: grid; gap: 2px; }
+.radio-dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 0; }
+.radio-dialog h3 { margin: 0; color: var(--green); }
+
+.now-bar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; gap: 12px; align-items: center; padding: 8px 16px; background: var(--panel); border-top: 1px solid var(--edge); }
+.now-bar audio { height: 36px; max-width: 60vw; }
+.now { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 640px) {
+  .items th:nth-child(4), .items td:nth-child(4) { display: none; }
+  .now-bar { flex-direction: column; align-items: stretch; }
+  .now-bar audio { max-width: none; width: 100%; }
+}
