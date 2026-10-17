@@ -94,6 +94,12 @@ test("a station per genre, unlisted, kept in step with the library; TV from film
     assert.equal(second.radio[0]!.files, 15);
     assert.equal(second.radio[0]!.made, false);
     assert.equal(store.list().length, 5);
+
+    // A station its owner stopped stays stopped through the next scan.
+    store.setDesired(first.radio[0]!.id, "stopped");
+    const third = await syncAutoStations(deps, { ...DEFAULT_AUTO, maxVideoRunning: 1 });
+    assert.equal(third.radio[0]!.running, false);
+    assert.equal(store.get(first.radio[0]!.id)!.desired, "stopped");
   } finally {
     rmSync(top, { recursive: true, force: true });
   }

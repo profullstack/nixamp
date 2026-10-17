@@ -163,7 +163,9 @@ export async function syncAutoStations(deps: AutoDeps, options: AutoOptions = DE
     }
     const { station, made } = await upsert(deps, `genre:audio:${genre.toLowerCase()}`, `${genre} Radio`, order(items).map((one) => one.path), false, options);
     let running = station.desired === "running";
-    if (!running && options.start && deps.mayStart()) {
+    // Only a station this sync made is started: one its owner stopped stays stopped through
+    // every later scan (a re-sync had put the pirated genre stations back on the air).
+    if (!running && made && options.start && deps.mayStart()) {
       await deps.runner.start(station.id).then(() => { running = true; }, (error: Error) => deps.log?.(`  auto stations: ${genre} Radio did not start: ${error.message}`));
     }
     report.radio.push({ genre, id: station.id, files: items.length, made, running });
@@ -190,7 +192,7 @@ export async function syncAutoStations(deps: AutoDeps, options: AutoOptions = DE
       }
       const { station, made } = await upsert(deps, `genre:video:${genre.toLowerCase()}`, `${genre} TV`, films.map((one) => one.path), true, options);
       let running = station.desired === "running";
-      if (!running && options.start && runningTv < options.maxVideoRunning && deps.mayStart()) {
+      if (!running && made && options.start && runningTv < options.maxVideoRunning && deps.mayStart()) {
         await deps.runner.start(station.id).then(() => { running = true; runningTv += 1; }, (error: Error) => deps.log?.(`  auto stations: ${genre} TV did not start: ${error.message}`));
       }
       report.tv.push({ genre, id: station.id, films: films.length, made, running });
