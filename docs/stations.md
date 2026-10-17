@@ -24,6 +24,26 @@ listeners join where it is. It is the PRD's RAD-01..05 ([prd-library-radio.md](p
 - **Audio.** MP3, 128 kbps by default (`bitrate`: 64-320), 48 kHz stereo; one encoder per
   station whatever the number of listeners.
 
+## Limits and metering
+
+Every byte a station's link delivers and every second somebody listens is counted per station
+per calendar month in `$XDG_STATE_HOME/nixamp/usage-<port>.json`, with peak listeners, restarts
+and files that would not play. `GET /api/v1/stations/:id/metrics` (owner) answers this month,
+the history and the limits; the owner view carries `metrics` and `alerts` (off the air while
+wanted, files left out, repeated restarts, allowance nearly or fully used), and so does `/radio`.
+
+The operator sets the limits:
+
+| | default | refusal |
+| --- | --- | --- |
+| `NIXAMP_STATION_MAX_LISTENERS` | 200 per station | `503 station_full`, `Retry-After: 60` |
+| `NIXAMP_MAX_LISTENERS` | 500 across stations | `503 server_full`, so one station cannot take the server |
+| `NIXAMP_MAX_RUNNING_STATIONS` | 10 | `409 too_many_running` on start |
+| `NIXAMP_STATION_MONTHLY_GB` | 0 (no allowance) | `429 allowance_exhausted` until the month turns; nobody already listening is cut off |
+
+Changes (anything but GET under `/api/v1/stations`) are limited to 30 a minute per caller
+(`429 rate_limited`), apart from listening, so neither can starve the other.
+
 ## Who may do what
 
 | Caller | May |

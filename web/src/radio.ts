@@ -39,6 +39,8 @@ interface Station {
   excluded: string[];
   rights: { basis: string; note: string } | null;
   links: { page: string; stream: string; m3u: string };
+  metrics?: { listeners: number; month: { bytes: number; listenerSeconds: number; peakListeners: number; restarts: number } };
+  alerts?: string[];
 }
 
 interface Playlist {
@@ -183,6 +185,10 @@ function drawStations(): void {
         `${station.items.length} files · ${station.shuffle ? "shuffle" : "in order"} · ${station.repeat ? "repeating" : "once"} · ${station.bitrate} kbps · ${station.listeners} listening`,
       ),
       station.error && station.state !== "live" ? el("p", { class: "warn" }, station.error) : null,
+      ...(station.alerts ?? []).map((alert) => el("p", { class: "warn", role: "status" }, `⚠ ${alert}`)),
+      station.metrics ? el("p", { class: "muted" },
+        `This month: ${(station.metrics.month.bytes / 1024 ** 2).toFixed(1)} MB delivered · ${Math.round(station.metrics.month.listenerSeconds / 3600 * 10) / 10} listener-hours · peak ${station.metrics.month.peakListeners}`,
+      ) : null,
       shareable ? el("p", { class: "link" }, el("a", { href: station.links.page, target: "_blank", rel: "noopener" }, "Open the listening page")) : null,
       el("div", { class: "actions" }, toggle, skip, copy, access, retry, remove),
     ));

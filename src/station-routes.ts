@@ -15,6 +15,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Channels } from "./channels.ts";
 import type { StationRunner } from "./station-runner.ts";
+import { alertsFor, type Limits, type StationUsage } from "./station-metering.ts";
 import {
   StationError, channelOf, tokensMatch, type OwnerStation, type PublicStation, type Station, type StationStore,
 } from "./stations.ts";
@@ -45,6 +46,11 @@ export interface StationContext {
   readBody: (request: IncomingMessage) => Promise<string>;
   /** Headers every answer carries (CORS). */
   headers: Record<string, string>;
+  /** Metering and limits; absent in tests that do not care. */
+  usage?: StationUsage;
+  limits?: Limits;
+  /** Null to go ahead with a change, or how long to wait (control rate limit). */
+  throttle?: () => { retryAfter: number } | null;
 }
 
 function fail(ctx: StationContext, response: ServerResponse, error: unknown): void {
@@ -101,6 +107,10 @@ export function ownerView(ctx: StationContext, station: Station): OwnerStation &
     error: ctx.runner.error(station.id),
     links: links(ctx, station),
     nowPlaying: nowPlayingFile(ctx, station),
+    ...(ctx.usage && ctx.limits ? {
+      metrics: { listeners: ctx.usage.listeners(station.id), month: ctx.usage.thisMonth(station.id), limits: ctx.limits },
+      alerts: alertsFor(station, ctx.runner.observed(station.id), ctx.runner.downSince(station.id), ctx.usage.thisMonth(station.id), ctx.limits),
+    } : {}),
   };
 }
 
@@ -204,20 +214,45 @@ export async function handleStations(
       ctx.json(response, 503, { error: "the station is not on the air", code: "not_live", state: ctx.runner.observed(station.id) });
       return true;
     }
+    // Admitted only within the station's and the server's limits, and the
+    // month's allowance; refused with what to do about it.
+    const refused = method === "GET" && ctx.usage && ctx.limits ? ctx.usage.admit(station.id, ctx.limits) : null;
+    if (refused) {
+      response.writeHead(refused.status, { ...ctx.headers, "content-type": "application/json; charset=utf-8", "retry-after": String(refused.retryAfter) });
+      response.end(JSON.stringify({ error: refused.error, code: refused.code, retryAfter: refused.retryAfter }));
+      return true;
+    }
     response.writeHead(200, { ...ctx.headers, "content-type": ctx.channels.contentType(channelId), "cache-control": "no-store" });
     if (method === "HEAD") {
       response.end();
       return true;
     }
-    const detach = ctx.channels.listen(channelId, response);
+    // Every byte that goes out through the link is counted against the station.
+    const usage = ctx.usage;
+    const counted = usage
+      ? {
+          write: (chunk: Buffer): boolean => {
+            usage.delivered(station.id, chunk.length);
+            return response.write(chunk);
+          },
+          end: (): void => { response.end(); },
+          pending: (): number => response.writableLength,
+        }
+      : response;
+    const detach = ctx.channels.listen(channelId, counted);
     if (detach === null) {
       response.end();
       return true;
     }
+    const left = usage?.joined(station.id);
     const untrack = ctx.runner.track(station.id, { end: () => response.destroy() });
+    let gone = false;
     const leave = (): void => {
+      if (gone) return;
+      gone = true;
       detach();
       untrack();
+      left?.();
     };
     request.on("close", leave);
     response.on("close", leave);
@@ -228,6 +263,15 @@ export async function handleStations(
   if (!ctx.canControl) {
     ctx.json(response, 403, { error: "only this server's owner manages its stations", code: "forbidden" });
     return true;
+  }
+  // Changes are limited apart from listening, so neither starves the other.
+  if (method !== "GET" && ctx.throttle) {
+    const wait = ctx.throttle();
+    if (wait) {
+      response.setHeader("retry-after", String(wait.retryAfter));
+      ctx.json(response, 429, { error: "too many changes at once; wait a moment", code: "rate_limited", retryAfter: wait.retryAfter });
+      return true;
+    }
   }
 
   const body = async (): Promise<Record<string, unknown>> => {
@@ -305,11 +349,30 @@ export async function handleStations(
       return true;
     }
 
+    if (action === "metrics" && method === "GET") {
+      if (!ctx.usage || !ctx.limits) {
+        ctx.json(response, 404, { error: "metering is off on this server", code: "not_found" });
+        return true;
+      }
+      ctx.json(response, 200, {
+        listeners: ctx.usage.listeners(station.id),
+        month: ctx.usage.thisMonth(station.id),
+        history: ctx.usage.history(station.id),
+        limits: ctx.limits,
+        alerts: alertsFor(station, ctx.runner.observed(station.id), ctx.runner.downSince(station.id), ctx.usage.thisMonth(station.id), ctx.limits),
+      });
+      return true;
+    }
     if (method !== "POST") {
       ctx.json(response, 405, { error: "POST", code: "method_not_allowed" });
       return true;
     }
     if (action === "start") {
+      const running = ctx.store.list().filter((one) => one.desired === "running" && one.id !== id).length;
+      if (ctx.limits && ctx.limits.runningStations > 0 && running >= ctx.limits.runningStations) {
+        ctx.json(response, 409, { error: `this server runs at most ${ctx.limits.runningStations} stations at once; stop one first`, code: "too_many_running" });
+        return true;
+      }
       const started = await ctx.runner.start(id);
       ctx.json(response, 200, { station: ownerView(ctx, started) });
       return true;
