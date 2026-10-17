@@ -36,7 +36,7 @@ import {
 import { Ingest, normaliseFormat } from "./ingest.ts";
 import {
   BACKLOG_SECONDS, Channels, cleanId, generatedId, rememberChannels, rememberedChannels, rememberedNow,
-  type Channel, type ChannelInfo, type RememberedChannel,
+  type Channel, type ChannelInfo, type PullResume, type RememberedChannel,
 } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
@@ -71,6 +71,10 @@ import { ArtCache, coverArtOf, stillFrom } from "./art.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
 import { HlsPackagers, segmentType, withKey } from "./hls.ts";
 import { refusedDestination } from "./destinations.ts";
+import { handleStations, isStationListenPath } from "./station-routes.ts";
+import { STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
+import { StationRunner } from "./station-runner.ts";
+import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
 import { CompressionService } from "./compression/service.ts";
 import { handleChannelCompression, handleCompressionApi, handleStaticRelay, type RouteContext } from "./compression/routes.ts";
 import { DEFAULT_SITE as NICHEDB, Enricher, type EnrichKind, FIXTURE_TTL_MS } from "./enrich.ts";
@@ -1112,6 +1116,64 @@ export interface KnownSource {
   /** A picture and a line about it, from the site or the list that named it. */
   art?: string;
   about?: string;
+  /** A station's rotation (see PullResume.rotation). */
+  rotation?: PullResume["rotation"];
+  /** kbps for an audio rendition; 192 when unset. */
+  audioBitrate?: number;
+}
+
+/**
+ * A station's files, chosen by track index (as /api/folders/live takes them)
+ * or by a folder under the library; null when neither was given. Only files
+ * on this machine and inside the library: a station never reaches past it.
+ */
+export function selectStationFiles(engine: Engine, body: { items?: unknown; folder?: unknown }): string[] | null {
+  const root = engine.snapshot(false).root;
+  if (Array.isArray(body.items)) {
+    const indices = [...new Set(body.items.filter((one): one is number => Number.isInteger(one) && one >= 0))];
+    const files = indices.map((index) => engine.trackPath(index)).filter((one): one is string => typeof one === "string" && !isRemote(one));
+    if (indices.length !== body.items.length || files.length !== indices.length) {
+      throw new StationError("unknown_items", "one or more of those tracks are not files in this library");
+    }
+    return files;
+  }
+  if (typeof body.folder === "string") {
+    const folder = body.folder.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+    if (folder.split("/").includes("..")) throw new StationError("invalid_folder", "a folder inside the library, please");
+    const files: string[] = [];
+    const count = engine.snapshot(false).trackCount;
+    for (let index = 0; index < count; index++) {
+      const file = engine.trackPath(index);
+      if (!file || isRemote(file)) continue;
+      const served = relative(root, file).replaceAll("\\", "/");
+      if (served.startsWith("../")) continue;
+      if (folder === "" || served.startsWith(`${folder}/`)) files.push(file);
+    }
+    if (files.length === 0) throw new StationError("empty_folder", "that folder has no files that play");
+    return files;
+  }
+  return null;
+}
+
+const tracksByPath = new WeakMap<Engine, { revision: number; byPath: Map<string, { title: string; artist: string; album: string }> }>();
+
+/** What the library knows about one file: its tags, for a now-playing line. */
+export function trackFor(engine: Engine, file: string): { title: string; artist: string; album: string } | null {
+  const revision = engine.snapshot(false).revision;
+  let index = tracksByPath.get(engine);
+  if (!index || index.revision !== revision) {
+    const tracks = engine.snapshot().tracks ?? [];
+    const byPath = new Map<string, { title: string; artist: string; album: string }>();
+    tracks.forEach((track, at) => {
+      const path = engine.trackPath(at);
+      // Tags only: a title that is the file's own name is not a tag.
+      const named = track.title && !looksLikeFileName(track.title) ? track.title : "";
+      if (path) byPath.set(path, { title: named, artist: track.artist ?? "", album: track.album ?? "" });
+    });
+    index = { revision, byPath };
+    tracksByPath.set(engine, index);
+  }
+  return index.byPath.get(file) ?? null;
 }
 
 /** How many times a source that answers nothing is asked, and how far apart. */
@@ -1190,7 +1252,7 @@ export async function pullChannel(
       ]
     // No picture in it, so none is invented: MP3 is the thing every browser
     // plays and the thing a listener can join halfway through.
-    : ["-vn", "-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"];
+    : ["-vn", "-c:a", "libmp3lame", "-b:a", `${known.audioBitrate ?? 192}k`, "-f", "mp3"];
   // A transport stream is read further into before it is decoded, and given
   // the timestamps a recording cut mid-stream does not carry. Ahead of the
   // caller's own input arguments, which are headers for the address itself.
@@ -1201,7 +1263,7 @@ export async function pullChannel(
   const tagged = looksLikeFileName(name) && codecs.tags?.title ? codecs.tags.title : name;
   const channel = channels.pull(
     id, tagged, source, encode, kind, true, undefined, opening, kind === "video" ? audio : "",
-    { live, position: known.position ?? 0, ...(playlist ? { playlist, playlistAt: known.playlistAt ?? 0 } : {}) },
+    { live, position: known.position ?? 0, ...(playlist ? { playlist, playlistAt: known.playlistAt ?? 0 } : {}), ...(known.rotation ? { rotation: known.rotation } : {}) },
     // Known before the first dial: whether the source is a transport stream
     // decides whether it can be read here for a source-boundary relay.
     assumed ? undefined : codecs,
@@ -1644,6 +1706,8 @@ async function readBytes(request: IncomingMessage, limit: number): Promise<Uint8
 }
 
 export interface HandlerOptions {
+  /** This server's stations and what keeps them on the air. */
+  stations?: { store: StationStore; runner: StationRunner };
   web: string | null;
   /** Branded clients on this same backend, keyed by an explicitly configured host. */
   webSites?: ReadonlyMap<string, import("./web-sites.ts").WebSite>;
@@ -2575,6 +2639,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       path !== "/api/health" &&
       path !== "/api/directory" &&
       !isSignInPath(path) &&
+      // A station's link is its own key, checked by the station.
+      !isStationListenPath(path) &&
+      !STATION_PAGE.test(path) &&
       !eventChannelRequest
     ) {
       let scope = scopeOf(keyFrom(request, url), key, listenKey);
@@ -2610,6 +2677,56 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 403, { error: "this link can listen, not drive" });
         return;
       }
+    }
+
+    // Whether this request may administer: the control key, an open server,
+    // or the owner's nixamp.com session. Asked by the routes that do not go
+    // through the admin gate further down.
+    const controlOf = async (): Promise<{ allowed: boolean; account: string }> => {
+      if (key === null) return { allowed: true, account: "" };
+      if (scopeOf(keyFrom(request, url), key, listenKey) === "control") return { allowed: true, account: "" };
+      if (options.owner) {
+        const session = tokenFrom(request.headers) || url.searchParams.get("session") || "";
+        if (session !== "" && (await options.owner.check(false, session)).allowed) {
+          return { allowed: true, account: (await options.owner.accountFor(session)) || "" };
+        }
+      }
+      return { allowed: false, account: "" };
+    };
+
+    // The page a station's link opens. The same bytes for every station: it
+    // reads its id and token from its own address.
+    if (options.stations && STATION_PAGE.test(path) && (request.method === "GET" || request.method === "HEAD")) {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-cache",
+        "content-security-policy": STATION_PAGE_CSP,
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(request.method === "HEAD" ? undefined : STATION_PAGE_HTML);
+      return;
+    }
+
+    if (options.stations && (path === "/api/v1/stations" || path.startsWith("/api/v1/stations/"))) {
+      const control = await controlOf();
+      const encrypted = (request.socket as { encrypted?: boolean }).encrypted === true;
+      const forwarded = behindProxy ? String(request.headers["x-forwarded-proto"] ?? "").split(",")[0]?.trim() : "";
+      const scheme = forwarded === "https" || encrypted ? "https" : "http";
+      await handleStations(request, response, path, url, {
+        store: options.stations.store,
+        runner: options.stations.runner,
+        channels: options.channels!,
+        canControl: control.allowed,
+        account: control.account,
+        select: (body) => selectStationFiles(engine, body),
+        trackFor: (file) => trackFor(engine, file),
+        base: `${scheme}://${request.headers.host ?? "localhost"}`,
+        json,
+        readBody,
+        headers: CORS,
+      });
+      return;
     }
 
     if (path === "/api/health") {
@@ -4268,7 +4385,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           // offering something that always failed.
           carries: options.carries !== false && Boolean(options.channels),
         },
-        channels: (options.channels?.list() ?? []).map((one) => ({
+        channels: (options.channels?.list() ?? []).filter((one) => !stationOfChannel(one.id)).map((one) => ({
           id: one.id,
           name: one.name,
           via: one.via,
@@ -4899,7 +5016,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // on, and the address a channel is pulled from is the one thing about
       // it that is not theirs to have.
       json(response, 200, {
-        channels: options.channels.list().map(({ source: _source, ...shown }) => shown),
+        // Stations answer for themselves, under /api/v1/stations.
+        channels: options.channels.list().filter((one) => !stationOfChannel(one.id)).map(({ source: _source, ...shown }) => shown),
         listeners: options.channels.listeners,
       });
       return;
@@ -4912,6 +5030,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       const rest = path.slice("/api/channels/".length);
       const [rawId, action, file] = rest.split("/");
       const id = cleanId(rawId);
+      // A station's channel is heard through the station's own link, which
+      // knows whether it is private. Through here, only by its owner.
+      if (stationOfChannel(id) && !(await controlOf()).allowed) {
+        json(response, 404, { error: "nothing is playing on that channel" });
+        return;
+      }
       const event = await eventForChannel();
       if (event) {
         const account = await options.accounts?.whoIs(tokenFrom(request.headers)) ?? null;
@@ -6410,6 +6534,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // same ffmpeg that carries the channels. No ffmpeg, no outro, and a show
   // that ends closes its channel as before.
   const outro = new Outro({ ffmpeg: tools.ffmpeg, dir: join(stateDir(), "outro"), onEvent: (message) => console.log(message) });
+  // Made once the channels exist; told of every channel that ends, so a
+  // station that died is brought back and one that was stopped is not.
+  let stationRunner: StationRunner | null = null;
   const channels = new Channels({
     ffmpeg: tools.ffmpeg,
     ffprobe: tools.ffprobe,
@@ -6420,8 +6547,25 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     onEnd: (info) => {
       console.log(`  "${info.id}" stopped.`);
       art.forget(info.id);
+      stationRunner?.onChannelEnd(info);
     },
   });
+  const stationStore = new StationStore(StationStore.fileFor(stateDir(), options.port));
+  stationRunner = new StationRunner({
+    store: stationStore,
+    channels,
+    pull: async (channelId, name, files, known) =>
+      Boolean(await pullChannel(channels, tools.ffprobe, channelId, name, files[0]!, [], "", {
+        playlist: files,
+        live: true,
+        rotation: known.rotation,
+        audioBitrate: known.audioBitrate,
+      })),
+    // The library as it is now, or as it was chosen while it is still being read.
+    roots: () => [engine.snapshot(false).root || chosen].filter((one) => one !== ""),
+    log: (line) => console.log(line),
+  });
+  const stations = { store: stationStore, runner: stationRunner };
   // Channels as HLS, on demand, for Safari on a phone: one ffmpeg copying a
   // channel's fragments into short files while somebody is asking for them.
   // What things are, from nichedb.dev, remembered beside the keys so a
@@ -6470,6 +6614,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       if (!channel) console.log(`  "${one.id}" is already on.`);
     });
   }
+  stationRunner.restore();
   // Where each film has got to, written down every so often, so a restart
   // picks it up from about there rather than from the start. Only when it
   // has changed: a server carrying nothing but live television writes
@@ -7012,6 +7157,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     media: options.media,
     owner,
     channels,
+    stations,
     rememberChannels: remembering,
     catalogs,
     publishUrls: () => publishUrls,
@@ -7441,6 +7587,12 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
    * A declaration rather than an assignment, so it exists from the moment the
    * function is entered -- the port is open well before this line is reached.
    */
+  /** The station behind this channel, when its owner made it public and listed it. */
+  function listedStation(channelId: string): Station | undefined {
+    const station = stationStore.get(stationOfChannel(channelId));
+    return station && station.visibility === "public" && station.listed ? station : undefined;
+  }
+
   function makePublisher(): Publisher | null {
     if (!publishable_) return null;
     const listen = shareLink(publishable_.url, listenKey, false);
@@ -7464,10 +7616,20 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         // which channels are on. A directory row that says "5,717 files,
         // live: CNN" is one somebody can decide about; "5717 tracks" was not.
         playing: () => engine.snapshot(false).playing,
-        channels: () => channels.list().map((one) => one.name),
+        // Stations only when their owner listed them; every other channel as before.
+        channels: () => channels.list().filter((one) => !stationOfChannel(one.id) || listedStation(one.id)).map((one) => one.name),
         // The same with what a link preview needs: the id a join link names
         // a channel by, a picture, a line.
-        lineup: () => channels.list().map((one) => lineupEntry(listen, one)),
+        lineup: () => channels.list()
+          .filter((one) => !stationOfChannel(one.id) || listedStation(one.id))
+          .map((one) => {
+            const entry = lineupEntry(listen, one);
+            const station = listedStation(one.id);
+            // A station is listened to through its own link, never the server's.
+            return station
+              ? { ...entry, listen: `${publishable_!.url}/station/${station.id}?t=${encodeURIComponent(station.listenToken)}` }
+              : entry;
+          }),
         // From `nixamp login`. The directory will not list a stream it cannot
         // attribute to somebody, because a listing is now a phone code that
         // costs money to answer.

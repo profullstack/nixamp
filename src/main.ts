@@ -232,6 +232,7 @@ keeps serving its browser remote. One per user.
 
   nixamp attach   put the player back in front of it
   nixamp admin    who is connected, and re-stream to them
+  nixamp station  make a folder into a station others can join (see: nixamp station help)
 
 From inside the player, d hands the music to a daemon without stopping it.
 `,
@@ -551,6 +552,11 @@ export async function main(): Promise<void> {
   }
   if (first === "daemon") {
     process.exitCode = await runDaemon(rest);
+    return;
+  }
+  if (first === "station" || first === "stations") {
+    const { station } = await import("./station-cli.ts");
+    process.exitCode = await station(rest);
     return;
   }
   if (first === "admin") {
