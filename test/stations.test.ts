@@ -403,3 +403,28 @@ test("a station's link opens the built page, with the player, when the server ha
     rmSync(state, { recursive: true, force: true });
   }
 });
+
+test("the server going down is not a station restart", () => {
+  const dir = mkdtempSync(join(tmpdir(), "nixamp-stations-close-"));
+  try {
+    const store = new StationStore(StationStore.fileFor(dir, 4321));
+    const station = store.create({ name: "Steady FM" }, ["/media/a.mp3"], "");
+    store.setDesired(station.id, "running", Date.now());
+    const restarts: string[] = [];
+    const runner = new StationRunner({
+      store,
+      channels: new Channels({ ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"] }),
+      pull: async () => false,
+      roots: () => ["/media"],
+      onRestart: (id) => restarts.push(id),
+    });
+    const ended = { id: channelOf(station.id), error: "" } as unknown as Parameters<StationRunner["onChannelEnd"]>[0];
+    runner.onChannelEnd(ended);
+    assert.deepEqual(restarts, [station.id], "an end nobody asked for is a restart");
+    runner.close();
+    runner.onChannelEnd(ended);
+    assert.deepEqual(restarts, [station.id], "ends while the server shuts down are not");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

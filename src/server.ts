@@ -8199,6 +8199,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     enricher.save();
     compression.stopAll();
     hls.stopAll();
+    stationRunner?.close();
     channels.stopAll();
     ingest?.stopRtmp();
     ingest?.close();

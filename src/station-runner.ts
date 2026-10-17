@@ -49,8 +49,21 @@ export class StationRunner {
   private listening = new Map<string, Set<Ending>>();
   /** When a station that should be on went off, for "off the air for N minutes". */
   private down = new Map<string, number>();
+  /** The server is going down: its channels end because it is, not because a station failed. */
+  private closing = false;
 
   constructor(private readonly deps: RunnerDeps) {}
+
+  /**
+   * Called before the server stops every channel on its way out. Without it,
+   * each update or restart counted as a restart of every station, and after a
+   * busy day every station said "something keeps stopping it".
+   */
+  close(): void {
+    this.closing = true;
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
+  }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
@@ -181,7 +194,7 @@ export class StationRunner {
   onChannelEnd(info: ChannelInfo): void {
     const id = stationOfChannel(info.id);
     if (!id) return;
-    if (this.stopping.delete(info.id)) return;
+    if (this.stopping.delete(info.id) || this.closing) return;
     const station = this.deps.store.get(id);
     if (!station || station.desired !== "running") return;
     // A list that is not repeated played through: that is the end of it,
