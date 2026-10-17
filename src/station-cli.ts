@@ -271,7 +271,7 @@ async function aiCommand(argv: string[], call: Call, show: Show, json: boolean):
   const describe = (one: Record<string, unknown>): string => [
     `${String(one["name"])}  [${String(one["key"])}]${one["enabled"] ? "" : "  (off)"}`,
     `  style      ${String(one["style"])}`,
-    `  tracks     ${String(one["tracks"] ?? (one["tracks"] as unknown[] | undefined)?.length ?? 0)} of ${String(one["trackSeconds"])} s, ${String(one["perDay"])} a day${one["vocals"] ? ", with vocals" : ""}`,
+    `  tracks     ${Array.isArray(one["tracks"]) ? one["tracks"].length : Number(one["tracks"] ?? 0)} of ${String(one["trackSeconds"])} s, ${String(one["perDay"])} a day${one["vocals"] ? ", with vocals" : ""}`,
     `  station    ${one["stationId"] ? String(one["stationId"]) : "made with its first track"}${one["publish"] ? ", public on the guide" : ", unlisted"}`,
     ...(one["lastError"] ? [`  problem    ${String(one["lastError"])}`] : []),
   ].join("\n");
@@ -325,7 +325,7 @@ async function aiCommand(argv: string[], call: Call, show: Show, json: boolean):
         ...(has(argv, "--off") ? { enabled: false } : has(argv, "--on") ? { enabled: true } : {}),
         ...(has(argv, "--vocals") ? { vocals: true } : has(argv, "--instrumental") ? { vocals: false } : {}),
       };
-      return show(await call("PATCH", `/api/v1/stations/ai/stations/${key}`, body), (answer) => describe({ ...(answer["station"] as Record<string, unknown>), tracks: ((answer["station"] as Record<string, unknown>)["tracks"] as unknown[]).length }));
+      return show(await call("PATCH", `/api/v1/stations/ai/stations/${key}`, body), (answer) => describe(answer["station"] as Record<string, unknown>));
     }
     case "remove": {
       if (!key) { console.error("nixamp station ai remove needs the AI station's key"); return 2; }

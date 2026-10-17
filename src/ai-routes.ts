@@ -127,7 +127,8 @@ export async function handleAiRoutes(
           return true;
         }
         if (method === "POST") {
-          ctx.json(response, 200, { setting: shares.configure(await jsonBody(ctx, request)) });
+          shares.configure(await jsonBody(ctx, request));
+          ctx.json(response, 200, { setting: shares.setting() });
           return true;
         }
       }
