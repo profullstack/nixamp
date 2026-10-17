@@ -2861,6 +2861,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           return selectStationFiles(engine, body);
         },
         trackFor: (file) => trackFor(engine, file),
+        ...(options.library ? { isVideo: (file: string) => options.library!.index.itemAt(file)?.video === true } : {}),
         base: `${scheme}://${request.headers.host ?? "localhost"}`,
         publicBase: options.stations.publicBase?.() ?? "",
         json,

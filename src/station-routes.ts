@@ -40,6 +40,8 @@ export interface StationContext {
   select: (body: { items?: unknown; folder?: unknown }) => string[] | null;
   /** What the library knows about a file, for now playing. */
   trackFor: (file: string) => { title: string; artist: string; album: string } | null;
+  /** Whether the library knows this file as moving picture; absent in tests that do not care. */
+  isVideo?: (file: string) => boolean;
   /** This server's address as the asker reached it, for links. */
   base: string;
   /**
@@ -92,6 +94,9 @@ export function publicView(ctx: StationContext, station: Station): PublicStation
   const file = state === "live" || state === "recovering" ? nowPlayingFile(ctx, station) : "";
   // The tags the player read when it put this file on, else the library's.
   const track = file ? (ctx.channels.tagsOf(channelOf(station.id), file) ?? ctx.trackFor(file)) : null;
+  // What the channel is carrying wins over the flag: a station made by hand
+  // from films streams video whether or not anyone said so.
+  const video = station.video || ctx.channels.kindOf(channelOf(station.id)) === "video";
   return {
     id: station.id,
     name: station.name,
@@ -100,8 +105,8 @@ export function publicView(ctx: StationContext, station: Station): PublicStation
     state,
     // Tags, or nothing: a bare file name is the owner's, not the public's.
     nowPlaying: track && (track.title || track.artist) ? track : null,
-    kind: station.video ? "video" : "audio",
-    format: state === "stopped" || state === "offline" ? null : station.video
+    kind: video ? "video" : "audio",
+    format: state === "stopped" || state === "offline" ? null : video
       ? { codec: "h264+aac", bitrateKbps: station.bitrate, sampleRate: 48_000, channels: 2 }
       : { codec: "mp3", bitrateKbps: station.bitrate, sampleRate: 48_000, channels: 2 },
     listeners: ctx.runner.listeners(station.id),
@@ -342,6 +347,10 @@ export async function handleStations(
         }
         const items = ctx.select(input);
         if (items === null) throw new StationError("items_required", "choose files by track index (items) or a folder");
+        // Unsaid, a station is TV when most of its files are.
+        if (input["video"] === undefined && ctx.isVideo) {
+          input["video"] = items.filter((file) => ctx.isVideo!(file)).length * 2 > items.length;
+        }
         const station = ctx.store.create(input, items, ctx.account, Date.now(), key);
         ctx.json(response, 201, { station: ownerView(ctx, station), created: true });
         return true;
