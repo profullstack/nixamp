@@ -81,7 +81,7 @@ import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
 import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
-import { GUIDE_CSP, guideHosts, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
+import { GUIDE_CSP, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
 import { STATION_CONTROL_LIMIT, StationUsage, limitsFromEnv, type Limits } from "./station-metering.ts";
@@ -126,6 +126,7 @@ import {
   Transcripts, fileFingerprint, formatOf, idFrom, languageCode, linesFrom, mediaOfLive, mediaOfUrl, toSrt, toText, toVtt, transcriptIdOf, wire,
 } from "./transcripts.ts";
 import { handleMessage as mcpMessage } from "./mcp.ts";
+import { PUBLIC_TOOLS, callPublicTool, isPublicTool } from "./directory-mcp.ts";
 import { Media, factsFromRequest, holderFrom, mediaId, openFileListing, openFileOf, type MediaRecord } from "./media.ts";
 import { mediaPage, type PageTranscript } from "./media-page.ts";
 import { describeFile, refreshChanged } from "./media-local.ts";
@@ -2684,6 +2685,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !isStationListenPath(path) &&
       // Sharing a track and reporting one are for anybody the guide reaches.
       !isPublicSharePath(path) &&
+      // What is on, as MCP, for anybody.
+      path !== "/mcp/public" &&
       !STATION_PAGE.test(path) &&
       !isPublicAsset &&
       !isGuidePage &&
@@ -2759,7 +2762,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       });
       const own = new Set(entries.map((one) => one.page));
       const others = options.stations!.peers ? (await options.stations!.peers.entries()).filter((one) => !own.has(one.page)) : [];
-      const page = renderGuide([...entries, ...others] as GuideEntry[]);
+      const page = renderGuide([...entries, ...others] as GuideEntry[], options.stations!.publicBase?.() ?? "");
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-cache",
@@ -3874,6 +3877,67 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
      * GET: nothing here has to be pushed, so a client is told so and gets
      * on with POST.
      */
+    /*
+     * nixamp.com/mcp/public: what is on, anywhere, for any agent with no
+     * account. /mcp stays a 401 without a token, because that 401 is how an
+     * MCP client finds out it should sign in (OAuth discovery).
+     */
+    if (path === "/mcp/public" && options.stations) {
+      if (request.method === "OPTIONS") { response.writeHead(204, CORS); response.end(); return; }
+      if (request.method !== "POST") {
+        json(response, 405, { error: "POST a JSON-RPC message" });
+        return;
+      }
+      const stationGuide = async (): Promise<unknown[]> => {
+        if (!options.stations) return [];
+        const own = guideEntries({
+          store: options.stations.store, runner: options.stations.runner, channels: options.channels!, canControl: false, account: "",
+          select: () => null, trackFor: (file) => trackFor(engine, file), base: options.site ?? "", publicBase: options.stations.publicBase?.() ?? "",
+          json, readBody, headers: CORS,
+        });
+        const shown = new Set(own.map((one) => one.page));
+        const others = options.stations.peers ? (await options.stations.peers.entries()).filter((one) => !shown.has(one.page)) : [];
+        return [...own, ...others];
+      };
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await readBody(request, 256 * 1024));
+      } catch {
+        json(response, 400, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
+        return;
+      }
+      const messages = (Array.isArray(parsed) ? parsed : [parsed]) as Array<{ id?: unknown; method?: unknown; params?: Record<string, unknown> }>;
+      const answers: unknown[] = [];
+      for (const message of messages) {
+        const id = message?.id ?? null;
+        const method = typeof message?.method === "string" ? message.method : "";
+        if (method.startsWith("notifications/")) continue;
+        if (method === "initialize") {
+          answers.push({ jsonrpc: "2.0", id, result: {
+            protocolVersion: (message.params?.["protocolVersion"] as string | undefined) ?? "2025-06-18",
+            capabilities: { tools: { listChanged: false } },
+            serverInfo: { name: "nixamp", title: "nixamp: every public radio and TV station", version: "2" },
+            instructions: "Find what is on across every nixamp server (stations_list, station_find) and share a track to a station's server (station_share). Sign in (a nixamp token as the bearer, or OAuth) for watch parties, rooms, transcripts and managing your own stations.",
+          } });
+        } else if (method === "ping") {
+          answers.push({ jsonrpc: "2.0", id, result: {} });
+        } else if (method === "tools/list") {
+          answers.push({ jsonrpc: "2.0", id, result: { tools: PUBLIC_TOOLS } });
+        } else if (method === "tools/call" && isPublicTool(String(message.params?.["name"] ?? ""))) {
+          answers.push({ jsonrpc: "2.0", id, result: await callPublicTool(String(message.params!["name"]), (message.params?.["arguments"] ?? {}) as Record<string, unknown>, { guide: stationGuide }) });
+        } else {
+          answers.push({ jsonrpc: "2.0", id, error: { code: -32001, message: "only the station tools are public; for the rest use /mcp with a nixamp token as the bearer (`nixamp token create`), or OAuth" } });
+        }
+      }
+      if (answers.length === 0) {
+        response.writeHead(202, CORS);
+        response.end();
+        return;
+      }
+      json(response, 200, Array.isArray(parsed) ? answers : answers[0]);
+      return;
+    }
+
     if (path === "/mcp" && options.accounts && options.site) {
       if (request.method === "GET") {
         response.writeHead(405, { ...CORS, allow: "POST, DELETE" });
@@ -3891,6 +3955,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
       const token = tokenFrom(request.headers);
       const who = await options.accounts.whoIs(token);
+      const stationGuide = async (): Promise<unknown[]> => {
+        if (!options.stations) return [];
+        const own = guideEntries({
+          store: options.stations.store, runner: options.stations.runner, channels: options.channels!, canControl: false, account: "",
+          select: () => null, trackFor: (file) => trackFor(engine, file), base: options.site ?? "", publicBase: options.stations.publicBase?.() ?? "",
+          json, readBody, headers: CORS,
+        });
+        const shown = new Set(own.map((one) => one.page));
+        const others = options.stations.peers ? (await options.stations.peers.entries()).filter((one) => !shown.has(one.page)) : [];
+        return [...own, ...others];
+      };
       if (who === null) {
         const error = JSON.stringify({ error: "sign in: a nixamp token as the bearer (`nixamp token create`), or OAuth" });
         response.writeHead(401, {
@@ -3917,7 +3992,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           answers.push({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "invalid request" } });
           continue;
         }
-        const answer = await mcpMessage(message as Parameters<typeof mcpMessage>[0], { session, fetcher: fetch });
+        const answer = await mcpMessage(message as Parameters<typeof mcpMessage>[0], { session, fetcher: fetch, guide: stationGuide });
         if (answer) answers.push(answer);
       }
       if (answers.length === 0) {
@@ -6851,7 +6926,13 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     trustedProxies: () => new Set([...(process.env["NIXAMP_TRUSTED_PROXIES"] ?? "").split(","), ...(readConfig().trustedProxies ?? [])].map((one) => one.trim()).filter(Boolean)),
     // Known once the server has worked out its addresses, after it is listening.
     publicBase: () => (publishable_?.url ?? "").replace(/\/+$/, ""),
-    peers: new PeerGuides(),
+    // Other servers' guides: the configured peers, and on a directory
+    // (nixamp.com) every server listed in it, so its guide is every public
+    // station anywhere.
+    peers: new PeerGuides(() => {
+      const listed = directory ? directory.list().map((one) => peerBase(one.url)).filter(Boolean).slice(0, 100) : [];
+      return [...new Set([...guidePeers(), ...listed])];
+    }),
   };
   // Music handed over from BitTorrented, copied into a folder of our own.
   const importer = new Importer(join(stateDir(), `handoffs-${options.port}.json`), {

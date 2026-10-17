@@ -61,6 +61,24 @@ carries the Share a track form.
 `GET /api/v1/stations/guide` is the same list as JSON. No key is needed; nothing private or
 unlisted ever appears.
 
+## Every station, on nixamp.com
+
+nixamp.com's guide asks every server in its directory for its own guide, so
+**https://nixamp.com/guide** and `GET https://nixamp.com/api/v1/stations/guide` list every public,
+listed station on every server, each linked at its own server. A server is in the directory when
+its daemon announces (`--announce`) signed in to nixamp.com; `Listed at https://nixamp.com/directory`
+in its log says so, and "it needs an account" means its session ran out (`nixamp login` there).
+
+**MCP for anybody:** `POST https://nixamp.com/mcp/public` (any server answers it too) offers
+`stations_list` (kind, group), `station_find` (words: "data structures", "lofi") and `station_share`
+(an MP3 link to a station's server, with the sharer's basis and agreement). No sign-in. `/mcp` itself
+still answers 401 without a token, because that is how a client discovers OAuth; signed in, it has
+these three as well as everything else.
+
+The guide page carries its server's public address (`<body data-api>`), and the share form and
+Report button post there and to each station's own server, so they work through a gateway such as
+pit.moshcode.sh/n/live.streaming, whose sandbox also rules out `confirm()` (Report is click-twice).
+
 ## Limits and metering
 
 Every byte a station's link delivers and every second somebody listens is counted per station
