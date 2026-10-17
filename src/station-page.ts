@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 const STYLE = `
 :root{--bg:#f6f5f2;--fg:#17171a;--muted:#5d5d66;--card:#fff;--line:#dedcd6;--accent:#1f6feb;--live:#0b7a3b;--warn:#9a6700;--off:#8c2f39}
 @media (prefers-color-scheme:dark){:root{--bg:#121214;--fg:#ececf1;--muted:#a4a4b0;--card:#1c1c20;--line:#2c2c33;--accent:#6aa7ff;--live:#3fbf7f;--warn:#e3b341;--off:#f0838f}}
-*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+*{box-sizing:border-box}[hidden]{display:none!important}html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:560px;margin:0 auto;padding:48px 16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px}
 h1{font-size:1.6rem;line-height:1.2;margin:0 0 4px}
@@ -30,6 +30,13 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid var(-
 label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:.9rem}
 input[type=range]{width:120px;accent-color:var(--accent)}
 .small{margin-top:20px;font-size:.85rem;color:var(--muted)}.small a{color:inherit}
+.lyrics{margin:20px 0 0;border-top:1px solid var(--line);padding-top:12px}
+.lyrics summary{cursor:pointer;font-weight:600;min-height:24px}
+.lyrics .for{font-weight:400;color:var(--muted);font-size:.9rem}
+.words{margin-top:10px;line-height:1.6}
+.words p{margin:0 0 1em;white-space:pre-wrap;overflow-wrap:anywhere}
+.words p.sec{margin:1.2em 0 .3em;font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.words p.sec:first-child{margin-top:0}
 .screen{display:block;width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;margin:12px 0}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @media (prefers-reduced-motion:no-preference){.live::before{animation:pulse 2s ease-in-out infinite}}
@@ -90,13 +97,37 @@ const SCRIPT = `
     if (!wanted || audio.paused || audio.buffered.length === 0) return 0;
     return Math.max(0, Math.min(30, audio.buffered.end(audio.buffered.length - 1) - audio.currentTime));
   };
+  // The words of what is on, line by line; "[Verse 1]" as a small header. Text only, never HTML.
+  let words = null;
+  const lyrics = async () => {
+    try {
+      const r = await fetch(api + "/lyrics" + q, { cache: "no-store" });
+      const got = r.ok ? (await r.json()).lyrics : null;
+      const key = got ? got.title + "\\n" + got.text : "";
+      if (key === words) return;
+      words = key;
+      $("#lyrics").hidden = !got;
+      if (!got) return;
+      const out = [];
+      let stanza = [];
+      const flush = () => { if (stanza.length) { const p = document.createElement("p"); p.textContent = stanza.join("\\n"); out.push(p); stanza = []; } };
+      for (const line of got.text.split("\\n")) {
+        if (/^\\s*\\[[^\\]]{1,160}\\]\\s*$/.test(line)) { flush(); const h = document.createElement("p"); h.className = "sec"; h.textContent = line.trim().slice(1, -1); out.push(h); }
+        else if (line.trim() === "") flush();
+        else stanza.push(line);
+      }
+      flush();
+      $("#words").replaceChildren(...out);
+      $("#lyrics-for").textContent = got.title ? " · " + got.title : "";
+    } catch {}
+  };
   const listen = () => {
     if (!window.EventSource) return;
     const events = new EventSource(api + "/events" + q);
-    events.addEventListener("hello", (e) => { live = true; title(JSON.parse(e.data)); });
+    events.addEventListener("hello", (e) => { live = true; title(JSON.parse(e.data)); lyrics(); });
     events.addEventListener("now", (e) => {
       const s = JSON.parse(e.data);
-      setTimeout(() => { title(s); say(s.nowPlaying ? "Now playing " + (s.nowPlaying.title || "") : ""); }, ahead() * 1000);
+      setTimeout(() => { title(s); lyrics(); say(s.nowPlaying ? "Now playing " + (s.nowPlaying.title || "") : ""); }, ahead() * 1000);
     });
     events.addEventListener("state", () => poll());
     events.onerror = () => { live = false; };
@@ -122,7 +153,9 @@ const SCRIPT = `
   wire();
   $("#play").addEventListener("click", () => { if (wanted) { stop(); say("Stopped"); } else { wanted = true; retry = 0; button(); join(); say("Playing"); } });
   $("#volume").addEventListener("input", (e) => { audio.volume = Number(e.target.value); });
+  if (window.matchMedia && matchMedia("(max-width: 640px)").matches) $("#lyrics-box").open = false;
   poll();
+  lyrics();
   listen();
   setInterval(poll, 5000);
 })();
@@ -152,6 +185,9 @@ const PAGE = `<!doctype html>
       <button id="play" type="button" aria-pressed="false" disabled>Play</button>
       <label>Volume <input id="volume" type="range" min="0" max="1" step="0.05" value="1"></label>
     </div>
+    <section id="lyrics" class="lyrics" aria-label="Lyrics" hidden>
+      <details id="lyrics-box" open><summary>Lyrics<span id="lyrics-for" class="for"></span></summary><div id="words" class="words"></div></details>
+    </section>
     <p class="small"><a id="m3u" href="#">Open in another player (.m3u)</a> · Pausing here does not pause the station.</p>
   </div>
   <p class="small">Played by <a href="https://nixamp.com">nixamp</a>.</p>

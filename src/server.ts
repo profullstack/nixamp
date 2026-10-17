@@ -82,6 +82,9 @@ import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
 import { HolderStore, TagReader, factsFor } from "./track-facts.ts";
 import { SUPPORT_CSP, SUPPORT_PAGE, Support, SupportError, SupportSubscriptions, supportHoldersFrom } from "./support.ts";
+import { LyricsFinder } from "./lyrics.ts";
+import { LyricsPublisher } from "./lyrics-publish.ts";
+import { aiKey } from "./ai-keys.ts";
 import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
 import { GUIDE_CSP, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
@@ -1742,6 +1745,10 @@ export interface HandlerOptions {
     facts?: (station: Station, file: string) => Promise<import("./track-facts.ts").TrackFacts>;
     /** The cover picture inside a file, for the now-playing card. */
     cover?: (file: string) => Promise<{ bytes: Buffer; type: string } | null>;
+    /** The words of a file on the air, from its tags or nichedb. */
+    lyrics?: (station: Station, file: string) => Promise<import("./lyrics.ts").Lyrics | null>;
+    /** Our own songs' words, published back to nichedb. */
+    lyricsPublisher?: import("./lyrics-publish.ts").LyricsPublisher;
     /** Copyright holders, matched to tracks by artist or station. */
     holders?: import("./track-facts.ts").HolderStore;
     /** Proxies (by address) whose X-Forwarded-For is believed, for per-sharer limits. */
@@ -2998,6 +3005,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         ...(options.stations.auto ? { auto: options.stations.auto } : {}),
         ...(options.stations.facts ? { facts: options.stations.facts } : {}),
         ...(options.stations.cover ? { cover: options.stations.cover } : {}),
+        ...(options.stations.lyrics ? { lyrics: options.stations.lyrics } : {}),
+        ...(options.stations.lyricsPublisher ? { lyricsPublisher: options.stations.lyricsPublisher } : {}),
         ...(options.stations.peers ? { peers: () => options.stations!.peers!.entries() } : {}),
         throttle: () => {
           const verdict = guard.check(`stations:${control.account || callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, STATION_CONTROL_LIMIT);
@@ -7106,6 +7115,27 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     covers.set(file, { key, picture });
     return picture;
   };
+  // The words of what is on: the file's own tag, else nichedb.dev's.
+  const lyricsFinder = new LyricsFinder({ tags: (file) => tagReader.read(file), known: (file) => trackFor(engine, file) });
+  stations.lyrics = (_station, file) => lyricsFinder.find(file);
+  // Our own songs' words, back to nichedb, when a key is set: on any station
+  // change, after a library scan, and once at start.
+  const lyricsPublisher = new LyricsPublisher({
+    file: LyricsPublisher.fileFor(stateDir(), options.port),
+    key: () => aiKey("NIXAMP_LYRICS_KEY"),
+    stations: () => stationStore.list(),
+    tags: (file) => tagReader.read(file),
+    known: (file) => trackFor(engine, file),
+    log: (line) => console.log(line),
+  });
+  stations.lyricsPublisher = lyricsPublisher;
+  stationStore.onSaved = () => lyricsPublisher.soon();
+  const scannedBefore = libraryIndex.onScanned;
+  libraryIndex.onScanned = (report) => {
+    scannedBefore?.(report);
+    lyricsPublisher.soon();
+  };
+  lyricsPublisher.soon();
   stations.facts = async (station, file) => {
     const share = listenerShares.atFile(file);
     const composed = aiRadio.trackAt(file);
@@ -7113,8 +7143,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     let stamp = "";
     try { stamp = String(Math.round(statSync(file).mtimeMs)); } catch { stamp = ""; }
     const art = picture ? `/api/v1/stations/${station.id}/art?t=${encodeURIComponent(station.listenToken)}&f=${sha("sha1").update(file + stamp).digest("hex").slice(0, 12)}` : "";
+    const words = await lyricsFinder.find(file).catch(() => null);
     return factsFor({
       art,
+      ...(words ? { lyrics: `/api/v1/stations/${station.id}/lyrics?t=${encodeURIComponent(station.listenToken)}&f=${sha("sha1").update(file + stamp).digest("hex").slice(0, 12)}` } : {}),
       station, file,
       tags: await tagReader.read(file),
       known: trackFor(engine, file),

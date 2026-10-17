@@ -17,12 +17,14 @@ import type { Channels } from "./channels.ts";
 import type { StationRunner } from "./station-runner.ts";
 import { alertsFor, type Limits, type StationUsage } from "./station-metering.ts";
 import { aiFromTags, type TrackFacts } from "./track-facts.ts";
+import type { Lyrics } from "./lyrics.ts";
+import type { PublishReport } from "./lyrics-publish.ts";
 import {
   StationError, channelOf, tokensMatch, type OwnerStation, type PublicStation, type Station, type StationStore,
 } from "./stations.ts";
 
 /** The three things a station's link opens. */
-const LISTEN = /^\/api\/v1\/stations\/([a-z0-9]{10})\/(stream|state|listen\.m3u|events|now|art)$/;
+const LISTEN = /^\/api\/v1\/stations\/([a-z0-9]{10})\/(stream|state|listen\.m3u|events|now|art|lyrics)$/;
 
 /** Whether this path is one a station's own link may open, without the server's key. */
 export function isStationListenPath(path: string): boolean {
@@ -64,6 +66,10 @@ export interface StationContext {
   facts?: (station: Station, file: string) => Promise<TrackFacts>;
   /** The cover picture inside a file (JPEG/PNG bytes), or null. */
   cover?: (file: string) => Promise<{ bytes: Buffer; type: string } | null>;
+  /** The words of a file, from its tags or nichedb; null when none are known. */
+  lyrics?: (station: Station, file: string) => Promise<Lyrics | null>;
+  /** Our own songs' words, published back to nichedb (lyrics-publish.ts). */
+  lyricsPublisher?: { status: () => unknown; publish: (station: Station) => Promise<PublishReport> };
   /** Auto stations: run a sync with these settings (and keep them), or read them. */
   auto?: { sync: (input: Record<string, unknown>) => Promise<unknown>; setting: () => unknown };
   /** The public stations other servers list (guide peers); absent when there are none. */
@@ -272,6 +278,16 @@ export async function handleStations(
       response.end(method === "HEAD" ? undefined : picture.bytes);
       return true;
     }
+    if (what === "lyrics") {
+      const file = ctx.runner.observed(station.id) === "live" || ctx.runner.observed(station.id) === "recovering" ? nowPlayingFile(ctx, station) : "";
+      const lyrics = file && ctx.lyrics ? await ctx.lyrics(station, file).catch(() => null) : null;
+      if (!lyrics) {
+        ctx.json(response, 404, { error: "no lyrics for what is playing", code: "not_found" });
+        return true;
+      }
+      ctx.json(response, 200, { lyrics: { title: lyrics.title, artist: lyrics.artist, text: lyrics.text, source: lyrics.source, language: lyrics.language } });
+      return true;
+    }
     if (what === "now") {
       const file = ctx.runner.observed(station.id) === "live" || ctx.runner.observed(station.id) === "recovering" ? nowPlayingFile(ctx, station) : "";
       ctx.json(response, 200, { station: station.id, facts: file && ctx.facts ? await ctx.facts(station, file).catch(() => null) : null });
@@ -416,6 +432,35 @@ export async function handleStations(
         return true;
       }
       ctx.json(response, 405, { error: "GET or POST", code: "method_not_allowed" });
+      return true;
+    }
+
+    if (path === "/api/v1/stations/lyrics") {
+      if (!ctx.lyricsPublisher) {
+        ctx.json(response, 404, { error: "lyrics publishing is not available here", code: "not_found" });
+        return true;
+      }
+      if (method !== "GET") {
+        ctx.json(response, 405, { error: "GET", code: "method_not_allowed" });
+        return true;
+      }
+      ctx.json(response, 200, ctx.lyricsPublisher.status());
+      return true;
+    }
+    const publishLyrics = /^\/api\/v1\/stations\/lyrics\/([a-z0-9]{10})\/publish$/.exec(path);
+    if (publishLyrics) {
+      const target = ctx.store.get(publishLyrics[1]!);
+      if (!ctx.lyricsPublisher || !target) {
+        ctx.json(response, 404, { error: "no such station", code: "not_found" });
+        return true;
+      }
+      if (method !== "POST") {
+        ctx.json(response, 405, { error: "POST", code: "method_not_allowed" });
+        return true;
+      }
+      const report = await ctx.lyricsPublisher.publish(target);
+      const refused = report.stopped.startsWith("not published") ? "not_eligible" : report.stopped.startsWith("no key") ? "no_key" : "";
+      ctx.json(response, refused ? 409 : 200, refused ? { error: report.stopped, code: refused, report } : { report });
       return true;
     }
 

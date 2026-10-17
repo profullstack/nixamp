@@ -16,7 +16,9 @@ interface TrackFacts {
   rights: { holder: string; basis: string; note: string; license: string; source: string };
   support: { holder: string; url: string; label: string } | null;
   art?: string;
+  lyrics?: string;
 }
+interface Lyrics { title: string; artist: string; text: string; source: string; language: string }
 const BASIS: Record<string, string> = {
   owned: "owned by the station", permission: "broadcast with permission", licensed: "licensed for broadcast",
   "creative-commons": "Creative Commons", "public-domain": "public domain",
@@ -62,7 +64,7 @@ const title = (s: StationState): void => {
 /** Who made it, AI or not, whose copyright, and how to support them. Text only, never HTML. */
 const showFacts = (f: TrackFacts | null | undefined): void => {
   const box = $("#facts");
-  if (!f) { box.hidden = true; return; }
+  if (!f) { box.hidden = true; void loadLyrics(""); return; }
   const rows: Array<[string, string]> = [];
   if (f.artist) rows.push(["Artist", f.artist]);
   if (f.album) rows.push(["Album", f.album]);
@@ -108,7 +110,60 @@ const showFacts = (f: TrackFacts | null | undefined): void => {
     support.textContent = `${f.support!.label || "Support"} ${f.support!.holder}`;
   }
   box.hidden = false;
+  void loadLyrics(typeof f.lyrics === "string" && f.lyrics.startsWith("/api/v1/stations/") ? f.lyrics : "");
 };
+
+/** The words, line by line as written; "[Verse 1]" and the like as small headers. Text only, never HTML. */
+const drawLyrics = (words: Lyrics): void => {
+  const lines = words.text.split("\n");
+  const out: HTMLElement[] = [];
+  let stanza: string[] = [];
+  const flush = (): void => {
+    if (stanza.length === 0) return;
+    const p = document.createElement("p");
+    p.textContent = stanza.join("\n");
+    out.push(p);
+    stanza = [];
+  };
+  for (const line of lines) {
+    if (/^\s*\[[^\]]{1,160}\]\s*$/.test(line)) {
+      flush();
+      const head = document.createElement("p");
+      head.className = "station-lyrics-section";
+      head.textContent = line.trim().slice(1, -1);
+      out.push(head);
+    } else if (line.trim() === "") {
+      flush();
+    } else {
+      stanza.push(line);
+    }
+  }
+  flush();
+  const box = $("#lyrics-text");
+  box.replaceChildren(...out);
+  box.lang = /^[a-z]{2,3}$/.test(words.language) ? words.language : "";
+  $("#lyrics-for").textContent = words.title ? `· ${words.title}` : "";
+  $("#lyrics-source").textContent = words.source === "embedded" ? "From the track itself." : "From nichedb.dev.";
+  $("#lyrics").hidden = false;
+};
+
+let lyricsAt = "";
+const loadLyrics = async (url: string): Promise<void> => {
+  if (url === lyricsAt) return;
+  lyricsAt = url;
+  if (!url) { $("#lyrics").hidden = true; return; }
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    if (lyricsAt !== url) return;
+    if (!r.ok) { $("#lyrics").hidden = true; return; }
+    drawLyrics(((await r.json()) as { lyrics: Lyrics }).lyrics);
+  } catch {
+    if (lyricsAt === url) lyricsAt = "";
+  }
+};
+
+// Open beside the player on a wide screen; folded on a phone, where it would push everything else away.
+if (window.matchMedia?.("(max-width: 640px)").matches) $<HTMLDetailsElement>("#lyrics-box").open = false;
 
 const loadFacts = async (): Promise<void> => {
   try {
