@@ -91,10 +91,11 @@ test("an edit lands on the next entry, and excluded entries are never tried", { 
     });
     let edited = false;
     await drain(list, 3, () => {
-      if (!edited && list.history.length === 1) { files = [f.bad, f.c]; edited = true; }
+      // While a plays, b is taken out and bad and c put after a.
+      if (!edited && list.history.length === 1) { files = [f.a, f.bad, f.c]; edited = true; }
     });
-    // a was on when the list changed; it finished, then the new list (minus bad) played.
-    assert.equal(list.history[0]?.at, 0);
+    // The very next track is the new list's, after a; bad is never tried.
+    assert.deepEqual(list.history.slice(0, 3).map((one) => one.file), [f.a, f.c, f.a]);
     assert.deepEqual(tried, []);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });

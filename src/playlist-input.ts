@@ -50,13 +50,13 @@ export const MAX_FAILURES_IN_A_ROW = 5;
  * whose input codecs differ. Only one entry is encoded at a time, with pipe
  * backpressure bounding read-ahead independently of the directory's size. */
 export class PlaylistInputStream {
-  private entries: { at: number; start: number; position: number }[] = [];
+  private entries: { at: number; file: string; start: number; position: number }[] = [];
   error: Error | null = null;
   complete = false;
   constructor(private readonly options: PlaylistInput) {}
 
   /** Every entry that has started, in the order it started, with where it sits in the stream. */
-  get history(): ReadonlyArray<{ at: number; start: number; position: number }> {
+  get history(): ReadonlyArray<{ at: number; file: string; start: number; position: number }> {
     return this.entries;
   }
 
@@ -88,16 +88,46 @@ export class PlaylistInputStream {
     let failuresInARow = 0;
     let first = true;
     try {
+      const orderFor = (list: string[]): number[] =>
+        o.order ? o.order(list.length).filter((one) => one >= 0 && one < list.length) : list.map((_, index) => index);
+      let files = o.current?.() ?? o.files;
+      if (files.length === 0) throw new Error("The playlist is empty");
+      let order = orderFor(files);
+      let step = Math.min(o.at, order.length);
+      let played = 0;
+      let last = "";
       for (;;) {
-        const files = o.current?.() ?? o.files;
-        if (files.length === 0) throw new Error("The playlist is empty");
-        const order = o.order ? o.order(files.length).filter((one) => one >= 0 && one < files.length) : files.map((_, index) => index);
-        let played = 0;
-        for (let step = first ? Math.min(o.at, order.length) : 0; step < order.length && !signal.aborted; step++) {
+        if (signal.aborted) break;
+        // Asked at every boundary, so an edit lands on the next track. The
+        // list goes on after the file that just played, where the new list
+        // has it; a shuffled list draws a new order.
+        if (o.current) {
+          const fresh = o.current();
+          if (fresh.length !== files.length || fresh.some((one, index) => one !== files[index])) {
+            if (fresh.length === 0) throw new Error("The playlist is empty");
+            files = fresh;
+            order = orderFor(files);
+            const where = last ? files.indexOf(last) : -1;
+            step = o.order ? 0 : where >= 0 ? where + 1 : Math.min(step, files.length);
+          }
+        }
+        if (step >= order.length) {
+          if (!o.repeat) break;
+          // A pass where everything was passed over is a list with nothing
+          // to play, and repeating it would be the loop this exists to avoid.
+          if (played === 0) throw new Error("Nothing in this playlist would play");
+          played = 0;
+          order = orderFor(files);
+          step = 0;
+          continue;
+        }
+        {
           const at = order[step]!;
+          step += 1;
           const file = files[at]!;
+          last = file;
           if (o.excluded?.(file)) continue;
-          const position = first && step === o.at ? o.position : 0;
+          const position = first && step - 1 === o.at ? o.position : 0;
           first = false;
           let reached = 0;
           try {
@@ -106,7 +136,7 @@ export class PlaylistInputStream {
             if (!codecs.audio && !codecs.video) throw new Error(`Cannot decode playlist entry ${at + 1}`);
             const duration = (codecs.duration ?? 0) - position;
             if (duration <= 0) throw new Error(`No playable duration for playlist entry ${at + 1}`);
-            this.entries.push({ at, start: offset, position });
+            this.entries.push({ at, file, start: offset, position });
             const hasVideo = Boolean(codecs.video);
             const extra = o.video && !hasVideo
               ? ["-f", "lavfi", "-i", `color=c=black:s=${width}x${height}:r=30`]
@@ -181,10 +211,6 @@ export class PlaylistInputStream {
             }
           }
         }
-        if (signal.aborted || !o.repeat) break;
-        // A pass where everything was passed over is a list with nothing to
-        // play, and repeating it would be the loop this exists to avoid.
-        if (played === 0) throw new Error("Nothing in this playlist would play");
       }
       this.complete = !signal.aborted;
     } catch (error) {
