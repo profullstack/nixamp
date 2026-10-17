@@ -6730,6 +6730,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     };
   };
   let autoRunning: Promise<unknown> | null = null;
+  let autoLast: { at: number; report: unknown } | null = null;
   const runAuto = (settings: AutoOptions): Promise<unknown> => {
     if (autoRunning) return autoRunning;
     autoRunning = syncAutoStations({
@@ -6738,8 +6739,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       runner: stationRunner!,
       owner: options.owner || "",
       mayStart: () => stationLimits.runningStations === 0 || stationStore.list().filter((one) => one.desired === "running").length < stationLimits.runningStations,
+      // Only what is already known: a sync over a whole library must not ask
+      // nichedb a question per file (it queued minutes of queries there).
       filmGenres: async (title) => {
-        const hit = await enricher.lookup(title, "title");
+        const hit = enricher.known(title);
         const genres = hit?.data?.["genres"];
         return Array.isArray(genres) ? genres.filter((one): one is string => typeof one === "string") : [];
       },
@@ -6747,6 +6750,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     }, settings).then((report) => {
       const made = report as { radio: unknown[]; tv: unknown[] };
       console.log(`  auto stations: ${made.radio.length} radio, ${made.tv.length} TV.`);
+      autoLast = { at: Date.now(), report };
       return report;
     }).finally(() => { autoRunning = null; });
     return autoRunning;
@@ -6756,7 +6760,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     if (settings) void runAuto(settings);
   };
   const stationAuto = {
-    setting: () => autoSetting(),
+    setting: () => ({ ...(autoSetting() ?? { off: true }), running: autoRunning !== null, last: autoLast }),
     sync: async (input: Record<string, unknown>) => {
       if (input["off"] === true) {
         writeConfig({ autoStations: undefined });
@@ -6767,7 +6771,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         if (input[name] !== undefined) (settings as unknown as Record<string, unknown>)[name] = input[name];
       }
       writeConfig({ autoStations: settings as unknown as Record<string, unknown> });
-      return runAuto(settings);
+      // In the background: a big library takes a while, and an HTTP request
+      // that waits for it times out before it is done.
+      void runAuto(settings);
+      return { started: true, settings };
     },
   };
   const stations = { store: stationStore, runner: stationRunner, usage: stationUsage, limits: stationLimits, auto: stationAuto };

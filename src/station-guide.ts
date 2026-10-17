@@ -7,6 +7,7 @@
  * /api/v1/stations/guide for the list and writes it in as text.
  */
 import { createHash } from "node:crypto";
+import { readConfig } from "./library.ts";
 
 const STYLE = `
 :root{--bg:#f6f5f2;--fg:#17171a;--muted:#5d5d66;--card:#fff;--line:#dedcd6;--accent:#1f6feb;--live:#0b7a3b}
@@ -86,7 +87,12 @@ export const GUIDE_CSP = [
   "img-src 'self' data:", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
 ].join("; ");
 
-/** The hosts whose front page is the guide (NIXAMP_GUIDE_HOSTS, comma-separated). */
+/**
+ * The hosts whose front page is the guide: `guideHosts` in config.json
+ * (`nixamp station guide-host NAME`, which survives restarts and updates),
+ * plus NIXAMP_GUIDE_HOSTS, comma-separated.
+ */
 export function guideHosts(env: Record<string, string | undefined> = process.env): Set<string> {
-  return new Set((env["NIXAMP_GUIDE_HOSTS"] ?? "").split(",").map((one) => one.trim().toLowerCase()).filter(Boolean));
+  const saved = (() => { try { return readConfig().guideHosts ?? []; } catch { return []; } })();
+  return new Set([...(env["NIXAMP_GUIDE_HOSTS"] ?? "").split(","), ...saved].map((one) => one.trim().toLowerCase()).filter(Boolean));
 }

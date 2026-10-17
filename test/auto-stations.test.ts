@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { genreBuckets, syncAutoStations, DEFAULT_AUTO } from "../src/auto-stations.ts";
+import { adultTitle, genreBuckets, syncAutoStations, DEFAULT_AUTO } from "../src/auto-stations.ts";
 import { LibraryIndex, type Probed } from "../src/library-index.ts";
 import { PlaylistInputStream } from "../src/playlist-input.ts";
 import { StationBreaks } from "../src/station-breaks.ts";
@@ -28,6 +28,13 @@ test("server1's genre tags fold into genres a listener knows", () => {
   assert.deepEqual(genreBuckets(""), []);
 });
 
+test("adult titles are recognised by name or by nichedb's genres", () => {
+  assert.equal(adultTitle("Peta Jensen - Hot And Steamy! The Best Of Shower Sex Compilation_1080p.mp4"), true);
+  assert.equal(adultTitle("Some Film (2019)", ["Adult"]), true);
+  assert.equal(adultTitle("The Matrix (1999)", ["Action", "Sci-Fi"]), false);
+  assert.equal(adultTitle("Middlesex Story"), false);
+});
+
 test("a station per genre, unlisted, kept in step with the library; TV from film genres, capped", async () => {
   const top = mkdtempSync(join(tmpdir(), "nixamp-auto-"));
   try {
@@ -41,6 +48,7 @@ test("a station per genre, unlisted, kept in step with the library; TV from film
     for (let i = 0; i < 4; i++) add(`lecture${i}.mp3`, "MIT Faculty Lecture");
     for (let i = 0; i < 4; i++) add(`film-comedy${i}.mp4`, "", true);
     for (let i = 0; i < 3; i++) add(`film-drama${i}.mp4`, "", true);
+    add("film-comedy-XXX Hot Compilation.mp4", "", true);
     const probe = async (path: string): Promise<Probed> => {
       const one = tag[path.split("/").pop()!]!;
       return { state: "ready", error: "", duration: one.duration!, codec: one.video ? "aac" : "mp3", bitrate: 1, sampleRate: 1, channels: 2, video: one.video ?? false, hasArt: false, tags: { title: path.split("/").pop()!, artist: "A", genre: one.genre } };
@@ -59,6 +67,7 @@ test("a station per genre, unlisted, kept in step with the library; TV from film
     assert.ok(first.skipped.includes("Jazz radio (3 files)"));
     assert.ok(!JSON.stringify(first).includes("Lecture"), "lectures are not radio");
     assert.deepEqual(first.tv.map((one) => [one.genre, one.films, one.running]), [["Comedy", 4, true], ["Romance", 4, false], ["Drama", 3, false]]);
+    assert.ok(!store.list().some((one) => one.items.some((path) => /XXX/.test(path))), "adult films never reach a genre station");
     for (const station of store.list()) {
       assert.equal(station.visibility, "unlisted");
       assert.equal(station.listed, false);

@@ -221,6 +221,21 @@ export class Enricher {
    * channel however its name reads. `auto` lets nichedb's parser decide from
    * the name itself, which is right for a file.
    */
+  /**
+   * What is already known about a name, without asking anybody: for work
+   * that runs over a whole library and must not send nichedb a thousand
+   * questions at once.
+   */
+  known(name: string): Enriched | null {
+    const asked = String(name ?? "").trim();
+    if (asked === "") return null;
+    for (const kind of ["auto", "title"] as EnrichKind[]) {
+      const had = this.cache.get(cacheKey(asked, kind, null));
+      if (had?.hit) return had.hit;
+    }
+    return null;
+  }
+
   async lookup(name: string, kind: EnrichKind = "auto", year: number | null = null): Promise<Enriched | null> {
     const asked = String(name ?? "").trim();
     if (asked === "") return null;
