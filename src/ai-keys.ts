@@ -10,7 +10,11 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { stateDir } from "./daemon.ts";
 
-export const AI_KEY_NAMES = ["ELEVENLABS_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"] as const;
+export const AI_KEY_NAMES = [
+  "ELEVENLABS_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+  // Any OpenAI-compatible endpoint in OpenAI's place (Cloudflare Workers AI, Ollama, ...) and its model.
+  "NIXAMP_OPENAI_URL", "NIXAMP_OPENAI_MODEL",
+] as const;
 export type AiKeyName = (typeof AI_KEY_NAMES)[number];
 
 export function aiKeysFile(): string {

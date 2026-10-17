@@ -87,18 +87,23 @@ export async function askJson(options: AskOptions): Promise<Answer> {
     return { model, value: firstObject(text) };
   });
   if (openai) tries.push(async () => {
-    const model = env["NIXAMP_OPENAI_MODEL"] || "gpt-4.1-mini";
-    const response = await send("https://api.openai.com/v1/chat/completions", {
+    // OpenAI, or anything that speaks its chat completions (Cloudflare
+    // Workers AI's /ai/v1, Ollama's /v1): NIXAMP_OPENAI_URL is that base.
+    const baseUrl = (aiKey("NIXAMP_OPENAI_URL", env) || "https://api.openai.com/v1").replace(/\/+$/, "");
+    const official = new URL(baseUrl).host === "api.openai.com";
+    const model = aiKey("NIXAMP_OPENAI_MODEL", env) || "gpt-4.1-mini";
+    const response = await send(`${baseUrl}/chat/completions`, {
       method: "POST",
       signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
       headers: { "content-type": "application/json", authorization: `Bearer ${openai}` },
       body: JSON.stringify({
         model,
-        response_format: { type: "json_object" },
+        // Not every compatible server knows json_object; the answer is read for its JSON either way.
+        ...(official ? { response_format: { type: "json_object" } } : {}),
         messages: [{ role: "system", content: options.system }, { role: "user", content: options.prompt }],
       }),
     });
-    if (!response.ok) throw new Error(`openai answered HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`${official ? "openai" : new URL(baseUrl).host} answered HTTP ${response.status}`);
     const body = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     return { model, value: firstObject(body.choices?.[0]?.message?.content ?? "") };
   });
