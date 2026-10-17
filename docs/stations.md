@@ -61,6 +61,29 @@ carries the Share a track form.
 `GET /api/v1/stations/guide` is the same list as JSON. No key is needed; nothing private or
 unlisted ever appears.
 
+## The now-playing card
+
+Under the player, a station's page shows what is known about the track on the air:
+artist, album, year, genre; **made with AI** (yes, and with what, only on evidence: a tag naming Suno,
+Udio, ElevenLabs, MusicGen..., or AI radio's own files; otherwise "not stated"); **copyright**
+(the file's copyright tag, else a registered holder, else a listener share's declaration, else the
+station's declared basis); a licence; and a **Support** button to the holder's link.
+`GET /api/v1/stations/:id/now?t=` answers the same as JSON, and every `now` event carries it as `facts`.
+
+Holders are the owner's to register:
+
+    nixamp station holder set "Profullstack" --artist profullstack --station rvhmw2dwv3 \
+      --support https://nixamp.com/support/profullstack --license "All rights reserved"
+    nixamp station holder list
+    nixamp station holder remove profullstack
+
+(`/api/v1/stations/holders`, MCP `station_holders`.) A holder who collects for themselves gives
+their own https link. **nixamp.com/support/<holder>** takes a one-time crypto payment through
+nixamp.com's own CoinPay business for the holders it collects for (`NIXAMP_SUPPORT_HOLDERS`,
+"id=Name,...", default `profullstack=Profullstack`). There is no monthly option: CoinPay's only
+merchant subscription API runs on Stripe, which we do not use; recurring crypto invoices would need
+the listener's email and are not built.
+
 ## Every station, on nixamp.com
 
 nixamp.com's guide asks every server in its directory for its own guide, so

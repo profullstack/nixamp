@@ -253,6 +253,28 @@ export async function station(argv: string[]): Promise<number> {
         return await aiCommand(argv.slice(1), call, show, json);
       case "shares":
         return await sharesCommand(argv.slice(1), call, show);
+      case "holder":
+      case "holders": {
+        const sub = argv[1] ?? "list";
+        const all = (flagName: string): string[] => argv.flatMap((one, at) => (one === flagName && argv[at + 1] ? [argv[at + 1]!] : []));
+        const line = (h: Record<string, unknown>): string =>
+          `${String(h["name"])}  [${String(h["id"])}]\n  artists   ${((h["artists"] as string[]) ?? []).join(", ") || "-"}\n  stations  ${((h["stations"] as string[]) ?? []).join(", ") || "-"}\n  support   ${String(h["support"] || "-")}${h["license"] ? `\n  licence   ${String(h["license"])}` : ""}`;
+        if (sub === "list") return show(await call("GET", "/api/v1/stations/holders"), (body) => ((body["holders"] as Record<string, unknown>[]) ?? []).map(line).join("\n\n") || "No copyright holders yet. nixamp station holder set NAME --artist ARTIST --support URL");
+        if (sub === "remove") return show(await call("DELETE", `/api/v1/stations/holders/${argv[2] ?? ""}`), () => `Removed ${argv[2]}.`);
+        if (sub === "set") {
+          const name = argv[2];
+          if (!name || name.startsWith("--")) { console.error("nixamp station holder set needs a NAME"); return 2; }
+          const body: Record<string, unknown> = { name };
+          if (all("--artist").length) body["artists"] = all("--artist");
+          if (all("--station").length) body["stations"] = all("--station");
+          if (flag(argv, "--support")) body["support"] = flag(argv, "--support");
+          if (flag(argv, "--label")) body["label"] = flag(argv, "--label");
+          if (flag(argv, "--license")) body["license"] = flag(argv, "--license");
+          return show(await call("POST", "/api/v1/stations/holders", body), (answer) => line(answer["holder"] as Record<string, unknown>));
+        }
+        console.error(`nixamp station holder: no command "${sub}".\n\n${USAGE}`);
+        return 2;
+      }
       case "delete": {
         const station = needId();
         if (!station) return 2;

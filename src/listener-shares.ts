@@ -215,6 +215,11 @@ export class ListenerShares {
     return this.shares.get(id);
   }
 
+  /** The share whose copy is this file, if it is one. */
+  atFile(file: string): Share | undefined {
+    return [...this.shares.values()].find((one) => one.file === file);
+  }
+
   /** The share, if this token is the one its sharer was given. */
   forSharer(id: string, token: string): Share | undefined {
     const share = this.shares.get(id);

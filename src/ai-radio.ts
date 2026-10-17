@@ -302,6 +302,15 @@ export class AiRadio {
     return this.stations.get(key);
   }
 
+  /** The track AI radio composed at this path, if it did. */
+  trackAt(file: string): AiTrack | undefined {
+    for (const station of this.stations.values()) {
+      const hit = station.tracks.find((one) => one.file === file);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+
   /** What the owner sees: the stations, this month's seconds, and why nothing is being made. */
   status(): Record<string, unknown> {
     const month = monthOf(this.now());

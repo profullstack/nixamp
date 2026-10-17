@@ -41,6 +41,11 @@ export const USAGE = `nixamp station — make a collection into a station
   nixamp station shares approve|reject|delete SHARE
   nixamp station shares trust ADDRESS [--remove]   believe this proxy's X-Forwarded-For
 
+  Copyright holders (the now-playing card: who holds a track's copyright, and how to support them):
+  nixamp station holder list
+  nixamp station holder set NAME [--artist ARTIST]... [--station ID]... [--support https://...] [--label Subscribe] [--license TEXT]
+  nixamp station holder remove ID
+
   --json        machine-readable output
   --url, --key  another server, as with \`nixamp admin\`
 

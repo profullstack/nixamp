@@ -124,6 +124,21 @@ export const STATION_TOOLS = [
     },
   },
   {
+    name: "station_holders",
+    description: "Copyright holders for the now-playing card: who holds a track's copyright (matched by artist name or station) and the link that supports them. action list (default), set (name, artists, stations, support https URL, label, license), remove (id).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server: SERVER,
+        action: { type: "string", enum: ["list", "set", "remove"] },
+        id: STRING, name: STRING,
+        artists: { type: "array", items: STRING }, stations: { type: "array", items: STRING },
+        support: { ...STRING, description: "https link where listeners subscribe or donate, e.g. https://nixamp.com/support/profullstack" },
+        label: STRING, license: STRING,
+      },
+    },
+  },
+  {
     name: "station_unpublish",
     description: "Take a station out of the directory, or make it private: its links stop working and listeners are disconnected.",
     inputSchema: { type: "object", properties: { server: SERVER, id: ID, private: { type: "boolean" } }, required: ["id"] },
@@ -211,6 +226,15 @@ export async function callStationTool(name: string, args: Record<string, unknown
         : undefined;
       if (answer === null) return say("Which AI station? Pass its key from action status.", true);
       if (answer === undefined) return say("action is status, create, generate, update, remove, budget or resume", true);
+      return answer.ok ? say(JSON.stringify(answer.body, null, 2)) : refused(answer.body);
+    }
+    if (name === "station_holders") {
+      const action = String(args["action"] ?? "list");
+      const answer = action === "list" ? await call("GET", "/api/v1/stations/holders")
+        : action === "set" ? await call("POST", "/api/v1/stations/holders", pick(["id", "name", "artists", "stations", "support", "label", "license"]))
+        : action === "remove" && typeof args["id"] === "string" ? await call("DELETE", `/api/v1/stations/holders/${encodeURIComponent(args["id"])}`)
+        : null;
+      if (!answer) return say("action is list, set or remove (remove needs id)", true);
       return answer.ok ? say(JSON.stringify(answer.body, null, 2)) : refused(answer.body);
     }
     if (name === "station_shares") {

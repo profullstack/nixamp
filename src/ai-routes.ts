@@ -13,6 +13,7 @@ import { AI_KEY_NAMES, aiKeysSet, saveAiKey, type AiKeyName } from "./ai-keys.ts
 import type { AiRadio } from "./ai-radio.ts";
 import { SHARE_BASES, SHARE_GENRES, ownerShareView, sharerView, type ListenerShares } from "./listener-shares.ts";
 import { StationError } from "./stations.ts";
+import type { HolderStore } from "./track-facts.ts";
 
 const PUBLIC = /^\/api\/v1\/share(?:\/(upload|report|[a-f0-9]{12}))?$/;
 
@@ -24,6 +25,8 @@ export function isPublicSharePath(path: string): boolean {
 export interface AiRoutesContext {
   ai?: AiRadio;
   shares?: ListenerShares;
+  /** The copyright holders the owner registered, for the now-playing card. */
+  holders?: HolderStore;
   canControl: boolean;
   /** Who is asking, for per-sharer limits (an address; hashed before it is kept). */
   caller: string;
@@ -57,7 +60,8 @@ export async function handleAiRoutes(
 ): Promise<boolean> {
   const method = request.method ?? "GET";
   const publicPath = PUBLIC.exec(path);
-  const ownerPath = path === "/api/v1/stations/ai" || path.startsWith("/api/v1/stations/ai/") || path === "/api/v1/stations/shares" || path.startsWith("/api/v1/stations/shares/");
+  const ownerPath = path === "/api/v1/stations/ai" || path.startsWith("/api/v1/stations/ai/") || path === "/api/v1/stations/shares" || path.startsWith("/api/v1/stations/shares/")
+    || path === "/api/v1/stations/holders" || path.startsWith("/api/v1/stations/holders/");
   if (!publicPath && !ownerPath) return false;
   try {
     if (publicPath) {
@@ -111,6 +115,30 @@ export async function handleAiRoutes(
 
     if (!ctx.canControl) {
       ctx.json(response, 403, { error: "only this server's owner manages AI radio and shares", code: "forbidden" });
+      return true;
+    }
+
+    if (path === "/api/v1/stations/holders" || path.startsWith("/api/v1/stations/holders/")) {
+      const holders = ctx.holders;
+      if (!holders) {
+        ctx.json(response, 404, { error: "copyright holders are not kept here", code: "not_found" });
+        return true;
+      }
+      if (path === "/api/v1/stations/holders" && method === "GET") {
+        ctx.json(response, 200, { holders: holders.list() });
+        return true;
+      }
+      if (path === "/api/v1/stations/holders" && method === "POST") {
+        ctx.json(response, 200, { holder: holders.set(await jsonBody(ctx, request)) });
+        return true;
+      }
+      const one = /^\/api\/v1\/stations\/holders\/([a-z0-9-]{1,40})$/.exec(path);
+      if (one && method === "DELETE") {
+        if (!holders.remove(one[1]!)) throw new StationError("not_found", "no such holder", 404);
+        ctx.json(response, 200, { deleted: one[1] });
+        return true;
+      }
+      ctx.json(response, 404, { error: "no such holder route", code: "not_found" });
       return true;
     }
 
