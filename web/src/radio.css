@@ -8,7 +8,12 @@
 .radio-nav a:hover, .radio-nav a:focus-visible { border-bottom-color: var(--green); }
 .radio-title { margin: 0 0 6px; font-size: 15px; letter-spacing: 0.08em; color: var(--green); text-transform: uppercase; }
 .radio-subtitle { margin: 18px 0 6px; font-size: 13px; color: var(--green-dim); text-transform: uppercase; letter-spacing: 0.08em; }
-.radio-notice { border: 1px solid var(--warn); color: var(--warn); padding: 8px 12px; border-radius: 6px; margin: 0; }
+/* Pinned to the window: a message from a button far down the page is still seen. */
+.radio-notice { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50; width: min(640px, calc(100vw - 32px)); box-sizing: border-box; display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; background: var(--panel); border: 1px solid var(--warn); color: var(--warn); padding: 10px 12px; border-radius: 6px; margin: 0; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45); }
+.radio-notice[hidden] { display: none; }
+.radio-notice.ok { border-color: var(--green); color: var(--fg); }
+.radio-notice .notice-close { min-height: 0; padding: 0 8px; line-height: 1.4; }
+.radio-app .station.just-changed { outline: 2px solid var(--green); outline-offset: 2px; transition: outline-color 0.4s; }
 .radio-app .hint, .radio-app .muted { color: var(--muted); }
 .radio-app .warn { color: var(--warn); }
 .radio-app button { font: inherit; color: var(--bg); background: var(--green); border: 1px solid var(--green); border-radius: 4px; padding: 4px 12px; cursor: pointer; min-height: 32px; }
