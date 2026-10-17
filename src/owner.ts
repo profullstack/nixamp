@@ -130,6 +130,9 @@ export function needsAdmin(path: string, method = "GET"): boolean {
   // Going live with a file on this server is the same act as going live
   // with a catalog entry, and the same question.
   if (/^\/api\/tracks\/\d+\/live$/.test(path)) return true;
+  // And so is a folder: without this the gate never ran for it, and a
+  // listen link alone could put any folder on the air, uncapped.
+  if (path === "/api/folders/live") return true;
   return false;
 }
 
