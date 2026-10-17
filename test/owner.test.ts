@@ -136,7 +136,7 @@ test("a member may go live, and take off what they put on, and nothing else that
   assert.equal(needsMember("/api/channels/cat-e", "POST"), false);
   assert.equal(needsMember("/api/live/start", "POST"), false);
   // Everything a member may do is something that needs administering at all.
-  for (const [path, method] of [["/api/tracks/3/live", "POST"], ["/api/catalogs/k/entries/e/live", "POST"], ["/api/channels/x/keep", "POST"], ["/api/channels/x", "DELETE"], ["/api/channels/x", "PATCH"], ["/api/links/play", "POST"]] as const) {
+  for (const [path, method] of [["/api/tracks/3/live", "POST"], ["/api/folders/live", "POST"], ["/api/catalogs/k/entries/e/live", "POST"], ["/api/channels/x/keep", "POST"], ["/api/channels/x", "DELETE"], ["/api/channels/x", "PATCH"], ["/api/links/play", "POST"]] as const) {
     assert.equal(needsAdmin(path, method), true, `${method} ${path}`);
   }
 });
