@@ -24,6 +24,33 @@ listeners join where it is. It is the PRD's RAD-01..05 ([prd-library-radio.md](p
 - **Audio.** MP3, 128 kbps by default (`bitrate`: 64-320), 48 kHz stereo; one encoder per
   station whatever the number of listeners.
 
+## Auto stations (a station per genre)
+
+`nixamp station auto` (or `POST /api/v1/stations/auto`, MCP `station_auto`) makes a station for
+every genre the library has and keeps them in step: the setting is saved in `config.json`, and
+after every library scan the stations are re-synced (new files join, ids and links never change).
+
+- **Radio** from the music's genre tags, folded into genres a listener knows (Punk, Rock, Metal,
+  Hip-Hop, Pop, Alternative, Industrial, Electronic, Reggae, Jazz, Blues, Classical, Country &
+  Folk, Soul & R&B, Latin). A tag can put a file in several ("Pop, Rock, Metal"). Lectures,
+  interviews, podcasts and talk are left out. `--min` files per station (10).
+- **TV** from the genres nichedb knows for each film (40 minutes or longer), at most two genres a
+  film; `--films` per station (3). A TV station re-encodes video, about a core while it runs, so
+  only `--tv` (2) run; the rest are made and wait, stopped.
+- Shuffled, repeating, **unlisted**: a link for whoever you give it to. Nothing is declared or
+  published on your behalf.
+- **Breaks** every `--breaks` seconds (600), between songs or films and never inside one: the ad
+  network's spot (this server's `AD_SLOT`, else nixamp.com's), else a house spot you put at
+  `$XDG_STATE_HOME/nixamp/ads/spot.mp4` (TV) or `spot.mp3` (radio), else no break.
+  `breaksEvery` can be set on any station (120-86400, 0 for none).
+
+## The guide
+
+`/guide` (and `/` on a host listed in `NIXAMP_GUIDE_HOSTS`, such as a Moshpit name) is a public
+page of the stations on this server that are **public and listed**, radio and TV, with what is on.
+`GET /api/v1/stations/guide` is the same list as JSON. No key is needed; nothing private or
+unlisted ever appears.
+
 ## Limits and metering
 
 Every byte a station's link delivers and every second somebody listens is counted per station

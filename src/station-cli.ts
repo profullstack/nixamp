@@ -177,6 +177,27 @@ export async function station(argv: string[]): Promise<number> {
           return [`page    ${links["page"]}`, `stream  ${links["stream"]}`, `m3u     ${links["m3u"]}`].join("\n");
         });
       }
+      case "auto": {
+        const body: Record<string, unknown> = argv.includes("--off") ? { off: true } : {
+          ...(argv.includes("--no-video") ? { video: false } : {}),
+          ...(argv.includes("--no-start") ? { start: false } : {}),
+          ...(flag(argv, "--min") ? { minItems: Number(flag(argv, "--min")) } : {}),
+          ...(flag(argv, "--films") ? { minFilms: Number(flag(argv, "--films")) } : {}),
+          ...(flag(argv, "--tv") ? { maxVideoRunning: Number(flag(argv, "--tv")) } : {}),
+          ...(flag(argv, "--breaks") ? { breaksEvery: Number(flag(argv, "--breaks")) } : {}),
+        };
+        return show(await call("POST", "/api/v1/stations/auto", body), (answer) => {
+          const report = answer["report"] as { off?: boolean; radio?: Array<Record<string, unknown>>; tv?: Array<Record<string, unknown>>; skipped?: string[] };
+          if (report.off) return "Auto stations are off. The stations already made stay as they are.";
+          const line = (one: Record<string, unknown>, unit: string) => `  ${String(one["genre"]).padEnd(16)} ${String(one["files"] ?? one["films"]).padStart(5)} ${unit}  ${one["running"] ? "on air" : "stopped"}${one["made"] ? "  (new)" : ""}  [${String(one["id"])}]`;
+          return [
+            "Radio:", ...(report.radio ?? []).map((one) => line(one, "files")),
+            "TV:", ...((report.tv ?? []).length ? (report.tv ?? []).map((one) => line(one, "films")) : ["  none (no film genres known yet)"]),
+            ...((report.skipped ?? []).length ? [`Too small for a station: ${(report.skipped ?? []).join(", ")}`] : []),
+            "Every library scan keeps these up to date. They are unlisted: `nixamp station link ID` for a link.",
+          ].join("\n");
+        });
+      }
       case "delete": {
         const station = needId();
         if (!station) return 2;

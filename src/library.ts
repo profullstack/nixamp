@@ -25,6 +25,8 @@ export interface Config {
   library?: string;
   /** Whether this machine is listed in the public directory; unset until chosen. */
   publish?: boolean;
+  /** Auto stations: a station per genre, re-synced after every library scan. */
+  autoStations?: Record<string, unknown>;
 }
 
 export function configPath(): string {
@@ -39,6 +41,7 @@ export function readConfig(): Config {
     return {
       ...(typeof record["library"] === "string" ? { library: record["library"] } : {}),
       ...(typeof record["publish"] === "boolean" ? { publish: record["publish"] } : {}),
+      ...(typeof record["autoStations"] === "object" && record["autoStations"] !== null ? { autoStations: record["autoStations"] as Record<string, unknown> } : {}),
     };
   } catch {
     return {};

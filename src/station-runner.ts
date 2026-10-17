@@ -27,6 +27,8 @@ export interface RunnerDeps {
   /** Told when a station is restarted after an unexpected end, and when a file will not play. */
   onRestart?: (id: string) => void;
   onFailure?: (id: string) => void;
+  /** A file for a break on a radio (false) or TV (true) station, or null for none. */
+  breaks?: (video: boolean) => Promise<string | null>;
 }
 
 /** Something a listener is connected through, that can be ended. */
@@ -143,6 +145,9 @@ export class StationRunner {
             return now ? this.playable(now) : [];
           },
           excluded: (file) => store.isExcluded(id, file),
+          ...(station.breaksEvery > 0 && this.deps.breaks
+            ? { breaks: { everySeconds: station.breaksEvery, next: () => this.deps.breaks!(station.video) } }
+            : {}),
           onFailure: ({ file, reason }) => {
             this.errors.set(id, reason);
             this.deps.onFailure?.(id);

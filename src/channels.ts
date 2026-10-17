@@ -129,7 +129,7 @@ export interface PullResume {
    * lists of files on this machine; not remembered, because whoever owns the
    * rotation (the station) puts it back.
    */
-  rotation?: Pick<PlaylistInput, "repeat" | "order" | "current" | "excluded" | "onFailure" | "passOver">;
+  rotation?: Pick<PlaylistInput, "repeat" | "order" | "current" | "excluded" | "onFailure" | "passOver" | "breaks">;
 }
 
 /**

@@ -78,9 +78,12 @@ import { ListenerStore } from "./library-user.ts";
 import { Importer } from "./handoff.ts";
 import { handleHandoffs } from "./handoff-routes.ts";
 import { STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
+import { GUIDE_CSP, GUIDE_HTML, guideHosts } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
 import { STATION_CONTROL_LIMIT, StationUsage, limitsFromEnv, type Limits } from "./station-metering.ts";
+import { StationBreaks } from "./station-breaks.ts";
+import { DEFAULT_AUTO, syncAutoStations, type AutoOptions } from "./auto-stations.ts";
 import { CompressionService } from "./compression/service.ts";
 import { handleChannelCompression, handleCompressionApi, handleStaticRelay, type RouteContext } from "./compression/routes.ts";
 import { DEFAULT_SITE as NICHEDB, Enricher, type EnrichKind, FIXTURE_TTL_MS } from "./enrich.ts";
@@ -1717,7 +1720,13 @@ export interface HandlerOptions {
   /** Music handed over from BitTorrented. */
   importer?: Importer;
   /** This server's stations and what keeps them on the air. */
-  stations?: { store: StationStore; runner: StationRunner; usage?: StationUsage; limits?: Limits };
+  stations?: {
+    store: StationStore;
+    runner: StationRunner;
+    usage?: StationUsage;
+    limits?: Limits;
+    auto?: { sync: (input: Record<string, unknown>) => Promise<unknown>; setting: () => unknown };
+  };
   web: string | null;
   /** Branded clients on this same backend, keyed by an explicitly configured host. */
   webSites?: ReadonlyMap<string, import("./web-sites.ts").WebSite>;
@@ -2640,6 +2649,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // port is open from another device before wondering whether the link is
     // wrong, and it says nothing about the library.
     const eventChannelRequest = Boolean(channelId && await eventForChannel());
+    // The public station guide: at /guide, and at the front of a host named
+    // for it (a Moshpit name such as live.streaming, NIXAMP_GUIDE_HOSTS).
+    const requestHost = String(request.headers["x-forwarded-host"] ?? request.headers.host ?? "").split(",")[0]!.trim().replace(/:\d+$/, "").toLowerCase();
+    const isGuidePage = Boolean(options.stations) && (request.method === "GET" || request.method === "HEAD") &&
+      (path === "/guide" || (path === "/" && guideHosts().has(requestHost)));
     // Whether this request holds only the listen key. A listener may browse
     // and hear the library, but where it lives on this machine is the
     // owner's business: the absolute path names the user account and the disk.
@@ -2652,6 +2666,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // A station's link is its own key, checked by the station.
       !isStationListenPath(path) &&
       !STATION_PAGE.test(path) &&
+      !isGuidePage &&
       !eventChannelRequest
     ) {
       let scope = scopeOf(keyFrom(request, url), key, listenKey);
@@ -2703,6 +2718,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
       return { allowed: false, account: "" };
     };
+
+    if (isGuidePage) {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-cache",
+        "content-security-policy": GUIDE_CSP,
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(request.method === "HEAD" ? undefined : GUIDE_HTML);
+      return;
+    }
 
     // The page a station's link opens. The same bytes for every station: it
     // reads its id and token from its own address.
@@ -2788,6 +2815,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         headers: CORS,
         ...(options.stations.usage ? { usage: options.stations.usage } : {}),
         ...(options.stations.limits ? { limits: options.stations.limits } : {}),
+        ...(options.stations.auto ? { auto: options.stations.auto } : {}),
         throttle: () => {
           const verdict = guard.check(`stations:${control.account || callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, STATION_CONTROL_LIMIT);
           return verdict.ok ? null : { retryAfter: verdict.retryAfter };
@@ -6663,7 +6691,15 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const stationUsage = new StationUsage(StationUsage.fileFor(stateDir(), options.port));
   const stationLimits = limitsFromEnv();
   process.once("exit", () => stationUsage.flush());
+  // Breaks between songs and films: the network's spot, or a house one.
+  const stationBreaks = new StationBreaks({
+    dir: join(stateDir(), "ads"),
+    site: process.env["NIXAMP_SITE"] || "https://nixamp.com",
+    hasSlot: Boolean(process.env["AD_SLOT"]),
+    guard: (url) => refusedDestination(url),
+  });
   stationRunner = new StationRunner({
+    breaks: (video) => stationBreaks.next(video ? "video" : "audio"),
     onRestart: (id) => stationUsage.restarted(id),
     onFailure: (id) => stationUsage.failed(id),
     store: stationStore,
@@ -6679,7 +6715,62 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     roots: () => [...new Set([engine.snapshot(false).root || chosen, ...libraryIndex.roots()])].filter((one) => one !== ""),
     log: (line) => console.log(line),
   });
-  const stations = { store: stationStore, runner: stationRunner, usage: stationUsage, limits: stationLimits };
+  // Auto stations: a station per genre, kept in step with the library.
+  const autoSetting = (): AutoOptions | null => {
+    const saved = readConfig().autoStations;
+    if (!saved) return null;
+    const pick = (name: keyof AutoOptions) => (saved[name] === undefined ? DEFAULT_AUTO[name] : saved[name]);
+    return {
+      video: pick("video") !== false,
+      minItems: Number(pick("minItems")) || DEFAULT_AUTO.minItems,
+      minFilms: Number(pick("minFilms")) || DEFAULT_AUTO.minFilms,
+      start: pick("start") !== false,
+      maxVideoRunning: Number(pick("maxVideoRunning")) >= 0 ? Number(pick("maxVideoRunning")) : DEFAULT_AUTO.maxVideoRunning,
+      breaksEvery: Number(pick("breaksEvery")) >= 0 ? Number(pick("breaksEvery")) : DEFAULT_AUTO.breaksEvery,
+    };
+  };
+  let autoRunning: Promise<unknown> | null = null;
+  const runAuto = (settings: AutoOptions): Promise<unknown> => {
+    if (autoRunning) return autoRunning;
+    autoRunning = syncAutoStations({
+      index: libraryIndex,
+      store: stationStore,
+      runner: stationRunner!,
+      owner: options.owner || "",
+      mayStart: () => stationLimits.runningStations === 0 || stationStore.list().filter((one) => one.desired === "running").length < stationLimits.runningStations,
+      filmGenres: async (title) => {
+        const hit = await enricher.lookup(title, "title");
+        const genres = hit?.data?.["genres"];
+        return Array.isArray(genres) ? genres.filter((one): one is string => typeof one === "string") : [];
+      },
+      log: (line) => console.log(line),
+    }, settings).then((report) => {
+      const made = report as { radio: unknown[]; tv: unknown[] };
+      console.log(`  auto stations: ${made.radio.length} radio, ${made.tv.length} TV.`);
+      return report;
+    }).finally(() => { autoRunning = null; });
+    return autoRunning;
+  };
+  libraryIndex.onScanned = () => {
+    const settings = autoSetting();
+    if (settings) void runAuto(settings);
+  };
+  const stationAuto = {
+    setting: () => autoSetting(),
+    sync: async (input: Record<string, unknown>) => {
+      if (input["off"] === true) {
+        writeConfig({ autoStations: undefined });
+        return { off: true };
+      }
+      const settings: AutoOptions = { ...DEFAULT_AUTO, ...(autoSetting() ?? {}) };
+      for (const name of Object.keys(DEFAULT_AUTO) as (keyof AutoOptions)[]) {
+        if (input[name] !== undefined) (settings as unknown as Record<string, unknown>)[name] = input[name];
+      }
+      writeConfig({ autoStations: settings as unknown as Record<string, unknown> });
+      return runAuto(settings);
+    },
+  };
+  const stations = { store: stationStore, runner: stationRunner, usage: stationUsage, limits: stationLimits, auto: stationAuto };
   // Music handed over from BitTorrented, copied into a folder of our own.
   const importer = new Importer(join(stateDir(), `handoffs-${options.port}.json`), {
     index: libraryIndex,

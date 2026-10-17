@@ -81,6 +81,18 @@ export const STATION_TOOLS = [
     },
   },
   {
+    name: "station_auto",
+    description: "A station for every genre in the library (radio from music tags, TV from film genres), kept up to date after every library scan, with a short break between songs and films. Unlisted; publishing stays a separate step. off: true stops the automation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server: SERVER,
+        video: { type: "boolean" }, minItems: { type: "integer" }, minFilms: { type: "integer" },
+        maxVideoRunning: { type: "integer" }, breaksEvery: { type: "integer" }, start: { type: "boolean" }, off: { type: "boolean" },
+      },
+    },
+  },
+  {
     name: "station_unpublish",
     description: "Take a station out of the directory, or make it private: its links stop working and listeners are disconnected.",
     inputSchema: { type: "object", properties: { server: SERVER, id: ID, private: { type: "boolean" } }, required: ["id"] },
@@ -148,6 +160,10 @@ export async function callStationTool(name: string, args: Record<string, unknown
       if (!answer.ok) return refused(answer.body);
       const all = (answer.body["stations"] as Record<string, unknown>[] | undefined) ?? [];
       return say(all.length === 0 ? "No stations on this server yet." : all.map(line).join("\n"));
+    }
+    if (name === "station_auto") {
+      const answer = await call("POST", "/api/v1/stations/auto", pick(["video", "minItems", "minFilms", "maxVideoRunning", "breaksEvery", "start", "off"]));
+      return answer.ok ? say(JSON.stringify(answer.body["report"], null, 2)) : refused(answer.body);
     }
     if (!/^[a-z0-9]{10}$/.test(id) && name !== "station_create") return say("Which station? Pass its id from station_list.", true);
     if (name === "station_get") {

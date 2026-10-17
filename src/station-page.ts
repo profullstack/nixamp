@@ -30,6 +30,7 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid var(-
 label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:.9rem}
 input[type=range]{width:120px;accent-color:var(--accent)}
 .small{margin-top:20px;font-size:.85rem;color:var(--muted)}.small a{color:inherit}
+.screen{display:block;width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;margin:12px 0}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @media (prefers-reduced-motion:no-preference){.live::before{animation:pulse 2s ease-in-out infinite}}
 @keyframes pulse{50%{opacity:.35}}
@@ -42,13 +43,29 @@ const SCRIPT = `
   const q = "?t=" + encodeURIComponent(token);
   const api = "/api/v1/stations/" + encodeURIComponent(id);
   const $ = (s) => document.querySelector(s);
-  const audio = new Audio();
+  // Sound, or a TV station's picture: the element is chosen by the first state.
+  let audio = new Audio();
   audio.preload = "none";
+  let wired = false;
+  const wire = () => {
+    if (wired) return;
+    wired = true;
+    audio.addEventListener("playing", () => { if (retry) say("Back on"); retry = 0; if (last) draw(last); });
+    audio.addEventListener("error", again);
+    audio.addEventListener("ended", again);
+    audio.addEventListener("stalled", () => { if (wanted && audio.readyState < 3) again(); });
+  };
   let wanted = false, retry = 0, timer = 0, last = null, live = false;
   const chip = (state, text) => { const c = $("#state"); c.className = "chip " + state; c.textContent = text; };
   const say = (text) => { $("#announce").textContent = text; };
   const draw = (s) => {
     last = s;
+    if (s.kind === "video" && audio.tagName !== "VIDEO") {
+      audio = $("#screen");
+      audio.hidden = false;
+      wired = false;
+      wire();
+    }
     document.title = s.name + " · nixamp";
     $("#name").textContent = s.name;
     $("#about").textContent = s.description || "";
@@ -102,10 +119,7 @@ const SCRIPT = `
     clearTimeout(timer);
     timer = setTimeout(join, Math.min(15000, 1000 * 2 ** Math.min(retry, 4)));
   };
-  audio.addEventListener("playing", () => { if (retry) say("Back on"); retry = 0; if (last) draw(last); });
-  audio.addEventListener("error", again);
-  audio.addEventListener("ended", again);
-  audio.addEventListener("stalled", () => { if (wanted && audio.readyState < 3) again(); });
+  wire();
   $("#play").addEventListener("click", () => { if (wanted) { stop(); say("Stopped"); } else { wanted = true; retry = 0; button(); join(); say("Playing"); } });
   $("#volume").addEventListener("input", (e) => { audio.volume = Number(e.target.value); });
   poll();
@@ -130,6 +144,7 @@ const PAGE = `<!doctype html>
 <main>
   <div class="card">
     <span id="state" class="chip unavailable" role="status">Loading</span>
+    <video id="screen" class="screen" playsinline preload="none" hidden></video>
     <h1 id="name">&nbsp;</h1>
     <p id="about" class="about" hidden></p>
     <div class="now" aria-live="polite"><div id="title" class="title"></div><div id="by" class="by"></div></div>
