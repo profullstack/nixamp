@@ -136,11 +136,12 @@ export function keyFrom(request: IncomingMessage, url: URL): string | null {
 }
 
 /** The Set-Cookie for a browser that just opened the link. */
-export function keyCookie(key: string): string {
+export function keyCookie(key: string, secure = false): string {
   // HttpOnly because nothing in the page reads it: the browser attaches it to
-  // every same-origin request by itself. No Secure, because the whole point is
-  // a plain-http address on your own network.
-  return `${KEY_COOKIE}=${encodeURIComponent(key)}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`;
+  // every same-origin request by itself. Secure only when the link was opened
+  // over https: a plain-http address on your own network is still a thing,
+  // and a Secure cookie there would never be sent back.
+  return `${KEY_COOKIE}=${encodeURIComponent(key)}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${secure ? "; Secure" : ""}`;
 }
 
 /**

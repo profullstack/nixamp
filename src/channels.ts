@@ -14,6 +14,7 @@
  * what live means. MP3 frames are self-describing, so a player finds the next
  * frame boundary and carries on; there is nothing to catch up on.
  */
+import { protocolArgs } from "./decoder-policy.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -503,10 +504,10 @@ export class Channel {
                 // What the source's site expects on the request: a user agent, a
                 // referer, a cookie. A link resolved by yt-dlp comes with these,
                 // and a CDN that got them from yt-dlp and not from us answers 403.
-                ...input, ...seek, "-i", current,
+                ...input, ...seek, ...protocolArgs(current), "-i", current,
                 // The sound, when the site keeps it apart from the picture: a
                 // second input, dialled the same way, that the encode maps in.
-                ...(audio ? [...remoteArgs, ...(paced ? ["-re"] : []), ...input, ...seek, "-i", audio] : []),
+                ...(audio ? [...remoteArgs, ...(paced ? ["-re"] : []), ...input, ...seek, ...protocolArgs(audio), "-i", audio] : []),
               ]),
           ...(playlistEncode ?? encode),
           "pipe:1",

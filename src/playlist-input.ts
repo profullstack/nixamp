@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { protocolArgs } from "./decoder-policy.ts";
 import type { Readable } from "node:stream";
 import { codecsOf } from "./audio.ts";
 
@@ -52,7 +53,7 @@ export class PlaylistInputStream {
           : o.video && !codecs.audio ? ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"] : [];
         const args = [
           ...prefix, "-hide_banner", "-loglevel", "error", "-nostdin", "-filter_threads", "2",
-          "-threads", "2", ...(position > 0 ? ["-ss", String(position)] : []), "-i", file,
+          "-threads", "2", ...(position > 0 ? ["-ss", String(position)] : []), ...protocolArgs(file), "-i", file,
           ...extra, "-t", String(duration),
           ...(o.video ? [
             "-map", hasVideo ? "0:v:0" : "1:v:0", "-map", codecs.audio ? "0:a:0" : "1:a:0",
