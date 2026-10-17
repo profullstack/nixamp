@@ -1740,6 +1740,8 @@ export interface HandlerOptions {
     shares?: ListenerShares;
     /** What a listener may know about the track on the air. */
     facts?: (station: Station, file: string) => Promise<import("./track-facts.ts").TrackFacts>;
+    /** The cover picture inside a file, for the now-playing card. */
+    cover?: (file: string) => Promise<{ bytes: Buffer; type: string } | null>;
     /** Copyright holders, matched to tracks by artist or station. */
     holders?: import("./track-facts.ts").HolderStore;
     /** Proxies (by address) whose X-Forwarded-For is believed, for per-sharer limits. */
@@ -2972,6 +2974,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         ...(options.stations.limits ? { limits: options.stations.limits } : {}),
         ...(options.stations.auto ? { auto: options.stations.auto } : {}),
         ...(options.stations.facts ? { facts: options.stations.facts } : {}),
+        ...(options.stations.cover ? { cover: options.stations.cover } : {}),
         ...(options.stations.peers ? { peers: () => options.stations!.peers!.entries() } : {}),
         throttle: () => {
           const verdict = guard.check(`stations:${control.account || callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, STATION_CONTROL_LIMIT);
@@ -7067,10 +7070,28 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const tagReader = new TagReader(tools.ffprobe);
   const holderStore = new HolderStore(HolderStore.fileFor(stateDir(), options.port));
   stations.holders = holderStore;
+  // Covers read once per file (and its size and time), a few hundred kept.
+  const covers = new Map<string, { key: string; picture: { bytes: Buffer; type: string } | null }>();
+  stations.cover = async (file) => {
+    let key = "";
+    try { const info = statSync(file); key = `${info.size}:${info.mtimeMs}`; } catch { return null; }
+    const hit = covers.get(file);
+    if (hit && hit.key === key) return hit.picture;
+    const bytes = await coverArtOf(tools.ffmpeg, file).catch(() => null);
+    const picture = bytes && bytes.length > 0 ? { bytes, type: bytes[0] === 0x89 ? "image/png" : "image/jpeg" } : null;
+    if (covers.size > 300) covers.clear();
+    covers.set(file, { key, picture });
+    return picture;
+  };
   stations.facts = async (station, file) => {
     const share = listenerShares.atFile(file);
     const composed = aiRadio.trackAt(file);
+    const picture = await stations.cover!(file);
+    let stamp = "";
+    try { stamp = String(Math.round(statSync(file).mtimeMs)); } catch { stamp = ""; }
+    const art = picture ? `/api/v1/stations/${station.id}/art?t=${encodeURIComponent(station.listenToken)}&f=${sha("sha1").update(file + stamp).digest("hex").slice(0, 12)}` : "";
     return factsFor({
+      art,
       station, file,
       tags: await tagReader.read(file),
       known: trackFor(engine, file),

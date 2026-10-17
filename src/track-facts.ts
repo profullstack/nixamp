@@ -27,6 +27,8 @@ export interface TrackFacts {
   ai: { generated: boolean | null; by: string; evidence: string };
   rights: { holder: string; basis: string; note: string; license: string; source: "tag" | "holder" | "share" | "ai-radio" | "station" | "" };
   support: { holder: string; url: string; label: string } | null;
+  /** The track's own cover, on this station's link (it changes with the track); "" when it has none. */
+  art: string;
 }
 
 export interface Holder {
@@ -107,12 +109,13 @@ const AI_MARKS: Array<[RegExp, string]> = [
   [/riffusion/i, "Riffusion"],
   [/ace-?step/i, "ACE-Step"],
   [/mubert/i, "Mubert"],
+  [/made with mozart|mozart ai/i, "Mozart AI"],
   [/\b(ai[- ]generated|generated (by|with) ai|made (by|with) ai)\b/i, "AI"],
 ];
 
 /** Whether these tags say the track was made by AI, and with what. */
 export function aiFromTags(tags: Record<string, string>): { by: string; evidence: string } | null {
-  for (const field of ["comment", "description", "encoded_by", "encoder", "software", "tsse", "publisher", "copyright", "genre"]) {
+  for (const field of ["comment", "description", "encoded_by", "encoder", "software", "tsse", "publisher", "copyright", "genre", "album"]) {
     const value = tags[field];
     if (!value) continue;
     // The encoder field is usually just "Lavf..." -- only a named model counts.
@@ -135,6 +138,8 @@ export interface FactSources {
   share?: { basis: string; note: string; by: string } | null;
   /** AI radio's record of this file, when it composed it. */
   aiTrack?: { made: string } | null;
+  /** Where its cover is served, when it has one. */
+  art?: string;
 }
 
 export function factsFor(input: FactSources): TrackFacts {
@@ -171,7 +176,7 @@ export function factsFor(input: FactSources): TrackFacts {
     rights = { holder: "", basis: "", note: "", license: "", source: "" };
   }
   const support = holder && holder.support ? { holder: holder.name, url: holder.support, label: holder.label || "Support" } : null;
-  return { title, artist, album, year, genre, ai, rights, support };
+  return { title, artist, album, year, genre, ai, rights, support, art: input.art ?? "" };
 }
 
 function slug(text: string): string {

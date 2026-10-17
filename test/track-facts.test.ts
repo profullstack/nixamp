@@ -86,3 +86,11 @@ test("support: a one-time CoinPay checkout on nixamp's business, for a known hol
   await assert.rejects(support.checkout({ holder: "profullstack", amountUsd: 0.5, coin: "SOL" }), /amount/);
   await assert.rejects(support.checkout({ holder: "profullstack", amountUsd: 5, coin: "BTC" }), /Pay with one of: SOL/);
 });
+
+test("Mozart AI is named from its album tag, and the cover's address rides along", () => {
+  assert.equal(aiFromTags({ album: "Made with Mozart", artist: "chovy" })?.by, "Mozart AI");
+  assert.equal(aiFromTags({ album: "Mozart: Requiem" }), null, "a Mozart album is not AI");
+  const facts = factsFor({ station: station(), file: "/m/a.mp3", tags: { title: "Valhalla Bounce" }, holders: [], art: "/api/v1/stations/rvhmw2dwv3/art?t=x&f=abc" });
+  assert.equal(facts.art, "/api/v1/stations/rvhmw2dwv3/art?t=x&f=abc");
+  assert.equal(factsFor({ station: station(), file: "/m/b.mp3", tags: {}, holders: [] }).art, "");
+});
