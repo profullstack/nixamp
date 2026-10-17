@@ -7,6 +7,7 @@ import { t as uiMessage, i18n, terminalUiLanguage, uiLanguage } from "./i18n.ts"
  *
  * ffmpeg decodes; we read every sample on its way to the speakers and draw it.
  */
+import { USAGE as STATION_USAGE } from "./station-usage.ts";
 import { createApp, themes, type BrailleCanvas, type Container, type KeyEvent, type Theme } from "@profullstack/hqtui";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -395,6 +396,7 @@ q or d leaves; neither stops anything. \`nixamp daemon stop\` is what stops it.
 };
 
 export function helpFor(topic: string | undefined): string {
+  if (topic === "station" || topic === "stations") return STATION_USAGE;
   return (topic ? TOPICS[topic] : undefined) ?? HELP;
 }
 
