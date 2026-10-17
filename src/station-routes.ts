@@ -16,12 +16,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Channels } from "./channels.ts";
 import type { StationRunner } from "./station-runner.ts";
 import { alertsFor, type Limits, type StationUsage } from "./station-metering.ts";
+import type { TrackFacts } from "./track-facts.ts";
 import {
   StationError, channelOf, tokensMatch, type OwnerStation, type PublicStation, type Station, type StationStore,
 } from "./stations.ts";
 
 /** The three things a station's link opens. */
-const LISTEN = /^\/api\/v1\/stations\/([a-z0-9]{10})\/(stream|state|listen\.m3u|events)$/;
+const LISTEN = /^\/api\/v1\/stations\/([a-z0-9]{10})\/(stream|state|listen\.m3u|events|now)$/;
 
 /** Whether this path is one a station's own link may open, without the server's key. */
 export function isStationListenPath(path: string): boolean {
@@ -59,6 +60,8 @@ export interface StationContext {
   limits?: Limits;
   /** Null to go ahead with a change, or how long to wait (control rate limit). */
   throttle?: () => { retryAfter: number } | null;
+  /** What a listener may know about the track on the air (track-facts.ts). */
+  facts?: (station: Station, file: string) => Promise<TrackFacts>;
   /** Auto stations: run a sync with these settings (and keep them), or read them. */
   auto?: { sync: (input: Record<string, unknown>) => Promise<unknown>; setting: () => unknown };
   /** The public stations other servers list (guide peers); absent when there are none. */
@@ -210,7 +213,19 @@ export async function handleStations(
         const view = publicView(ctx, station);
         return { station: station.id, playback: `${station.id}:${ctx.channels.info(channelOf(station.id))?.startedAt ?? 0}`, track: `${station.id}:${instance}`, at: Date.now(), state: view.state, nowPlaying: view.nowPlaying };
       };
-      send("hello", now());
+      // Each "now" carries what is known about the track: who made it, AI or
+      // not, whose copyright, how to support them.
+      const withFacts = async (): Promise<Record<string, unknown>> => {
+        const payload = now();
+        const file = nowPlayingFile(ctx, station);
+        if (!ctx.facts || !file) return payload;
+        try {
+          return { ...payload, facts: await ctx.facts(station, file) };
+        } catch {
+          return payload;
+        }
+      };
+      void withFacts().then((payload) => send("hello", payload));
       const tick = setInterval(() => {
         const current = ctx.store.get(station.id);
         if (!current) {
@@ -222,7 +237,7 @@ export async function handleStations(
         if (file !== lastFile) {
           lastFile = file;
           instance += 1;
-          send("now", now());
+          void withFacts().then((payload) => send("now", payload));
         } else if (state !== lastState) {
           send("state", now());
         }
@@ -239,6 +254,11 @@ export async function handleStations(
       };
       request.on("close", leave);
       response.on("close", leave);
+      return true;
+    }
+    if (what === "now") {
+      const file = ctx.runner.observed(station.id) === "live" || ctx.runner.observed(station.id) === "recovering" ? nowPlayingFile(ctx, station) : "";
+      ctx.json(response, 200, { station: station.id, facts: file && ctx.facts ? await ctx.facts(station, file).catch(() => null) : null });
       return true;
     }
     if (what === "state") {

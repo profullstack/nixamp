@@ -80,6 +80,8 @@ import { handleHandoffs } from "./handoff-routes.ts";
 import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
+import { HolderStore, TagReader, factsFor } from "./track-facts.ts";
+import { SUPPORT_CSP, SUPPORT_PAGE, Support, SupportError, supportHoldersFrom } from "./support.ts";
 import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
 import { GUIDE_CSP, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
@@ -1736,6 +1738,10 @@ export interface HandlerOptions {
     ai?: AiRadio;
     /** Tracks anybody may share, sorted onto the air by AI. */
     shares?: ListenerShares;
+    /** What a listener may know about the track on the air. */
+    facts?: (station: Station, file: string) => Promise<import("./track-facts.ts").TrackFacts>;
+    /** Copyright holders, matched to tracks by artist or station. */
+    holders?: import("./track-facts.ts").HolderStore;
     /** Proxies (by address) whose X-Forwarded-For is believed, for per-sharer limits. */
     trustedProxies?: () => Set<string>;
     /** Other servers' public stations, for this guide to list beside its own. */
@@ -1914,6 +1920,8 @@ export interface HandlerOptions {
   speech?: Speech;
   liveVoice?: LiveVoice;
   translationPasses?: TranslationPasses;
+  /** Payments to copyright holders nixamp.com collects for (support.ts). */
+  support?: Support;
   /** Signing secret of nixamp's CoinPay business, for /api/v1/webhooks/coinpay. */
   coinpayWebhookSecret?: string;
   sharedTranslations?: SharedTranslations;
@@ -2687,6 +2695,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !isPublicSharePath(path) &&
       // What is on, as MCP, for anybody.
       path !== "/mcp/public" &&
+      // Supporting a copyright holder is for anybody listening.
+      !/^\/support\/[a-z0-9-]{1,40}$/.test(path) && !/^\/api\/v1\/support\/[a-z0-9-]{1,40}$/.test(path) &&
       // A station's short link, which sends the browser to wherever it plays.
       !/^\/watch\/[a-z0-9]{10}$/.test(path) &&
       !STATION_PAGE.test(path) &&
@@ -2753,6 +2763,50 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
      * in the directory). It sends the browser to the station's own page, on
      * the server that plays it. Nothing private or unlisted is ever found.
      */
+    /* Support a copyright holder: the page, the coins, and a CoinPay checkout. */
+    const supportPage = /^\/support\/([a-z0-9-]{1,40})$/.exec(path);
+    if (supportPage && options.support && (request.method === "GET" || request.method === "HEAD")) {
+      if (!options.support.holder(supportPage[1]!)) {
+        json(response, 404, { error: "nobody by that name is supported here", code: "not_found" });
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache", "content-security-policy": SUPPORT_CSP, "referrer-policy": "no-referrer", "x-content-type-options": "nosniff" });
+      response.end(request.method === "HEAD" ? undefined : SUPPORT_PAGE);
+      return;
+    }
+    const supportApi = /^\/api\/v1\/support\/([a-z0-9-]{1,40})$/.exec(path);
+    if (supportApi && options.support) {
+      const support = options.support;
+      const holder = support.holder(supportApi[1]!);
+      if (!holder) {
+        json(response, 404, { error: "nobody by that name is supported here", code: "not_found" });
+        return;
+      }
+      try {
+        if (request.method === "GET") {
+          const { coins } = support.enabled ? await support.coins() : { coins: [] as string[] };
+          json(response, 200, { id: holder.id, name: holder.name, coins, ...(support.enabled ? {} : { error: "Support payments are not set up here." }) });
+          return;
+        }
+        if (request.method === "POST") {
+          const verdict = guard.check(`support:${callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, { allowed: 10, windowMs: 60_000 });
+          if (!verdict.ok) {
+            json(response, 429, { error: "too many at once; wait a minute", code: "rate_limited", retryAfter: verdict.retryAfter });
+            return;
+          }
+          let body: Record<string, unknown> = {};
+          try { body = JSON.parse(await readBody(request)) as Record<string, unknown>; } catch { body = {}; }
+          json(response, 200, await support.checkout({ ...body, holder: holder.id }));
+          return;
+        }
+        json(response, 405, { error: "GET or POST", code: "method_not_allowed" });
+      } catch (error) {
+        if (error instanceof SupportError) json(response, error.status, { error: error.message, code: error.code });
+        else json(response, 502, { error: "the payment service did not answer; nothing was charged", code: "provider" });
+      }
+      return;
+    }
+
     const stationShortLink = /^\/watch\/([a-z0-9]{10})$/.exec(path);
     if (stationShortLink && options.stations && (request.method === "GET" || request.method === "HEAD")) {
       const encrypted = (request.socket as { encrypted?: boolean }).encrypted === true;
@@ -2856,7 +2910,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
-    if (options.stations && (isPublicSharePath(path) || path.startsWith("/api/v1/stations/ai") || path.startsWith("/api/v1/stations/shares"))) {
+    if (options.stations && (isPublicSharePath(path) || path.startsWith("/api/v1/stations/ai") || path.startsWith("/api/v1/stations/shares") || path.startsWith("/api/v1/stations/holders"))) {
       const control = await controlOf();
       // Behind a proxy we trust (dev2 for live.streaming), the sharer is the
       // first address it names; otherwise whoever connected.
@@ -2866,6 +2920,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       const handled = await handleAiRoutes(request, response, path, url, {
         ...(options.stations.ai ? { ai: options.stations.ai } : {}),
         ...(options.stations.shares ? { shares: options.stations.shares } : {}),
+        ...(options.stations.holders ? { holders: options.stations.holders } : {}),
         canControl: control.allowed,
         caller,
         json,
@@ -2916,6 +2971,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         ...(options.stations.usage ? { usage: options.stations.usage } : {}),
         ...(options.stations.limits ? { limits: options.stations.limits } : {}),
         ...(options.stations.auto ? { auto: options.stations.auto } : {}),
+        ...(options.stations.facts ? { facts: options.stations.facts } : {}),
         ...(options.stations.peers ? { peers: () => options.stations!.peers!.entries() } : {}),
         throttle: () => {
           const verdict = guard.check(`stations:${control.account || callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, STATION_CONTROL_LIMIT);
@@ -7006,6 +7062,23 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   });
   stations.ai = aiRadio;
   stations.shares = listenerShares;
+  // The now-playing card: the file's own tags, where it came from here, and
+  // the copyright holders the owner registered.
+  const tagReader = new TagReader(tools.ffprobe);
+  const holderStore = new HolderStore(HolderStore.fileFor(stateDir(), options.port));
+  stations.holders = holderStore;
+  stations.facts = async (station, file) => {
+    const share = listenerShares.atFile(file);
+    const composed = aiRadio.trackAt(file);
+    return factsFor({
+      station, file,
+      tags: await tagReader.read(file),
+      known: trackFor(engine, file),
+      holders: holderStore.list(),
+      share: share ? { basis: share.rights.basis, note: share.rights.note, by: share.by } : null,
+      aiTrack: composed ? { made: composed.made } : null,
+    });
+  };
   // Channels as HLS, on demand, for Safari on a phone: one ffmpeg copying a
   // channel's fragments into short files while somebody is asking for them.
   // What things are, from nichedb.dev, remembered beside the keys so a
@@ -7138,6 +7211,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // is temporarily unconfigured. Self-hosters can explicitly sponsor usage.
   const translationPasses = accounts && pool && process.env["NIXAMP_TRANSLATION_BILLING"] !== "off"
     ? new TranslationPasses({ db: pool, key: coinpayKeyFrom(), site: nixampSite }) : undefined;
+  // Payments to the copyright holders nixamp.com collects for, on its own CoinPay business.
+  const supportPayments = accounts ? new Support({ key: coinpayKeyFrom(), site: nixampSite, holders: supportHoldersFrom() }) : undefined;
   if (translationPasses) void translationPasses.access().catch(() => console.error("nixamp: translation checkout could not warm; it will retry on demand"));
   const liveVoice = accounts && process.env["NIXAMP_DUBBING"] !== "off" ? new LiveVoice({
     ...(pool ? { db: pool } : {}),
@@ -7690,6 +7765,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(speech ? { speech } : {}),
     ...(liveVoice ? { liveVoice } : {}),
     ...(translationPasses ? { translationPasses } : {}),
+    ...(supportPayments ? { support: supportPayments } : {}),
     ...(process.env["COINPAY_WEBHOOK_SECRET"] ? { coinpayWebhookSecret: process.env["COINPAY_WEBHOOK_SECRET"] } : {}),
     ...(sharedTranslations ? { sharedTranslations } : {}),
     ...(translator ? { translator } : {}),

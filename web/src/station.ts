@@ -10,12 +10,23 @@ import "./styles.css";
 import "./station.css";
 
 interface NowPlaying { title: string; artist: string; album: string }
+interface TrackFacts {
+  title: string; artist: string; album: string; year: string; genre: string;
+  ai: { generated: boolean | null; by: string; evidence: string };
+  rights: { holder: string; basis: string; note: string; license: string; source: string };
+  support: { holder: string; url: string; label: string } | null;
+}
+const BASIS: Record<string, string> = {
+  owned: "owned by the station", permission: "broadcast with permission", licensed: "licensed for broadcast",
+  "creative-commons": "Creative Commons", "public-domain": "public domain",
+};
 interface StationState {
   name: string;
   description: string;
   state: "live" | "starting" | "recovering" | "stopped" | "offline" | string;
   nowPlaying: NowPlaying | null;
   kind: "audio" | "video";
+  facts?: TrackFacts | null;
 }
 
 const id = location.pathname.split("/").filter(Boolean)[1] ?? "";
@@ -45,6 +56,50 @@ const title = (s: StationState): void => {
   const playing = s.nowPlaying;
   $("#title").textContent = playing ? (playing.title || "Untitled") : (s.state === "live" ? "On the air" : "");
   $("#by").textContent = playing ? [playing.artist, playing.album].filter(Boolean).join(" · ") : "";
+};
+
+/** Who made it, AI or not, whose copyright, and how to support them. Text only, never HTML. */
+const showFacts = (f: TrackFacts | null | undefined): void => {
+  const box = $("#facts");
+  if (!f) { box.hidden = true; return; }
+  const rows: Array<[string, string]> = [];
+  if (f.artist) rows.push(["Artist", f.artist]);
+  if (f.album) rows.push(["Album", f.album]);
+  if (f.year) rows.push(["Year", f.year]);
+  if (f.genre && !/^ai$/i.test(f.genre)) rows.push(["Genre", f.genre]);
+  rows.push(["Made with AI", f.ai.generated === true ? `Yes, ${f.ai.by}` : f.ai.generated === false ? "No" : "Not stated"]);
+  const holder = f.rights.holder;
+  const basis = f.rights.basis ? BASIS[f.rights.basis] ?? f.rights.basis : "";
+  rows.push(["Copyright", holder ? `© ${holder}` : basis ? `Not stated (${basis})` : "Not stated"]);
+  if (f.rights.license) rows.push(["Licence", f.rights.license]);
+  else if (f.rights.note && f.rights.source !== "holder") rows.push(["Rights", f.rights.note]);
+  const list = $("#facts-list");
+  list.replaceChildren(...rows.flatMap(([name, value]) => {
+    const dt = document.createElement("dt"); dt.textContent = name;
+    const dd = document.createElement("dd"); dd.textContent = value;
+    return [dt, dd];
+  }));
+  const badge = $("#ai-badge");
+  badge.hidden = f.ai.generated !== true;
+  badge.textContent = f.ai.generated === true ? "AI-generated" : "";
+  badge.title = f.ai.evidence;
+  const support = $<HTMLAnchorElement>("#support");
+  const url = f.support?.url ?? "";
+  support.hidden = !/^https:\/\//.test(url);
+  if (!support.hidden) {
+    support.href = url;
+    support.textContent = `${f.support!.label || "Support"} ${f.support!.holder}`;
+  }
+  box.hidden = false;
+};
+
+const loadFacts = async (): Promise<void> => {
+  try {
+    const r = await fetch(api + "/now" + q, { cache: "no-store" });
+    if (r.ok) showFacts(((await r.json()) as { facts: TrackFacts | null }).facts);
+  } catch {
+    // The next track says it again.
+  }
 };
 
 /** A fresh request is always the live edge: never a cached or paused one. */
@@ -133,15 +188,21 @@ const poll = async (): Promise<void> => {
 const listen = (): void => {
   if (!window.EventSource) return;
   const source = new EventSource(api + "/events" + q);
-  source.addEventListener("hello", (e) => { events = true; title(JSON.parse((e as MessageEvent).data) as StationState); });
+  source.addEventListener("hello", (e) => {
+    events = true;
+    const s = JSON.parse((e as MessageEvent).data) as StationState;
+    title(s);
+    if (s.facts !== undefined) showFacts(s.facts); else void loadFacts();
+  });
   source.addEventListener("now", (e) => {
     const s = JSON.parse((e as MessageEvent).data) as StationState;
-    setTimeout(() => { title(s); say(s.nowPlaying ? "Now playing " + (s.nowPlaying.title || "") : ""); }, ahead() * 1000);
+    setTimeout(() => { title(s); showFacts(s.facts); say(s.nowPlaying ? "Now playing " + (s.nowPlaying.title || "") : ""); }, ahead() * 1000);
   });
   source.addEventListener("state", () => void poll());
   source.onerror = () => { events = false; };
 };
 
 void poll();
+void loadFacts();
 listen();
 setInterval(() => void poll(), 5000);
