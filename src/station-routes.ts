@@ -16,7 +16,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Channels } from "./channels.ts";
 import type { StationRunner } from "./station-runner.ts";
 import { alertsFor, type Limits, type StationUsage } from "./station-metering.ts";
-import type { TrackFacts } from "./track-facts.ts";
+import { aiFromTags, type TrackFacts } from "./track-facts.ts";
 import {
   StationError, channelOf, tokensMatch, type OwnerStation, type PublicStation, type Station, type StationStore,
 } from "./stations.ts";
@@ -123,6 +123,8 @@ export type GuideGroup = "ai" | "shared" | "radio" | "tv";
 
 export function guideGroup(station: Station): GuideGroup {
   if (station.auto.startsWith("ai:")) return "ai";
+  // A station whose owner declared the music AI-made ("made with Suno") is AI radio too.
+  if (station.rights?.basis === "owned" && aiFromTags({ comment: station.rights.note })) return "ai";
   if (station.auto.startsWith("share:")) return "shared";
   return station.video ? "tv" : "radio";
 }
