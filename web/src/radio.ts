@@ -778,6 +778,11 @@ async function serverChoices(): Promise<Target[]> {
     for (const one of body.servers ?? []) {
       const { base, key } = splitShareLink(one.url);
       if (!/^https?:\/\//.test(base) || base.replace(/\/+$/, "") === location.origin) continue;
+      // An https page may not call a plain-http server (mixed content): a
+      // server that registered before it had its name would only fail here.
+      if (location.protocol === "https:" && base.startsWith("http://")) continue;
+      const seen = choices.find((other) => other.base === base.replace(/\/+$/, ""));
+      if (seen) continue;
       choices.push({ id: one.id, name: one.name || new URL(base).host, base: base.replace(/\/+$/, ""), session, key: one.key || key });
     }
   } catch {
