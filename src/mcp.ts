@@ -31,6 +31,7 @@ import { describeFile, keepFile, type Described } from "./media-local.ts";
 import { fileFingerprint, idFrom, languageCode, mediaOfUrl, transcriptIdOf } from "./transcripts.ts";
 import { personaLines, readPersona, readVoices, writePersona } from "./profile.ts";
 import { STATION_TOOLS, callStationTool, isStationTool, type StationToolOptions } from "./station-mcp.ts";
+import { PUBLIC_TOOLS, callPublicTool, isPublicTool, type PublicToolOptions } from "./directory-mcp.ts";
 import { LIBRARY_TOOLS, callLibraryTool, isLibraryTool } from "./library-mcp.ts";
 
 export const PROTOCOL_VERSION = "2025-06-18";
@@ -245,6 +246,7 @@ export const TOOLS: ToolDefinition[] = [
     },
   },
   ...STATION_TOOLS,
+  ...(PUBLIC_TOOLS as unknown as ToolDefinition[]),
   ...LIBRARY_TOOLS,
 ];
 
@@ -261,6 +263,8 @@ function said(line: TrollboxLine): string {
 
 export interface McpOptions {
   fetcher?: typeof fetch;
+  /** Where the public station tools read the guide; nixamp.com's by default. */
+  guide?: PublicToolOptions["guide"];
   /** Where stations are asked; the tests hand in a local daemon. */
   stations?: StationToolOptions;
   /** Injected by the tests; the session on disk otherwise. */
@@ -315,6 +319,14 @@ function describe(row: PartyRow): string {
  * pipe, and so the same call is reachable from anywhere else that wants it.
  */
 export async function callTool(name: string, args: Record<string, unknown>, options: McpOptions = {}): Promise<ToolResult> {
+  // What is on anywhere: nixamp.com's guide, open to anybody.
+  if (isPublicTool(name)) {
+    return callPublicTool(name, args, {
+      ...(options.guide ? { guide: options.guide } : {}),
+      ...(options.fetcher ? { fetcher: options.fetcher } : {}),
+      ...(options.session?.site ? { site: options.session.site } : {}),
+    }) as unknown as ToolResult;
+  }
   // Stations first: on this machine they need the daemon, not a sign-in.
   if (isStationTool(name) || isLibraryTool(name)) {
     const local = { ...(options.fetcher ? { fetcher: options.fetcher } : {}), ...(options.session !== undefined ? { session: options.session } : {}), ...(options.stations ?? {}) };

@@ -38,11 +38,15 @@ const SCRIPT = `
 (async () => {
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
   const say = (text) => { document.querySelector("#status").textContent = text; };
-  const report = async (id, button) => {
-    if (!confirm("Report the track playing now? It comes off the air until the owner looks at it.")) return;
+  // This server's own address: through a gateway (pit.moshcode.sh/n/...) the
+  // page's origin is not the server's, and a relative fetch would ask the gateway.
+  const API = document.body.dataset.api || "";
+  const report = async (s, button) => {
+    // Click twice: a sandboxed page (the gateway's) cannot open confirm().
+    if (button.dataset.armed !== "1") { button.dataset.armed = "1"; button.textContent = "Click again to take it off the air"; return; }
     button.disabled = true;
     try {
-      const r = await fetch("/api/v1/share/report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ station: id }) });
+      const r = await fetch(new URL(s.page).origin + "/api/v1/share/report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ station: s.id }) });
       const body = await r.json();
       button.textContent = body.reported ? "Reported: off the air" : "Nothing shared is playing";
     } catch { button.textContent = "Could not report; try again"; button.disabled = false; }
@@ -60,10 +64,10 @@ const SCRIPT = `
         a.append(el("div", "live", s.state === "live" ? "● LIVE" : "off the air"), el("div", "name", s.name),
           el("div", "now", s.nowPlaying ? [s.nowPlaying.title, s.nowPlaying.artist].filter(Boolean).join(" — ") : ""));
         card.append(a);
-        if (group === "shared" && !s.peer) {
+        if (group === "shared") {
           const b = el("button", "report", "Report this track");
           b.type = "button";
-          b.addEventListener("click", () => report(s.id, b));
+          b.addEventListener("click", () => report(s, b));
           card.append(b);
         }
         grid.append(card);
@@ -73,7 +77,7 @@ const SCRIPT = `
   };
   const load = async () => {
     try {
-      const r = await fetch("/api/v1/stations/guide", { cache: "no-store" });
+      const r = await fetch(API + "/api/v1/stations/guide", { cache: "no-store" });
       if (r.ok && (r.headers.get("content-type") || "").includes("json")) draw((await r.json()).stations);
     } catch {}
   };
@@ -81,7 +85,7 @@ const SCRIPT = `
     for (let i = 0; i < 120; i++) {
       await new Promise((done) => setTimeout(done, 3000));
       try {
-        const share = (await (await fetch(status, { cache: "no-store" })).json()).share;
+        const share = (await (await fetch(API + status, { cache: "no-store" })).json()).share;
         if (!share) return;
         const words = { fetching: "Fetching it…", checking: "Listening to it and checking it…", held: "Waiting for the owner to look at it", approved: "On the air", rejected: "Not accepted", failed: "Could not use it", withdrawn: "Withdrawn", reported: "Reported" };
         say((words[share.state] || share.state) + (share.genre ? " · " + share.genre : "") + (share.reason ? " — " + share.reason : ""));
@@ -91,7 +95,7 @@ const SCRIPT = `
   };
   const form = document.querySelector("#share");
   try {
-    const info = await (await fetch("/api/v1/share", { cache: "no-store" })).json();
+    const info = await (await fetch(API + "/api/v1/share", { cache: "no-store" })).json();
     if (info.open) {
       document.querySelector("#share-title").hidden = false;
       form.hidden = false;
@@ -109,8 +113,8 @@ const SCRIPT = `
     say(file && file.size && !link ? "Uploading…" : "Sending…");
     try {
       const r = file && file.size && !link
-        ? await fetch("/api/v1/share/upload?" + new URLSearchParams({ ...fields, name: file.name }), { method: "PUT", headers: { "content-type": file.type || "audio/mpeg" }, body: file })
-        : await fetch("/api/v1/share", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...fields, agree: true, url: link }) });
+        ? await fetch(API + "/api/v1/share/upload?" + new URLSearchParams({ ...fields, name: file.name }), { method: "PUT", headers: { "content-type": file.type || "audio/mpeg" }, body: file })
+        : await fetch(API + "/api/v1/share", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...fields, agree: true, url: link }) });
       const body = await r.json();
       if (!r.ok) { say(body.error || "That did not work."); return; }
       form.reset();
@@ -149,7 +153,7 @@ const GROUPS = ["ai", "shared", "radio", "tv"] as const;
  * gateway that cannot run its script against this server (the Moshpit's
  * /n/<name>), and for a crawler. Everything from a station is escaped.
  */
-export function renderGuide(entries: GuideEntry[]): string {
+export function renderGuide(entries: GuideEntry[], apiBase = ""): string {
   const groupOf = (one: GuideEntry): string => one.group ?? (one.kind === "video" ? "tv" : "radio");
   const cards = (group: string): string => entries
     .filter((one) => groupOf(one) === group && /^https?:\/\//.test(one.page))
@@ -162,7 +166,8 @@ export function renderGuide(entries: GuideEntry[]): string {
       .replace(`<h2 id="${group}-title" hidden>`, made ? `<h2 id="${group}-title">` : `<h2 id="${group}-title" hidden>`)
       .replace(`<div id="${group}" class="grid" aria-live="polite"></div>`, `<div id="${group}" class="grid" aria-live="polite">${made}</div>`);
   }
-  return page.replace('<p id="empty" class="empty">', entries.length ? '<p id="empty" class="empty" hidden>' : '<p id="empty" class="empty">');
+  const api = /^https:\/\/[^\s"<>]+$/.test(apiBase) ? apiBase.replace(/\/+$/, "") : "";
+  return (page.replace('<p id="empty" class="empty">', entries.length ? '<p id="empty" class="empty" hidden>' : '<p id="empty" class="empty">')).replace("<body>", api ? `<body data-api="${escape(api)}">` : "<body>");
 }
 
 export const GUIDE_HTML = `<!doctype html>
@@ -218,7 +223,7 @@ export const GUIDE_HTML = `<!doctype html>
 `;
 
 export const GUIDE_CSP = [
-  "default-src 'none'", `script-src ${hash(SCRIPT)}`, `style-src ${hash(STYLE)}`, "connect-src 'self'",
+  "default-src 'none'", `script-src ${hash(SCRIPT)}`, `style-src ${hash(STYLE)}`, "connect-src 'self' https:",
   "img-src 'self' data:", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
 ].join("; ");
 

@@ -122,7 +122,7 @@ test("the MCP server introduces itself and lists its tools", async () => {
   const tools = (listed?.["result"] as { tools: { name: string }[] }).tools;
   assert.deepEqual(
     tools.map((tool) => tool.name).sort(),
-    ["library_browse", "library_scan", "library_search", "library_status", "media_get", "media_hash", "playlist_add", "playlist_create", "playlist_list", "profile_get", "profile_set", "station_ai", "station_auto", "station_control", "station_create", "station_get", "station_list", "station_publish", "station_shares", "station_unpublish", "station_update", "transcribe_audio", "transcript_get", "transcript_read", "transcripts_list", "translate_text", "trollbox_read", "trollbox_say", "voices_list", "watch_parties_list", "watch_party_end", "watch_party_get", "watch_party_host", "watch_party_sync"],
+    ["library_browse", "library_scan", "library_search", "library_status", "media_get", "media_hash", "playlist_add", "playlist_create", "playlist_list", "profile_get", "profile_set", "station_ai", "station_auto", "station_control", "station_create", "station_find", "station_get", "station_list", "station_publish", "station_share", "station_shares", "station_unpublish", "station_update", "stations_list", "transcribe_audio", "transcript_get", "transcript_read", "transcripts_list", "translate_text", "trollbox_read", "trollbox_say", "voices_list", "watch_parties_list", "watch_party_end", "watch_party_get", "watch_party_host", "watch_party_sync"],
   );
   // Every tool says what it takes, or a client cannot call it.
   for (const tool of TOOLS) assert.equal((tool.inputSchema as { type: string }).type, "object");
