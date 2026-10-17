@@ -41,6 +41,11 @@ export const USAGE = `nixamp station — make a collection into a station
   nixamp station shares approve|reject|delete SHARE
   nixamp station shares trust ADDRESS [--remove]   believe this proxy's X-Forwarded-For
 
+  Lyrics (shown on the station page from each file's own tag, else nichedb.dev; ours published back):
+  nixamp station lyrics                      the key, what was published, which stations may publish
+  nixamp station lyrics publish ID           publish a station's words now (public, listed, basis owned only)
+  nixamp station lyrics key                  nichedb's key (NIXAMP_LYRICS_KEY), from stdin (--clear forgets it)
+
   Copyright holders (the now-playing card: who holds a track's copyright, and how to support them):
   nixamp station holder list
   nixamp station holder set NAME [--artist ARTIST]... [--station ID]... [--support https://...] [--label Subscribe] [--license TEXT]

@@ -20,6 +20,19 @@
 .station-facts dt{opacity:.65}.station-facts dd{margin:0;overflow-wrap:anywhere}
 .station-support{display:inline-block;margin-top:14px;padding:10px 18px;border-radius:999px;background:#3ddc84;color:#06120a;font-weight:700;text-decoration:none}
 .station-support:focus-visible{outline:3px solid #3ddc84;outline-offset:3px}
+.station-lyrics{margin:16px 0;padding:16px;border:1px solid var(--line,#1f2a22);border-radius:12px}
+.station-lyrics summary{display:flex;align-items:baseline;gap:8px;cursor:pointer;min-height:24px;list-style-position:outside}
+.station-lyrics summary::-webkit-details-marker{display:none}
+.station-lyrics summary::before{content:"▸";opacity:.7;transition:transform .15s}
+.station-lyrics details[open] summary::before{transform:rotate(90deg)}
+.station-lyrics h2{font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;opacity:.7;margin:0}
+.station-lyrics-for{font-size:.85rem;opacity:.65;overflow-wrap:anywhere}
+.station-lyrics-text{margin-top:12px;font-size:1rem;line-height:1.6;max-width:60ch}
+.station-lyrics-text p{margin:0 0 1em;white-space:pre-wrap;overflow-wrap:anywhere}
+.station-lyrics-text p.station-lyrics-section{margin:1.2em 0 .3em;font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;opacity:.55}
+.station-lyrics-text p.station-lyrics-section:first-child{margin-top:0}
+.station-lyrics-source{margin:8px 0 0;font-size:.8rem;opacity:.6}
+@media (prefers-reduced-motion:reduce){.station-lyrics summary::before{transition:none}}
 .station-small{margin-top:16px;font-size:.85rem;opacity:.75}.station-small a{color:inherit}
 @media (prefers-reduced-motion:no-preference){.station-chip.live::before{animation:station-pulse 2s ease-in-out infinite}}
 @keyframes station-pulse{50%{opacity:.35}}

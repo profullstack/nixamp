@@ -29,6 +29,8 @@ export interface TrackFacts {
   support: { holder: string; url: string; label: string } | null;
   /** The track's own cover, on this station's link (it changes with the track); "" when it has none. */
   art: string;
+  /** Where the track's words are, on this station's link; "" when none are known. */
+  lyrics: string;
 }
 
 export interface Holder {
@@ -82,7 +84,12 @@ export class TagReader {
         try {
           const parsed = JSON.parse(out) as { format?: { tags?: Record<string, unknown> }; streams?: Array<{ tags?: Record<string, unknown> }> };
           for (const source of [...(parsed.streams ?? []).map((one) => one.tags ?? {}), parsed.format?.tags ?? {}]) {
-            for (const [name, value] of Object.entries(source)) if (typeof value === "string") tags[name.toLowerCase()] = value.slice(0, 2000);
+            for (const [name, value] of Object.entries(source)) {
+              if (typeof value !== "string") continue;
+              const lower = name.toLowerCase();
+              // A song's words run longer than any other tag (lyrics.ts).
+              tags[lower] = value.slice(0, /lyrics/.test(lower) ? 20_000 : 2000);
+            }
           }
         } catch {
           // No tags is an answer too.
@@ -140,6 +147,8 @@ export interface FactSources {
   aiTrack?: { made: string } | null;
   /** Where its cover is served, when it has one. */
   art?: string;
+  /** Where its words are served, when it has them. */
+  lyrics?: string;
 }
 
 export function factsFor(input: FactSources): TrackFacts {
@@ -176,7 +185,7 @@ export function factsFor(input: FactSources): TrackFacts {
     rights = { holder: "", basis: "", note: "", license: "", source: "" };
   }
   const support = holder && holder.support ? { holder: holder.name, url: holder.support, label: holder.label || "Support" } : null;
-  return { title, artist, album, year, genre, ai, rights, support, art: input.art ?? "" };
+  return { title, artist, album, year, genre, ai, rights, support, art: input.art ?? "", lyrics: input.lyrics ?? "" };
 }
 
 function slug(text: string): string {

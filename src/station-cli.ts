@@ -253,6 +253,8 @@ export async function station(argv: string[]): Promise<number> {
         return await aiCommand(argv.slice(1), call, show, json);
       case "shares":
         return await sharesCommand(argv.slice(1), call, show);
+      case "lyrics":
+        return await lyricsCommand(argv.slice(1), call, show, json);
       case "holder":
       case "holders": {
         const sub = argv[1] ?? "list";
@@ -385,6 +387,44 @@ async function aiCommand(argv: string[], call: Call, show: Show, json: boolean):
     }
     default:
       console.error(`nixamp station ai: no command "${sub}".\n\n${USAGE}`);
+      return 2;
+  }
+}
+
+/** `nixamp station lyrics ...`: our own songs' words, published back to nichedb.dev. */
+async function lyricsCommand(argv: string[], call: Call, show: Show, json: boolean): Promise<number> {
+  const [sub, id] = argv;
+  switch (sub) {
+    case undefined:
+    case "status":
+      return show(await call("GET", "/api/v1/stations/lyrics"), (body) => {
+        const stations = (body["stations"] as Record<string, unknown>[] | undefined) ?? [];
+        const last = body["last"] as { at: number; reports: Array<Record<string, unknown>> } | null;
+        return [
+          `key        ${body["key"] ? "set" : "- (nixamp station lyrics key, the value on stdin)"}`,
+          `target     ${String(body["target"])}`,
+          `published  ${String(body["published"])} files${body["running"] ? "; publishing now" : ""}`,
+          ...(last ? [`last run   ${new Date(last.at).toISOString()}: ${last.reports.map((one) => `${String(one["station"])} +${String(one["published"])}`).join(", ") || "nothing eligible"}`] : []),
+          ...(body["lastError"] ? [`problem    ${String(body["lastError"])}`] : []),
+          "",
+          ...stations.map((one) => `  ${String(one["id"])}  ${one["eligible"] ? "publishes" : "no       "} ${String(one["published"]).padStart(4)}/${String(one["files"]).padEnd(5)} ${String(one["name"])}${one["eligible"] ? "" : `  (${String(one["why"])})`}`),
+        ].join("\n");
+      });
+    case "publish": {
+      if (!id || id.startsWith("--")) { console.error("nixamp station lyrics publish needs a station id"); return 2; }
+      if (!json) console.log("Publishing; a second between songs…");
+      return show(await call("POST", `/api/v1/stations/lyrics/${id}/publish`, {}), (body) => {
+        const report = body["report"] as Record<string, unknown>;
+        return `${String(report["published"])} published, ${String(report["unchanged"])} already there, ${String(report["without"])} without words, ${String(report["failed"])} failed${report["stopped"] ? `\nstopped: ${String(report["stopped"])}` : ""}`;
+      });
+    }
+    case "key": {
+      const value = argv.includes("--clear") ? "" : await readStdin();
+      return show(await call("POST", "/api/v1/stations/ai/keys", { name: "NIXAMP_LYRICS_KEY", value }), (answer) =>
+        `nichedb lyrics key ${((answer["keys"] ?? {}) as Record<string, boolean>)["NIXAMP_LYRICS_KEY"] ? "set" : "cleared"}.`);
+    }
+    default:
+      console.error(`nixamp station lyrics: no command "${sub}".\n\n${USAGE}`);
       return 2;
   }
 }

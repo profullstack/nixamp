@@ -14,6 +14,8 @@ export const AI_KEY_NAMES = [
   "ELEVENLABS_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
   // Any OpenAI-compatible endpoint in OpenAI's place (Cloudflare Workers AI, Ollama, ...) and its model.
   "NIXAMP_OPENAI_URL", "NIXAMP_OPENAI_MODEL",
+  // nichedb.dev's key for publishing our own songs' words (lyrics-publish.ts).
+  "NIXAMP_LYRICS_KEY",
 ] as const;
 export type AiKeyName = (typeof AI_KEY_NAMES)[number];
 

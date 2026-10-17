@@ -192,8 +192,12 @@ export class StationStore {
     return join(stateDir, `stations-${port}.json`);
   }
 
+  /** Told after every change is written (lyrics publishing listens). */
+  onSaved: (() => void) | null = null;
+
   private save(): void {
     this.io.write(this.file, `${JSON.stringify({ version: 1, stations: [...this.stations.values()] }, null, 2)}\n`);
+    try { this.onSaved?.(); } catch { /* a listener's trouble is not the store's */ }
   }
 
   list(): Station[] {
