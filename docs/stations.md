@@ -69,6 +69,10 @@ listed station on every server, each linked at its own server. A server is in th
 its daemon announces (`--announce`) signed in to nixamp.com; `Listed at https://nixamp.com/directory`
 in its log says so, and "it needs an account" means its session ran out (`nixamp login` there).
 
+**Short watch links:** `/watch/<station id>` on nixamp.com, a guide host (live.streaming) or any
+server sends the browser to that public, listed station's own page on the server that plays it,
+here or on a peer (`https://nixamp.com/watch/24uy7gidfu`). Unlisted and private stations are 404.
+
 **MCP for anybody:** `POST https://nixamp.com/mcp/public` (any server answers it too) offers
 `stations_list` (kind, group), `station_find` (words: "data structures", "lofi") and `station_share`
 (an MP3 link to a station's server, with the sharer's basis and agreement). No sign-in. `/mcp` itself

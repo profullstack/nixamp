@@ -2687,6 +2687,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !isPublicSharePath(path) &&
       // What is on, as MCP, for anybody.
       path !== "/mcp/public" &&
+      // A station's short link, which sends the browser to wherever it plays.
+      !/^\/watch\/[a-z0-9]{10}$/.test(path) &&
       !STATION_PAGE.test(path) &&
       !isPublicAsset &&
       !isGuidePage &&
@@ -2743,6 +2745,33 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
       return { allowed: false, account: "" };
     };
+
+    /*
+     * /watch/<station id>: a short link that works on any server with a
+     * guide -- nixamp.com, or a guide host like live.streaming -- for a
+     * public, listed station here or on a peer (on nixamp.com, every server
+     * in the directory). It sends the browser to the station's own page, on
+     * the server that plays it. Nothing private or unlisted is ever found.
+     */
+    const stationShortLink = /^\/watch\/([a-z0-9]{10})$/.exec(path);
+    if (stationShortLink && options.stations && (request.method === "GET" || request.method === "HEAD")) {
+      const encrypted = (request.socket as { encrypted?: boolean }).encrypted === true;
+      const own = guideEntries({
+        store: options.stations.store, runner: options.stations.runner, channels: options.channels!, canControl: false, account: "",
+        select: () => null, trackFor: (file) => trackFor(engine, file),
+        base: `${encrypted ? "https" : "http"}://${request.headers.host ?? "localhost"}`,
+        publicBase: options.stations.publicBase?.() ?? "", json, readBody, headers: CORS,
+      });
+      const found = own.find((one) => one.id === stationShortLink[1])
+        ?? (options.stations.peers ? (await options.stations.peers.entries()).find((one) => one.id === stationShortLink[1]) : undefined);
+      if (!found || !/^https?:\/\//.test(found.page)) {
+        json(response, 404, { error: "no public station with that id", code: "not_found" });
+        return;
+      }
+      response.writeHead(302, { location: found.page, "cache-control": "no-store", "referrer-policy": "no-referrer" });
+      response.end();
+      return;
+    }
 
     if (isGuidePage) {
       const encrypted = (request.socket as { encrypted?: boolean }).encrypted === true;
