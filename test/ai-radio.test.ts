@@ -173,3 +173,19 @@ test("a model that refuses this server hands over to the next one with a key", a
   const failing = (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
   await assert.rejects(askJson({ system: "s", prompt: "p", fetcher: failing, env }), /gemini answered HTTP 500; openai answered HTTP 500/);
 });
+
+test("an OpenAI-compatible endpoint stands in for OpenAI", async () => {
+  const { askJson } = await import("../src/ai-text.ts");
+  let seen: { url: string; body: Record<string, unknown> } | null = null;
+  const fetcher = (async (url: string, init: RequestInit) => {
+    seen = { url, body: JSON.parse(String(init.body)) as Record<string, unknown> };
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'Here: {"title":"T","prompt":"P"}' } }] }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const env = { OPENAI_API_KEY: "cf", NIXAMP_OPENAI_URL: "https://api.cloudflare.com/client/v4/accounts/abc/ai/v1/", NIXAMP_OPENAI_MODEL: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" };
+  const answer = await askJson({ system: "s", prompt: "p", fetcher, env });
+  assert.equal(seen!.url, "https://api.cloudflare.com/client/v4/accounts/abc/ai/v1/chat/completions");
+  assert.equal(seen!.body["model"], "@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+  assert.equal(seen!.body["response_format"], undefined, "json_object only for OpenAI itself");
+  assert.equal(answer.model, "@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+  assert.deepEqual(answer.value, { title: "T", prompt: "P" });
+});

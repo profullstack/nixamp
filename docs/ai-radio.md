@@ -32,7 +32,12 @@ metering. It is made with its first track; each new one joins on the next track.
   `{seconds}`, `{vocals}` and `{out}` replaced (each one argument) and must leave an MP3 at `{out}`,
   e.g. a MusicGen or ACE-Step script on a GPU box.
 - **Briefs.** Gemini (`GEMINI_API_KEY`, `NIXAMP_GEMINI_MODEL`, default gemini-flash-latest), else
-  OpenAI (`OPENAI_API_KEY`, `NIXAMP_OPENAI_MODEL`, gpt-4.1-mini), else Anthropic. Without any, the
+  OpenAI (`OPENAI_API_KEY`, `NIXAMP_OPENAI_MODEL`, gpt-4.1-mini), else Anthropic; each one with a
+  key is tried in turn, so a model that refuses this server (Gemini's "User location is not
+  supported") hands over to the next. `NIXAMP_OPENAI_URL` points the OpenAI slot at any compatible
+  server, e.g. Cloudflare Workers AI (`https://api.cloudflare.com/client/v4/accounts/ID/ai/v1`, a
+  Workers AI token as `OPENAI_API_KEY`, `NIXAMP_OPENAI_MODEL=@cf/meta/llama-3.3-70b-instruct-fp8-fast`)
+  or Ollama (`http://localhost:11434/v1`). All of these can be kept in `ai.json` like the keys. Without any, the
   station's own style with a drawn mood and title. Briefs never name an artist or quote a lyric;
   a brief ElevenLabs will not make comes back with one it will, which is used once.
 - **Rights.** Unless made with `--unlisted`, the station is public, listed, and declared `owned`
