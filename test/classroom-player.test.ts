@@ -29,3 +29,20 @@ test("direct media is HTTPS only and provider pages never become media sources",
   for (const value of ["http://media.example/lesson.mp4", "https://user:password@media.example/lesson.mp4", "https://media.example/page", "javascript:alert(1)"]) assert.equal(classroomBroadcast(value), null);
   assert.equal(await classroomSource("https://pairux.com/l/ABC123", signal), null);
 });
+
+test("a station's listening link plays on backtoschool.help, as sound or pictures, and only with its own token", async () => {
+  const page = "https://server1.chovy.nixamp.com:4321/station/ab12cd34ef?t=AbCdEfGhIjKlMnOpQrStUv";
+  const broadcast = classroomBroadcast(page)!;
+  assert.equal(broadcast.provider, "station");
+  assert.equal(broadcast.url, page);
+  assert.equal(broadcast.embed, "https://server1.chovy.nixamp.com:4321/api/v1/stations/ab12cd34ef/stream?t=AbCdEfGhIjKlMnOpQrStUv");
+  for (const value of [`${page}&k=controlkey`, "https://evil.example/station/ab12cd34ef?t=AbCdEfGhIjKlMnOpQrStUv", "https://server1.chovy.nixamp.com:4321/station/ab12cd34ef", "http://server1.chovy.nixamp.com:4321/station/ab12cd34ef?t=AbCdEfGhIjKlMnOpQrStUv"]) {
+    assert.equal(classroomBroadcast(value), null, value);
+  }
+  const kind = (answer: string) => (async (input: string | URL | Request) => {
+    assert.equal(String(input), "https://server1.chovy.nixamp.com:4321/api/v1/stations/ab12cd34ef/state?t=AbCdEfGhIjKlMnOpQrStUv");
+    return Response.json({ kind: answer });
+  }) as typeof fetch;
+  assert.deepEqual(await classroomSource(page, signal, kind("video")), { src: broadcast.embed, live: true, kind: "mp4" });
+  assert.deepEqual(await classroomSource(page, signal, kind("audio")), { src: broadcast.embed, live: true, kind: "audio" });
+});

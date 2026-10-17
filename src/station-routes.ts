@@ -61,6 +61,8 @@ export interface StationContext {
   throttle?: () => { retryAfter: number } | null;
   /** Auto stations: run a sync with these settings (and keep them), or read them. */
   auto?: { sync: (input: Record<string, unknown>) => Promise<unknown>; setting: () => unknown };
+  /** The public stations other servers list (guide peers); absent when there are none. */
+  peers?: () => Promise<unknown[]>;
 }
 
 function fail(ctx: StationContext, response: ServerResponse, error: unknown): void {
@@ -160,8 +162,13 @@ export async function handleStations(
 
   // The public guide: only stations their owner made public and listed, with
   // their links, because public is what that means. Nothing else, ever.
+  // A peer asking for this one's (?local=1) gets this server's stations only.
   if (path === "/api/v1/stations/guide" && (method === "GET" || method === "HEAD")) {
-    ctx.json(response, 200, { stations: guideEntries(ctx) });
+    const own = guideEntries(ctx);
+    const shown = new Set(own.map((one) => one.page));
+    const others = url.searchParams.has("local") || !ctx.peers ? [] : (await ctx.peers())
+      .filter((one) => !shown.has((one as { page: string }).page));
+    ctx.json(response, 200, { stations: [...own, ...others] });
     return true;
   }
 

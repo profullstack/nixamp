@@ -10,6 +10,7 @@ import { emptySnapshot } from "../src/protocol.ts";
 import { createServer, type Engine } from "../src/server.ts";
 import { StationRunner } from "../src/station-runner.ts";
 import { StationStore } from "../src/stations.ts";
+import { PeerGuides, peerBase } from "../src/station-guide.ts";
 
 const memory = () => ({ read: () => null, write: () => undefined });
 
@@ -64,4 +65,52 @@ test("the guide lists only what its owner made public and listed", async () => {
     await closing;
     rmSync(top, { recursive: true, force: true });
   }
+});
+
+test("the guide lists its peers' public stations, and a peer asking gets only this one's", async () => {
+  const top = mkdtempSync(join(tmpdir(), "nixamp-guide-peer-"));
+  const store = new StationStore(join(top, "s.json"), memory());
+  const channels = new Channels({ ffmpeg: ["ffmpeg"] });
+  const runner = new StationRunner({ store, channels, pull: async () => false, roots: () => [top] });
+  const own = store.create({ name: "Server1 FM" }, ["/x.mp3"], "");
+  store.setAccess(own.id, { visibility: "public", listed: true, rights: { basis: "owned" } }, "acct");
+  const asked: string[] = [];
+  const fetcher = (async (input: string | URL | Request) => {
+    asked.push(String(input));
+    return Response.json({ stations: [
+      { id: "aaaaaaaaaa", name: "Server2 FM", kind: "video", group: "tv", state: "live", page: "https://server2.example:4321/station/aaaaaaaaaa?t=tok", nowPlaying: { title: "A film", artist: "" } },
+      // Somebody else's address in a peer's list is not the peer's to give.
+      { id: "bbbbbbbbbb", name: "Elsewhere", kind: "audio", state: "live", page: "https://evil.example/station/bbbbbbbbbb?t=x", nowPlaying: null },
+    ] });
+  }) as typeof fetch;
+  const peers = new PeerGuides(() => ["https://server2.example:4321"], fetcher);
+  const engine = { snapshot: () => ({ ...emptySnapshot(), root: top }), command: () => undefined, subscribe: () => () => undefined, trackPath: () => undefined } as unknown as Engine;
+  const server = createServer(engine, { web: null, media: true, version: "test", key: "ctl", listenKey: "lst", channels, stations: { store, runner, peers, publicBase: () => "https://server1.example:4321" } });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const port = (server.address() as AddressInfo).port;
+  try {
+    const all = JSON.parse((await get(port, "/api/v1/stations/guide", "server1.example")).body) as { stations: Array<{ name: string; peer?: boolean }> };
+    assert.deepEqual(all.stations.map((one) => one.name), ["Server1 FM", "Server2 FM"]);
+    assert.equal(all.stations[1]!.peer, true);
+    assert.deepEqual(asked, ["https://server2.example:4321/api/v1/stations/guide?local=1"]);
+    const local = JSON.parse((await get(port, "/api/v1/stations/guide?local=1", "server1.example")).body) as { stations: Array<{ name: string }> };
+    assert.deepEqual(local.stations.map((one) => one.name), ["Server1 FM"], "no ring between two peers");
+    const page = (await get(port, "/guide", "server1.example")).body;
+    assert.match(page, /Server2 FM/);
+    assert.match(page, /href="https:\/\/server2\.example:4321\/station\/aaaaaaaaaa\?t=tok"/);
+    assert.doesNotMatch(page, /Elsewhere/);
+    assert.equal(asked.length, 1, "asked once in 15 s");
+  } finally {
+    const closing = new Promise<void>((done) => server.close(() => done()));
+    (server as { closeAllConnections?: () => void }).closeAllConnections?.();
+    await closing;
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("a peer that is down drops out of the guide instead of holding it up", async () => {
+  const peers = new PeerGuides(() => ["https://down.example"], (async () => { throw new TypeError("fetch failed"); }) as typeof fetch);
+  assert.deepEqual(await peers.entries(), []);
+  assert.equal(peerBase("http://plain.example:4321"), "", "https only");
+  assert.equal(peerBase("https://server2.example:4321/admin/key"), "https://server2.example:4321");
 });

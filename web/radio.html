@@ -23,14 +23,16 @@
           <a href="#library" data-tab="library">Library</a>
           <a href="#stations" data-tab="stations">Radio</a>
         </nav>
-        <span id="who" class="chip"></span>
+        <label class="server-pick">Server
+          <select id="server"></select>
+        </label>
       </header>
 
       <p id="notice" class="radio-notice" role="alert" hidden></p>
 
       <section id="stations" class="panel radio-section" aria-labelledby="stations-title">
         <h2 id="stations-title" class="radio-title">My stations</h2>
-        <p class="hint">A station plays a folder or a playlist from this server, round and round, for anyone with its link. New stations are private and stopped; starting one does not publish it.</p>
+        <p class="hint">A station plays a folder or a playlist from the server picked above, round and round, for anyone with its link. New stations are private and stopped; starting one does not publish it. Tick <strong>live.streaming</strong> or <strong>backtoschool.help</strong> on a station to put it on the air there.</p>
         <div id="station-list" class="station-list" aria-live="polite"></div>
         <details id="new-station" class="radio-form">
           <summary>New station</summary>
@@ -64,7 +66,7 @@
             <label class="inline"><input type="radio" name="visibility" value="public" /> Public: the link, and listed if you choose</label>
           </fieldset>
           <div id="public-only">
-            <label class="inline"><input type="checkbox" name="listed" checked /> List it in the nixamp.com directory</label>
+            <label class="inline"><input type="checkbox" name="listed" checked /> List it on live.streaming</label>
             <label>On what basis may this be broadcast?
               <select name="basis">
                 <option value="">Choose…</option>

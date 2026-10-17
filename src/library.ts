@@ -29,6 +29,8 @@ export interface Config {
   autoStations?: Record<string, unknown>;
   /** Hosts (e.g. Moshpit names) whose front page is the public station guide. */
   guideHosts?: string[];
+  /** Other servers (https base addresses) whose public, listed stations this guide shows too. */
+  guidePeers?: string[];
   /** Station limits kept across restarts (station-metering.ts). */
   limits?: Record<string, unknown>;
   /** Proxies whose X-Forwarded-For is believed for listener shares (`nixamp station shares trust ADDRESS`). */
@@ -51,6 +53,7 @@ export function readConfig(): Config {
       ...(typeof record["limits"] === "object" && record["limits"] !== null ? { limits: record["limits"] as Record<string, unknown> } : {}),
       ...(Array.isArray(record["trustedProxies"]) ? { trustedProxies: (record["trustedProxies"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
       ...(Array.isArray(record["guideHosts"]) ? { guideHosts: (record["guideHosts"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
+      ...(Array.isArray(record["guidePeers"]) ? { guidePeers: (record["guidePeers"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
     };
   } catch {
     return {};

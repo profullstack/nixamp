@@ -70,3 +70,11 @@
   .now-bar { flex-direction: column; align-items: stretch; }
   .now-bar audio { max-width: none; width: 100%; }
 }
+
+/* Which of the owner's servers this page drives. */
+.server-pick { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; margin-left: auto; }
+.server-pick select { max-width: 16rem; }
+/* Where a station is on the air: one tick each. */
+.targets { display: flex; gap: 16px; flex-wrap: wrap; margin: 6px 0; }
+.targets label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.targets a { font-size: 13px; }

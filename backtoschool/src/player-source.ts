@@ -1,13 +1,21 @@
 import { classroomBroadcast } from "../../src/classroom.ts";
 import { apiUrl, splitShareLink } from "../../web/src/remote.ts";
 
-export interface ClassroomSource { src: string; live: boolean; kind?: "hls" | "audio"; }
+export interface ClassroomSource { src: string; live: boolean; kind?: "hls" | "audio" | "mp4"; }
 
 /** Resolve viewer links without loading another document or sending viewer keys elsewhere. */
 export async function classroomSource(value: unknown, signal: AbortSignal, request: typeof fetch = fetch): Promise<ClassroomSource | null> {
   const broadcast = classroomBroadcast(value);
   if (!broadcast || broadcast.provider === "pairux") return null;
   if (broadcast.provider === "media") return { src: broadcast.url, live: false };
+  if (broadcast.provider === "station") {
+    // Sound or pictures is the station's to say; its link may ask.
+    const state = broadcast.embed.replace(/\/stream\?/, "/state?");
+    const response = await request(state, { signal });
+    if (!response.ok) throw new Error("The broadcast could not be loaded. Try again.");
+    const station = await response.json() as { kind?: string };
+    return { src: broadcast.embed, live: true, kind: station.kind === "video" ? "mp4" : "audio" };
+  }
   const url = new URL(broadcast.url);
   const play = url.searchParams.get("play")!;
   if (play.startsWith("https://")) return { src: play, live: false };

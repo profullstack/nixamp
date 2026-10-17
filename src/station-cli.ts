@@ -199,6 +199,21 @@ export async function station(argv: string[]): Promise<number> {
         console.log(hosts.size ? `The guide is the front page for: ${[...hosts].join(", ")}` : "No host shows the guide as its front page (it is still at /guide).");
         return 0;
       }
+      case "guide-peer": {
+        // Another server whose public, listed stations this guide shows too.
+        const { readConfig, writeConfig } = await import("./library.ts");
+        const { peerBase } = await import("./station-guide.ts");
+        const peer = peerBase(id ?? "");
+        if (id && !peer) {
+          console.error("A guide peer is an https address, e.g. https://server2.example.com:4321");
+          return 2;
+        }
+        const peers = new Set(readConfig().guidePeers ?? []);
+        if (argv.includes("--remove")) peers.delete(peer); else if (peer) peers.add(peer);
+        writeConfig({ guidePeers: [...peers] });
+        console.log(peers.size ? `The guide also lists the public stations of: ${[...peers].join(", ")}` : "The guide lists only this server's stations.");
+        return 0;
+      }
       case "auto": {
         const body: Record<string, unknown> = argv.includes("--off") ? { off: true } : {
           ...(argv.includes("--no-video") ? { video: false } : {}),

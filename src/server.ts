@@ -81,7 +81,7 @@ import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
 import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
-import { GUIDE_CSP, guideHosts, renderGuide } from "./station-guide.ts";
+import { GUIDE_CSP, guideHosts, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
 import { STATION_CONTROL_LIMIT, StationUsage, limitsFromEnv, type Limits } from "./station-metering.ts";
@@ -1459,7 +1459,7 @@ const CORS: Record<string, string> = {
   // control API has to be reachable cross-origin. It exposes no filesystem
   // paths and takes six commands; binding to 127.0.0.1 is what keeps it shut.
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
   "access-control-allow-headers": "content-type, authorization",
   "access-control-max-age": "86400",
 };
@@ -1737,6 +1737,8 @@ export interface HandlerOptions {
     shares?: ListenerShares;
     /** Proxies (by address) whose X-Forwarded-For is believed, for per-sharer limits. */
     trustedProxies?: () => Set<string>;
+    /** Other servers' public stations, for this guide to list beside its own. */
+    peers?: PeerGuides;
   };
   web: string | null;
   /** Branded clients on this same backend, keyed by an explicitly configured host. */
@@ -2697,7 +2699,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // server was refused, and the address of a machine you administer was
       // useless without a link you had to go and find.
       if (scope === null && options.owner) {
-        const check = await options.owner.check(false, tokenFrom(request.headers));
+        // In the query too, as controlOf takes it: an <audio> on another
+        // origin (nixamp.com/radio) cannot send a header.
+        const check = await options.owner.check(false, tokenFrom(request.headers) || url.searchParams.get("session") || "");
         if (check.allowed) scope = "control";
       }
       if (scope === null) {
@@ -2753,7 +2757,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         readBody,
         headers: CORS,
       });
-      const page = renderGuide(entries);
+      const own = new Set(entries.map((one) => one.page));
+      const others = options.stations!.peers ? (await options.stations!.peers.entries()).filter((one) => !own.has(one.page)) : [];
+      const page = renderGuide([...entries, ...others] as GuideEntry[]);
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-cache",
@@ -2878,6 +2884,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         ...(options.stations.usage ? { usage: options.stations.usage } : {}),
         ...(options.stations.limits ? { limits: options.stations.limits } : {}),
         ...(options.stations.auto ? { auto: options.stations.auto } : {}),
+        ...(options.stations.peers ? { peers: () => options.stations!.peers!.entries() } : {}),
         throttle: () => {
           const verdict = guard.check(`stations:${control.account || callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, STATION_CONTROL_LIMIT);
           return verdict.ok ? null : { retryAfter: verdict.retryAfter };
@@ -6844,6 +6851,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     trustedProxies: () => new Set([...(process.env["NIXAMP_TRUSTED_PROXIES"] ?? "").split(","), ...(readConfig().trustedProxies ?? [])].map((one) => one.trim()).filter(Boolean)),
     // Known once the server has worked out its addresses, after it is listening.
     publicBase: () => (publishable_?.url ?? "").replace(/\/+$/, ""),
+    peers: new PeerGuides(),
   };
   // Music handed over from BitTorrented, copied into a folder of our own.
   const importer = new Importer(join(stateDir(), `handoffs-${options.port}.json`), {
