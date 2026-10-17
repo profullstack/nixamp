@@ -46,7 +46,7 @@ const SCRIPT = `
   const load = async () => {
     try {
       const r = await fetch("/api/v1/stations/guide", { cache: "no-store" });
-      if (r.ok) draw((await r.json()).stations);
+      if (r.ok && (r.headers.get("content-type") || "").includes("json")) draw((await r.json()).stations);
     } catch {}
   };
   await load();
@@ -55,6 +55,38 @@ const SCRIPT = `
 `;
 
 const hash = (text: string): string => `'sha256-${createHash("sha256").update(text).digest("base64")}'`;
+
+function escape(text: string): string {
+  return text.replace(/[&<>"']/g, (one) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[one]!);
+}
+
+export interface GuideEntry {
+  name: string;
+  kind: "audio" | "video";
+  state: string;
+  page: string;
+  nowPlaying: { title: string; artist: string } | null;
+}
+
+/**
+ * The guide with its stations already in it, so it reads the same through a
+ * gateway that cannot run its script against this server (the Moshpit's
+ * /n/<name>), and for a crawler. Everything from a station is escaped.
+ */
+export function renderGuide(entries: GuideEntry[]): string {
+  const cards = (kind: "audio" | "video"): string => entries
+    .filter((one) => one.kind === kind && /^https?:\/\//.test(one.page))
+    .map((one) => `<a class="station" href="${escape(one.page)}"><div class="live">${one.state === "live" ? "● LIVE" : "off the air"}</div><div class="name">${escape(one.name)}</div><div class="now">${one.nowPlaying ? escape([one.nowPlaying.title, one.nowPlaying.artist].filter(Boolean).join(" — ")) : ""}</div></a>`)
+    .join("");
+  const radio = cards("audio");
+  const tv = cards("video");
+  return GUIDE_HTML
+    .replace('<h2 id="radio-title" hidden>', radio ? '<h2 id="radio-title">' : '<h2 id="radio-title" hidden>')
+    .replace('<div id="radio" class="grid" aria-live="polite"></div>', `<div id="radio" class="grid" aria-live="polite">${radio}</div>`)
+    .replace('<h2 id="tv-title" hidden>', tv ? '<h2 id="tv-title">' : '<h2 id="tv-title" hidden>')
+    .replace('<div id="tv" class="grid" aria-live="polite"></div>', `<div id="tv" class="grid" aria-live="polite">${tv}</div>`)
+    .replace('<p id="empty" class="empty">', entries.length ? '<p id="empty" class="empty" hidden>' : '<p id="empty" class="empty">');
+}
 
 export const GUIDE_HTML = `<!doctype html>
 <html lang="en">

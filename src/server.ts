@@ -71,14 +71,14 @@ import { ArtCache, coverArtOf, stillFrom } from "./art.ts";
 import { PartyLine, telnyxSms } from "./partyline.ts";
 import { HlsPackagers, segmentType, withKey } from "./hls.ts";
 import { refusedDestination } from "./destinations.ts";
-import { handleStations, isStationListenPath } from "./station-routes.ts";
+import { guideEntries, handleStations, isStationListenPath } from "./station-routes.ts";
 import { handleLibrary } from "./library-routes.ts";
 import { LibraryIndex, probeItem, trackOf, type Probed } from "./library-index.ts";
 import { ListenerStore } from "./library-user.ts";
 import { Importer } from "./handoff.ts";
 import { handleHandoffs } from "./handoff-routes.ts";
 import { STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
-import { GUIDE_CSP, GUIDE_HTML, guideHosts } from "./station-guide.ts";
+import { GUIDE_CSP, guideHosts, renderGuide } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
 import { STATION_CONTROL_LIMIT, StationUsage, limitsFromEnv, type Limits } from "./station-metering.ts";
@@ -1726,6 +1726,8 @@ export interface HandlerOptions {
     usage?: StationUsage;
     limits?: Limits;
     auto?: { sync: (input: Record<string, unknown>) => Promise<unknown>; setting: () => unknown };
+    /** This server's public https address, once it is known. */
+    publicBase?: () => string;
   };
   web: string | null;
   /** Branded clients on this same backend, keyed by an explicitly configured host. */
@@ -2720,6 +2722,22 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     };
 
     if (isGuidePage) {
+      const encrypted = (request.socket as { encrypted?: boolean }).encrypted === true;
+      const entries = guideEntries({
+        store: options.stations!.store,
+        runner: options.stations!.runner,
+        channels: options.channels!,
+        canControl: false,
+        account: "",
+        select: () => null,
+        trackFor: (file) => trackFor(engine, file),
+        base: `${encrypted ? "https" : "http"}://${request.headers.host ?? "localhost"}`,
+        publicBase: options.stations!.publicBase?.() ?? "",
+        json,
+        readBody,
+        headers: CORS,
+      });
+      const page = renderGuide(entries);
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-cache",
@@ -2727,7 +2745,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
       });
-      response.end(request.method === "HEAD" ? undefined : GUIDE_HTML);
+      response.end(request.method === "HEAD" ? undefined : page);
       return;
     }
 
@@ -2810,6 +2828,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         },
         trackFor: (file) => trackFor(engine, file),
         base: `${scheme}://${request.headers.host ?? "localhost"}`,
+        publicBase: options.stations.publicBase?.() ?? "",
         json,
         readBody,
         headers: CORS,
@@ -6777,7 +6796,11 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       return { started: true, settings };
     },
   };
-  const stations = { store: stationStore, runner: stationRunner, usage: stationUsage, limits: stationLimits, auto: stationAuto };
+  const stations = {
+    store: stationStore, runner: stationRunner, usage: stationUsage, limits: stationLimits, auto: stationAuto,
+    // Known once the server has worked out its addresses, after it is listening.
+    publicBase: () => (publishable_?.url ?? "").replace(/\/+$/, ""),
+  };
   // Music handed over from BitTorrented, copied into a folder of our own.
   const importer = new Importer(join(stateDir(), `handoffs-${options.port}.json`), {
     index: libraryIndex,
