@@ -24,6 +24,9 @@ export interface RunnerDeps {
   roots: () => string[];
   log?: (line: string) => void;
   now?: () => number;
+  /** Told when a station is restarted after an unexpected end, and when a file will not play. */
+  onRestart?: (id: string) => void;
+  onFailure?: (id: string) => void;
 }
 
 /** Something a listener is connected through, that can be ended. */
@@ -42,6 +45,8 @@ export class StationRunner {
   private starting = new Set<string>();
   private errors = new Map<string, string>();
   private listening = new Map<string, Set<Ending>>();
+  /** When a station that should be on went off, for "off the air for N minutes". */
+  private down = new Map<string, number>();
 
   constructor(private readonly deps: RunnerDeps) {}
 
@@ -76,6 +81,7 @@ export class StationRunner {
   /** Wanted off, and taken off. Stays off across restarts. */
   stop(id: string): Station {
     const station = this.deps.store.setDesired(id, "stopped", this.now());
+    this.down.delete(id);
     this.cancelRecovery(id);
     this.attempts.delete(id);
     this.errors.delete(id);
@@ -139,6 +145,7 @@ export class StationRunner {
           excluded: (file) => store.isExcluded(id, file),
           onFailure: ({ file, reason }) => {
             this.errors.set(id, reason);
+            this.deps.onFailure?.(id);
             if (store.recordFailure(id, file)) {
               this.log(`  Station "${station.name}": left out a file that failed ${EXCLUDE_AFTER} times.`);
             }
@@ -151,6 +158,7 @@ export class StationRunner {
         return false;
       }
       this.startedAt.set(id, this.now());
+      this.down.delete(id);
       this.deps.channels.keep(channelId);
       return true;
     } catch (error) {
@@ -176,6 +184,8 @@ export class StationRunner {
       this.errors.delete(id);
       return;
     }
+    if (!this.down.has(id)) this.down.set(id, this.now());
+    this.deps.onRestart?.(id);
     const ran = this.now() - (this.startedAt.get(id) ?? 0);
     if (ran >= HEALTHY_RUN_MS) this.attempts.delete(id);
     this.errors.set(id, info.error || "the station stopped");
@@ -209,6 +219,11 @@ export class StationRunner {
     const info = this.deps.channels.info(channelOf(id));
     if (info) return info.redials ? "recovering" : "live";
     return (this.attempts.get(id) ?? 0) <= RECOVERY_DELAYS_MS.length && this.timers.has(id) ? "recovering" : "offline";
+  }
+
+  /** When it went off while wanted, or 0 when it is not off. */
+  downSince(id: string): number {
+    return this.down.get(id) ?? 0;
   }
 
   error(id: string): string {

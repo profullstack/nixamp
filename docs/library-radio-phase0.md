@@ -265,6 +265,14 @@ run in parallel. P1a should ship first because it fixes behavior that is live to
   idempotency, per-file grants, copies with size + SHA-256, expiry, retry, private draft.
 - BitTorrented side: grant route, scope, handoff call and UI (media-streamer PR).
 
+## P1h status (0.35.0)
+
+- Done: per-station monthly metering (bytes, listener-seconds, peak, restarts, failures),
+  operator limits per station / server / running stations / monthly allowance with actionable
+  refusals, control rate limit apart from listening, metrics endpoint, alerts in the owner view
+  and the console. Phase 1 is complete at the code level; Phase 2 (the seven-day pilot and
+  five outside creators) is operational and needs real people.
+
 ## Phase 0 items still open
 
 - [x] One external listener: dev2 pulled 12 s of server1 `/api/live` over https with the listen key

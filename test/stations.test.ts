@@ -11,6 +11,7 @@ import { createServer, pullChannel, type Engine } from "../src/server.ts";
 import { StationRunner } from "../src/station-runner.ts";
 import { station as stationCli } from "../src/station-cli.ts";
 import { StationError, StationStore, channelOf, insideRoots, shuffled } from "../src/stations.ts";
+import { StationUsage } from "../src/station-metering.ts";
 
 const available = spawnSync("ffmpeg", ["-version"]).status === 0 && spawnSync("ffprobe", ["-version"]).status === 0;
 const CONTROL = "control-key-for-tests";
@@ -119,7 +120,9 @@ test("stations over HTTP: owner manages, a link only listens, private means priv
     pull: async (id, name, list, known) => Boolean(await pullChannel(channels, ["ffprobe"], id, name, list[0]!, [], "", { playlist: list, live: true, ...known })),
     roots: () => [root],
   });
-  const server = createServer(engine, { web: null, media: true, version: "test", key: CONTROL, listenKey: LISTEN, channels, stations: { store, runner } });
+  const usage = new StationUsage(StationUsage.fileFor(state, 1));
+  const limits = { stationListeners: 2, totalListeners: 10, runningStations: 1, monthlyBytes: 0 };
+  const server = createServer(engine, { web: null, media: true, version: "test", key: CONTROL, listenKey: LISTEN, channels, stations: { store, runner, usage, limits } });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const asOwner = (path: string, init: RequestInit = {}) => fetch(`${base}${path}${path.includes("?") ? "&" : "?"}k=${CONTROL}`, init);
@@ -183,6 +186,22 @@ test("stations over HTTP: owner manages, a link only listens, private means priv
     const a = await readSome(first, 4096);
     const b = await readSome(second, 4096);
     assert.ok(a.got >= 4096 && b.got >= 4096, `heard ${a.got} and ${b.got} bytes`);
+    // A third is over this station's limit of two, and is told so.
+    const third = await fetch(streamUrl);
+    assert.equal(third.status, 503);
+    assert.equal(((await third.json()) as { code: string }).code, "station_full");
+    assert.equal(third.headers.get("retry-after"), "60");
+    // Delivery is counted, and the owner sees it.
+    const metrics = await (await asOwner(`/api/v1/stations/${station.id}/metrics`)).json() as { listeners: number; month: { bytes: number; peakListeners: number } };
+    assert.equal(metrics.listeners, 2);
+    assert.ok(metrics.month.bytes >= 8192, `counted ${metrics.month.bytes} bytes`);
+    assert.equal(metrics.month.peakListeners, 2);
+    // One station running is this server's limit: a second is refused by name.
+    const other = await (await asOwner("/api/v1/stations", post({ name: "Second FM", folder: "" }))).json() as { station: { id: string } };
+    const tooMany = await asOwner(`/api/v1/stations/${other.station.id}/start`, post({}));
+    assert.equal(tooMany.status, 409);
+    assert.equal(((await tooMany.json()) as { code: string }).code, "too_many_running");
+    await asOwner(`/api/v1/stations/${other.station.id}`, { method: "DELETE" });
     await b.reader.cancel();
 
     // Now playing is the tags, not the file name.

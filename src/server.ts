@@ -80,6 +80,7 @@ import { handleHandoffs } from "./handoff-routes.ts";
 import { STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
+import { STATION_CONTROL_LIMIT, StationUsage, limitsFromEnv, type Limits } from "./station-metering.ts";
 import { CompressionService } from "./compression/service.ts";
 import { handleChannelCompression, handleCompressionApi, handleStaticRelay, type RouteContext } from "./compression/routes.ts";
 import { DEFAULT_SITE as NICHEDB, Enricher, type EnrichKind, FIXTURE_TTL_MS } from "./enrich.ts";
@@ -1716,7 +1717,7 @@ export interface HandlerOptions {
   /** Music handed over from BitTorrented. */
   importer?: Importer;
   /** This server's stations and what keeps them on the air. */
-  stations?: { store: StationStore; runner: StationRunner };
+  stations?: { store: StationStore; runner: StationRunner; usage?: StationUsage; limits?: Limits };
   web: string | null;
   /** Branded clients on this same backend, keyed by an explicitly configured host. */
   webSites?: ReadonlyMap<string, import("./web-sites.ts").WebSite>;
@@ -2785,6 +2786,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json,
         readBody,
         headers: CORS,
+        ...(options.stations.usage ? { usage: options.stations.usage } : {}),
+        ...(options.stations.limits ? { limits: options.stations.limits } : {}),
+        throttle: () => {
+          const verdict = guard.check(`stations:${control.account || callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, STATION_CONTROL_LIMIT);
+          return verdict.ok ? null : { retryAfter: verdict.retryAfter };
+        },
       });
       return;
     }
@@ -6652,7 +6659,13 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   const listeners = new ListenerStore(ListenerStore.fileFor(stateDir(), options.port));
   const library = { index: libraryIndex, probe: probeFile, retag: retagPlayer, listeners };
   const stationStore = new StationStore(StationStore.fileFor(stateDir(), options.port));
+  // What stations deliver, per month, and the operator's limits on it.
+  const stationUsage = new StationUsage(StationUsage.fileFor(stateDir(), options.port));
+  const stationLimits = limitsFromEnv();
+  process.once("exit", () => stationUsage.flush());
   stationRunner = new StationRunner({
+    onRestart: (id) => stationUsage.restarted(id),
+    onFailure: (id) => stationUsage.failed(id),
     store: stationStore,
     channels,
     pull: async (channelId, name, files, known) =>
@@ -6666,7 +6679,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     roots: () => [...new Set([engine.snapshot(false).root || chosen, ...libraryIndex.roots()])].filter((one) => one !== ""),
     log: (line) => console.log(line),
   });
-  const stations = { store: stationStore, runner: stationRunner };
+  const stations = { store: stationStore, runner: stationRunner, usage: stationUsage, limits: stationLimits };
   // Music handed over from BitTorrented, copied into a folder of our own.
   const importer = new Importer(join(stateDir(), `handoffs-${options.port}.json`), {
     index: libraryIndex,
