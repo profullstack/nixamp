@@ -31,6 +31,7 @@ import { describeFile, keepFile, type Described } from "./media-local.ts";
 import { fileFingerprint, idFrom, languageCode, mediaOfUrl, transcriptIdOf } from "./transcripts.ts";
 import { personaLines, readPersona, readVoices, writePersona } from "./profile.ts";
 import { STATION_TOOLS, callStationTool, isStationTool, type StationToolOptions } from "./station-mcp.ts";
+import { LIBRARY_TOOLS, callLibraryTool, isLibraryTool } from "./library-mcp.ts";
 
 export const PROTOCOL_VERSION = "2025-06-18";
 
@@ -244,6 +245,7 @@ export const TOOLS: ToolDefinition[] = [
     },
   },
   ...STATION_TOOLS,
+  ...LIBRARY_TOOLS,
 ];
 
 interface TrollboxLine {
@@ -314,8 +316,9 @@ function describe(row: PartyRow): string {
  */
 export async function callTool(name: string, args: Record<string, unknown>, options: McpOptions = {}): Promise<ToolResult> {
   // Stations first: on this machine they need the daemon, not a sign-in.
-  if (isStationTool(name)) {
-    return callStationTool(name, args, { ...(options.fetcher ? { fetcher: options.fetcher } : {}), ...(options.session !== undefined ? { session: options.session } : {}), ...(options.stations ?? {}) });
+  if (isStationTool(name) || isLibraryTool(name)) {
+    const local = { ...(options.fetcher ? { fetcher: options.fetcher } : {}), ...(options.session !== undefined ? { session: options.session } : {}), ...(options.stations ?? {}) };
+    return isStationTool(name) ? callStationTool(name, args, local) : callLibraryTool(name, args, local);
   }
   const session = options.session === undefined ? readSession() : options.session;
   if (!session) {

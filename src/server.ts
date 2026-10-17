@@ -72,6 +72,8 @@ import { PartyLine, telnyxSms } from "./partyline.ts";
 import { HlsPackagers, segmentType, withKey } from "./hls.ts";
 import { refusedDestination } from "./destinations.ts";
 import { handleStations, isStationListenPath } from "./station-routes.ts";
+import { handleLibrary } from "./library-routes.ts";
+import { LibraryIndex, probeItem, trackOf, type Probed } from "./library-index.ts";
 import { STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
@@ -1706,6 +1708,8 @@ async function readBytes(request: IncomingMessage, limit: number): Promise<Uint8
 }
 
 export interface HandlerOptions {
+  /** The library as an index: sources, items, search. */
+  library?: { index: LibraryIndex; probe: (path: string) => Promise<Probed>; retag: (tracks: Track[]) => void };
   /** This server's stations and what keeps them on the air. */
   stations?: { store: StationStore; runner: StationRunner };
   web: string | null;
@@ -2705,6 +2709,24 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         "x-content-type-options": "nosniff",
       });
       response.end(request.method === "HEAD" ? undefined : STATION_PAGE_HTML);
+      return;
+    }
+
+    // Past the key gate is past it: the owner, or somebody given the listen
+    // link, may read the library; only the owner may change it.
+    if (options.library && (path === "/api/v1/library" || path.startsWith("/api/v1/library/"))) {
+      const control = await controlOf();
+      await handleLibrary(request, response, path, url, {
+        index: options.library.index,
+        canRead: true,
+        canWrite: control.allowed,
+        account: control.account,
+        probe: options.library.probe,
+        retag: options.library.retag,
+        sendFile,
+        json,
+        readBody,
+      });
       return;
     }
 
@@ -6392,7 +6414,7 @@ function isFile(path: string): boolean {
   }
 }
 
-function sendFile(request: IncomingMessage, response: ServerResponse, file: string): void {
+function sendFile(request: IncomingMessage, response: ServerResponse, file: string, cache?: string): void {
   let size: number;
   try {
     size = statSync(file).size;
@@ -6409,7 +6431,7 @@ function sendFile(request: IncomingMessage, response: ServerResponse, file: stri
   };
   // The shell must never be cached by a service worker's fetch fallback, but
   // hashed assets and audio can be.
-  headers["cache-control"] = type.startsWith("text/html") ? "no-cache" : "public, max-age=3600";
+  headers["cache-control"] = cache ?? (type.startsWith("text/html") ? "no-cache" : "public, max-age=3600");
 
   if (range) {
     headers["content-range"] = `bytes ${range.start}-${range.end}/${size}`;
@@ -6550,6 +6572,22 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       stationRunner?.onChannelEnd(info);
     },
   });
+  // The library as an index kept beside the keys: what each file is, learned
+  // once and asked about again only when it changes. The folder this server
+  // was started on is its first source.
+  const libraryIndex = new LibraryIndex(LibraryIndex.fileFor(stateDir(), options.port));
+  const homeSource = (() => {
+    try {
+      return !isRemote(root) && statSync(root).isDirectory() ? libraryIndex.ensureSource(root, options.owner || "") : null;
+    } catch {
+      return null;
+    }
+  })();
+  const probeFile = (path: string): Promise<Probed> => probeItem(tools, path);
+  const retagPlayer = (tracks: Track[]): void => {
+    if (tracks.length > 0) engine.retag(tracks, root);
+  };
+  const library = { index: libraryIndex, probe: probeFile, retag: retagPlayer };
   const stationStore = new StationStore(StationStore.fileFor(stateDir(), options.port));
   stationRunner = new StationRunner({
     store: stationStore,
@@ -6562,7 +6600,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
         audioBitrate: known.audioBitrate,
       })),
     // The library as it is now, or as it was chosen while it is still being read.
-    roots: () => [engine.snapshot(false).root || chosen].filter((one) => one !== ""),
+    roots: () => [...new Set([engine.snapshot(false).root || chosen, ...libraryIndex.roots()])].filter((one) => one !== ""),
     log: (line) => console.log(line),
   });
   const stations = { store: stationStore, runner: stationRunner };
@@ -7158,6 +7196,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     owner,
     channels,
     stations,
+    library,
     rememberChannels: remembering,
     catalogs,
     publishUrls: () => publishUrls,
@@ -7453,15 +7492,23 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       }
       console.log(`nixamp serve — ${found.length} tracks under ${root}`);
       if (isRemote(root)) return;
-      // Handed the files we already found. Tagging used to walk the whole
-      // library a second time to discover the same paths, and that second walk
-      // was the one that ran with the port already open.
-      return loadTagged(tools, root, probeAsync, found.map((track) => track.path))
-        .then((tagged) => engine.retag(tagged, root))
-        .catch(() => {
-          // Filenames are a working player. A failure here is worth nothing
-          // but titles that stay as they are.
-        });
+      if (!homeSource) {
+        // A playlist file or a single file: tagged as it always was.
+        return loadTagged(tools, root, probeAsync, found.map((track) => track.path))
+          .then((tagged) => engine.retag(tagged, root))
+          .catch(() => undefined);
+      }
+      // What is already known, at once: a restart has its tags before the
+      // first listener arrives. Then only new and changed files are asked
+      // about, and their tags reach the player a couple of hundred at a time
+      // rather than all at the end.
+      retagPlayer(libraryIndex.tracksFor(found.map((track) => track.path)));
+      const { done } = libraryIndex.scan(homeSource.id, probeFile, {
+        onProgress: (changed) => retagPlayer(changed.filter((one) => one.state === "ready").map(trackOf)),
+      });
+      return done.then((report) => {
+        console.log(`nixamp serve — library: ${report.unchanged} unchanged, ${report.probed} read${report.failed ? `, ${report.failed} would not read` : ""}${report.missing ? `, ${report.missing} gone` : ""}${report.outside ? `, ${report.outside} links outside left out` : ""}.`);
+      });
     })
     .catch((error: unknown) => {
       console.log(`nixamp: could not read ${root}: ${(error as Error).message}`);

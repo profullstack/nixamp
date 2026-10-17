@@ -234,6 +234,15 @@ run in parallel. P1a should ship first because it fixes behavior that is live to
 - Next: library sources + persisted index (P1d), MCP tools and web Library/Radio nav (P1f),
   per-station now-playing SSE aligned to audible output (P1e), BitTorrented handoff (P1g).
 
+## P1d status (0.31.0)
+
+- Done: persisted library index ([library.md](library.md)): sources with approved roots and a
+  symlink policy, stable item ids, item states, fuller tags, owner corrections, incremental
+  rescans (restart has its tags at once), paginated search and browse, item streaming, CLI and
+  MCP. LIB-01, LIB-02, LIB-03 (states; the bounded cache arrives with managed storage) and the
+  search half of LIB-04.
+- Next in P1d: playlists CRUD and the per-user queue with resume across devices.
+
 ## Phase 0 items still open
 
 - [x] One external listener: dev2 pulled 12 s of server1 `/api/live` over https with the listen key
