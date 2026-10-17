@@ -28,7 +28,7 @@ export const STATION_TOOLS = [
   },
   {
     name: "station_create",
-    description: "Make a station from a folder in the library (path relative to it, \"\" for all of it) or from track indexes. It starts private and stopped; nothing is published.",
+    description: "Make a station from a folder in the library (path relative to it, \"\" for all of it), a playlist, or track indexes. It starts private and stopped; nothing is published.",
     inputSchema: {
       type: "object",
       properties: {
@@ -36,6 +36,7 @@ export const STATION_TOOLS = [
         name: STRING,
         folder: { ...STRING, description: "A folder under the library, e.g. \"Albums/Late Night\"." },
         items: { type: "array", items: { type: "integer" }, description: "Track indexes, as /api/state lists them." },
+        playlist: { ...STRING, description: "A playlist id (playlist_list): the station plays its ready items in order." },
         description: STRING,
         shuffle: { type: "boolean" },
         repeat: { type: "boolean", description: "Round and round (default) or once." },
@@ -154,7 +155,7 @@ export async function callStationTool(name: string, args: Record<string, unknown
       return answer.ok ? say(JSON.stringify(answer.body["station"], null, 2)) : refused(answer.body);
     }
     if (name === "station_create") {
-      const answer = await call("POST", "/api/v1/stations", pick(["name", "folder", "items", "description", "shuffle", "repeat", "bitrate", "idempotencyKey"]));
+      const answer = await call("POST", "/api/v1/stations", pick(["name", "folder", "items", "playlist", "description", "shuffle", "repeat", "bitrate", "idempotencyKey"]));
       return answer.ok ? say(`Made, private and stopped: ${line(answer.body["station"] as Record<string, unknown>)}`) : refused(answer.body);
     }
     if (name === "station_update") {

@@ -38,6 +38,21 @@ export const LIBRARY_TOOLS = [
     },
   },
   {
+    name: "playlist_list",
+    description: "This listener's playlists on the server: id, name, how many items.",
+    inputSchema: { type: "object", properties: { server: SERVER } },
+  },
+  {
+    name: "playlist_create",
+    description: "A new playlist from library item ids (from library_search), in order. A playlist can then be a station: station_create with playlist.",
+    inputSchema: { type: "object", properties: { server: SERVER, name: STRING, items: { type: "array", items: STRING } }, required: ["name"] },
+  },
+  {
+    name: "playlist_add",
+    description: "Add library items to a playlist, at the end or at a place.",
+    inputSchema: { type: "object", properties: { server: SERVER, id: STRING, items: { type: "array", items: STRING }, at: { type: "integer" } }, required: ["id", "items"] },
+  },
+  {
     name: "library_scan",
     description: "Look at a source again: new files are read, changed ones re-read, gone ones marked unavailable. Returns a job id; library_status shows when it is done.",
     inputSchema: { type: "object", properties: { server: SERVER, source: STRING, force: { type: "boolean" } } },
@@ -85,7 +100,21 @@ export async function callLibraryTool(name: string, args: Record<string, unknown
       const groups = (answer.body["groups"] as Array<{ name: string; count: number; artist?: string }>) ?? [];
       return say(groups.map((one) => `${one.name}${one.artist ? ` — ${one.artist}` : ""} (${one.count})`).join("\n") || "Nothing yet.");
     }
-    if (name === "library_scan") {
+    if (name === "playlist_list") {
+      const answer = await get("GET", "/api/v1/library/playlists");
+      if (!answer.ok) return refused(answer.body);
+      const lists = (answer.body["playlists"] as Array<Record<string, unknown>>) ?? [];
+      return say(lists.map((one) => `${String(one["id"])}  ${String(one["name"])} (${String(one["count"])})`).join("\n") || "No playlists yet.");
+    }
+    if (name === "playlist_create" || name === "playlist_add") {
+      const answer = name === "playlist_create"
+        ? await get("POST", "/api/v1/library/playlists", { name: args["name"], items: args["items"] ?? [] })
+        : await get("POST", `/api/v1/library/playlists/${encodeURIComponent(String(args["id"] ?? ""))}/items`, { items: args["items"], ...(typeof args["at"] === "number" ? { at: args["at"] } : {}) });
+      if (!answer.ok) return refused(answer.body);
+      const list = answer.body["playlist"] as Record<string, unknown>;
+      return say(`${String(list["id"])}  ${String(list["name"])}: ${String(list["count"])} items, revision ${String(list["revision"])}`);
+    }
+        if (name === "library_scan") {
       let source = typeof args["source"] === "string" ? args["source"] : "";
       if (!source) {
         const listed = await get("GET", "/api/v1/library/sources");

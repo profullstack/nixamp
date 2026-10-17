@@ -144,6 +144,23 @@ export async function libraryTool(argv: string[]): Promise<number> {
         if (!source) { console.error("nixamp library remove needs a source id"); return 2; }
         return out(await call("DELETE", `/api/v1/library/sources/${source}`), (body) => `Forgot ${String(body["forgotten"])} items. No file was touched.`);
       }
+      case "playlists":
+        return out(await call("GET", "/api/v1/library/playlists"), (body) =>
+          ((body["playlists"] as Record<string, unknown>[]) ?? []).map((one) => `${String(one["id"])}  ${String(one["name"])} (${String(one["count"])})`).join("\n") || "No playlists yet.");
+      case "playlist": {
+        const [verb, first, ...others] = rest;
+        const showList = (body: Record<string, unknown>): string => {
+          const list = body["playlist"] as Record<string, unknown>;
+          const items = (list["items"] as Record<string, unknown>[] | undefined) ?? [];
+          return [`${String(list["id"])}  ${String(list["name"])} (revision ${String(list["revision"])})`, ...items.map((one, at) => `  ${at + 1}. ${itemLine(one)}`)].join("\n");
+        };
+        if (verb === "new" && first) return out(await call("POST", "/api/v1/library/playlists", { name: first, items: others }), showList);
+        if (verb === "show" && first) return out(await call("GET", `/api/v1/library/playlists/${first}`), showList);
+        if (verb === "add" && first && others.length) return out(await call("POST", `/api/v1/library/playlists/${first}/items`, { items: others }), showList);
+        if (verb === "delete" && first) return out(await call("DELETE", `/api/v1/library/playlists/${first}`), () => `Deleted playlist ${first}.`);
+        console.error("nixamp library playlist new NAME [ITEM...] | show ID | add ID ITEM... | delete ID");
+        return 2;
+      }
       default:
         console.log(LIBRARY_USAGE);
         return 2;

@@ -241,7 +241,9 @@ run in parallel. P1a should ship first because it fixes behavior that is live to
   rescans (restart has its tags at once), paginated search and browse, item streaming, CLI and
   MCP. LIB-01, LIB-02, LIB-03 (states; the bounded cache arrives with managed storage) and the
   search half of LIB-04.
-- Next in P1d: playlists CRUD and the per-user queue with resume across devices.
+- Done in 0.32.0: playlists (per listener, revisioned) and the per-listener queue with resume
+  across devices; stations from playlists. P1d complete at the API, CLI and MCP; the PWA's
+  Library/Radio screens are P1f.
 
 ## Phase 0 items still open
 
