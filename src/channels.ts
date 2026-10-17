@@ -1456,7 +1456,10 @@ export function rememberedChannels(dir: string, port: number): RememberedChannel
  */
 export function rememberedNow(channels: Channels): RememberedChannel[] {
   return channels.list()
-    .filter((one) => one.via === "pull" && one.source && !channels.isEphemeral(one.id))
+    // A station's channel is put back by its station, which knows whether it
+    // is still wanted; remembering it here too would bring back one its
+    // owner had stopped.
+    .filter((one) => one.via === "pull" && one.source && !channels.isEphemeral(one.id) && !one.id.startsWith("station-"))
     .map((one) => {
       const kept: RememberedChannel = { id: one.id, name: one.name, source: one.source as string };
       if (one.kind) kept.kind = one.kind;

@@ -220,6 +220,20 @@ run in parallel. P1a should ship first because it fixes behavior that is live to
   open the library; public now-playing allowlist; redirects followed inside yt-dlp/ffmpeg and
   DNS rebinding for member links.
 
+## P1b/P1c status (0.30.0)
+
+- Done: station model (`src/stations.ts`, `src/station-runner.ts`, `src/station-routes.ts`,
+  [stations.md](stations.md)): random durable id, desired/observed state, private/unlisted/public
+  with listing separate, rights basis before public, per-station listen token (opens stream,
+  state, m3u only), revocation drops listeners, idempotent create, bounded recovery then
+  5-minute offline retries; playlist engine (#249): repeat, station-wide shuffle, skip,
+  next-track edits, pass over and exclude broken files; station channels kept out of
+  `/api/channels`, `/api/streams`, `channels.json` and the directory lineup unless listed;
+  public page `/station/:id`; `nixamp station` CLI with `--json` and exit codes.
+- Covers RAD-01..05, AC-04/05/06/07/08/09/13/14/19/21/22 at the unit/integration level.
+- Next: library sources + persisted index (P1d), MCP tools and web Library/Radio nav (P1f),
+  per-station now-playing SSE aligned to audible output (P1e), BitTorrented handoff (P1g).
+
 ## Phase 0 items still open
 
 - [x] One external listener: dev2 pulled 12 s of server1 `/api/live` over https with the listen key

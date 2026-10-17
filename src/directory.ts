@@ -154,6 +154,8 @@ export interface LineupEntry {
   kind: "audio" | "video";
   art: string;
   about: string;
+  /** A station's own listening page, on the same server; only for a station its owner listed. */
+  listen?: string;
 }
 
 const MAX_NAME = 60;
@@ -233,13 +235,13 @@ export function parseAnnouncement(input: unknown): Announcement | null {
         }
       : {}),
     ...(Array.isArray(record["lineup"])
-      ? { lineup: (record["lineup"] as unknown[]).map(parseLineupEntry).filter((one): one is LineupEntry => one !== null).slice(0, MAX_CHANNELS) }
+      ? { lineup: (record["lineup"] as unknown[]).map((one) => parseLineupEntry(one, listen.origin)).filter((one): one is LineupEntry => one !== null).slice(0, MAX_CHANNELS) }
       : {}),
   };
 }
 
 /** One lineup entry as a publisher sent it, cleaned, or null when it is not one. */
-export function parseLineupEntry(input: unknown): LineupEntry | null {
+export function parseLineupEntry(input: unknown, origin = ""): LineupEntry | null {
   if (typeof input !== "object" || input === null) return null;
   const record = input as Record<string, unknown>;
   const id = clean(record["id"], MAX_ID);
@@ -257,6 +259,12 @@ export function parseLineupEntry(input: unknown): LineupEntry | null {
     // page in a tag, and javascript: is a page in a tag that runs.
     art: publishable(art) !== null ? art : "",
     about: clean(record["about"], MAX_ABOUT),
+    // The same server as the listing, or nothing, like the audio address.
+    ...(() => {
+      const offered = typeof record["listen"] === "string" ? record["listen"].slice(0, MAX_ART) : "";
+      const parsed = offered && origin ? publishable(offered) : null;
+      return parsed !== null && parsed.origin === origin ? { listen: offered } : {};
+    })(),
   };
 }
 
