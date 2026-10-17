@@ -12,7 +12,8 @@ names or READMEs. Line numbers are against the pinned nixamp commit.
 | media-streamer `master` | `de93056645b6` (2026-10-14), package 0.5.0 |
 | nixamp.com | live; `/api/directory` lists 1 server (server1.chovy.nixamp.com, 5,716 tracks) |
 | bittorrented.com | live on dev2 behind `SITE_OFFLINE = true` + `LEGAL_MODE = true` (invite-only, legal allowlist) |
-| server1 / server2 | version not read (ssh host key failed from dev2 this session) |
+| server1 | was 0.28.37, updated to 0.28.45 on 2026-10-17; 5,716 tracks; https on the manual `*.chovy.nixamp.com` cert |
+| server2 | not checked |
 
 ## Deployment inventory
 
@@ -207,7 +208,13 @@ run in parallel. P1a should ship first because it fixes behavior that is live to
 
 ## Phase 0 items still open
 
-- [ ] Demonstrate folder playback and one external listener end to end (PRD section 20). server1 is
-      listed in the directory, but its version and an outside listen were not verified this session.
+- [x] One external listener: dev2 pulled 12 s of server1 `/api/live` over https with the listen key
+      (H.264 + AAC 156 kbps, 2.2 MB) on 2026-10-17. Still to do: the same for an audio-only folder
+      station on `/api/channels/:id`, in a browser.
+- [ ] **Restart hazard (found 2026-10-17):** nixamp.com's Porkbun key is invalid, so machine naming
+      fails and delays `serve` past the 15 s `daemon start` wait (`src/daemon.ts:257`). The daemon is
+      killed and, without naming, the stored cert is never loaded (plain http). server1 now runs with
+      explicit `--tls-cert/--tls-key/--public-url`. Fix the key, and make `daemon start` wait for
+      naming or start listening first.
 - [ ] Decide on the BitTorrented handoff under legal mode (owner: Anthony).
 - [ ] Confirm the reference test host for section 16 targets.
