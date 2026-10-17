@@ -76,7 +76,8 @@ function nowPlayingFile(ctx: StationContext, station: Station): string {
 export function publicView(ctx: StationContext, station: Station): PublicStation {
   const state = ctx.runner.observed(station.id);
   const file = state === "live" || state === "recovering" ? nowPlayingFile(ctx, station) : "";
-  const track = file ? ctx.trackFor(file) : null;
+  // The tags the player read when it put this file on, else the library's.
+  const track = file ? (ctx.channels.tagsOf(channelOf(station.id), file) ?? ctx.trackFor(file)) : null;
   return {
     id: station.id,
     name: station.name,

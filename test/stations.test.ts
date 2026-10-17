@@ -189,6 +189,8 @@ test("stations over HTTP: owner manages, a link only listens, private means priv
     const live = await (await fetch(stateUrl)).json() as { state: string; nowPlaying: { title: string } | null; format: { bitrateKbps: number } };
     assert.equal(live.state, "live");
     assert.equal(live.format.bitrateKbps, 128);
+    // From the file's own tags, read as it went on: not the library's guess, not a file name.
+    assert.match(live.nowPlaying?.title ?? "", /^(First|Second) Song$/);
 
     // Skip is the owner's: a station's link does not even reach it.
     assert.equal((await fetch(`${base}/api/v1/stations/${station.id}/skip?t=${encodeURIComponent(station.listenToken)}`, post({}))).status, 401);
