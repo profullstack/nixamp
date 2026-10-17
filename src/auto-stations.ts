@@ -40,6 +40,13 @@ const RULES: Array<[RegExp, string]> = [
 
 const NOT_MUSIC = /lecture|interview|audiobook|podcast|speech|spoken|talk|course|sermon|lesson|comedy/i;
 
+/** Never on a genre TV station, whatever nichedb calls it. */
+const ADULT = /\b(xxx|porn|nsfw|onlyfans|brazzers|blacked|bangbros|milf|hentai|sex|erotic|adult)\b/i;
+
+export function adultTitle(title: string, genres: string[] = []): boolean {
+  return ADULT.test(title) || genres.some((one) => /adult|erotic|porn/i.test(one));
+}
+
 /** The genres a tag belongs to, recognisably named; [] when it is not music or not known. */
 export function genreBuckets(raw: string): string[] {
   if (!raw || NOT_MUSIC.test(raw)) return [];
@@ -146,7 +153,9 @@ export async function syncAutoStations(deps: AutoDeps, options: AutoOptions = DE
     const tv = new Map<string, LibraryItem[]>();
     for (const item of all) {
       if (!item.video || item.duration < 40 * 60) continue;
-      const genres = await deps.filmGenres(shown(item).title).catch(() => []);
+      const title = shown(item).title;
+      const genres = await deps.filmGenres(title).catch(() => []);
+      if (adultTitle(`${title} ${item.rel}`, genres)) continue;
       for (const genre of genres.slice(0, 2)) {
         const list = tv.get(genre) ?? [];
         list.push(item);

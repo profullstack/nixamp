@@ -177,6 +177,16 @@ export async function station(argv: string[]): Promise<number> {
           return [`page    ${links["page"]}`, `stream  ${links["stream"]}`, `m3u     ${links["m3u"]}`].join("\n");
         });
       }
+      case "guide-host": {
+        // This machine's own setting, read by the daemon on every request.
+        const { readConfig, writeConfig } = await import("./library.ts");
+        const host = (id ?? "").trim().toLowerCase();
+        const hosts = new Set(readConfig().guideHosts ?? []);
+        if (argv.includes("--remove")) hosts.delete(host); else if (host) hosts.add(host);
+        writeConfig({ guideHosts: [...hosts] });
+        console.log(hosts.size ? `The guide is the front page for: ${[...hosts].join(", ")}` : "No host shows the guide as its front page (it is still at /guide).");
+        return 0;
+      }
       case "auto": {
         const body: Record<string, unknown> = argv.includes("--off") ? { off: true } : {
           ...(argv.includes("--no-video") ? { video: false } : {}),
@@ -186,7 +196,21 @@ export async function station(argv: string[]): Promise<number> {
           ...(flag(argv, "--tv") ? { maxVideoRunning: Number(flag(argv, "--tv")) } : {}),
           ...(flag(argv, "--breaks") ? { breaksEvery: Number(flag(argv, "--breaks")) } : {}),
         };
-        return show(await call("POST", "/api/v1/stations/auto", body), (answer) => {
+        const started = await call("POST", "/api/v1/stations/auto", body);
+        let answer = started;
+        if (started.status < 400 && !body["off"]) {
+          // Started in the background; wait for it to say what it made.
+          for (let tries = 0; tries < 600; tries++) {
+            await new Promise((next) => setTimeout(next, 1000));
+            const state = await call("GET", "/api/v1/stations/auto");
+            const setting = state.body["setting"] as { running?: boolean; last?: { report?: unknown } } | undefined;
+            if (!setting?.running && setting?.last?.report) {
+              answer = { status: 200, body: { report: setting.last.report } };
+              break;
+            }
+          }
+        }
+        return show(answer, (answer) => {
           const report = answer["report"] as { off?: boolean; radio?: Array<Record<string, unknown>>; tv?: Array<Record<string, unknown>>; skipped?: string[] };
           if (report.off) return "Auto stations are off. The stations already made stay as they are.";
           const line = (one: Record<string, unknown>, unit: string) => `  ${String(one["genre"]).padEnd(16)} ${String(one["files"] ?? one["films"]).padStart(5)} ${unit}  ${one["running"] ? "on air" : "stopped"}${one["made"] ? "  (new)" : ""}  [${String(one["id"])}]`;

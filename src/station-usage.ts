@@ -13,6 +13,8 @@ export const USAGE = `nixamp station — make a collection into a station
   nixamp station unpublish ID [--private]
   nixamp station link ID [--rotate]
   nixamp station delete ID
+  nixamp station guide-host NAME [--remove]
+                     NAME's front page is the public station guide (e.g. a Moshpit name)
   nixamp station auto [--no-video] [--min 10] [--films 3] [--tv 2] [--breaks 600] [--no-start]
                      a station per genre, kept in step with the library (--off stops it)
 

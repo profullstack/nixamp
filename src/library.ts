@@ -27,6 +27,8 @@ export interface Config {
   publish?: boolean;
   /** Auto stations: a station per genre, re-synced after every library scan. */
   autoStations?: Record<string, unknown>;
+  /** Hosts (e.g. Moshpit names) whose front page is the public station guide. */
+  guideHosts?: string[];
 }
 
 export function configPath(): string {
@@ -42,6 +44,7 @@ export function readConfig(): Config {
       ...(typeof record["library"] === "string" ? { library: record["library"] } : {}),
       ...(typeof record["publish"] === "boolean" ? { publish: record["publish"] } : {}),
       ...(typeof record["autoStations"] === "object" && record["autoStations"] !== null ? { autoStations: record["autoStations"] as Record<string, unknown> } : {}),
+      ...(Array.isArray(record["guideHosts"]) ? { guideHosts: (record["guideHosts"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
     };
   } catch {
     return {};
