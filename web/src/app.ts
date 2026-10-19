@@ -201,6 +201,7 @@ export function start(): void {
     accountProviders: need<HTMLDivElement>("account-providers"),
     accountPanel: need<HTMLElement>("account-panel"),
     accountElsewhere: need<HTMLParagraphElement>("account-elsewhere"),
+    adnet: need<HTMLElement>("adnet"),
     welcome: need<HTMLElement>("welcome"),
     welcomeCreate: need<HTMLButtonElement>("welcome-create"),
     welcomeBrowse: need<HTMLButtonElement>("welcome-browse"),
@@ -5790,6 +5791,36 @@ export function start(): void {
     dom.welcome.hidden = !keepsAccounts || meId !== "" || hiddenByThem;
   };
 
+  // --- the display ad ---------------------------------------------------
+  //
+  // One ad.network unit, only on nixamp.com (where accounts live), never on
+  // somebody's own server. ad.js is fetched here rather than from the shell
+  // so a self-hosted page never loads it, and it scans once at
+  // DOMContentLoaded, which has passed by now: ask it to scan again, a
+  // bounded number of times while it arrives. It will not refill a unit it
+  // has marked filled, so a repeated scan never double-requests.
+  let adnetShown = false;
+  const showAdnet = (): void => {
+    if (adnetShown || !keepsAccounts) return;
+    adnetShown = true;
+    dom.adnet.hidden = false;
+    const ads = (): { scan?: () => void } | undefined =>
+      (window as unknown as { crawlproofAds?: { scan?: () => void } }).crawlproofAds;
+    if (!document.querySelector('script[src="https://crawlproof.com/ad.js"]')) {
+      const script = document.createElement("script");
+      script.src = "https://crawlproof.com/ad.js";
+      script.async = true;
+      document.head.append(script);
+    }
+    let tries = 0;
+    const scan = (): void => {
+      const runtime = ads();
+      if (runtime?.scan) { runtime.scan(); return; }
+      if (++tries <= 25) setTimeout(scan, 200);
+    };
+    scan();
+  };
+
   const showAccount = (email: string | null): void => {
     // Anything drawn from who is signed in -- a party room's chat box, say
     // -- hears about it here rather than asking again.
@@ -5864,6 +5895,7 @@ export function start(): void {
     dom.accountPanel.hidden = !keepsAccounts;
     dom.accountElsewhere.hidden = keepsAccounts;
     showWelcome();
+    showAdnet();
     for (const provider of offered) {
       const link = document.createElement("a");
       link.className = "button";

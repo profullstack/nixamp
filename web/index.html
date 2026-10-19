@@ -7,6 +7,8 @@
     <meta name="description" content="Broadcast live radio, television and film from your own machine with nixamp, the open source streaming platform you run yourself. Terminal, web and desktop on one engine. Listen free, go live in one command, monetize with x402." />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#080c09" />
+    <!-- ad.network site verification: it reads the raw HTML of nixamp.com/ for this code. -->
+    <meta name="ad.network" content="SSXBxU06ZRXMrzpJ" />
     <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64" />
     <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -186,6 +188,12 @@
           </label>
         </section>
       </section>
+
+      <!-- The one display ad, between the player and the panels. In the shell
+           so ad.network finds it in the raw HTML; shown, and ad.js loaded, by
+           app.ts only where accounts live (nixamp.com). A nixamp on your own
+           machine never shows it and never fetches the script. -->
+      <aside class="adnet" id="adnet" aria-label="Advertisement" data-ad-network="SSXBxU06ZRXMrzpJ" data-cp-ad data-slot="514646f2-8299-40c1-9d9e-37d60d2d5892" data-format="banner_300x250" hidden></aside>
 
       <div class="split" id="zone-top">
         <section class="panel player-only" data-title="Spectrum Analyser" data-i18n-data-title="Spectrum Analyser" id="spectrum-panel">
