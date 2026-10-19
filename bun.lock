@@ -29,7 +29,7 @@
       "name": "@nixamp/backtoschool-web",
       "version": "0.1.0",
       "dependencies": {
-        "@profullstack/player": "^0.13.1",
+        "@profullstack/player": "0.15.0",
       },
       "devDependencies": {
         "@types/node": "^26",
@@ -56,7 +56,7 @@
         "@profullstack/footer": "latest",
         "@profullstack/long-string-scroller": "workspace:*",
         "@profullstack/notifications": "^0.1.0",
-        "@profullstack/player": "^0.13.2",
+        "@profullstack/player": "0.15.0",
         "fastenhancer-web": "^0.1.1",
         "fft.js": "4.0.4",
       },
@@ -198,7 +198,7 @@
 
     "@profullstack/auth-system": ["@profullstack/auth-system@0.8.3", "", { "dependencies": { "bcryptjs": "^2.4.3", "jsonwebtoken": "^9.0.2", "uuid": "^11.1.0" }, "peerDependencies": { "@supabase/supabase-js": "^2.49.4", "mongodb": "^6.5.0", "mysql2": "^3.9.2", "pg": "^8.11.3", "pocketbase": "^0.21.1" }, "optionalPeers": ["@supabase/supabase-js", "mongodb", "mysql2", "pg", "pocketbase"] }, "sha512-goafDEaq8XDDCChfAfi8wvUxn1xMeGWXpr7XEH9czFU/eIq9PkehGRTy3d/YP2BGzO1iIxrTAb2m2eOMTMdYUA=="],
 
-    "@profullstack/footer": ["@profullstack/footer@0.2.1", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-KHmKVwrlzCBrSAAJ4zobNFCxTg8VF0gvNMeAut00dX3+gbWCtk6eOwIR2AaqEC7smj6Aio6cIexzt/dUnv1McA=="],
+    "@profullstack/footer": ["@profullstack/footer@0.2.5", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-/CKwFP3m+qM0ZFTC9Rj11fgClutJzeYliX44Qp4qwrv2JgA/1k4tVOB3mhkPhaeckUhnfg5UyESDI1uoWr9c2w=="],
 
     "@profullstack/hqtui": ["@profullstack/hqtui@0.5.0", "", { "bin": { "hqtui": "bin/hqtui.mjs" } }, "sha512-jDwILBmdQx8pQA0ao/tzzty8u5nFNS4XhvU9xXhZvdIaMeiF3HBJIVtP6cS6kigS4lXmHR7sztbb9QJpaWwhig=="],
 
@@ -210,7 +210,7 @@
 
     "@profullstack/notifications": ["@profullstack/notifications@0.1.0", "", {}, "sha512-17jiBCRiZVDcIyWnWKYr5E2eVog/1iHgXaruGbmlw7j7Ob4zd6oOqGjh8BP8wm13iFwikczYObQwSrGadBdnGw=="],
 
-    "@profullstack/player": ["@profullstack/player@0.13.2", "", { "dependencies": { "hls.js": "^1.7.1", "mpegts.js": "^1.8.2" }, "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-NcNbgPtIUB7pQ7Jdio82KrYU6/YSPNgkywVyRX916n0dqkPHhdFlTqKvrCs3SZ9h/m4wLLdCnL+V+0+6YLwysQ=="],
+    "@profullstack/player": ["@profullstack/player@0.15.0", "", { "dependencies": { "hls.js": "^1.7.1", "mpegts.js": "^1.8.2" }, "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-vcOuLZ59jpHzTKAGbd1hjdhjYaNxKoAq5D8RCQszVYRYZEwobJCn/LJy1CeZzaBDfVBCRziWR2lwkWlYHVVFCg=="],
 
     "@profullstack/synconfig": ["@profullstack/synconfig@0.1.2", "", {}, "sha512-t1Pdms+k/+A7tgFCAcNx8Dry0kwboPEue9Pw2pbn/chXSMfp1dxrcFz672zWkDgvcB7YBmYpIjnvW4NkNkE4Rg=="],
 

@@ -48,6 +48,7 @@ import { emptySnapshot, type FullSnapshot, merge, type Snapshot } from "../../sr
 import { isMatchupName } from "../../src/matchup.ts";
 
 declare const __NIXAMP_VERSION__: string;
+import { attachSource } from "@profullstack/player";
 import { attachLongStringScroller } from "../../packages/long-string-scroller/src/index.ts";
 
 export const BAND_COUNT = 24;
@@ -7576,9 +7577,10 @@ export function start(): void {
       }, 150);
     };
 
-    void chosen().then((src) => {
+    void chosen().then(async (src) => {
       if (src === "" || busy()) return;
-      jingle.src = src;
+      // Delivered like every other sound here, by @profullstack/player.
+      await attachSource(jingle, { src, kind: "audio" });
       return player.playJingle(jingle).then(
         spend,
         () => {

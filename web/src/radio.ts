@@ -13,6 +13,7 @@
 import "./styles.css";
 import "./radio.css";
 import { splitShareLink } from "./remote.ts";
+import { attachSource, type AttachedSource } from "@profullstack/player";
 
 type Json = Record<string, unknown>;
 
@@ -630,11 +631,22 @@ async function playList(ids: string[], start: number, position = 0): Promise<voi
   await playCurrent(position);
 }
 
+/** The engine on #audio. The page keeps the browser's own controls; only the delivery is the package's. */
+let attached: AttachedSource | null = null;
+
+function detach(): void {
+  attached?.destroy();
+  attached = null;
+}
+
 async function playCurrent(position = 0): Promise<void> {
   const id = queue[at];
   if (!id) return;
   const audio = $<HTMLAudioElement>("#audio");
-  audio.src = address(`/api/v1/library/items/${id}/stream`, true);
+  detach();
+  // The address carries the session or key in its query (an element cannot
+  // send a header), and a same-origin cookie rides along as before.
+  attached = await attachSource(audio, { src: address(`/api/v1/library/items/${id}/stream`, true), kind: "audio" });
   if (position > 0) audio.currentTime = position;
   const item = results.find((one) => one.id === id) ?? (await api<{ item: Item }>("GET", `/api/v1/library/items/${id}`).then((one) => one.item).catch(() => null));
   $("#now").textContent = item ? `${item.title}${item.artist ? ` — ${item.artist}` : ""}` : "";
@@ -843,6 +855,7 @@ async function use(next: Target): Promise<void> {
   queue = [];
   const audio = $<HTMLAudioElement>("#audio");
   audio.pause();
+  detach();
   audio.removeAttribute("src");
   $("#now").textContent = "";
   $("#resume").hidden = true;

@@ -9,6 +9,7 @@ import { installEventWriter } from "./event-writer.ts";
 import type { LiveEvent } from "../../src/live-events.ts";
 import { classroomBroadcast } from "../../src/classroom.ts";
 import { mountClassroomPlayer } from "./player.ts";
+import { attachSource } from "@profullstack/player";
 import { installTvNavigation } from "./tv.ts";
 installTvNavigation();
 import { api, ApiError, send, type Account, type EventEnvelope } from "./api.ts";
@@ -432,7 +433,7 @@ function playerPanel(event: LiveEvent): string {
         <span class="eyebrow">${event.status === "live" ? "On air now" : event.recordingId ? uiMessage("Replay") : "The room opens soon"}</span>
         <h2>${available ? (event.status === "live" ? "Listen live" : "Listen again") : "We’ll see you here."}</h2>
         <p id="player-note">${available ? "Press play and you’re in. No sign-up, no setup." : escape(relativeStart(event))}</p>
-        ${available ? `<button class="button button-primary listen-button" type="button" data-listen><span class="live-dot"></span> ${event.status === "live" ? "Listen live" : "Play replay"}</button><audio id="event-audio" preload="none" src="${escape(source)}" controls></audio>` : ""}
+        ${available ? `<button class="button button-primary listen-button" type="button" data-listen><span class="live-dot"></span> ${event.status === "live" ? "Listen live" : "Play replay"}</button><audio id="event-audio" preload="none" data-src="${escape(source)}" controls></audio>` : ""}
       </div>
     </div>`;
 }
@@ -501,6 +502,11 @@ async function eventPage(slug: string): Promise<void> {
 function bindEventPage(event: LiveEvent): void {
   const playerRoot = document.querySelector<HTMLElement>("[data-classroom-player]");
   const disposePlayer = playerRoot ? mountClassroomPlayer(playerRoot, event.broadcastUrl) : () => {};
+  // The room's sound or its replay, delivered by @profullstack/player; the
+  // element keeps its own controls, and the address stays same-origin so the
+  // invite query and the session cookie still ride along.
+  const eventAudio = document.querySelector<HTMLAudioElement>("#event-audio");
+  const attachedAudio = eventAudio?.dataset.src ? attachSource(eventAudio, { src: eventAudio.dataset.src, kind: "audio" }) : null;
   document.querySelector<HTMLButtonElement>("[data-listen]")?.addEventListener("click", async (click) => {
     const button = click.currentTarget as HTMLButtonElement;
     const audio = document.querySelector<HTMLAudioElement>("#event-audio");
@@ -508,6 +514,7 @@ function bindEventPage(event: LiveEvent): void {
     button.disabled = true;
     uiText(button, () => uiMessage("Connecting…"));
     try {
+      await attachedAudio;
       await audio.play();
       button.textContent = "You’re listening";
       document.querySelector("#player-note")!.textContent = "Live audio from this NixAmp room.";
@@ -610,7 +617,7 @@ function bindEventPage(event: LiveEvent): void {
     showClassUpdate("The host updated this class. Refresh the details when you’re ready.");
     // Keep the viewer's player, chat field, focus, and scroll exactly where they are.
   }).catch(() => undefined), 5000);
-  routeCleanup = () => { disposePlayer(); clearInterval(chatTimer); clearInterval(raiseTimer); clearInterval(eventTimer); };
+  routeCleanup = () => { disposePlayer(); void attachedAudio?.then((one) => one.destroy()); clearInterval(chatTimer); clearInterval(raiseTimer); clearInterval(eventTimer); };
   void loadListeners(event);
 }
 
