@@ -86,6 +86,7 @@ import { LyricsFinder } from "./lyrics.ts";
 import { LyricsPublisher } from "./lyrics-publish.ts";
 import { aiKey } from "./ai-keys.ts";
 import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
+import { withPitFooter } from "./pit-footer.ts";
 import { guideAds, guideCsp, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
@@ -6430,7 +6431,24 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           }
           const shell = subject ? readIfPossible(file) : null;
           if (subject && shell !== null) {
-            html(response, 200, joinDocument(shell, subject, eventSite ?? "https://nixamp.com"));
+            html(response, 200, requestHost === "nixamp.com" ? withPitFooter(joinDocument(shell, subject, eventSite ?? "https://nixamp.com")) : joinDocument(shell, subject, eventSite ?? "https://nixamp.com"));
+            return;
+          }
+        }
+        // nixamp.com's own pages (the app shell, the radio console) carry the
+        // pit.world global footer, appended on the way out. A local install
+        // serving the same files on its own host is left alone.
+        if (requestHost === "nixamp.com" && file.endsWith(".html") && (request.method === "GET" || request.method === "HEAD")) {
+          const shell = readIfPossible(file);
+          if (shell !== null) {
+            const page = withPitFooter(shell);
+            response.writeHead(200, {
+              ...CORS,
+              "content-type": "text/html; charset=utf-8",
+              "content-length": Buffer.byteLength(page),
+              "cache-control": "no-cache",
+            });
+            response.end(request.method === "HEAD" ? undefined : page);
             return;
           }
         }

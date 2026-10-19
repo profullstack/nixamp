@@ -186,7 +186,9 @@ export function renderGuide(entries: GuideEntry[], apiBase = "", ads: GuideAds =
   if (ads.site) page = page.replace("</head>", `<script data-site="${escape(ads.site)}" src="${CRAWLPROOF}/stats.js" async></script>\n</head>`);
   if (ads.slot) {
     const format = ads.format ?? "banner_300x250";
-    page = page.replace("  <footer>", `  <div class="ad-unit ad-${format}"><iframe src="${CRAWLPROOF}/api/ads/frame?slot=${encodeURIComponent(ads.slot)}&amp;format=${format}" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>\n  <footer>`);
+    const slot = ads.slot;
+    // The one ad goes at the top of the content, never against the footer.
+    page = page.replace('<p class="lead">Radio and TV, on the air now. Pick one and press play.</p>\n', (lead) => `${lead}  <div class="ad-unit ad-${format}"><iframe src="${CRAWLPROOF}/api/ads/frame?slot=${encodeURIComponent(slot)}&amp;format=${format}" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>\n`);
   }
   const api = /^https:\/\/[^\s"<>]+$/.test(apiBase) ? apiBase.replace(/\/+$/, "") : "";
   return (page.replace('<p id="empty" class="empty">', entries.length ? '<p id="empty" class="empty" hidden>' : '<p id="empty" class="empty">')).replace("<body>", api ? `<body data-api="${escape(api)}">` : "<body>");
@@ -237,7 +239,7 @@ export const GUIDE_HTML = `<!doctype html>
     <button type="submit">Share it</button>
     <div id="status" role="status" aria-live="polite"></div>
   </form>
-  <footer>Played by <a href="https://nixamp.com">nixamp</a>, on the Moshpit.</footer>
+  <footer>Played by <a href="https://nixamp.com">nixamp</a>.</footer>
 </main>
 <script>${SCRIPT}</script>
 </body>
