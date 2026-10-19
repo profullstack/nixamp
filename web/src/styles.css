@@ -63,6 +63,19 @@ body {
   gap: 10px;
 }
 
+/* ---- the display ad ---------------------------------------------------- */
+
+/* Takes no room until ad.js has filled it, then the 250px creative plus the
+   label ad.js draws above it. Centred; on a phone narrower than the creative
+   it may run to the screen edges rather than clip. */
+.adnet { display: flex; justify-content: center; }
+.adnet[hidden] { display: none; }
+.adnet:not([data-cp-filled]) { height: 0; overflow: hidden; }
+.adnet[data-cp-filled] { min-height: 266px; }
+@media (max-width: 340px) {
+  .adnet { margin-inline: calc(50% - 50vw); }
+}
+
 /* ---- the welcome ------------------------------------------------------- */
 
 /* The pitch. Bigger type than anything else on the page, once, because it is
