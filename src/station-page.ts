@@ -217,6 +217,22 @@ export const STATION_PAGE_CSP = [
 ].join("; ");
 
 /** The built page: its own bundle, styles and player engines, only this server, never framed. */
+/**
+ * A live room's page (/watch): the same built page shape, but what it plays and
+ * asks about is on the room's own server, any https nixamp server.
+ */
+export const WATCH_APP_CSP = [
+  "default-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "media-src 'self' blob: https:",
+  "worker-src 'self' blob:",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self' https:",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 export const STATION_APP_CSP = [
   "default-src 'self'",
   "style-src 'self' 'unsafe-inline'",

@@ -74,6 +74,8 @@ export interface StationContext {
   auto?: { sync: (input: Record<string, unknown>) => Promise<unknown>; setting: () => unknown };
   /** The public stations other servers list (guide peers); absent when there are none. */
   peers?: () => Promise<unknown[]>;
+  /** Live rooms members published to this guide (guide-rooms.ts); absent when this server keeps none. */
+  rooms?: () => Promise<unknown[]>;
 }
 
 function fail(ctx: StationContext, response: ServerResponse, error: unknown): void {
@@ -181,7 +183,9 @@ export async function handleStations(
     const shown = new Set(own.map((one) => one.page));
     const others = url.searchParams.has("local") || !ctx.peers ? [] : (await ctx.peers())
       .filter((one) => !shown.has((one as { page: string }).page));
-    ctx.json(response, 200, { stations: [...own, ...others] });
+    // Rooms are this guide's own; a peer asking for its stations does not list them twice.
+    const rooms = url.searchParams.has("local") || !ctx.rooms ? [] : await ctx.rooms();
+    ctx.json(response, 200, { stations: [...rooms, ...own, ...others] });
     return true;
   }
 

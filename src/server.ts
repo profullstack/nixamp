@@ -85,7 +85,8 @@ import { SUPPORT_CSP, SUPPORT_PAGE, Support, SupportError, SupportSubscriptions,
 import { LyricsFinder } from "./lyrics.ts";
 import { LyricsPublisher } from "./lyrics-publish.ts";
 import { aiKey } from "./ai-keys.ts";
-import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
+import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML, WATCH_APP_CSP } from "./station-page.ts";
+import { handleRooms, RoomProbe, roomEntries, RoomStore, watchBase } from "./guide-rooms.ts";
 import { withPitFooter } from "./pit-footer.ts";
 import { guideAds, guideCsp, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
@@ -1756,6 +1757,8 @@ export interface HandlerOptions {
     trustedProxies?: () => Set<string>;
     /** Other servers' public stations, for this guide to list beside its own. */
     peers?: PeerGuides;
+    /** Live rooms members published to this guide, and how to ask a room's server what is on it. */
+    rooms?: { store: RoomStore; probe: RoomProbe };
   };
   web: string | null;
   /** Branded clients on this same backend, keyed by an explicitly configured host. */
@@ -2711,6 +2714,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !/^\/support\/[a-z0-9-]{1,40}$/.test(path) && path !== "/support/cancel" && !/^\/api\/v1\/support\/[a-z0-9-]{1,40}$/.test(path) &&
       // A station's short link, which sends the browser to wherever it plays.
       !/^\/watch\/[a-z0-9]{10}$/.test(path) &&
+      // A live room's page: the room's own key travels in ?play=, checked by its server.
+      !(path === "/watch" && Boolean(options.stations?.rooms)) &&
+      // Live rooms on the guide: listed for anybody, published by a member (guide-rooms.ts).
+      !((path === "/api/v1/guide/rooms" || path.startsWith("/api/v1/guide/rooms/")) && Boolean(options.stations?.rooms)) &&
       !STATION_PAGE.test(path) &&
       !isPublicAsset &&
       !isGuidePage &&
@@ -2878,8 +2885,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       });
       const own = new Set(entries.map((one) => one.page));
       const others = options.stations!.peers ? (await options.stations!.peers.entries()).filter((one) => !own.has(one.page)) : [];
+      const rooms = options.stations!.rooms
+        ? await roomEntries(options.stations!.rooms.store, options.stations!.rooms.probe, watchBase(options.stations!.publicBase?.() || `${encrypted ? "https" : "http"}://${request.headers.host ?? "localhost"}`))
+        : [];
       const ads = guideAds();
-      const page = renderGuide([...entries, ...others] as GuideEntry[], options.stations!.publicBase?.() ?? "", ads);
+      const page = renderGuide([...rooms, ...entries, ...others] as GuideEntry[], options.stations!.publicBase?.() ?? "", ads);
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-cache",
@@ -2893,6 +2903,46 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
 
     // The page a station's link opens. The same bytes for every station: it
     // reads its id and token from its own address.
+    // A live room's page: /watch?play=<a nixamp server's channel or live
+    // stream address>. The built page plays it in @profullstack/player, as a
+    // film or as radio; nothing about the room passes through here.
+    if (options.stations?.rooms && path === "/watch" && (request.method === "GET" || request.method === "HEAD")) {
+      const built = web !== null && isFile(join(web, "watch.html")) ? readFileSync(join(web, "watch.html")) : null;
+      if (!built) {
+        json(response, 404, { error: "this server was started without its web pages" });
+        return;
+      }
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-cache",
+        "content-security-policy": WATCH_APP_CSP,
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(request.method === "HEAD" ? undefined : built);
+      return;
+    }
+
+    if (options.stations?.rooms && (path === "/api/v1/guide/rooms" || path.startsWith("/api/v1/guide/rooms/"))) {
+      const control = await controlOf();
+      const session = tokenFrom(request.headers) || url.searchParams.get("session") || "";
+      const rooms = options.stations.rooms;
+      await handleRooms(request, response, path, {
+        store: rooms.store,
+        probe: rooms.probe,
+        base: watchBase(options.stations.publicBase?.() || `https://${request.headers.host ?? "localhost"}`),
+        canControl: control.allowed,
+        member: async () => (session && options.owner ? (await options.owner.accountFor(session)) || "" : ""),
+        json,
+        readBody,
+        throttle: () => {
+          const verdict = guard.check(`rooms:${callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, STATION_CONTROL_LIMIT);
+          return verdict.ok ? null : { retryAfter: verdict.retryAfter };
+        },
+      });
+      return;
+    }
+
     if (options.stations && STATION_PAGE.test(path) && (request.method === "GET" || request.method === "HEAD")) {
       // The built page plays in @profullstack/player; the inline one is for a
       // server started without the web build.
@@ -3010,6 +3060,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         ...(options.stations.lyrics ? { lyrics: options.stations.lyrics } : {}),
         ...(options.stations.lyricsPublisher ? { lyricsPublisher: options.stations.lyricsPublisher } : {}),
         ...(options.stations.peers ? { peers: () => options.stations!.peers!.entries() } : {}),
+        ...(options.stations.rooms ? {
+          rooms: () => roomEntries(options.stations!.rooms!.store, options.stations!.rooms!.probe, watchBase(options.stations!.publicBase?.() || `${scheme}://${request.headers.host ?? "localhost"}`)),
+        } : {}),
         throttle: () => {
           const verdict = guard.check(`stations:${control.account || callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, STATION_CONTROL_LIMIT);
           return verdict.ok ? null : { retryAfter: verdict.retryAfter };
@@ -7072,6 +7125,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       const listed = directory ? directory.list().map((one) => peerBase(one.url)).filter(Boolean).slice(0, 100) : [];
       return [...new Set([...guidePeers(), ...listed])];
     }),
+    // Live rooms published to this guide; the probe never reaches this machine's own network.
+    rooms: { store: new RoomStore(RoomStore.fileFor(stateDir(), options.port)), probe: new RoomProbe(fetch, (link) => refusedDestination(link)) },
   };
   // Music handed over from BitTorrented, copied into a folder of our own.
   const importer = new Importer(join(stateDir(), `handoffs-${options.port}.json`), {

@@ -31,6 +31,8 @@ export interface Config {
   guideHosts?: string[];
   /** Other servers (https base addresses) whose public, listed stations this guide shows too. */
   guidePeers?: string[];
+  /** Where the guide links a published live room's page (https://live.streaming.pit.world); this server's own address when unset. */
+  watchBase?: string;
   /** crawlproof on the guide: tracker project id (site), ad slot and format (`nixamp station guide-ads`). */
   guideAds?: { site?: string; slot?: string; format?: "banner_300x250" | "text_link" };
   /** Station limits kept across restarts (station-metering.ts). */
