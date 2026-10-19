@@ -1459,7 +1459,11 @@ body.tv input, body.tv .filter { font-size: 1em; padding: 8px 10px; }
 
 /* An explicit purchase opens a compact dialog; payment updates never navigate. */
 #translation-purchase { color: var(--fg); background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; width: min(480px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; padding: 20px; }
-#translation-purchase::backdrop { background: #000a; }
+#translation-purchase::backdrop, #streaming-publish::backdrop { background: #000a; }
+#streaming-publish { color: var(--fg); background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; width: min(480px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; padding: 20px; }
+#streaming-publish label { display: block; margin: 12px 0 4px; }
+#streaming-publish input[type=text], #streaming-publish select { width: 100%; }
+#streaming-publish p { margin: 12px 0; line-height: 1.5; }
 .purchase-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .purchase-heading h2 { font-size: 18px; margin: 0; }
 #translation-purchase p { margin: 12px 0; line-height: 1.5; }

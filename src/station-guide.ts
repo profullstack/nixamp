@@ -67,7 +67,7 @@ const SCRIPT = `
     } catch { button.textContent = "Could not report; try again"; button.disabled = false; }
   };
   const draw = (stations) => {
-    for (const group of ["ai", "shared", "radio", "tv"]) {
+    for (const group of ["rooms", "ai", "shared", "radio", "tv"]) {
       const grid = document.querySelector("#" + group);
       grid.replaceChildren();
       const list = stations.filter((s) => (s.group || (s.kind === "video" ? "tv" : "radio")) === group);
@@ -154,8 +154,8 @@ export interface GuideEntry {
   id?: string;
   name: string;
   kind: "audio" | "video";
-  /** ai, shared, radio or tv; from kind when absent. */
-  group?: "ai" | "shared" | "radio" | "tv";
+  /** rooms (live rooms, src/guide-rooms.ts), ai, shared, radio or tv; from kind when absent. */
+  group?: "rooms" | "ai" | "shared" | "radio" | "tv";
   state: string;
   page: string;
   nowPlaying: { title: string; artist: string } | null;
@@ -163,7 +163,7 @@ export interface GuideEntry {
   peer?: boolean;
 }
 
-const GROUPS = ["ai", "shared", "radio", "tv"] as const;
+const GROUPS = ["rooms", "ai", "shared", "radio", "tv"] as const;
 
 /**
  * The guide with its stations already in it, so it reads the same through a
@@ -208,6 +208,8 @@ export const GUIDE_HTML = `<!doctype html>
 <main>
   <h1>Live</h1>
   <p class="lead">Radio and TV, on the air now. Pick one and press play.</p>
+  <h2 id="rooms-title" hidden>Live rooms</h2>
+  <div id="rooms" class="grid" aria-live="polite"></div>
   <h2 id="ai-title" hidden>AI Radio</h2>
   <div id="ai" class="grid" aria-live="polite"></div>
   <h2 id="shared-title" hidden>Shared by listeners</h2>

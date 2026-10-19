@@ -166,6 +166,8 @@ export function start(): void {
     copyNow: need<HTMLButtonElement>("copy-now"),
     copyNixamp: need<HTMLButtonElement>("copy-nixamp"),
     schoolLive: need<HTMLButtonElement>("school-live"),
+    streamingLive: need<HTMLButtonElement>("streaming-live"),
+    streamingPublish: need<HTMLDialogElement>("streaming-publish"),
     canvas: need<HTMLCanvasElement>("spectrum"),
     glyphs: need<HTMLElement>("glyphs"),
     levels: need<HTMLElement>("levels"),
@@ -1471,6 +1473,8 @@ export function start(): void {
     // Teaching it needs a live room to point at and an account to own the
     // class; the school and this site keep the same accounts.
     dom.schoolLive.hidden = liveRoomLinkNow() === "" || !keepsAccounts || meId === "";
+    // Publishing it on live.streaming needs the room's own address and a nixamp.com account.
+    dom.streamingLive.hidden = roomStreamNow() === "" || remote.session === "";
     // Share sits with the transport, for anything with an address safe to hand out.
     dom.shareNow.hidden = shareLinkNow() === "";
     // The trollbox follows whatever live is joined.
@@ -4915,6 +4919,66 @@ export function start(): void {
     }
   }
   dom.schoolLive.addEventListener("click", () => { void teachOnSchool(); });
+
+  /** The live.streaming guide, which keeps the published rooms (src/guide-rooms.ts on its server). */
+  const STREAMING_SITE = "https://live.streaming.pit.world";
+
+  /**
+   * The room's own stream address, what a "?play=" link carries and what
+   * live.streaming plays: https://host/api/channels/<id>?k=KEY, or the live
+   * stream's. From the view link (host/view/KEY), so never the control key.
+   */
+  function roomStreamNow(): string {
+    if (mode !== "remote") return "";
+    const view = /^(https:\/\/[^/]+)\/view\/([A-Za-z0-9_-]+)\/?$/.exec(shareableLink());
+    if (!view) return "";
+    if (channelOn) return `${view[1]}/api/channels/${encodeURIComponent(channelOn.id)}?k=${view[2]}`;
+    if (nowMeta?.kind === "live" || onServerLive()) return `${view[1]}/api/live?k=${view[2]}`;
+    return "";
+  }
+
+  const streamingNote = need<HTMLElement>("streaming-publish-note");
+  const streamingTitle = need<HTMLInputElement>("streaming-publish-title-input");
+  const streamingBasis = need<HTMLSelectElement>("streaming-publish-basis");
+  const streamingAgree = need<HTMLInputElement>("streaming-publish-agree");
+  const streamingGo = need<HTMLButtonElement>("streaming-publish-go");
+  dom.streamingLive.addEventListener("click", () => {
+    if (roomStreamNow() === "") return;
+    streamingTitle.value = currentShareTitle();
+    streamingNote.textContent = "";
+    dom.streamingPublish.showModal();
+  });
+  need<HTMLButtonElement>("streaming-publish-close").addEventListener("click", () => dom.streamingPublish.close());
+  need<HTMLFormElement>("streaming-publish-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    void publishOnStreaming();
+  });
+
+  /** Lists this room on live.streaming with the member's session, then opens its page there. */
+  async function publishOnStreaming(): Promise<void> {
+    const play = roomStreamNow();
+    if (play === "" || streamingGo.disabled) return;
+    if (!streamingAgree.checked) { streamingNote.textContent = "Tick the box to confirm you may broadcast it."; return; }
+    streamingGo.disabled = true;
+    streamingNote.textContent = "Publishing…";
+    try {
+      const answer = await fetch(`${STREAMING_SITE}/api/v1/guide/rooms`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${remote.session}` },
+        body: JSON.stringify({ play, basis: streamingBasis.value, title: streamingTitle.value.trim(), agree: true }),
+      });
+      const body = (await answer.json().catch(() => ({}))) as { page?: string; error?: string };
+      if (!answer.ok || !body.page) throw new Error(body.error ?? "it could not be published");
+      dom.streamingPublish.close();
+      note = `Live on live.streaming: ${body.page}`;
+      draw();
+      globalThis.open(body.page, "_blank", "noopener");
+    } catch (error) {
+      streamingNote.textContent = `Could not publish: ${(error as Error).message}`;
+    } finally {
+      streamingGo.disabled = false;
+    }
+  }
 
   dom.favHere.addEventListener("click", () => {
     // Kept as the view link, so opening a favourite later is watching it;
