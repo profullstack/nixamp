@@ -5,7 +5,8 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleRooms, RoomProbe, roomAddress, roomEntries, RoomStore, ROOMS_PER_MEMBER, watchPage } from "../src/guide-rooms.ts";
+import { handleRooms, RoomProbe, roomAddress, roomEntries, RoomStore, ROOMS_PER_MEMBER, watchBase, watchPage } from "../src/guide-rooms.ts";
+import { readConfig, writeConfig } from "../src/library.ts";
 import { renderGuide } from "../src/station-guide.ts";
 
 const PLAY = "https://server1.chovy.nixamp.com:4321/api/channels/folder-b19b85542264?k=JV5m_XbnQFD0K9_JEnGEXw";
@@ -23,6 +24,20 @@ test("a room address is a channel or the live stream, with a key and nothing els
     "https://u:p@a.example/api/live?k=abcdefghij",
     "not a link",
   ]) assert.equal(roomAddress(bad), null, bad);
+});
+
+test("watchBase survives a config read, so the guide links rooms where it was told", () => {
+  const dir = mkdtempSync(join(tmpdir(), "rooms-config-"));
+  const saved = process.env["XDG_STATE_HOME"];
+  process.env["XDG_STATE_HOME"] = dir;
+  try {
+    writeConfig({ watchBase: "https://live.streaming.pit.world" });
+    assert.equal(readConfig().watchBase, "https://live.streaming.pit.world");
+    assert.equal(watchBase("https://fallback.example", {}), "https://live.streaming.pit.world");
+  } finally {
+    if (saved === undefined) delete process.env["XDG_STATE_HOME"]; else process.env["XDG_STATE_HOME"] = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("the room page carries the stream address", () => {

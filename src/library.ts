@@ -59,6 +59,7 @@ export function readConfig(): Config {
       ...(Array.isArray(record["guideHosts"]) ? { guideHosts: (record["guideHosts"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
       ...(typeof record["guideAds"] === "object" && record["guideAds"] !== null ? { guideAds: record["guideAds"] as Config["guideAds"] } : {}),
       ...(Array.isArray(record["guidePeers"]) ? { guidePeers: (record["guidePeers"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
+      ...(typeof record["watchBase"] === "string" ? { watchBase: record["watchBase"] } : {}),
     };
   } catch {
     return {};
