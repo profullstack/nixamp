@@ -218,6 +218,7 @@ export interface RoomContext {
   /** The nixamp.com account behind the request's session, or "". */
   member: () => Promise<string>;
   json: (response: ServerResponse, status: number, body: unknown) => void;
+  /** The request body: server.ts's raw text, which handleRooms parses as JSON. */
   readBody: (request: IncomingMessage) => Promise<unknown>;
   /** Refused by the caller's rate limit, or null. */
   throttle?: () => { retryAfter: number } | null;
@@ -243,7 +244,10 @@ export async function handleRooms(request: IncomingMessage, response: ServerResp
     return true;
   }
   if (path === "/api/v1/guide/rooms" && method === "POST") {
-    const body = (await ctx.readBody(request).catch(() => null)) as { play?: unknown; basis?: unknown; note?: unknown; title?: unknown; agree?: unknown } | null;
+    // server.ts hands over the raw text; a body that was never parsed has no
+    // `play`, and every publish read as a bad address.
+    const raw = await ctx.readBody(request).catch(() => null);
+    const body = (typeof raw === "string" ? (() => { try { return JSON.parse(raw) as unknown; } catch { return null; } })() : raw) as { play?: unknown; basis?: unknown; note?: unknown; title?: unknown; agree?: unknown } | null;
     const address = roomAddress(typeof body?.play === "string" ? body.play : "");
     if (!address) {
       ctx.json(response, 400, { error: "play must be a nixamp room's stream address: https://host/api/channels/<id>?k=KEY", code: "bad_address" });
