@@ -16,6 +16,8 @@ export const USAGE = `nixamp station — make a collection into a station
   nixamp station delete ID
   nixamp station guide-host NAME [--remove]
                      NAME's front page is the public station guide (e.g. a Moshpit name)
+  nixamp station guide-ads [--site ID] [--slot ID] [--format banner_300x250|text_link] [--off]
+                     crawlproof analytics (project ID) and an ad unit (slot ID) on the guide
   nixamp station guide-peer URL [--remove]
                      the guide also lists the public, listed stations of the server at URL
   nixamp station auto [--no-video] [--min 10] [--films 3] [--tv 2] [--breaks 600] [--no-start]

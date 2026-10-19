@@ -199,6 +199,27 @@ export async function station(argv: string[]): Promise<number> {
         console.log(hosts.size ? `The guide is the front page for: ${[...hosts].join(", ")}` : "No host shows the guide as its front page (it is still at /guide).");
         return 0;
       }
+      case "guide-ads": {
+        // crawlproof analytics + an ad unit on the guide; read by the daemon on every request.
+        const { readConfig, writeConfig } = await import("./library.ts");
+        const { cleanGuideAds } = await import("./station-guide.ts");
+        const raw = argv.includes("--off") ? {} : { ...(readConfig().guideAds ?? {}), ...Object.fromEntries(
+          (["site", "slot", "format"] as const).flatMap((name) => { const value = flag(argv, `--${name}`); return value === undefined ? [] : [[name, value]]; }),
+        ) };
+        const next = cleanGuideAds(raw);
+        for (const name of ["site", "slot"] as const) {
+          if (typeof (raw as Record<string, unknown>)[name] === "string" && (raw as Record<string, unknown>)[name] !== "" && !next[name]) {
+            console.error(`--${name} is a crawlproof id (letters, digits and dashes)`);
+            return 2;
+          }
+        }
+        writeConfig({ guideAds: next });
+        console.log([
+          next.site ? `Tracker   crawlproof project ${next.site}` : "Tracker   off",
+          next.slot ? `Ad        crawlproof slot ${next.slot} (${next.format ?? "banner_300x250"})` : "Ad        off",
+        ].join("\n"));
+        return 0;
+      }
       case "guide-peer": {
         // Another server whose public, listed stations this guide shows too.
         const { readConfig, writeConfig } = await import("./library.ts");

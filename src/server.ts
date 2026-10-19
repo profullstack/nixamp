@@ -86,7 +86,7 @@ import { LyricsFinder } from "./lyrics.ts";
 import { LyricsPublisher } from "./lyrics-publish.ts";
 import { aiKey } from "./ai-keys.ts";
 import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML } from "./station-page.ts";
-import { GUIDE_CSP, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
+import { guideAds, guideCsp, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
 import { STATION_CONTROL_LIMIT, StationUsage, limitsFromEnv, type Limits } from "./station-metering.ts";
@@ -2877,11 +2877,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       });
       const own = new Set(entries.map((one) => one.page));
       const others = options.stations!.peers ? (await options.stations!.peers.entries()).filter((one) => !own.has(one.page)) : [];
-      const page = renderGuide([...entries, ...others] as GuideEntry[], options.stations!.publicBase?.() ?? "");
+      const ads = guideAds();
+      const page = renderGuide([...entries, ...others] as GuideEntry[], options.stations!.publicBase?.() ?? "", ads);
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-cache",
-        "content-security-policy": GUIDE_CSP,
+        "content-security-policy": guideCsp(ads),
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
       });

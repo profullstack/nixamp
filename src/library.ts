@@ -31,6 +31,8 @@ export interface Config {
   guideHosts?: string[];
   /** Other servers (https base addresses) whose public, listed stations this guide shows too. */
   guidePeers?: string[];
+  /** crawlproof on the guide: tracker project id (site), ad slot and format (`nixamp station guide-ads`). */
+  guideAds?: { site?: string; slot?: string; format?: "banner_300x250" | "text_link" };
   /** Station limits kept across restarts (station-metering.ts). */
   limits?: Record<string, unknown>;
   /** Proxies whose X-Forwarded-For is believed for listener shares (`nixamp station shares trust ADDRESS`). */
@@ -53,6 +55,7 @@ export function readConfig(): Config {
       ...(typeof record["limits"] === "object" && record["limits"] !== null ? { limits: record["limits"] as Record<string, unknown> } : {}),
       ...(Array.isArray(record["trustedProxies"]) ? { trustedProxies: (record["trustedProxies"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
       ...(Array.isArray(record["guideHosts"]) ? { guideHosts: (record["guideHosts"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
+      ...(typeof record["guideAds"] === "object" && record["guideAds"] !== null ? { guideAds: record["guideAds"] as Config["guideAds"] } : {}),
       ...(Array.isArray(record["guidePeers"]) ? { guidePeers: (record["guidePeers"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
     };
   } catch {
