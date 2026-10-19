@@ -243,7 +243,13 @@ export async function handleRooms(request: IncomingMessage, response: ServerResp
     return true;
   }
   if (path === "/api/v1/guide/rooms" && method === "POST") {
-    const body = (await ctx.readBody(request).catch(() => null)) as { play?: unknown; basis?: unknown; note?: unknown; title?: unknown; agree?: unknown } | null;
+    // The server hands the body over as text; parsed here, and anything unreadable is no body.
+    const raw = await ctx.readBody(request).catch(() => null);
+    let parsed: unknown = raw;
+    if (typeof raw === "string") {
+      try { parsed = JSON.parse(raw); } catch { parsed = null; }
+    }
+    const body = (parsed && typeof parsed === "object" ? parsed : null) as { play?: unknown; basis?: unknown; note?: unknown; title?: unknown; agree?: unknown } | null;
     const address = roomAddress(typeof body?.play === "string" ? body.play : "");
     if (!address) {
       ctx.json(response, 400, { error: "play must be a nixamp room's stream address: https://host/api/channels/<id>?k=KEY", code: "bad_address" });

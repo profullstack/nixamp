@@ -69,7 +69,8 @@ async function serve(ctx: Omit<Parameters<typeof handleRooms>[3], "json" | "read
     void handleRooms(request, response, new URL(request.url ?? "/", "http://x").pathname, {
       ...ctx,
       json: (res, status, body) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); },
-      readBody: async (req) => { let text = ""; for await (const chunk of req) text += chunk; return JSON.parse(text); },
+      // Text, as the server's own readBody hands it over (a parsed object here hid a broken publish).
+      readBody: async (req) => { let text = ""; for await (const chunk of req) text += chunk; return text; },
     }).then((handled) => { if (!handled) { response.writeHead(404); response.end(); } });
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
