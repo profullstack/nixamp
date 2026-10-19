@@ -32,6 +32,8 @@ button.report:hover{color:var(--warn)}
 #share .or{color:var(--muted);font-size:.85rem;margin:8px 0 0}
 #status{margin-top:10px;font-size:.9rem;min-height:1.4em}
 footer{margin-top:40px;color:var(--muted);font-size:.85rem}footer a{color:inherit}
+.ad-unit{margin:28px auto 0;display:flex;justify-content:center}.ad-unit iframe{border:0;display:block;background:transparent}
+.ad-banner_300x250 iframe{width:300px;height:250px;max-width:100%}.ad-text_link iframe{width:100%;height:40px}
 `;
 
 /**
@@ -140,6 +142,8 @@ const SCRIPT = `
 })();
 `;
 
+const CRAWLPROOF = "https://crawlproof.com";
+
 const hash = (text: string): string => `'sha256-${createHash("sha256").update(text).digest("base64")}'`;
 
 function escape(text: string): string {
@@ -166,7 +170,7 @@ const GROUPS = ["ai", "shared", "radio", "tv"] as const;
  * gateway that cannot run its script against this server (the Moshpit's
  * /n/<name>), and for a crawler. Everything from a station is escaped.
  */
-export function renderGuide(entries: GuideEntry[], apiBase = ""): string {
+export function renderGuide(entries: GuideEntry[], apiBase = "", ads: GuideAds = {}): string {
   const groupOf = (one: GuideEntry): string => one.group ?? (one.kind === "video" ? "tv" : "radio");
   const cards = (group: string): string => entries
     .filter((one) => groupOf(one) === group && /^https?:\/\//.test(one.page))
@@ -178,6 +182,11 @@ export function renderGuide(entries: GuideEntry[], apiBase = ""): string {
     page = page
       .replace(`<h2 id="${group}-title" hidden>`, made ? `<h2 id="${group}-title">` : `<h2 id="${group}-title" hidden>`)
       .replace(`<div id="${group}" class="grid" aria-live="polite"></div>`, `<div id="${group}" class="grid" aria-live="polite">${made}</div>`);
+  }
+  if (ads.site) page = page.replace("</head>", `<script data-site="${escape(ads.site)}" src="${CRAWLPROOF}/stats.js" async></script>\n</head>`);
+  if (ads.slot) {
+    const format = ads.format ?? "banner_300x250";
+    page = page.replace("  <footer>", `  <div class="ad-unit ad-${format}"><iframe src="${CRAWLPROOF}/api/ads/frame?slot=${encodeURIComponent(ads.slot)}&amp;format=${format}" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>\n  <footer>`);
   }
   const api = /^https:\/\/[^\s"<>]+$/.test(apiBase) ? apiBase.replace(/\/+$/, "") : "";
   return (page.replace('<p id="empty" class="empty">', entries.length ? '<p id="empty" class="empty" hidden>' : '<p id="empty" class="empty">')).replace("<body>", api ? `<body data-api="${escape(api)}">` : "<body>");
@@ -235,10 +244,55 @@ export const GUIDE_HTML = `<!doctype html>
 </html>
 `;
 
-export const GUIDE_CSP = [
-  "default-src 'none'", `script-src ${hash(SCRIPT)}`, `style-src 'self' ${hash(STYLE)}`, "connect-src 'self' https:",
-  "img-src 'self' data:", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
-].join("; ");
+/**
+ * The guide's policy. With crawlproof configured (guideAds below) its tracker
+ * script and its ad frame are allowed from crawlproof.com and nothing else
+ * changes; the tracker reports by fetch, which connect-src https: already allows.
+ */
+export function guideCsp(ads: GuideAds = {}): string {
+  return [
+    "default-src 'none'", `script-src ${hash(SCRIPT)}${ads.site ? ` ${CRAWLPROOF}` : ""}`, `style-src 'self' ${hash(STYLE)}`, "connect-src 'self' https:",
+    `img-src 'self' data:${ads.site || ads.slot ? ` ${CRAWLPROOF}` : ""}`, ...(ads.slot ? [`frame-src ${CRAWLPROOF}`] : []),
+    "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+export const GUIDE_CSP = guideCsp();
+
+
+/** crawlproof analytics and an ad on the guide: a project id (tracker data-site) and an ad slot. */
+export interface GuideAds {
+  site?: string;
+  slot?: string;
+  format?: "banner_300x250" | "text_link";
+}
+
+const AD_ID = /^[A-Za-z0-9-]{1,64}$/;
+
+/** A setting as the guide may use it: ids that are ids, a format it knows, or nothing. */
+export function cleanGuideAds(value: unknown): GuideAds {
+  if (typeof value !== "object" || value === null) return {};
+  const one = value as Record<string, unknown>;
+  const site = typeof one["site"] === "string" && AD_ID.test(one["site"].trim()) ? one["site"].trim() : "";
+  const slot = typeof one["slot"] === "string" && AD_ID.test(one["slot"].trim()) ? one["slot"].trim() : "";
+  const format = one["format"] === "text_link" || one["format"] === "banner_300x250" ? one["format"] : undefined;
+  return { ...(site ? { site } : {}), ...(slot ? { slot } : {}), ...(format && slot ? { format } : {}) };
+}
+
+/**
+ * crawlproof on the guide: `guideAds` in config.json (`nixamp station guide-ads
+ * --site ID --slot ID`), each overridden by NIXAMP_GUIDE_CRAWLPROOF_SITE /
+ * NIXAMP_GUIDE_AD_SLOT / NIXAMP_GUIDE_AD_FORMAT. Unset is off: a guide on
+ * somebody's own machine carries nobody's tracker.
+ */
+export function guideAds(env: Record<string, string | undefined> = process.env): GuideAds {
+  const saved = (() => { try { return readConfig().guideAds ?? {}; } catch { return {}; } })();
+  return cleanGuideAds({
+    site: env["NIXAMP_GUIDE_CRAWLPROOF_SITE"] ?? saved.site,
+    slot: env["NIXAMP_GUIDE_AD_SLOT"] ?? saved.slot,
+    format: env["NIXAMP_GUIDE_AD_FORMAT"] ?? saved.format,
+  });
+}
 
 /**
  * The hosts whose front page is the guide: `guideHosts` in config.json

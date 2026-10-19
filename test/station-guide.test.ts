@@ -10,7 +10,7 @@ import { emptySnapshot } from "../src/protocol.ts";
 import { createServer, type Engine } from "../src/server.ts";
 import { StationRunner } from "../src/station-runner.ts";
 import { StationStore } from "../src/stations.ts";
-import { GUIDE_CSP, PeerGuides, nowLine, peerBase, renderGuide } from "../src/station-guide.ts";
+import { GUIDE_CSP, PeerGuides, cleanGuideAds, guideAds, guideCsp, nowLine, peerBase, renderGuide } from "../src/station-guide.ts";
 
 const memory = () => ({ read: () => null, write: () => undefined });
 
@@ -127,4 +127,22 @@ test("a card's now-playing line drops pasted links and reads ';' artists as a li
 
 test("a gateway's own stylesheet may style its notice on the guide", () => {
   assert.match(GUIDE_CSP, /style-src 'self' 'sha256-/);
+});
+
+test("crawlproof on the guide: tracker + ad only when configured, and the policy lets exactly those in", () => {
+
+  const bare = renderGuide([]);
+  assert.doesNotMatch(bare, /crawlproof/, "off by default");
+  assert.doesNotMatch(guideCsp(), /crawlproof|frame-src/);
+  const ads = { site: "b5f8f7af-32b5-460b-ae7b-9732414fee8a", slot: "ade2345b-7a5e-40e3-ac02-004fb8c880b2" };
+  const page = renderGuide([], "", ads);
+  assert.match(page, /<script data-site="b5f8f7af-32b5-460b-ae7b-9732414fee8a" src="https:\/\/crawlproof\.com\/stats\.js" async><\/script>\n<\/head>/);
+  assert.match(page, /<iframe src="https:\/\/crawlproof\.com\/api\/ads\/frame\?slot=ade2345b-7a5e-40e3-ac02-004fb8c880b2&amp;format=banner_300x250"[^>]*sandbox=/);
+  const csp = guideCsp(ads);
+  assert.match(csp, /script-src 'sha256-[^']+' https:\/\/crawlproof\.com;/);
+  assert.match(csp, /frame-src https:\/\/crawlproof\.com/);
+  assert.match(csp, /connect-src 'self' https:/);
+  assert.match(renderGuide([], "", { slot: ads.slot, format: "text_link" }), /format=text_link/);
+  assert.deepEqual(cleanGuideAds({ site: "\"><script>", slot: "x y", format: "huge" }), {}, "only ids");
+  assert.deepEqual(guideAds({ NIXAMP_GUIDE_CRAWLPROOF_SITE: "abc", NIXAMP_GUIDE_AD_SLOT: "def" }), { site: "abc", slot: "def" });
 });
