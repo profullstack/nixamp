@@ -270,7 +270,10 @@ test("stations over HTTP: owner manages, a link only listens, private means priv
     const page = await fetch(`${base}/station/${station.id}?t=x`);
     assert.equal(page.status, 200);
     assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'none'; script-src 'sha256-/);
-    assert.match(await page.text(), /<button id="play"/);
+    const inline = await page.text();
+    assert.match(inline, /id="play"/);
+    // No media element of its own: in-page playback is @profullstack/player, in the built page.
+    assert.doesNotMatch(inline, /<audio|<video|new Audio/);
     assert.equal((await fetch(`${base}/station/../api/state`)).status, 401);
 
     // The CLI: made private, and publish refuses without a basis.

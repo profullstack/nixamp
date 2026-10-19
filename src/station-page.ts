@@ -24,11 +24,9 @@ h1{font-size:1.6rem;line-height:1.2;margin:0 0 4px}
 .live{color:var(--live)}.reconnecting{color:var(--warn)}.unavailable,.stopped{color:var(--off)}
 .now{margin:20px 0;min-height:3em}.now .title{font-weight:600}.now .by{color:var(--muted)}
 .controls{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-button{font:inherit;font-weight:600;border:0;border-radius:999px;padding:12px 28px;background:var(--accent);color:#fff;cursor:pointer;min-width:120px}
-button:disabled{opacity:.5;cursor:not-allowed}
-button:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
-label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:.9rem}
-input[type=range]{width:120px;accent-color:var(--accent)}
+.play{display:inline-block;font-weight:600;border-radius:999px;padding:12px 28px;background:var(--accent);color:#fff;text-decoration:none;cursor:pointer}
+.play[aria-disabled=true]{opacity:.5;pointer-events:none}
+a:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 .small{margin-top:20px;font-size:.85rem;color:var(--muted)}.small a{color:inherit}
 .lyrics{margin:20px 0 0;border-top:1px solid var(--line);padding-top:12px}
 .lyrics summary{cursor:pointer;font-weight:600;min-height:24px}
@@ -37,7 +35,6 @@ input[type=range]{width:120px;accent-color:var(--accent)}
 .words p{margin:0 0 1em;white-space:pre-wrap;overflow-wrap:anywhere}
 .words p.sec{margin:1.2em 0 .3em;font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .words p.sec:first-child{margin-top:0}
-.screen{display:block;width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;margin:12px 0}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @media (prefers-reduced-motion:no-preference){.live::before{animation:pulse 2s ease-in-out infinite}}
 @keyframes pulse{50%{opacity:.35}}
@@ -50,52 +47,30 @@ const SCRIPT = `
   const q = "?t=" + encodeURIComponent(token);
   const api = "/api/v1/stations/" + encodeURIComponent(id);
   const $ = (s) => document.querySelector(s);
-  // Sound, or a TV station's picture: the element is chosen by the first state.
-  let audio = new Audio();
-  audio.preload = "none";
-  let wired = false;
-  const wire = () => {
-    if (wired) return;
-    wired = true;
-    audio.addEventListener("playing", () => { if (retry) say("Back on"); retry = 0; if (last) draw(last); });
-    audio.addEventListener("error", again);
-    audio.addEventListener("ended", again);
-    audio.addEventListener("stalled", () => { if (wanted && audio.readyState < 3) again(); });
-  };
-  let wanted = false, retry = 0, timer = 0, last = null, live = false;
+  // No media element here: every player in the fleet is @profullstack/player,
+  // and this page has no bundle to carry it. Play hands the station to the
+  // listener's own player through its .m3u; the built page plays in place.
+  let live = false;
   const chip = (state, text) => { const c = $("#state"); c.className = "chip " + state; c.textContent = text; };
   const say = (text) => { $("#announce").textContent = text; };
   const draw = (s) => {
-    last = s;
-    if (s.kind === "video" && audio.tagName !== "VIDEO") {
-      audio = $("#screen");
-      audio.hidden = false;
-      wired = false;
-      wire();
-    }
     document.title = s.name + " · nixamp";
     $("#name").textContent = s.name;
     $("#about").textContent = s.description || "";
     $("#about").hidden = !s.description;
     if (!live) title(s);
-    if (wanted && retry > 0) chip("reconnecting", "Reconnecting");
-    else if (s.state === "live") chip("live", "Live");
+    if (s.state === "live") chip("live", "Live");
     else if (s.state === "starting" || s.state === "recovering") chip("reconnecting", "Coming back");
     else if (s.state === "stopped") chip("stopped", "Off the air");
     else chip("unavailable", "Unavailable");
-    $("#play").disabled = !(s.state === "live" || s.state === "recovering" || s.state === "starting");
-    $("#m3u").href = api + "/listen.m3u" + q;
+    const on = s.state === "live" || s.state === "recovering" || s.state === "starting";
+    $("#play").href = api + "/listen.m3u" + q;
+    $("#play").setAttribute("aria-disabled", String(!on));
   };
   const title = (s) => {
     const playing = s.nowPlaying;
     $("#title").textContent = playing ? (playing.title || "Untitled") : (s.state === "live" ? "On the air" : "");
     $("#by").textContent = playing ? [playing.artist, playing.album].filter(Boolean).join(" · ") : "";
-  };
-  // What is ahead of the speaker: the sound the player holds and has not
-  // played yet. A new title waits that long, so it changes with the song.
-  const ahead = () => {
-    if (!wanted || audio.paused || audio.buffered.length === 0) return 0;
-    return Math.max(0, Math.min(30, audio.buffered.end(audio.buffered.length - 1) - audio.currentTime));
   };
   // The words of what is on, line by line; "[Verse 1]" as a small header. Text only, never HTML.
   let words = null;
@@ -127,7 +102,7 @@ const SCRIPT = `
     events.addEventListener("hello", (e) => { live = true; title(JSON.parse(e.data)); lyrics(); });
     events.addEventListener("now", (e) => {
       const s = JSON.parse(e.data);
-      setTimeout(() => { title(s); lyrics(); say(s.nowPlaying ? "Now playing " + (s.nowPlaying.title || "") : ""); }, ahead() * 1000);
+      title(s); lyrics(); say(s.nowPlaying ? "Now playing " + (s.nowPlaying.title || "") : "");
     });
     events.addEventListener("state", () => poll());
     events.onerror = () => { live = false; };
@@ -135,24 +110,10 @@ const SCRIPT = `
   const poll = async () => {
     try {
       const r = await fetch(api + "/state" + q, { cache: "no-store" });
-      if (r.status === 404) { $("#name").textContent = "This station is not available"; chip("unavailable", "Unavailable"); $("#play").disabled = true; stop(); return; }
+      if (r.status === 404) { $("#name").textContent = "This station is not available"; chip("unavailable", "Unavailable"); $("#play").removeAttribute("href"); $("#play").setAttribute("aria-disabled", "true"); return; }
       if (r.ok) draw(await r.json());
     } catch {}
   };
-  // Always the live edge: a fresh request, never a cached or paused one.
-  const join = () => { audio.src = api + "/stream" + q + "&n=" + Date.now(); audio.play().catch(() => { wanted = false; button(); }); };
-  const stop = () => { wanted = false; clearTimeout(timer); audio.pause(); audio.removeAttribute("src"); audio.load(); button(); };
-  const button = () => { const b = $("#play"); b.textContent = wanted ? "Stop" : "Play"; b.setAttribute("aria-pressed", String(wanted)); };
-  const again = () => {
-    if (!wanted) return;
-    retry += 1;
-    if (last) draw(last);
-    clearTimeout(timer);
-    timer = setTimeout(join, Math.min(15000, 1000 * 2 ** Math.min(retry, 4)));
-  };
-  wire();
-  $("#play").addEventListener("click", () => { if (wanted) { stop(); say("Stopped"); } else { wanted = true; retry = 0; button(); join(); say("Playing"); } });
-  $("#volume").addEventListener("input", (e) => { audio.volume = Number(e.target.value); });
   if (window.matchMedia && matchMedia("(max-width: 640px)").matches) $("#lyrics-box").open = false;
   poll();
   lyrics();
@@ -177,18 +138,16 @@ const PAGE = `<!doctype html>
 <main>
   <div class="card">
     <span id="state" class="chip unavailable" role="status">Loading</span>
-    <video id="screen" class="screen" playsinline preload="none" hidden></video>
     <h1 id="name">&nbsp;</h1>
     <p id="about" class="about" hidden></p>
     <div class="now" aria-live="polite"><div id="title" class="title"></div><div id="by" class="by"></div></div>
     <div class="controls">
-      <button id="play" type="button" aria-pressed="false" disabled>Play</button>
-      <label>Volume <input id="volume" type="range" min="0" max="1" step="0.05" value="1"></label>
+      <a id="play" class="play" aria-disabled="true">Play in your player (.m3u)</a>
     </div>
     <section id="lyrics" class="lyrics" aria-label="Lyrics" hidden>
       <details id="lyrics-box" open><summary>Lyrics<span id="lyrics-for" class="for"></span></summary><div id="words" class="words"></div></details>
     </section>
-    <p class="small"><a id="m3u" href="#">Open in another player (.m3u)</a> · Pausing here does not pause the station.</p>
+    <p class="small">This server was started without the web build, so the station plays in VLC, mpv or any player that opens an .m3u. Run <code>bun run web:build</code> to play it on this page.</p>
   </div>
   <p class="small">Played by <a href="https://nixamp.com">nixamp</a>.</p>
   <div id="announce" class="sr" aria-live="assertive"></div>
@@ -209,7 +168,6 @@ export const STATION_PAGE_CSP = [
   `script-src ${hash(SCRIPT)}`,
   `style-src ${hash(STYLE)}`,
   "connect-src 'self'",
-  "media-src 'self'",
   "img-src 'self' data:",
   "base-uri 'none'",
   "form-action 'none'",
