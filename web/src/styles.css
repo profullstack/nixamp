@@ -68,7 +68,7 @@ body {
 /* A bar, never a box: takes no room until ad.js has filled it, then the
    728x90 leaderboard plus the label ad.js draws above it, or the 40px text
    bar where there is no room for the leaderboard (app.ts picks). */
-.adnet { display: flex; justify-content: center; }
+.adnet { display: flex; flex-direction: column; align-items: center; }
 .adnet[hidden] { display: none; }
 .adnet:not([data-cp-filled]) { height: 0; overflow: hidden; }
 .adnet[data-cp-filled][data-format="banner_728x90"] { min-height: 106px; }
