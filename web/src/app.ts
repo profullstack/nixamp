@@ -5868,6 +5868,10 @@ export function start(): void {
     if (adnetShown || !keepsAccounts) return;
     adnetShown = true;
     dom.adnet.hidden = false;
+    // A bar: the 728x90 leaderboard where it fits whole (a creative is drawn
+    // at its pixel width and would crop), else the fluid text bar. Chosen
+    // once, before ad.js sees the unit, so it fills exactly one format.
+    if (dom.adnet.clientWidth >= 728) dom.adnet.dataset.format = "banner_728x90";
     const ads = (): { scan?: () => void } | undefined =>
       (window as unknown as { crawlproofAds?: { scan?: () => void } }).crawlproofAds;
     if (!document.querySelector('script[src="https://crawlproof.com/ad.js"]')) {
