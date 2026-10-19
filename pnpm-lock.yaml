@@ -21,11 +21,11 @@ importers:
         specifier: ^0.1.2
         version: 0.1.3
       '@profullstack/throttle':
-        specifier: 0.2.2
-        version: 0.2.2
+        specifier: ^0.3.2
+        version: 0.3.2
       '@profullstack/x402-gateway':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.10.1
+        version: 0.10.1
       acme-client:
         specifier: 5.4.0
         version: 5.4.0
@@ -294,16 +294,16 @@ packages:
     resolution: {integrity: sha512-Ty/90ibgu2DVlablDeoFdItcobK+c8cMQFvuTfJOUlCfyvQZWoPjgt0JHPwTvq+ynOQ4i1ivBQ3K3PY/S4rObA==}
     engines: {node: '>=22'}
 
-  '@profullstack/throttle@0.2.2':
-    resolution: {integrity: sha512-qpb9yKE7frwTP29YILx+QePqyEPWGVZxPYve7ITqSfARzOl0ZKhfjeizxPKZUgYhFQfNk6kWCa6/53RVoj304g==}
+  '@profullstack/throttle@0.3.2':
+    resolution: {integrity: sha512-53bE30J/vjuuahKiBveB3oKL+L03ufNGwmmSk9yfQwInfmC3xr9I7DvDkPti/wwAuk6V6bcfUqeazgNGLfe8rQ==}
     engines: {node: '>=20.11'}
 
-  '@profullstack/x402-gateway@0.6.0':
-    resolution: {integrity: sha512-n9/7NixIM9wVOMGWDc+3RtFsGABG+HAYfkZ11JxoEIlF/FDRGEXbvHFlNL/M97RNy01964FhAbQp34OMJoxqZg==}
+  '@profullstack/x402-gateway@0.10.1':
+    resolution: {integrity: sha512-YF/P3GRbb/8dAHIhDT2R7yHSAK+olrT4/zAWLzf5aF9Na8o1/rJCdP+k6UnGepyQ9RQ2qL9p5diRVwb18Zt4VA==}
     engines: {node: '>=20.11'}
 
-  '@profullstack/x402-gateway@0.7.0':
-    resolution: {integrity: sha512-xsZRWHdOD9Y9EuRS4PsRmykVS2geOu/luY0jBlliOF3SEgxiLhgmx7ks+2jOUtGlq+cIfSonnk5eEObRGCOJ9w==}
+  '@profullstack/x402-gateway@0.10.1':
+    resolution: {integrity: sha512-YF/P3GRbb/8dAHIhDT2R7yHSAK+olrT4/zAWLzf5aF9Na8o1/rJCdP+k6UnGepyQ9RQ2qL9p5diRVwb18Zt4VA==}
     engines: {node: '>=20.11'}
 
   '@protobufjs/aspromise@1.1.2':
@@ -1205,13 +1205,13 @@ snapshots:
 
   '@profullstack/synconfig@0.1.3': {}
 
-  '@profullstack/throttle@0.2.2':
+  '@profullstack/throttle@0.3.2':
     dependencies:
-      '@profullstack/x402-gateway': 0.6.0
+      '@profullstack/x402-gateway': 0.10.1
 
   '@profullstack/x402-gateway@0.6.0': {}
 
-  '@profullstack/x402-gateway@0.7.0':
+  '@profullstack/x402-gateway@0.10.1':
     dependencies:
       '@profullstack/keys': 0.1.0
 
