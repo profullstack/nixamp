@@ -196,6 +196,12 @@ export const BACKLOG_AUDIO = 64 * 1024;
  * until the channel ended, however long that was.
  */
 export const LISTENER_QUEUE = 16 * 1024 * 1024;
+/**
+ * How much break-free radio a listener who skips breaks is handed on arrival:
+ * two minutes at 192k. Their player holds it, and each break they skip spends
+ * the length of the spot from it, so they never hear a gap.
+ */
+export const MUSIC_BACKLOG = 3 * 1024 * 1024;
 
 /** Media-time window for complete MP4 fragments. Byte limits are a separate
  * memory ceiling; the measured byte rate is only a fallback for inputs with
@@ -346,6 +352,11 @@ export class Channel {
    * can begin at; for MP3 any point will do, a frame announces itself.
    */
   private recent: Buffer[] = [];
+  /** Whether what the encoder is writing now is a break (a radio list's spot). */
+  private breakOn = false;
+  /** The last couple of minutes of a radio list without its breaks, for listenWithoutBreaks. */
+  private music: Buffer[] = [];
+  private musicBytes = 0;
   private fragmentClock = new FragmentClock();
   private fragmentTimes = new WeakMap<Buffer, number>();
   private recentBytes = 0;
@@ -582,6 +593,13 @@ export class Channel {
         }
       });
       (child.stdio[3] as Readable | null)?.on("error", () => undefined);
+      // A radio list's output is constant-bitrate MP3, so how many bytes it
+      // has written is exactly how far it has played: whether this chunk is
+      // a break, to the frame, rather than to progress's once a second.
+      const kbps = playlistInput && this.info.kind !== "video"
+        ? Number(/^(\d+)k$/.exec((playlistEncode ?? [])[playlistEncode!.indexOf("-b:a") + 1] ?? "")?.[1] ?? 0)
+        : 0;
+      let written = 0;
       child.stdout?.on("data", (chunk: Buffer) => {
         // An ffmpeg that was replaced can still have a chunk in the pipe.
         if (this.child !== child) return;
@@ -589,6 +607,10 @@ export class Channel {
         sent = true;
         this.info.bytes += chunk.byteLength;
         this.rearm(child);
+        if (kbps > 0 && playlistInput) {
+          this.breakOn = playlistInput.place((written * 8) / (kbps * 1000)).at === -1;
+          written += chunk.byteLength;
+        } else this.breakOn = this.info.playlistAt === -1;
         this.emit(chunk);
       });
       child.stdout?.on("error", () => undefined);
@@ -823,6 +845,13 @@ export class Channel {
     this.measure(chunk.byteLength);
     if (!this.fragments) {
       this.remember(chunk, BACKLOG_AUDIO, false);
+      if (this.info.playlist && !this.breakOn) {
+        this.music.push(chunk);
+        this.musicBytes += chunk.byteLength;
+        while (this.music.length > 1 && this.musicBytes - this.music[0]!.byteLength > MUSIC_BACKLOG) {
+          this.musicBytes -= this.music.shift()!.byteLength;
+        }
+      }
       this.send(chunk);
       return;
     }
@@ -1075,6 +1104,49 @@ export class Channel {
     };
   }
 
+  /**
+   * A radio list's listener who hears no breaks: handed the last couple of
+   * minutes of music at once, which their player holds, then everything but
+   * the breaks. Each skipped break spends its length of that head start, so
+   * there is no gap; only once it is all spent does a break become silence of
+   * the same length (`silence`), never the spot. Joining again refills it.
+   */
+  listenWithoutBreaks(listener: Listener, kbps: number, silence: (out: Listener) => Listener): () => void {
+    const bytesPerSecond = (kbps * 1000) / 8;
+    let ahead = 0;
+    for (const piece of this.music) {
+      try {
+        listener.write(piece);
+      } catch {
+        break;
+      }
+      ahead += piece.byteLength / bytesPerSecond;
+    }
+    const quiet = silence(listener);
+    const skipping: Listener = {
+      write: (chunk) => {
+        if (!this.breakOn) return listener.write(chunk);
+        const seconds = chunk.byteLength / bytesPerSecond;
+        if (ahead >= seconds) {
+          ahead -= seconds;
+          return true;
+        }
+        return quiet.write(chunk);
+      },
+      end: () => listener.end(),
+      ...(listener.pending ? { pending: () => listener.pending!() } : {}),
+    };
+    this.listeners.add(skipping);
+    this.info.listeners = this.listeners.size;
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = null;
+    return () => {
+      this.listeners.delete(skipping);
+      this.info.listeners = this.listeners.size;
+      if (this.ephemeral && this.listeners.size === 0) this.idleOut();
+    };
+  }
+
   /** Stay up with nobody watching: no longer on demand. */
   keep(): void {
     this.ephemeral = false;
@@ -1298,6 +1370,12 @@ export class Channels {
   listen(id: string, listener: Listener): (() => void) | null {
     const channel = this.open.get(id);
     return channel ? channel.listen(listener) : null;
+  }
+
+  /** Attach a listener who skips a radio list's breaks (Channel.listenWithoutBreaks). */
+  listenWithoutBreaks(id: string, listener: Listener, kbps: number, silence: (out: Listener) => Listener): (() => void) | null {
+    const channel = this.open.get(id);
+    return channel ? channel.listenWithoutBreaks(listener, kbps, silence) : null;
   }
 
   /** Feed a channel that already exists, for a publisher sending chunks. */

@@ -329,7 +329,8 @@ export async function handleStations(
       response.end(JSON.stringify({ error: refused.error, code: refused.code, retryAfter: refused.retryAfter }));
       return true;
     }
-    // Signed in at nixamp.com: the breaks go quiet. Radio only (break-silence.ts).
+    // Signed in at nixamp.com: no breaks, starting a little behind live so
+    // they can be left out without a gap. Radio only (Channel.listenWithoutBreaks).
     const pass = url.searchParams.get(PASS_PARAM) ?? "";
     const spared = method === "GET" && !station.video && pass !== "" && ctx.passes ? await ctx.passes.good(pass).catch(() => false) : false;
     response.writeHead(200, { ...ctx.headers, "content-type": ctx.channels.contentType(channelId), "cache-control": "no-store" });
@@ -349,10 +350,9 @@ export async function handleStations(
           pending: (): number => response.writableLength,
         }
       : response;
-    const counted = spared
-      ? quietDuringBreaks(metered, station.bitrate, () => ctx.channels.info(channelId)?.playlistAt === -1)
-      : metered;
-    const detach = ctx.channels.listen(channelId, counted);
+    const detach = spared
+      ? ctx.channels.listenWithoutBreaks(channelId, metered, station.bitrate, (out) => quietDuringBreaks(out, station.bitrate, () => true))
+      : ctx.channels.listen(channelId, metered);
     if (detach === null) {
       response.end();
       return true;

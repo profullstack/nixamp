@@ -1,10 +1,10 @@
 /**
- * Silence in place of a break, for one listener of a station.
+ * Silence in place of a break, for one listener of a station: the last resort.
  *
- * A station's breaks are in its one stream (playlist-input.ts), so a listener
- * with a listen pass (listen-pass.ts) cannot be spared the time a spot takes,
- * only the spot: while the channel says a break is on, what goes to them is
- * MP3 silence lasting as long as the bytes it stands in for. Audio only; a
+ * A listener with a listen pass (listen-pass.ts) skips breaks out of a head
+ * start of music (Channel.listenWithoutBreaks). Only when that is spent is a
+ * break replaced, by MP3 silence lasting as long as the bytes it stands in
+ * for, rather than a gap that stalls the player. Audio only; a
  * fragmented MP4 cannot have fragments swapped, so a TV station's breaks are
  * everybody's.
  *

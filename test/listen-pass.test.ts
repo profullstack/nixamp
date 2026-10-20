@@ -80,3 +80,37 @@ test("during a break a spared listener gets silence lasting as long as what it r
   assert.equal(silence.length % 384, 0);
   assert.ok(silence.length / 384 >= 207 && silence.length / 384 <= 208, String(silence.length / 384));
 });
+
+test("a listener who skips breaks gets music ahead, never the spot, and silence only once the head start is spent", async () => {
+  const { Channel } = await import("../src/channels.ts");
+  const info = { id: "station-x", name: "x", format: "mp3", via: "pull", startedAt: 0, bytes: 0, listeners: 0, kind: "audio", source: "", playlist: ["a.mp3", "b.mp3"] };
+  const channel = new Channel(info as never, { ffmpeg: ["ffmpeg"] } as never, () => undefined);
+  const control = channel as unknown as { breakOn: boolean };
+  const second = 16_000; // one second at 128 kbps
+  const music = (n: number): Buffer => Buffer.alloc(second, n);
+  // Ten seconds of music before anybody arrives.
+  for (let n = 1; n <= 10; n += 1) channel.receive(music(n));
+  const got: Buffer[] = [];
+  const out = { write: (chunk: Buffer) => { got.push(chunk); return true; }, end: () => undefined };
+  channel.listenWithoutBreaks(out, 128, (to) => quietDuringBreaks(to, 128, () => true));
+  assert.equal(got.length, 10);
+  // A six-second spot: skipped out of the ten seconds ahead.
+  control.breakOn = true;
+  for (let n = 0; n < 6; n += 1) channel.receive(Buffer.alloc(second, 0xee));
+  control.breakOn = false;
+  channel.receive(music(11));
+  assert.equal(got.length, 11);
+  assert.ok(got.every((chunk) => !chunk.includes(0xee)));
+  // Another six: four seconds were left, so the rest is silence, never the spot.
+  control.breakOn = true;
+  for (let n = 0; n < 6; n += 1) channel.receive(Buffer.alloc(second, 0xee));
+  control.breakOn = false;
+  assert.ok(got.every((chunk) => !chunk.includes(0xee)));
+  const silent = got.slice(11);
+  assert.ok(silent.length > 0);
+  assert.ok(silent.every((chunk) => chunk[0] === 0xff && chunk[1] === 0xfb));
+  // A spot is never kept for the next arrival's head start.
+  const later: Buffer[] = [];
+  channel.listenWithoutBreaks({ write: (chunk: Buffer) => { later.push(chunk); return true; }, end: () => undefined }, 128, (to) => to);
+  assert.ok(later.length > 0 && later.every((chunk) => !chunk.includes(0xee)));
+});
