@@ -122,6 +122,7 @@ import { EventWriter } from "./event-writer.ts";
 import { handleLiveApi } from "./live-api.ts";
 import { LiveEvents, eventStructuredData, isTicketed, type LiveEvent } from "./live-events.ts";
 import { Tickets, needsTicket, ticketFrom, ticketsFromEnv } from "./tickets.ts";
+import { ListenPassVerifier, PASS_PARAM, checkListenPass, listenPassSecret, mintListenPass } from "./listen-pass.ts";
 import { Layouts } from "./layouts.ts";
 import { Rooms } from "./rooms.ts";
 import { Trollbox, TrollboxError, fallbackHandle, roomFor } from "./trollbox.ts";
@@ -1496,6 +1497,9 @@ export function isSignInPath(path: string): boolean {
     path === "/api/v1/servers" ||
     path.startsWith("/api/v1/servers/") ||
     path === "/api/v1/me/handle" ||
+    // A listen pass is the session's to ask for and anybody's to check.
+    path === "/api/v1/me/pass" ||
+    path === "/api/v1/listen-pass/check" ||
     path === "/api/v1/me/profile" ||
     path.startsWith("/api/v1/me/profile/") ||
     // A stored photo is public: it is on every class the host runs.
@@ -2022,6 +2026,13 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // away, which are the same thing as far as "is it still going" goes.
     response.once("close", () => tracker.close(id));
   };
+
+  // Signs listen passes where accounts live (nixamp.com); "" everywhere else.
+  const listenPassKey = listenPassSecret();
+  const listenPasses = new ListenPassVerifier({
+    site: process.env["NIXAMP_SITE"] || "https://nixamp.com",
+    ...(listenPassKey ? { secret: listenPassKey } : {}),
+  });
 
   return async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://localhost");
@@ -3059,6 +3070,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         ...(options.stations.cover ? { cover: options.stations.cover } : {}),
         ...(options.stations.lyrics ? { lyrics: options.stations.lyrics } : {}),
         ...(options.stations.lyricsPublisher ? { lyricsPublisher: options.stations.lyricsPublisher } : {}),
+        passes: listenPasses,
         ...(options.stations.peers ? { peers: () => options.stations!.peers!.entries() } : {}),
         ...(options.stations.rooms ? {
           rooms: () => roomEntries(options.stations!.rooms!.store, options.stations!.rooms!.probe, watchBase(options.stations!.publicBase?.() || `${scheme}://${request.headers.host ?? "localhost"}`)),
@@ -4188,6 +4200,27 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         scopes_supported: SCOPE_NAMES,
         resource_name: "nixamp",
       });
+      return;
+    }
+
+    // A listen pass (listen-pass.ts): a station page on any *.nixamp.com server
+    // asks for one with this site's cookie, which is same-site there, so a
+    // signed-in listener hears no breaks. Credentialed, so never "*".
+    if (path === "/api/v1/me/pass" && request.method === "GET" && options.accounts && listenPassKey) {
+      const origin = String(request.headers.origin ?? "");
+      const cors: Record<string, string> = /^https:\/\/([a-z0-9-]+\.)*nixamp\.com(:\d+)?$/.test(origin)
+        ? { "access-control-allow-origin": origin, "access-control-allow-credentials": "true", vary: "origin" }
+        : {};
+      const who = await options.accounts.whoIs(tokenFrom(request.headers));
+      const body = who === null ? { error: "not signed in" } : mintListenPass(listenPassKey);
+      response.writeHead(who === null ? 401 : 200, { ...cors, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      response.end(JSON.stringify(body));
+      return;
+    }
+    // Asked by a station on another server about a pass it was handed.
+    if (path === "/api/v1/listen-pass/check" && request.method === "GET" && listenPassKey) {
+      const expires = checkListenPass(listenPassKey, url.searchParams.get(PASS_PARAM) ?? "");
+      json(response, 200, expires > 0 ? { ok: true, expires } : { ok: false });
       return;
     }
 

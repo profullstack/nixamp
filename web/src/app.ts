@@ -941,8 +941,19 @@ export function start(): void {
     //
     // The day a pass exists, `paid: true` is what suppresses a break, and it
     // gets passed from wherever that pass is known.
+    //
+    // That day is a listen pass (listen-pass.ts): signed in at nixamp.com is
+    // the pass, so a signed-in listener gets no breaks here either.
     void (async () => {
-      player.enableAds(adStage as HTMLElement, await adSettings({}, openedWith));
+      let signedIn = false;
+      try {
+        const site = location.hostname === "nixamp.com" ? "" : "https://nixamp.com";
+        const r = await fetch(`${site}/api/v1/me/pass`, { credentials: "include", cache: "no-store", signal: AbortSignal.timeout(3000) });
+        signedIn = r.ok;
+      } catch {
+        // Unknown is not signed in.
+      }
+      player.enableAds(adStage as HTMLElement, await adSettings(signedIn ? { paid: true } : {}, openedWith));
 
       // ?adNow plays one straight away. Without it, seeing an advert means
       // first finding something to play and then waiting out the interval,

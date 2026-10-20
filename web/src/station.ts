@@ -184,12 +184,28 @@ const unmount = (): void => {
   old?.destroy();
 };
 
+/**
+ * Signed in at nixamp.com: a listen pass, and this station's breaks are
+ * silence for us. The cookie is nixamp.com's, which every *.nixamp.com server
+ * shares a site with; anywhere else the answer is no pass and the breaks play.
+ */
+let pass = "";
+const passAsked = (async (): Promise<void> => {
+  const site = location.hostname === "nixamp.com" ? "" : "https://nixamp.com";
+  try {
+    const r = await fetch(site + "/api/v1/me/pass", { credentials: "include", cache: "no-store", signal: AbortSignal.timeout(3000) });
+    if (r.ok) pass = String(((await r.json()) as { pass?: unknown }).pass ?? "");
+  } catch {
+    // Not signed in, or nixamp.com out of reach: the breaks play.
+  }
+})();
+
 /** A fresh request is always the live edge: never a cached or paused one. */
 const mount = (autoplay: boolean): void => {
   unmount();
   const video = kind === "video";
   const current = createPlayer($("#stage"), {
-    src: api + "/stream" + q + "&n=" + Date.now(),
+    src: api + "/stream" + q + (pass ? "&pass=" + encodeURIComponent(pass) : "") + "&n=" + Date.now(),
     kind: video ? "mp4" : "audio",
     audio: !video,
     live: true,
@@ -263,7 +279,8 @@ function draw(s: StationState): void {
   // that changes (a station turned into TV).
   if (onAir && kind !== s.kind) {
     kind = s.kind;
-    mount(wanted);
+    // After the pass is known, so the first stream already has it.
+    void passAsked.then(() => mount(wanted));
   }
 }
 

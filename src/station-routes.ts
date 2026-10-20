@@ -19,6 +19,8 @@ import { alertsFor, type Limits, type StationUsage } from "./station-metering.ts
 import { aiFromTags, type TrackFacts } from "./track-facts.ts";
 import type { Lyrics } from "./lyrics.ts";
 import type { PublishReport } from "./lyrics-publish.ts";
+import { quietDuringBreaks } from "./break-silence.ts";
+import { PASS_PARAM } from "./listen-pass.ts";
 import {
   StationError, channelOf, tokensMatch, type OwnerStation, type PublicStation, type Station, type StationStore,
 } from "./stations.ts";
@@ -70,6 +72,8 @@ export interface StationContext {
   lyrics?: (station: Station, file: string) => Promise<Lyrics | null>;
   /** Our own songs' words, published back to nichedb (lyrics-publish.ts). */
   lyricsPublisher?: { status: () => unknown; publish: (station: Station) => Promise<PublishReport> };
+  /** Whether a listen pass is good: its holder hears silence in place of a radio station's breaks. */
+  passes?: { good: (pass: string) => Promise<boolean> };
   /** Auto stations: run a sync with these settings (and keep them), or read them. */
   auto?: { sync: (input: Record<string, unknown>) => Promise<unknown>; setting: () => unknown };
   /** The public stations other servers list (guide peers); absent when there are none. */
@@ -325,6 +329,9 @@ export async function handleStations(
       response.end(JSON.stringify({ error: refused.error, code: refused.code, retryAfter: refused.retryAfter }));
       return true;
     }
+    // Signed in at nixamp.com: the breaks go quiet. Radio only (break-silence.ts).
+    const pass = url.searchParams.get(PASS_PARAM) ?? "";
+    const spared = method === "GET" && !station.video && pass !== "" && ctx.passes ? await ctx.passes.good(pass).catch(() => false) : false;
     response.writeHead(200, { ...ctx.headers, "content-type": ctx.channels.contentType(channelId), "cache-control": "no-store" });
     if (method === "HEAD") {
       response.end();
@@ -332,7 +339,7 @@ export async function handleStations(
     }
     // Every byte that goes out through the link is counted against the station.
     const usage = ctx.usage;
-    const counted = usage
+    const metered = usage
       ? {
           write: (chunk: Buffer): boolean => {
             usage.delivered(station.id, chunk.length);
@@ -342,6 +349,9 @@ export async function handleStations(
           pending: (): number => response.writableLength,
         }
       : response;
+    const counted = spared
+      ? quietDuringBreaks(metered, station.bitrate, () => ctx.channels.info(channelId)?.playlistAt === -1)
+      : metered;
     const detach = ctx.channels.listen(channelId, counted);
     if (detach === null) {
       response.end();
