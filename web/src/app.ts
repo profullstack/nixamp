@@ -868,6 +868,58 @@ export function start(): void {
     return button;
   }
 
+  // ---- breaks between tracks ---------------------------------------------
+  //
+  // Seconds between breaks (0 when this listener gets none), seconds listened
+  // since the last one, and what ends the break being waited on.
+  let adEvery = 0;
+  let listened = 0;
+  let heardAt = 0;
+  let breakOver: (() => void) | null = null;
+
+  /**
+   * Count time actually playing. A song's break waits for the song to end; a
+   * film's, or a live stream's, which have no end worth waiting for, comes on
+   * the clock: five seconds every ten minutes.
+   */
+  function countListening(of: number): void {
+    const now = performance.now();
+    const playing = !player.adPlaying && player.playing;
+    if (playing && heardAt > 0 && now - heardAt < 2000) listened += (now - heardAt) / 1000;
+    heardAt = playing ? now : 0;
+    if (adEvery > 0 && (of <= 0 || player.showingVideo) && listened >= adEvery) {
+      listened = 0;
+      void player.playAdNow();
+    }
+  }
+
+  /** One break, resolved when it is over (or when there was none to play). */
+  function adBreak(): Promise<void> {
+    return new Promise((done) => {
+      const finish = (): void => {
+        breakOver = null;
+        clearTimeout(cap);
+        done();
+      };
+      const cap = setTimeout(finish, 90_000);
+      breakOver = finish;
+      void player.playAdNow().then(() => { if (!player.adPlaying) finish(); }, finish);
+    });
+  }
+
+  /** On from a track that ended: the next entry, wherever that is. */
+  function advance(): void {
+    if (rejoinChannel()) return;
+    // A list playing here moves on to its next entry, round again after the last.
+    if (stepList()) return;
+    if (stepFolder()) return;
+    // A channel that gave up is not a place in the playlist: stepping on
+    // from it played the first file in somebody's library, which read as
+    // the page picking something else to fail on.
+    if (mode === "remote" && watching < 0 && !remoteDrives()) return;
+    void step(1);
+  }
+
   const player = new BrowserPlayer({ audio: dom.audio, video: dom.video }, {
     // The connected server allows every origin, so the analyser may read what
     // it sends even though nixamp.com is not its origin. Asked at load time,
@@ -877,18 +929,18 @@ export function start(): void {
       // A picked file has no duration until the browser has looked at it.
       const track = local[index];
       if (mode === "local" && track && of > 0 && track.duration !== of) track.duration = of;
+      countListening(of);
       draw();
     },
     onEnded: () => {
-      if (rejoinChannel()) return;
-      // A list playing here moves on to its next entry, round again after the last.
-      if (stepList()) return;
-      if (stepFolder()) return;
-      // A channel that gave up is not a place in the playlist: stepping on
-      // from it played the first file in somebody's library, which read as
-      // the page picking something else to fail on.
-      if (mode === "remote" && watching < 0 && !remoteDrives()) return;
-      void step(1);
+      // A break that came due during this track plays now, between it and
+      // the next, never inside it.
+      if (adEvery > 0 && listened >= adEvery && player.duration > 0) {
+        listened = 0;
+        void adBreak().then(advance);
+        return;
+      }
+      advance();
     },
     onState: () => draw(),
     onBusy: (busy) => {
@@ -953,7 +1005,19 @@ export function start(): void {
       } catch {
         // Unknown is not signed in.
       }
-      player.enableAds(adStage as HTMLElement, await adSettings(signedIn ? { paid: true } : {}, openedWith));
+      const settings = await adSettings(signedIn ? { paid: true } : {}, openedWith);
+      // The player's own timer would cut into a song. It is never left to
+      // fire: breaks are run from here, at the end of a track (onEnded), or on
+      // the clock only for a live stream, which has no ends to wait for.
+      adEvery = settings?.everySeconds ?? 0;
+      player.enableAds(adStage as HTMLElement, settings && {
+        ...settings,
+        everySeconds: 365 * 24 * 60 * 60,
+        onBreakEnd: (info) => {
+          settings.onBreakEnd?.(info);
+          breakOver?.();
+        },
+      });
 
       // ?adNow plays one straight away. Without it, seeing an advert means
       // first finding something to play and then waiting out the interval,

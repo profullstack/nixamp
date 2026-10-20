@@ -109,6 +109,8 @@ export class PlaylistInputStream {
       let played = 0;
       let last = "";
       let lastBreak = 0;
+      // A film cut for a break, to be picked up where it stopped.
+      let resume: { at: number; file: string; position: number } | null = null;
       for (;;) {
         if (signal.aborted) break;
         // Asked at every boundary, so an edit lands on the next track. The
@@ -124,7 +126,8 @@ export class PlaylistInputStream {
             step = o.order ? 0 : where >= 0 ? where + 1 : Math.min(step, files.length);
           }
         }
-        if (step >= order.length) {
+        // A film cut for a break is not the end of the list: it has more to play.
+        if (step >= order.length && !resume) {
           if (!o.repeat) break;
           // A pass where everything was passed over is a list with nothing
           // to play, and repeating it would be the loop this exists to avoid.
@@ -136,7 +139,8 @@ export class PlaylistInputStream {
         }
         {
           // A break, when one is due: in place of the next entry, which stays
-          // next. Not at the very start, and never inside an entry.
+          // next. Not at the very start. Never inside a song; a film is cut
+          // for one on the clock (below), since waiting out a film is an hour.
           let breakFile: string | null = null;
           const every = typeof o.breaks?.everySeconds === "function" ? o.breaks.everySeconds() : (o.breaks?.everySeconds ?? 0);
           if (o.breaks && every > 0 && !first && offset - lastBreak >= every) {
@@ -145,12 +149,14 @@ export class PlaylistInputStream {
             if (signal.aborted) return;
           }
           const isBreak = breakFile !== null;
-          const at = isBreak ? -1 : order[step]!;
-          if (!isBreak) step += 1;
-          const file = isBreak ? breakFile! : files[at]!;
-          if (!isBreak) last = file;
-          if (!isBreak && o.excluded?.(file)) continue;
-          const position = first && step - 1 === o.at ? o.position : 0;
+          const resuming: { at: number; file: string; position: number } | null = isBreak ? null : resume;
+          if (resuming) resume = null;
+          const at: number = isBreak ? -1 : resuming ? resuming.at : order[step]!;
+          if (!isBreak && !resuming) step += 1;
+          const file: string = isBreak ? breakFile! : resuming ? resuming.file : files[at]!;
+          if (!isBreak && !resuming) last = file;
+          if (!isBreak && !resuming && o.excluded?.(file)) continue;
+          const position: number = resuming ? resuming.position : first && step - 1 === o.at ? o.position : 0;
           first = false;
           let reached = 0;
           try {
@@ -160,8 +166,13 @@ export class PlaylistInputStream {
             if (codecs.tags && (codecs.tags.title || codecs.tags.artist)) {
               this.tags.set(file, { title: codecs.tags.title ?? "", artist: codecs.tags.artist ?? "", album: codecs.tags.album ?? "" });
             }
-            const duration = (codecs.duration ?? 0) - position;
-            if (duration <= 0) throw new Error(`No playable duration for playlist entry ${at + 1}`);
+            const full = (codecs.duration ?? 0) - position;
+            if (full <= 0) throw new Error(`No playable duration for playlist entry ${at + 1}`);
+            // A film plays up to the next break and is picked up after it;
+            // a tail of a few seconds is not worth a cut.
+            const room = o.video && !isBreak && o.breaks && every > 0 ? every - (offset - lastBreak) : Infinity;
+            const cut = room >= 1 && full - room > 5;
+            const duration = cut ? room : full;
             this.entries.push({ at, file, start: offset, position });
             const hasVideo = Boolean(codecs.video);
             const extra = o.video && !hasVideo
@@ -228,6 +239,9 @@ export class PlaylistInputStream {
             // The next break is counted from the end of this one, so a spot
             // longer than the gap cannot follow itself.
             if (isBreak) lastBreak = offset;
+            // Cut for a break, not skipped: the break is due now, and the
+            // film carries on from here after it.
+            if (cut && !skipped) resume = { at, file, position: position + duration };
           } catch (error) {
             // A break that would not play is simply no break.
             if (isBreak && !signal.aborted) continue;

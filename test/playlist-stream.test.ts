@@ -132,3 +132,28 @@ test("an audio album crosses FLAC and MP3 entries without closing listeners", { 
     assert.ok(Math.abs(frequency(2.5) - 880) < 5);
   } finally { set.stopAll(); rmSync(root, { recursive: true, force: true }); }
 });
+
+test("a film is cut for a break on the clock and picked up where it stopped; a song is not", { skip: !available, timeout: 60_000 }, async () => {
+  const { PlaylistInputStream } = await import("../src/playlist-input.ts");
+  const root = mkdtempSync(join(tmpdir(), "nixamp-film-breaks-"));
+  try {
+    const film = join(root, "film.mp4");
+    const spot = join(root, "spot.mp4");
+    clip(film, "red", "libx264", "160x90", 17);
+    clip(spot, "blue", "libx264", "160x90", 1);
+    const run = async (video: boolean) => {
+      const input = new PlaylistInputStream({
+        ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], files: [film], at: 0, position: 0, video, width: 160, height: 90,
+        repeat: false, breaks: { everySeconds: 5, next: async () => spot },
+      });
+      for await (const _ of input.open(new AbortController().signal)) { /* drain */ }
+      return input.history.map((one) => [one.at, Math.round(one.position)]);
+    };
+    // Film: 5 s, spot, 5 s more from 5, spot, the last 7 s from 10 (a 2 s tail is not cut off).
+    assert.deepEqual(await run(true), [[0, 0], [-1, 0], [0, 5], [-1, 0], [0, 10]]);
+    // The same file as a song plays whole: there is nothing after it to break before.
+    assert.deepEqual(await run(false), [[0, 0]]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
