@@ -188,7 +188,10 @@ export class PlaylistInputStream {
               ...extra, "-t", String(duration),
               ...(o.video ? [
                 "-map", hasVideo ? "0:v:0" : "1:v:0", "-map", codecs.audio ? "0:a:0" : "1:a:0",
-                "-vf", `fps=30,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS-STARTPTS`,
+                // Square the pixels first: an anamorphic file (1280x720 at SAR
+                // 1707:1280 is a 2.37:1 film) fitted by its stored size and then
+                // setsar=1 came out squeezed to 16:9.
+                "-vf", `fps=30,scale='trunc(iw*sar/2)*2':ih,setsar=1,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS-STARTPTS`,
                 "-c:v", "libx264", "-threads", "2", "-preset", "veryfast", "-tune", "zerolatency",
                 "-crf", "23", "-pix_fmt", "yuv420p", "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
               ] : ["-map", "0:a:0", "-vn"]),

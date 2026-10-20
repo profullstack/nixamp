@@ -143,7 +143,7 @@ test("the settings YouTube actually needs", () => {
   const smaller = buildBroadcastArgs(plan({
     settings: { ...DEFAULT_ENCODER, resolution: "720p", framerate: 24, keyframeInterval: 2 },
   }));
-  assert.match(smaller[smaller.indexOf("-vf") + 1] as string, /scale=1280:720,fps=24/);
+  assert.match(smaller[smaller.indexOf("-vf") + 1] as string, /scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:.*fps=24/);
   assert.equal(smaller[smaller.indexOf("-g") + 1], "48");
 });
 
