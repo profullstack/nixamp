@@ -830,7 +830,7 @@ test("a phone's Safari is handed a live channel as HLS, and a dead channel does 
   assert.match(app, /const asHls = channel\.video && wantsHls\(\)/);
   assert.match(app, /\/hls\/index\.m3u8`/);
   // A channel that gave up is not a place in the playlist to step on from.
-  const ended = app.slice(app.indexOf("onEnded: () => {"), app.indexOf("onState: () => draw()"));
+  const ended = app.slice(app.indexOf("function advance(): void {"), app.indexOf("const player = new BrowserPlayer"));
   assert.match(ended, /if \(mode === "remote" && watching < 0 && !remoteDrives\(\)\) return;/);
 });
 
