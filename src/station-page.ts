@@ -197,7 +197,8 @@ export const STATION_APP_CSP = [
   "media-src 'self' blob:",
   "worker-src 'self' blob:",
   "img-src 'self' data: blob:",
-  "connect-src 'self'",
+  // nixamp.com for a listen pass, so a signed-in listener's breaks go quiet.
+  "connect-src 'self' https://nixamp.com",
   "base-uri 'none'",
   "form-action 'none'",
   "frame-ancestors 'none'",

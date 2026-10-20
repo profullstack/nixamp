@@ -74,6 +74,8 @@ export interface Station {
 /** Times an item may fail in a row before rotation leaves it out. */
 export const EXCLUDE_AFTER = 3;
 export const DEFAULT_BITRATE = 128;
+/** Seconds between breaks on a new station that did not say. */
+export const DEFAULT_BREAKS_EVERY = 600;
 export const BITRATES = [64, 96, 128, 160, 192, 256, 320];
 const MAX_ITEMS = 20_000;
 const MAX_NAME = 120;
@@ -233,7 +235,9 @@ export class StationStore {
       listenToken: newToken(),
       bitrate: this.bitrateFrom(input.bitrate),
       video: input.video === true,
-      breaksEvery: this.breaksFrom(input.breaksEvery),
+      // On unless asked for none: a station is free to listen to, and the
+      // spot is what pays for it. Signed-in listeners hear silence instead.
+      breaksEvery: input.breaksEvery === undefined ? DEFAULT_BREAKS_EVERY : this.breaksFrom(input.breaksEvery),
       auto: "",
       rights: null,
       owner,
