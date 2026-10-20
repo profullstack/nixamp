@@ -157,3 +157,32 @@ test("a film is cut for a break on the clock and picked up where it stopped; a s
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("an anamorphic film is letterboxed at its display shape, not squeezed to the stored size", { skip: !available, timeout: 30_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "nixamp-playlist-test-"));
+  try {
+    // 160x90 stored at SAR 2:1 displays 32:9, the way a 1280x720 scope film
+    // at SAR 1707:1280 displays 2.37:1.
+    const files = [join(root, "a.mp4"), join(root, "b.mp4")];
+    for (const file of files) {
+      ff(["-f", "lavfi", "-i", "color=c=red:s=160x90:r=10:d=2", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+        "-vf", "setsar=2", "-c:v", "libx264", "-threads", "1", "-g", "10", "-pix_fmt", "yuv420p", "-c:a", "aac", "-t", "2", file]);
+    }
+    let finish!: () => void;
+    const done = new Promise<void>(resolve => { finish = resolve; });
+    const set = new Channels({ ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], onEnd: finish });
+    try {
+      const channel = set.pull("show", "Show", files[0]!, [], "video", false, 10_000, [], "", { live: true, position: 0, playlist: files }, { video: "h264", audio: "aac", container: "mp4", width: 160, height: 90 });
+      assert.ok(channel);
+      const chunks: Buffer[] = [];
+      set.listen("show", { write(b) { chunks.push(Buffer.from(b)); return true; }, end() {} });
+      await done;
+      const out = join(root, "out.mp4"); writeFileSync(out, Buffer.concat(chunks));
+      const frame = ff(["-i", out, "-an", "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"]);
+      assert.equal(frame.length, 160 * 90 * 3);
+      const red = (row: number) => frame[(row * 160 + 80) * 3]! > 150;
+      assert.ok(!red(5) && !red(84), "black bars above and below");
+      assert.ok(red(45), "the picture in the middle");
+    } finally { set.stopAll(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

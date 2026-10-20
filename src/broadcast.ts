@@ -129,7 +129,9 @@ export function buildBroadcastArgs(plan: BroadcastPlan): string[] {
     "-bufsize", `${plan.settings.videoBitrate * 2}k`,
     // A strict constant frame rate. A source that only produces frames when
     // something changes reads to YouTube as a stream that is falling behind.
-    "-vf", `scale=${width}:${height},fps=${plan.settings.framerate}`,
+    // Letterboxed, never stretched, and square pixels first so an anamorphic
+    // source keeps its shape.
+    "-vf", `scale='trunc(iw*sar/2)*2':ih,setsar=1,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${plan.settings.framerate}`,
     "-pix_fmt", "yuv420p",
     "-g", String(gop),
     "-c:a", "aac",
