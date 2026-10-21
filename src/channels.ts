@@ -283,6 +283,21 @@ export interface ChannelOptions {
 }
 
 /**
+ * Where each chunk a channel put out begins in its byte count (ChannelInfo.bytes),
+ * so a listener's own bytes can be laid onto the channel's: a backlog, a
+ * skipped break and a redial all keep the chunk objects they were sent as.
+ */
+const chunkStarts = new WeakMap<Buffer, number>();
+
+/** The byte count a chunk began at, for one a list channel put out; undefined for any other. */
+export function chunkStart(chunk: Buffer): number | undefined {
+  return chunkStarts.get(chunk);
+}
+
+/** A list's dial: where in the byte count it began, and its list's clock. */
+interface Dial { base: number; input: PlaylistInputStream; kbps: number }
+
+/**
  * One live source, and its audience.
  *
  * Everything a listener is sent has been through ffmpeg, so a publisher cannot
@@ -338,6 +353,20 @@ export class Channel {
     return this.info.bytes > 0 && (!this.fragments || this.fragments.ready);
   }
 
+  /**
+   * What was going out at this point of the byte count: the list's file (""
+   * in a break) and how far into it, with its tags. Null for a byte this
+   * channel no longer knows, or for a channel that is not a radio list.
+   */
+  placeAt(bytes: number): { file: string; position: number; tags?: { title: string; artist: string; album: string } } | null {
+    const dial = this.dials.findLast((one) => one.base <= bytes);
+    if (!dial) return null;
+    const place = dial.input.place(((bytes - dial.base) * 8) / (dial.kbps * 1000));
+    const file = place.at >= 0 ? place.list[place.at] ?? "" : "";
+    const tags = file ? dial.input.tags.get(file) : undefined;
+    return { file, position: place.position, ...(tags ? { tags } : {}) };
+  }
+
   /** An entry's tags, as read when it was put on. */
   tagsOf(file: string): { title: string; artist: string; album: string } | undefined {
     return this.playlistInput?.tags.get(file);
@@ -369,6 +398,8 @@ export class Channel {
   private breakOn = false;
   /** The last couple of minutes of a radio list without its breaks, for listenWithoutBreaks. */
   private music: Buffer[] = [];
+  /** The last few dials of a radio list, newest last, for placeAt(). */
+  private dials: Dial[] = [];
   private musicBytes = 0;
   private fragmentClock = new FragmentClock();
   private fragmentTimes = new WeakMap<Buffer, number>();
@@ -622,9 +653,16 @@ export class Channel {
         if (this.child !== child) return;
         if (!sent) this.info.error = undefined;
         sent = true;
+        const at = this.info.bytes;
         this.info.bytes += chunk.byteLength;
         this.rearm(child);
         if (kbps > 0 && playlistInput) {
+          // Constant-bitrate MP3: a byte of this dial is exactly a time on its list's clock.
+          if (written === 0) {
+            this.dials.push({ base: at, input: playlistInput, kbps });
+            if (this.dials.length > 8) this.dials.shift();
+          }
+          chunkStarts.set(chunk, at);
           this.breakOn = playlistInput.place((written * 8) / (kbps * 1000)).at === -1;
           written += chunk.byteLength;
         } else this.breakOn = this.info.playlistAt === -1;
@@ -1458,6 +1496,11 @@ export class Channels {
   /** The kind of a channel, for a relay to say what it is carrying. */
   kindOf(id: string): "audio" | "video" | undefined {
     return this.open.get(id)?.info.kind;
+  }
+
+  /** What a radio list channel was putting out at a point of its byte count (Channel.placeAt). */
+  placeAt(id: string, bytes: number): ReturnType<Channel["placeAt"]> {
+    return this.open.get(id)?.placeAt(bytes) ?? null;
   }
 
   /** An entry's tags on a channel playing a list of files. */

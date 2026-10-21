@@ -158,7 +158,7 @@ const showFacts = (f: TrackFacts | null | undefined): void => {
 
 /** The words, line by line as written; "[Verse 1]" and the like as small headers. Text only, never HTML. */
 /** Karaoke: the timed lines on show, their elements, and which one is being sung. */
-let karaoke: { lines: SyncedLine[]; els: HTMLElement[]; words: HTMLElement[][]; at: number } | null = null;
+let karaoke: { lines: SyncedLine[]; els: HTMLElement[]; words: HTMLElement[][]; at: number; title: string } | null = null;
 
 const drawSynced = (words: Lyrics, lines: SyncedLine[]): void => {
   const els: HTMLElement[] = [];
@@ -181,7 +181,7 @@ const drawSynced = (words: Lyrics, lines: SyncedLine[]): void => {
   const box = $("#lyrics-text");
   box.classList.add("synced");
   box.replaceChildren(...els);
-  karaoke = { lines, els, words: wordEls, at: -1 };
+  karaoke = { lines, els, words: wordEls, at: -1, title: words.title };
   $("#lyrics-follow-box").hidden = false;
   $("#lyrics-for").textContent = words.title ? `· ${words.title}` : "";
   $("#lyrics-source").textContent = "Timed to the recording; the line being sung lights up.";
@@ -194,6 +194,8 @@ const highlightLyrics = (heard: number): void => {
   const { lines, els, words } = karaoke;
   let at = -1;
   for (let i = 0; i < lines.length; i++) if (lines[i]!.start <= heard + 0.1) at = i;
+  // A clock correction of a moment is not the song going back: stay on the line until it is clearly earlier.
+  if (at >= 0 && at < karaoke.at && heard > lines[karaoke.at]!.start - 1) at = karaoke.at;
   if (at !== karaoke.at) {
     els.forEach((el, i) => {
       el.classList.toggle("now", i === at);
@@ -202,8 +204,12 @@ const highlightLyrics = (heard: number): void => {
     karaoke.at = at;
     const box = $("#lyrics-text");
     if (at >= 0 && $<HTMLInputElement>("#lyrics-follow").checked) {
+      // Moved only when the line leaves the upper middle of the box, and gently, to a third of the way down.
       const el = els[at]!;
-      box.scrollTop = Math.max(0, el.offsetTop - box.offsetTop - box.clientHeight / 2 + el.clientHeight / 2);
+      const top = el.offsetTop - box.offsetTop - box.scrollTop;
+      if (top < box.clientHeight * 0.2 || top + el.clientHeight > box.clientHeight * 0.6) {
+        box.scrollTo({ top: Math.max(0, el.offsetTop - box.offsetTop - box.clientHeight / 3), behavior: "smooth" });
+      }
     }
   }
   if (at >= 0) words[at]!.forEach((span, i) => span.classList.toggle("sung", lines[at]!.words[i]!.start <= heard));
@@ -301,7 +307,7 @@ const mount = (autoplay: boolean): void => {
   unmount();
   const video = kind === "video";
   const current = createPlayer($("#stage"), {
-    src: more(api + "/stream" + q + (pass ? (q ? "&" : "?") + "pass=" + encodeURIComponent(pass) : ""), "n=" + Date.now()),
+    src: more(api + "/stream" + q + (pass ? (q ? "&" : "?") + "pass=" + encodeURIComponent(pass) : ""), "n=" + (streamNonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 8))),
     kind: video ? "mp4" : "audio",
     audio: !video,
     live: true,
@@ -317,6 +323,7 @@ const mount = (autoplay: boolean): void => {
   media.addEventListener("playing", () => {
     if (!mine()) return;
     clearTimeout(blockedTimer);
+    void askClock();
     if (restoring) { restoring = false; media.muted = listenerMuted; }
     if (retry) say("Back on");
     retry = 0;
@@ -371,21 +378,66 @@ const clockOf = (seconds: number): string => {
   return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 };
 
+/** This page's stream, named so the server can say what its bytes are (/clock). */
+let streamNonce = "";
+/** What the server said this stream's player was hearing at a currentTime: the song's own clock runs on from there. */
+let clockSeen: { nonce: string; ct: number; position: number; duration: number; break: boolean; title: string } | null = null;
+let clockAsked = 0;
+
+/** Asks which second of which song the player is on, by its own currentTime: exact, whatever it has buffered. */
+const askClock = async (): Promise<void> => {
+  const media = player?.media;
+  const nonce = streamNonce;
+  if (!media || kind === "video" || !nonce || media.paused || media.readyState < 2) return;
+  clockAsked = Date.now();
+  const ct = media.currentTime;
+  try {
+    const r = await fetch(more(api + "/clock" + q, `n=${encodeURIComponent(nonce)}&ct=${ct.toFixed(3)}`), { cache: "no-store" });
+    if (nonce !== streamNonce) return;
+    if (!r.ok) { clockSeen = null; return; }
+    const body = await r.json() as { position: number; duration: number; break: boolean; nowPlaying: { title: string } | null };
+    clockSeen = { nonce, ct, position: body.position, duration: body.duration, break: body.break, title: body.nowPlaying?.title ?? "" };
+  } catch {
+    // The estimate below carries on until the next answer.
+  }
+};
+setInterval(() => void askClock(), 3000);
+
 /** The progress bar: what the listener hears, so the player's buffer is taken off. */
 const tickProgress = (): void => {
   const box = $("#progress");
+  const media = player?.media;
+  const clock = clockSeen && media && clockSeen.nonce === streamNonce ? clockSeen : null;
+  if (clock && media) {
+    const heard = clock.position + (media.currentTime - clock.ct);
+    // Past the song's end the player is on the next one: ask again (not more than once a second).
+    if (clock.duration > 0 && heard > clock.duration && Date.now() - clockAsked > 1000) void askClock();
+    if (clock.break || clock.duration <= 0) {
+      box.hidden = true;
+      return;
+    }
+    showProgress(Math.min(clock.duration, Math.max(0, heard)), clock.duration);
+    // Lyrics are lit only for the song being heard: they may load a moment before it gets here.
+    if (!karaoke || !karaoke.title || !clock.title || karaoke.title.trim().toLowerCase() === clock.title.trim().toLowerCase()) highlightLyrics(heard);
+    return;
+  }
   if (!progressSeen) { box.hidden = true; return; }
   const heard = progressSeen.position + (Date.now() - progressSeen.at) / 1000 - ahead();
   const at = Math.min(progressSeen.duration, Math.max(0, heard));
-  const bar = $<HTMLProgressElement>("#progress-bar");
-  bar.max = progressSeen.duration;
-  bar.value = at;
-  bar.setAttribute("aria-valuetext", `${clockOf(at)} of ${clockOf(progressSeen.duration)}`);
-  $("#progress-time").textContent = `${clockOf(at)} / ${clockOf(progressSeen.duration)}`;
-  box.hidden = false;
+  showProgress(at, progressSeen.duration);
   highlightLyrics(at);
 };
-setInterval(tickProgress, 500);
+
+const showProgress = (at: number, duration: number): void => {
+  const bar = $<HTMLProgressElement>("#progress-bar");
+  bar.max = duration;
+  bar.value = at;
+  bar.setAttribute("aria-valuetext", `${clockOf(at)} of ${clockOf(duration)}`);
+  $("#progress-time").textContent = `${clockOf(at)} / ${clockOf(duration)}`;
+  $("#progress").hidden = false;
+};
+// Often enough for the words to fill in as they are sung.
+setInterval(tickProgress, 100);
 
 function draw(s: StationState): void {
   last = s;
@@ -452,6 +504,7 @@ const listen = (): void => {
   source.addEventListener("now", (e) => {
     const s = JSON.parse((e as MessageEvent).data) as StationState;
     setTimeout(() => { title(s); showFacts(s.facts); say(s.nowPlaying ? "Now playing " + (s.nowPlaying.title || "") : ""); }, ahead() * 1000);
+    void askClock();
   });
   source.addEventListener("state", () => void poll());
   source.onerror = () => { events = false; };
