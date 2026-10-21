@@ -100,7 +100,7 @@ import { withPitFooter } from "./pit-footer.ts";
 import { handleFollowPage } from "./follow-page.ts";
 import {
   asRadioPage, buildCatalogue, isRadioPath, NAV_STYLE, RADIO_ALBUM, RADIO_ARTIST, RADIO_CSP, RADIO_STATION, RADIO_SUB, RADIO_BUY, radioBuyLink, radioBuyQuery, radioNav, radioPeers, radioRewriter,
-  radioStations, renderAlbum, renderArtist, renderDirectory, renderMissing, rewriteResponse, type PeerRadio, type RadioCatalogue,
+  radioStations, renderAlbum, stationImage, renderArtist, renderDirectory, renderMissing, rewriteResponse, type PeerRadio, type RadioCatalogue,
 } from "./radio-pages.ts";
 import { adCsp, guideAds, guideCsp, withPageAd, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
@@ -2836,6 +2836,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     const requestHost = String(request.headers["x-forwarded-host"] ?? request.headers.host ?? "").split(",")[0]!.trim().replace(/:\d+$/, "").toLowerCase();
     const isGuidePage = Boolean(options.stations) && (request.method === "GET" || request.method === "HEAD") &&
       (path === "/guide" || (path === "/" && guideHosts().has(requestHost)));
+    // nixamp.com's own /radio is the radio app (web/radio.html), not live.streaming's
+    // station list; its other /radio pages name nixamp.com, not the box behind it.
+    const onDirectory = (() => { try { return new URL(storeSite).host === requestHost; } catch { return false; } })();
+    const radioPath = isRadioPath(path) && !(onDirectory && (path === "/radio" || path === "/radio/"));
     // The built web bundle is the same public code nixamp.com hands anyone;
     // a station's page loads it, and a station link carries no server key.
     const isPublicAsset = (request.method === "GET" || request.method === "HEAD") &&
@@ -2876,7 +2880,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !((path === "/vod" || /^\/vod\/[A-Za-z0-9_-]{1,32}$/.test(path) || path === "/api/v1/guide/vods" || path.startsWith("/api/v1/guide/vods/")) && Boolean(options.stations?.vods)) &&
       !STATION_PAGE.test(path) &&
       // Public, listed stations under readable names, and their artists and albums (radio-pages.ts).
-      !(isRadioPath(path) && Boolean(options.stations)) &&
+      !(radioPath && Boolean(options.stations)) &&
       // Following an artist from those pages, signed in at nixamp.com.
       !(path === "/follow" && Boolean(options.follows && options.accounts)) &&
       !isPublicAsset &&
@@ -3192,11 +3196,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
     }
 
-    if (options.stations && isRadioPath(path) && (request.method === "GET" || request.method === "HEAD")) {
+    if (options.stations && radioPath && (request.method === "GET" || request.method === "HEAD")) {
       const stations = options.stations;
       const named = radioStations(stations.store.list());
       const publicBase = stations.publicBase?.() ?? "";
-      const base = radioBaseFor(request, publicBase);
+      const base = onDirectory ? storeSite : radioBaseFor(request, publicBase);
       const nav = radioNav(guideHosts().has(requestHost) ? "/" : "/guide");
       const send = (status: number, page: string, csp = RADIO_CSP): void => {
         const ads = guideAds();
@@ -3290,7 +3294,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         const built = web !== null && isFile(join(web, "station.html")) ? readFileSync(join(web, "station.html"), "utf8") : null;
         // The built page carries the one ad; the inline fallback stays as it is.
         const ads = built ? guideAds() : {};
-        const page = withPageAd(asRadioPage(built ?? STATION_PAGE_HTML, station, slug, base, nav), ads);
+        // Its link preview carries the cover of an album it plays.
+        const image = stationImage(radioCatalogue(), slug, base);
+        const page = withPageAd(asRadioPage(built ?? STATION_PAGE_HTML, station, slug, base, nav, undefined, image), ads);
         response.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-cache",
@@ -3413,6 +3419,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json,
         readBody,
         page: () => { try { return shell ? readFileSync(shell, "utf8") : null; } catch { return null; } },
+        site: storeSite,
         released: music.released,
         ...(music.veo ? { veo: music.veo } : {}),
       })) return;
