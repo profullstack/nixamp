@@ -390,6 +390,17 @@ test("a single's singer is filmed in close-ups, each lip-synced to its seconds o
     await label.videos();
     assert.deepEqual(cuts[1]!.pinned, [], "no unsynced singer");
     assert.equal(cuts[1]!.clips, 2);
+    // nixamp.com mid-deploy (503 every time): nothing is cut, the shots are kept for the next try.
+    deps["retryMs"] = 0;
+    deps["lipsync"] = async () => { throw new Error("nixamp.com answered 503"); };
+    const third = label.sign({ preset: "no-refunds" });
+    await idle(label, () => Boolean(label.get(third.key)!.albums[0]?.doneAt));
+    const waiting = label.get(third.key)!.albums[0]!.songs[0]!;
+    copyFileSync(join(top, "song.mp3"), waiting.file);
+    await label.videos();
+    assert.equal(cuts.length, 2, "no video without its singer while nixamp.com is away");
+    assert.equal(waiting.video, undefined);
+    assert.ok(readdirSync(join(dirname(waiting.file), ".veo-1")).filter((name) => name.endsWith(".mp4")).length >= 4, "the paid shots wait");
   } finally {
     label.stopSchedule();
     rmSync(top, { recursive: true, force: true });

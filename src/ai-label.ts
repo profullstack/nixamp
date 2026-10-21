@@ -629,6 +629,9 @@ export async function writeStoryboard(
 /** Thrown by a Veo dependency when this month's budget is spent: no more shots until next month. */
 export class VeoUnavailable extends Error {}
 
+/** nixamp.com briefly away (a deploy: 502-504) or the network: worth asking again. */
+const TRANSIENT = /\b50[234]\b|fetch failed|ECONN|timed? ?out/i;
+
 // Nobody sings on camera: Veo's singers mouth a melody of their own, never the song's,
 // so a mouth in shot is out of sync. The band plays; the vocalist is far off, from
 // behind, in silhouette or between lines, never a close-up of singing.
@@ -1378,13 +1381,20 @@ export class AiLabel {
         // The shot made small enough to send (1080p, no sound) and the song's same 8 seconds.
         await runLow(this.deps.ffmpeg, [...this.deps.ffmpeg.slice(1), "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", singer[i]!.path, "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-t", "8", shot], 5 * 60_000, "the close-up did not shrink");
         await runLow(this.deps.ffmpeg, [...this.deps.ffmpeg.slice(1), "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-ss", at.toFixed(2), "-t", "8", "-i", song.file, "-c:a", "libmp3lame", "-b:a", "192k", audio], 60_000, "the song's seconds did not cut");
-        const bytes = await lipsync({ video: readFileSync(shot), audio: readFileSync(audio), seconds: 8 });
-        writeFileSync(`${synced}.part`, bytes);
+        let bytes: Buffer | null = null;
+        for (let attempt = 0; ; attempt++) {
+          try { bytes = await lipsync({ video: readFileSync(shot), audio: readFileSync(audio), seconds: 8 }); break; } catch (error) {
+            if (attempt >= 2 || !TRANSIENT.test((error as Error).message)) throw error;
+            await new Promise((done) => setTimeout(done, this.deps.retryMs ?? 60_000));
+          }
+        }
+        writeFileSync(`${synced}.part`, bytes!);
         renameSync(`${synced}.part`, synced);
         pinned.push({ path: synced, at, seconds: 8 });
       } catch (error) {
+        // nixamp.com away (a deploy) or the month spent: nothing is cut yet; the shots wait for the next try.
+        if (error instanceof VeoUnavailable || TRANSIENT.test((error as Error).message)) throw new Error(`lip sync ${i + 1} must wait: ${(error as Error).message}`);
         this.log(`lip sync ${i + 1} for "${song.title}": ${(error as Error).message}; the band plays there instead`);
-        if (error instanceof VeoUnavailable) break;
       } finally {
         rmSync(shot, { force: true });
         rmSync(audio, { force: true });
@@ -1438,7 +1448,7 @@ export class AiLabel {
         let bytes: Buffer | null = null;
         for (let attempt = 0; ; attempt++) {
           try { bytes = await veo({ prompt, seconds: 8, references }); break; } catch (error) {
-            if (attempt >= 2 || error instanceof VeoUnavailable || !/\b50[234]\b|fetch failed|ECONN|timed? ?out/i.test((error as Error).message)) throw error;
+            if (attempt >= 2 || error instanceof VeoUnavailable || !TRANSIENT.test((error as Error).message)) throw error;
             await new Promise((done) => setTimeout(done, this.deps.retryMs ?? 60_000));
           }
         }
