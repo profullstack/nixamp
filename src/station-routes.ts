@@ -324,7 +324,7 @@ export async function handleStations(
         ctx.json(response, 404, { error: "no lyrics for what is playing", code: "not_found" });
         return true;
       }
-      ctx.json(response, 200, { lyrics: { title: lyrics.title, artist: lyrics.artist, text: lyrics.text, source: lyrics.source, language: lyrics.language } });
+      ctx.json(response, 200, { lyrics: { title: lyrics.title, artist: lyrics.artist, text: lyrics.text, source: lyrics.source, language: lyrics.language, ...(lyrics.synced ? { synced: lyrics.synced } : {}) } });
       return true;
     }
     if (what === "now") {

@@ -13,6 +13,7 @@
  * nichedb's for ten minutes, misses included, so a station of tracks nobody
  * has words for asks once per track per ten minutes and never waits long.
  */
+import { readFileSync } from "node:fs";
 
 export interface Lyrics {
   title: string;
@@ -22,6 +23,76 @@ export interface Lyrics {
   source: string;
   /** ISO 639-1 where we know the mapping, else what the tag said; "" when unsaid. */
   language: string;
+  /** When a .lrc beside the file says when each line (and word) is sung: seconds from the file's start. */
+  synced?: SyncedLine[];
+}
+
+export interface SyncedLine {
+  start: number;
+  end: number;
+  text: string;
+  words: Array<{ start: number; end: number; text: string }>;
+}
+
+const STAMP = /^(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?$/;
+
+function seconds(stamp: string): number {
+  const match = STAMP.exec(stamp);
+  if (!match) return Number.NaN;
+  const fraction = match[3] ? Number(`0.${match[3]}`) : 0;
+  return Number(match[1]) * 60 + Number(match[2]) + fraction;
+}
+
+function stamp(at: number): string {
+  const whole = Math.max(0, at);
+  const minutes = Math.floor(whole / 60);
+  const rest = whole - minutes * 60;
+  return `${String(minutes).padStart(2, "0")}:${rest.toFixed(2).padStart(5, "0")}`;
+}
+
+/**
+ * Enhanced LRC: `[mm:ss.xx]` before each sung line, and `<mm:ss.xx>` before
+ * each word when the words are timed. Tags like `[ar:...]` and lines without a
+ * time are skipped. Ends are the next start (the last line runs 4 s).
+ */
+export function parseLrc(text: string): SyncedLine[] {
+  const lines: SyncedLine[] = [];
+  for (const raw of text.replace(/\r\n?/g, "\n").split("\n")) {
+    const head = /^\[([^\]]+)\](.*)$/.exec(raw.trim());
+    if (!head) continue;
+    const start = seconds(head[1]!);
+    if (!Number.isFinite(start)) continue;
+    const body = head[2]!;
+    const words: SyncedLine["words"] = [];
+    const parts = body.split(/<([^>]+)>/);
+    if (parts.length > 1) {
+      for (let i = 1; i < parts.length; i += 2) {
+        const at = seconds(parts[i]!);
+        const word = (parts[i + 1] ?? "").trim();
+        if (Number.isFinite(at) && word) words.push({ start: at, end: at, text: word });
+      }
+    }
+    const plain = (parts.length > 1 ? words.map((one) => one.text).join(" ") : body).trim();
+    if (!plain) continue;
+    lines.push({ start, end: start, text: plain, words });
+  }
+  lines.sort((a, b) => a.start - b.start);
+  lines.forEach((line, i) => {
+    line.end = lines[i + 1]?.start ?? line.start + 4;
+    line.words.forEach((word, j) => { word.end = line.words[j + 1]?.start ?? line.end; });
+  });
+  return lines;
+}
+
+export function formatLrc(lines: SyncedLine[], head: { title?: string; artist?: string; album?: string } = {}): string {
+  const tags = [head.artist ? `[ar:${head.artist}]` : "", head.title ? `[ti:${head.title}]` : "", head.album ? `[al:${head.album}]` : ""].filter(Boolean);
+  const body = lines.map((line) => `[${stamp(line.start)}]${line.words.length ? line.words.map((word) => ` <${stamp(word.start)}>${word.text}`).join("") : line.text}`);
+  return `${[...tags, ...body].join("\n")}\n`;
+}
+
+/** The .lrc that sits beside a file (same name, .lrc), or "". */
+export function lrcBeside(file: string): string {
+  return file.replace(/\.[^./]+$/, "") + ".lrc";
 }
 
 export const NICHEDB_LYRICS = "https://nichedb.dev";
@@ -116,7 +187,11 @@ export class LyricsFinder {
     const title = tags["title"] || known?.title || "";
     const artist = tags["artist"] || tags["album_artist"] || known?.artist || "";
     const own = lyricsFromTags(tags);
-    if (own) return { title, artist, text: own.text, source: "embedded", language: own.language };
+    // Timed words beside the file (karaoke): the page follows along with them.
+    let synced: SyncedLine[] = [];
+    try { synced = parseLrc(readFileSync(lrcBeside(file), "utf8")); } catch { synced = []; }
+    if (own) return { title, artist, text: own.text, source: "embedded", language: own.language, ...(synced.length ? { synced } : {}) };
+    if (synced.length) return { title, artist, text: synced.map((line) => line.text).join("\n"), source: "embedded", language: "", synced };
     if (!title || !artist || !this.base) return null;
     return this.lookup(artist, title);
   }

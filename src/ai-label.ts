@@ -33,6 +33,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { aiKey } from "./ai-keys.ts";
 import { composerFromEnv, OutOfCredit, type Composer } from "./ai-radio.ts";
 import { askJson, hasModel } from "./ai-text.ts";
+import { formatLrc, type SyncedLine } from "./lyrics.ts";
 import type { LibraryIndex, Probed } from "./library-index.ts";
 import type { StationRunner } from "./station-runner.ts";
 import { StationError, type StationStore } from "./stations.ts";
@@ -49,6 +50,8 @@ export interface LabelSong {
   /** The MP3, "" until composed. */
   file: string;
   lyricsFile: string;
+  /** Its words timed to the recording (001. <title>.lrc, enhanced LRC), for karaoke on the station page; absent until aligned. */
+  lrc?: string;
   /** Its music video (001. <title>.mp4), "" until made; absent on songs from before videos. */
   video?: string;
   /** Whether the video carries its song's tags (videos from 0.52.1 and before do not, until retagged). */
@@ -522,6 +525,55 @@ export async function workersAiCover(prompt: string, env: Record<string, string 
   return image;
 }
 
+/** A timed word from an aligner: seconds from the start of the song. */
+export interface TimedWord { text: string; start: number; end: number }
+
+/** ElevenLabs forced alignment: the song and its words in, each word's time out. */
+export function elevenLabsAligner(key: string, fetcher: typeof fetch = fetch): (audio: string, text: string) => Promise<TimedWord[]> {
+  return async (audio, text) => {
+    const form = new FormData();
+    form.append("file", new Blob([readFileSync(audio)], { type: "audio/mpeg" }), "song.mp3");
+    form.append("text", text);
+    const response = await fetcher("https://api.elevenlabs.io/v1/forced-alignment", {
+      method: "POST",
+      headers: { "xi-api-key": key },
+      body: form,
+      signal: AbortSignal.timeout(5 * 60_000),
+    });
+    if (response.status === 401 || response.status === 402) throw new OutOfCredit(`elevenlabs answered HTTP ${response.status} to the alignment`);
+    if (!response.ok) throw new Error(`the alignment answered HTTP ${response.status}`);
+    const body = await response.json() as { words?: Array<{ text?: unknown; start?: unknown; end?: unknown }> };
+    return (body.words ?? [])
+      .map((one) => ({ text: String(one.text ?? "").trim(), start: Number(one.start), end: Number(one.end) }))
+      .filter((one) => one.text && Number.isFinite(one.start) && Number.isFinite(one.end));
+  };
+}
+
+/** The sung lines of a song's words: section tags ([Chorus]) and blank lines are not sung. */
+export function sungLines(lyrics: string): string[] {
+  return lyrics.split("\n").map((line) => line.trim()).filter((line) => line && !/^\[[^\]]*\]$/.test(line));
+}
+
+/**
+ * Timed words laid back onto the lines they were written in, in order, so
+ * each line and each word knows when it is sung.
+ */
+export function syncLines(lyrics: string, timed: TimedWord[]): SyncedLine[] {
+  const out: SyncedLine[] = [];
+  let at = 0;
+  for (const line of sungLines(lyrics)) {
+    const words = line.split(/\s+/).filter(Boolean);
+    const placed = words.map((word) => {
+      const hit = timed[at];
+      if (hit) at += 1;
+      return hit ? { text: word, start: hit.start, end: hit.end } : null;
+    }).filter((one): one is { text: string; start: number; end: number } => one !== null);
+    if (placed.length === 0) break;
+    out.push({ start: placed[0]!.start, end: placed[placed.length - 1]!.end, text: line, words: placed });
+  }
+  return out;
+}
+
 const STORYBOARD_SYSTEM = [
   "You storyboard music videos for original songs. Write one image prompt per scene, in order, following the song's story and mood.",
   "Keep the same main character(s), setting and color palette across scenes so it reads as one video; vary the shots (wide, close-up, action, detail).",
@@ -674,6 +726,8 @@ export interface AiLabelDeps {
   tag?: (from: string, to: string, tags: Record<string, string>, cover: string) => Promise<void>;
   /** Renders a song's music video to `out`; ffmpeg by default (renderVideo). */
   video?: (audio: string, cover: string, out: string) => Promise<void>;
+  /** Times each sung word in a recording; ElevenLabs forced alignment by default, null without a key. */
+  align?: ((audio: string, text: string) => Promise<TimedWord[]>) | null;
   /** Renders a storyboard music video; ffmpeg by default (renderStoryVideo). */
   storyVideo?: (input: { audio: string; images: string[]; seconds: number; artist: string; title: string; out: string }) => Promise<void>;
   /** A scene's picture for this prompt, or null when nothing can draw one; Workers AI by default. */
@@ -700,6 +754,8 @@ export class AiLabel {
   private filming: Promise<number> | null = null;
   /** Songs whose video failed since this server started. */
   private videoFailed = new Set<string>();
+  /** Songs whose words were already sent to the aligner since this server started. */
+  private alignTried = new Set<string>();
   /** Old videos already tried as storyboards since this server started. */
   private upgradeTried = new Set<string>();
   /** The day's album is tried at most every 30 minutes, so a failing model is not hammered. */
@@ -976,7 +1032,40 @@ export class AiLabel {
    * song's tags (seconds each), then old cover-and-waveform videos made again
    * as storyboards.
    */
+  /** The aligner this server can use: the dependency, else ElevenLabs with its key, else none. */
+  private aligner(): ((audio: string, text: string) => Promise<TimedWord[]>) | null {
+    if (this.deps.align !== undefined) return this.deps.align;
+    const key = aiKey("ELEVENLABS_API_KEY");
+    return key ? elevenLabsAligner(key) : null;
+  }
+
+  /** A song's words timed to its recording, written as 001. <title>.lrc beside it. Once per song (a failure is not retried this run). */
+  private async sync(artist: LabelArtist, album: LabelAlbum, song: LabelSong): Promise<boolean> {
+    const align = this.aligner();
+    if (!align || !song.file || !song.lyrics || song.lrc || this.alignTried.has(song.file)) return false;
+    this.alignTried.add(song.file);
+    try {
+      const timed = await align(song.file, sungLines(song.lyrics).join("\n"));
+      const lines = syncLines(song.lyrics, timed);
+      if (lines.length === 0) throw new Error("the aligner placed no words");
+      const file = join(album.folder, `${songBase(song)}.lrc`);
+      writeFileSync(file, formatLrc(lines, { title: song.title, artist: artist.name, album: album.title }));
+      song.lrc = file;
+      this.save();
+      return true;
+    } catch (error) {
+      this.log(`could not time the words of "${song.title}": ${(error as Error).message}`);
+      return false;
+    }
+  }
+
   private async filmPass(): Promise<number> {
+    // Words timed first: quick, and what the station page's karaoke needs.
+    for (const artist of this.list()) {
+      for (const album of artist.albums) {
+        for (const song of album.songs) await this.sync(artist, album, song);
+      }
+    }
     const songs = this.list().flatMap((artist) => artist.albums
       .filter((album) => album.cover || album.coverTried)
       .flatMap((album) => album.songs.filter((song) => song.file && !this.videoFailed.has(song.file)).map((song) => ({ artist, album, song }))));
@@ -1289,7 +1378,8 @@ export class AiLabel {
       this.save();
       this.writeAlbumJson(artist, album);
       await this.place(artist.genre);
-      // Its video is made beside it, without holding up the next song.
+      // Its words timed to the recording, then its video, without holding up the next song.
+      await this.sync(artist, album, song).catch(() => undefined);
       void this.videos();
     } catch (error) {
       this.failed(artist, error);
@@ -1465,6 +1555,7 @@ export class AiLabel {
       for (const song of songs) {
         entries.push({ name: `${folder}/${songBase(song)}.mp3`, path: song.file });
         entries.push({ name: `${folder}/${songBase(song)}.lyrics.txt`, bytes: Buffer.from(`${song.lyrics}\n`) });
+        if (song.lrc) entries.push({ name: `${folder}/${songBase(song)}.lrc`, path: song.lrc });
         if (song.video) entries.push({ name: `${folder}/${songBase(song)}.mp4`, path: song.video });
       }
       if (album.cover) entries.push({ name: `${folder}/cover.jpg`, path: album.cover });
