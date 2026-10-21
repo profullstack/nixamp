@@ -496,7 +496,10 @@ export function stationHead(station: StationFace, slug: string, base: string, pa
 /** A station's picture for link previews: the cover of an album it plays, from the catalogue. */
 export function stationImage(catalogue: RadioCatalogue, slug: string, base: string): string {
   const album = [...catalogue.albums.values()].find((one) => one.stations.includes(slug) && (one.coverFile || one.label?.cover));
-  return album ? `${base}/radio/album/${album.slug}/cover.jpg` : "";
+  if (!album) return "";
+  // The label's albums keep their cover beside the songs, not in them: the label serves it.
+  if (album.label?.cover) return `${base}/api/v1/label/${album.label.artist}/${album.label.album}/cover.jpg`;
+  return `${base}/radio/album/${album.slug}/cover.jpg`;
 }
 
 /** The built station page (or the inline one) as /radio/<name> serves it: its head, the header, indexable. */
