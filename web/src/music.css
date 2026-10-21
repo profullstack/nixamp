@@ -51,6 +51,11 @@ button.card { font: inherit; text-align: left; cursor: pointer; width: 100%; }
 .members li { display: grid; grid-template-columns: 64px 1fr; gap: 12px; align-items: center; background: var(--card); border: 1px solid var(--edge); border-radius: 12px; padding: 10px; }
 .members img { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: var(--edge); }
 .members strong { display: block; } .members span { color: var(--muted); font-size: .85rem; }
+.members a { color: inherit; text-decoration: none; } .members a:hover strong, .members a:focus-visible strong { text-decoration: underline; }
+/* A member's page: what they look and sound like, as label / text rows. */
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; max-width: 70ch; }
+.facts dt { color: var(--muted); font-size: .85rem; padding-top: 2px; } .facts dd { margin: 0; }
+@media (max-width: 520px) { .facts { grid-template-columns: 1fr; } .facts dt { padding-top: 8px; } }
 
 ol.tracks { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--edge); }
 ol.tracks > li { border-bottom: 1px solid var(--edge); padding: 10px 4px; }

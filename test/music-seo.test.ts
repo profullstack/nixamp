@@ -82,6 +82,43 @@ test("not knowing yet is not a 404: an empty catalogue, or one without the page'
   assert.equal((await ask(artist, catalogue)).status, 200);
 });
 
+test("a band member has a page: their job in the title, their photo on the card, a Person in JSON-LD", () => {
+  const html = render("/music/member/f5fd7d9747/0243b45872/marina");
+  assert.match(html, /<title>Marina Del Gray · vocals in Marina Del Gray · nixamp music<\/title>/);
+  assert.match(html, /<meta property="og:type" content="profile" \/>/);
+  assert.match(html, /<meta property="og:image" content="https:\/\/nixamp\.com\/api\/v1\/music\/file\/f5fd7d9747\/0243b45872\/members\/marina\.jpg" \/>/);
+  assert.match(html, /"@type":"Person".*"jobTitle":"vocals".*"memberOf":\{"@type":"MusicGroup","name":"Marina Del Gray"/);
+  assert.match(html, /<a href="\/api\/v1\/music\/member\/f5fd7d9747\/0243b45872\/marina\.json">OpenProfile as JSON<\/a>/);
+  assert.equal(musicPage("/music/member/f5fd7d9747/0243b45872/nobody", catalogue, SITE).status, 404);
+});
+
+test("a member's OpenProfile as JSON: read from their page on the server that holds it", async () => {
+  const page = "# Aurora Wynter\n\n- **Kind**: fictional musician, made with AI\n- **Band**: [Hollow Sovereign](../artist.md)\n- **Role**: bass\n- **Avatar**: [portrait](aurora-wynter.jpg)\n- **Parent**: Profullstack, Inc.\n\nFormer choir singer.\n\n## Look\n\n25, silver hair\n\n## Voice\n\nsoaring\n\n## Personality\n\nintense\n\n## Influences\n\ndoom\n";
+  const asked: string[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => { asked.push(String(url)); return new Response(page, { status: 200 }); }) as typeof fetch;
+  try {
+    let status = 0;
+    let body = "";
+    const response = { headersSent: false, writeHead: (code: number) => { status = code; return response; }, end: (text?: string) => { body = String(text ?? ""); } };
+    const path = "/api/v1/music/member/f5fd7d9747/0243b45872/aurora-wynter.json";
+    await handleMusicRoutes({ method: "GET", url: path, headers: {} } as never, response as never, path,
+      { hub: { resolve: () => "https://server1.example:4321", catalogue: async () => catalogue }, json: () => undefined, readBody: async () => "", page: () => SHELL, site: SITE } as never);
+    assert.equal(status, 200);
+    assert.deepEqual(asked, ["https://server1.example:4321/api/v1/label/0243b45872/members/aurora-wynter.md"]);
+    const profile = JSON.parse(body) as Record<string, unknown>;
+    assert.equal(profile["name"], "Aurora Wynter");
+    assert.equal(profile["job"], "bass in Marina Del Gray");
+    assert.equal(profile["look"], "25, silver hair");
+    assert.equal(profile["avatar"], "https://nixamp.com/api/v1/music/file/f5fd7d9747/0243b45872/members/aurora-wynter.jpg");
+    assert.equal(profile["url"], "https://nixamp.com/music/member/f5fd7d9747/0243b45872/aurora-wynter");
+    // No server address in it.
+    assert.doesNotMatch(body, /server1/);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
 test("a station's link preview is the cover of an album it plays, or none", () => {
   const album = (slug: string, stations: string[], cover: boolean) => [slug, { slug, title: slug, year: 0, artist: "a", artistName: "A", concept: "", complete: true, tracks: [], stations, ...(cover ? { coverFile: "/x.mp3" } : {}) }] as const;
   const catalogue = { artists: new Map(), albums: new Map([album("no-art", ["ai-yacht-rock"], false), album("with-art", ["ai-yacht-rock"], true)]) };

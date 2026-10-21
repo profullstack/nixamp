@@ -39,6 +39,7 @@ const coverOf = (artist: Artist, album: Album): string => (album.cover ? file(ar
 const portraitOf = (artist: Artist, member: Member): string => file(artist.server, `${artist.key}/members/${member.slug}.jpg`);
 const artistHref = (artist: Artist): string => `/music/artist/${artist.server}/${artist.key}`;
 const albumHref = (artist: Artist, album: Album): string => `/music/album/${artist.server}/${artist.key}/${album.key}`;
+const memberHref = (artist: Artist, member: Member): string => `/music/member/${artist.server}/${artist.key}/${member.slug}`;
 const buyHref = (artist: Artist, kind: "song" | "album" | "artist", album = "", n = 0): string =>
   `/buy?${new URLSearchParams({ server: artist.server, kind, artist: artist.key, ...(kind !== "artist" ? { album } : {}), ...(kind === "song" ? { n: String(n) } : {}) })}`;
 
@@ -156,9 +157,8 @@ function artistView(data: Catalogue, server: string, key: string): HTMLElement[]
     ...(artist.members?.length ? [
       el("h2", {}, artist.members.length > 1 ? "The band" : "Who"),
       el("ul", { class: "members" }, ...artist.members.map((member) => el("li", {},
-        el("img", { src: portraitOf(artist, member), alt: "", width: "64", height: "64", loading: "lazy" }),
-        el("div", {}, el("strong", {}, member.name), el("span", {}, member.role),
-          el("a", { href: file(artist.server, `${artist.key}/members/${member.slug}.md`), class: "muted" }, " profile")),
+        el("a", { href: memberHref(artist, member) }, el("img", { src: portraitOf(artist, member), alt: "", width: "64", height: "64", loading: "lazy" })),
+        el("div", {}, el("a", { href: memberHref(artist, member) }, el("strong", {}, member.name)), el("span", {}, member.role)),
       ))),
     ] : []),
     el("h2", {}, "Discography"),
@@ -225,6 +225,51 @@ async function meView(): Promise<HTMLElement[]> {
   const artists = data ? allArtists(data).filter((one) => followed.includes(one.follow)) : [];
   out.push(artists.length ? el("div", { class: "grid" }, ...artists.map(artistCard)) : el("p", { class: "empty" }, "Follow an artist to hear when they release something."));
   return out;
+}
+
+interface MemberProfile {
+  name: string; role: string; job: string; band: { name: string; url: string }; avatar: string;
+  bio: string; look: string; voice: string; personality: string; influences: string; source: string;
+}
+
+/** A band member's OpenProfile as a page: their photo, what they do in the band, who they are. */
+async function memberView(data: Catalogue, server: string, key: string, who: string): Promise<HTMLElement[]> {
+  const artist = allArtists(data).find((one) => one.server === server && one.key === key);
+  const member = artist?.members?.find((one) => one.slug === who);
+  if (!artist || !member) return notFound();
+  const json = `/api/v1/music/member/${server}/${key}/${who}.json`;
+  const answer = await fetch(json).catch(() => null);
+  const profile = answer?.ok ? (await answer.json()) as MemberProfile : null;
+  const role = profile?.role || member.role || "member";
+  document.title = `${member.name} · ${role} in ${artist.name} · nixamp music`;
+  const fact = (label: string, text: string | undefined): HTMLElement[] => (text ? [el("dt", {}, label), el("dd", {}, text)] : []);
+  const facts = profile ? [...fact("Look", profile.look), ...fact(artist.members!.length > 1 && /vocal|sing/i.test(role) ? "Voice" : "Sound", profile.voice), ...fact("Personality", profile.personality), ...fact("Influences", profile.influences)] : [];
+  const others = artist.members!.filter((one) => one.slug !== who);
+  return [
+    el("p", { class: "crumbs" }, el("a", { href: "/music" }, "Music"), " / ", el("a", { href: artistHref(artist) }, artist.name)),
+    el("div", { class: "hero" }, picture(portraitOf(artist, member), `${member.name}`),
+      el("div", {},
+        el("div", { class: "kind" }, `${role.charAt(0).toUpperCase()}${role.slice(1)} · `, el("a", { href: artistHref(artist) }, artist.name)),
+        el("h1", {}, member.name),
+        (profile?.bio || member.bio) ? el("p", { class: "lead" }, profile?.bio || member.bio) : null,
+        el("div", { class: "actions" },
+          listenLive(data, artist),
+          followButton(artist),
+          el("a", { class: "btn ghost", href: json, title: "This profile as OpenProfile JSON, for apps and agents" }, "JSON"),
+          el("a", { class: "btn ghost", href: file(server, `${key}/members/${who}.md`), title: "The OpenProfile page this is read from" }, "OpenProfile source"),
+        ),
+      ),
+    ),
+    ...(facts.length ? [el("h2", {}, "About"), el("dl", { class: "facts" }, ...facts)] : []),
+    ...(others.length ? [
+      el("h2", {}, `Also in ${artist.name}`),
+      el("ul", { class: "members" }, ...others.map((one) => el("li", {},
+        el("a", { href: memberHref(artist, one) }, el("img", { src: portraitOf(artist, one), alt: "", width: "64", height: "64", loading: "lazy" })),
+        el("div", {}, el("a", { href: memberHref(artist, one) }, el("strong", {}, one.name)), el("span", {}, one.role)),
+      ))),
+    ] : []),
+    el("p", { class: "muted" }, "A fictional musician, made with AI. ", profile ? "" : "Their full profile did not load; try again in a moment."),
+  ];
 }
 
 function notFound(): HTMLElement[] {
@@ -471,6 +516,7 @@ async function render(): Promise<void> {
       nodes = parts[0] === "genre" && parts[1] ? genreView(data, parts[1])
         : parts[0] === "artist" && parts[2] ? artistView(data, parts[1]!, parts[2])
         : parts[0] === "album" && parts[3] ? albumView(data, parts[1]!, parts[2]!, parts[3])
+        : parts[0] === "member" && parts[3] ? await memberView(data, parts[1]!, parts[2]!, parts[3])
         : parts.length === 0 ? home(data) : notFound();
     }
   } catch {
