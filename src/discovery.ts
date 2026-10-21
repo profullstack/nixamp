@@ -94,7 +94,7 @@ export function llmsTxt(site: string): string {
 ## Desktop app
 Downloads: ${site}/download
 ${desktop}
-- Every release: ${RELEASES}
+Every release: ${RELEASES}
 `;
 }
 
