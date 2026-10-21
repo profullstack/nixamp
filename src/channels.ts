@@ -586,6 +586,8 @@ export class Channel {
             const seconds = Number(match[1]) / 1e6;
             if (playlistInput) {
               const place = playlistInput.place(seconds);
+              // A break (-1) belongs to no list; a track's index belongs to its own.
+              if (place.at >= 0 && this.info.playlist !== place.list) this.info.playlist = place.list as string[];
               this.info.playlistAt = place.at;
               this.info.position = place.position;
             } else this.info.position = from + seconds;
