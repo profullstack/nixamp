@@ -1041,7 +1041,11 @@ async function start(): Promise<void> {
     const hint = onDirectory()
       ? "Sign in to nixamp.com to manage your own stations, library and label here. A server shows up once it has run signed in to your account (nixamp login on that machine)."
       : "This page manages the server it is on.";
-    for (const id of ["#station-list", "#label-artists"]) $(id).replaceChildren(el("p", { class: "hint" }, hint));
+    // Nobody to manage for: no forms that look like they would make a
+    // station or record an album. What is on the air leads instead.
+    for (const id of ["#stations", "#label", "#library", "#music"]) $(id).hidden = true;
+    for (const tab of document.querySelectorAll<HTMLElement>(".radio-nav [data-tab], .server-pick")) tab.hidden = true;
+    $("#on-air").before(el("p", { class: "hint", id: "signed-out" }, hint));
     return;
   }
   picker.value = first.id;
