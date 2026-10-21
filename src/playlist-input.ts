@@ -39,7 +39,16 @@ export interface PlaylistInput {
    * `next` answers a file to play (an advert, an ident) or null for no break
    * this time. The break is outside the rotation and the station's history.
    */
-  breaks?: { everySeconds: number | (() => number); next: () => Promise<string | null> };
+  breaks?: {
+    everySeconds: number | (() => number);
+    next: () => Promise<string | null>;
+    /**
+     * Seconds of airtime since the last break when this stream opens, asked
+     * once per open: a station that slept with nobody listening carries its
+     * clock across, so breaks come every so often of time on the air.
+     */
+    sinceBreak?: () => number;
+  };
   /** Told when an entry is passed over because it would not play. */
   onFailure?: (event: { at: number; file: string; reason: string }) => void;
 }
@@ -51,12 +60,26 @@ export interface PlaylistInput {
  */
 export const MAX_FAILURES_IN_A_ROW = 5;
 
+/** An entry that started: where it sits in the stream and in its pass. */
+interface Entry {
+  at: number;
+  file: string;
+  start: number;
+  position: number;
+  list: readonly string[];
+  /** The pass's order and how far into it the next entry is, for resumePoint. */
+  order: readonly number[];
+  step: number;
+  /** Where the break clock stood when it started. */
+  lastBreak: number;
+}
+
 /** Decode each file independently; feed one persistent muxer a fixed stream
  * profile and continuous timestamps. A concat demuxer cannot decode a list
  * whose input codecs differ. Only one entry is encoded at a time, with pipe
  * backpressure bounding read-ahead independently of the directory's size. */
 export class PlaylistInputStream {
-  private entries: { at: number; file: string; start: number; position: number; list: readonly string[] }[] = [];
+  private entries: Entry[] = [];
   error: Error | null = null;
   complete = false;
   /**
@@ -68,7 +91,7 @@ export class PlaylistInputStream {
   constructor(private readonly options: PlaylistInput) {}
 
   /** Every entry that has started, in the order it started, with where it sits in the stream. */
-  get history(): ReadonlyArray<{ at: number; file: string; start: number; position: number; list: readonly string[] }> {
+  get history(): ReadonlyArray<Entry> {
     return this.entries;
   }
 
@@ -82,6 +105,22 @@ export class PlaylistInputStream {
     const entry = this.entries.findLast(one => seconds >= one.start) ?? this.entries[0];
     return entry ? { at: entry.at, position: Math.max(0, seconds - entry.start + entry.position), list: entry.list }
       : { at: this.options.at, position: this.options.position, list: this.options.files };
+  }
+
+  /**
+   * Where to pick up after this point of the stream, for a station that
+   * sleeps with nobody listening: the file that is on ("" in a break), the
+   * rest of this pass in the order it was going to play, and the seconds
+   * of airtime since the last break.
+   */
+  resumePoint(seconds: number): { file: string; upcoming: string[]; sinceBreak: number } | null {
+    const entry = this.entries.findLast(one => seconds >= one.start) ?? this.entries[0];
+    if (!entry) return null;
+    return {
+      file: entry.at >= 0 ? entry.file : "",
+      upcoming: entry.order.slice(entry.step).map((index) => entry.list[index]).filter((one): one is string => typeof one === "string"),
+      sinceBreak: entry.at < 0 ? 0 : Math.max(0, seconds - entry.lastBreak),
+    };
   }
 
   /** The decoder for the entry that is on, so skip() can end it early. */
@@ -114,7 +153,9 @@ export class PlaylistInputStream {
       let step = Math.min(Math.max(0, o.at), order.length);
       let played = 0;
       let last = "";
-      let lastBreak = 0;
+      // Counted back from 0 by however long it had been, so a clock carried
+      // across a sleep comes due when it would have on the air.
+      let lastBreak = -Math.max(0, o.breaks?.sinceBreak?.() ?? 0);
       // A film cut for a break, to be picked up where it stopped.
       let resume: { at: number; file: string; position: number } | null = null;
       for (;;) {
@@ -179,7 +220,7 @@ export class PlaylistInputStream {
             const room = o.video && !isBreak && o.breaks && every > 0 ? every - (offset - lastBreak) : Infinity;
             const cut = room >= 1 && full - room > 5;
             const duration = cut ? room : full;
-            this.entries.push({ at, file, start: offset, position, list: files });
+            this.entries.push({ at, file, start: offset, position, list: files, order, step, lastBreak });
             const hasVideo = Boolean(codecs.video);
             const extra = o.video && !hasVideo
               ? ["-f", "lavfi", "-i", `color=c=black:s=${width}x${height}:r=30`]

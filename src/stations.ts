@@ -69,6 +69,12 @@ export interface Station {
   idempotencyKey: string;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Where it was when it last went to sleep with nobody listening: the file
+   * that was on, so it carries on after it, and the seconds of airtime since
+   * its last break, so breaks keep their spacing across sleeps.
+   */
+  resume?: { after: string; sinceBreak: number };
 }
 
 /** Times an item may fail in a row before rotation leaves it out. */
@@ -309,6 +315,15 @@ export class StationStore {
     const had = this.stations.delete(id);
     if (had) this.save();
     return had;
+  }
+
+  /** Where it was when it went to sleep (Station.resume); null forgets it. */
+  setResume(id: string, resume: { after: string; sinceBreak: number } | null): void {
+    const station = this.stations.get(id);
+    if (!station) return;
+    if (resume) station.resume = { after: resume.after, sinceBreak: Math.max(0, Math.round(resume.sinceBreak)) };
+    else delete station.resume;
+    this.save();
   }
 
   setDesired(id: string, desired: Desired, now = Date.now()): Station {

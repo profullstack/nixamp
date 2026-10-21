@@ -46,6 +46,20 @@ after every library scan the stations are re-synced (new files join, ids and lin
   `nixamp station breaks ID 600` on one that exists. A hand-made station has none unless you ask;
   the interval is read at every boundary, so a change lands without a restart.
 
+## Sleeping with nobody listening
+
+A running station with nobody on its stream for a minute **sleeps**: its encoder (ffmpeg) stops,
+but it stays wanted on and stays on the air to the guide (`state: "live"`; the owner's view says
+`sleeping: true`, and `nowPlaying` is the track it will wake on). The first request for its stream
+(`/stream`, `/radio/<name>/stream`, `/api/channels/station-<id>` and its HLS) wakes it and is held
+until the first bytes, up to ten seconds. It carries on at the track after the one it slept on (the
+rest of the same shuffle), and its break clock carries across, so breaks still come every
+`breaksEvery` seconds of airtime. Anything attached counts as a listener: a player, a class or live
+room relaying it, an HLS packager, a peer pulling it; now-playing events alone do not. A sleep is
+not a failure: no recovery, no restart counted. After a server restart, running stations come back
+asleep. The idle time is `stationIdleSeconds` in config.json (or `NIXAMP_STATION_IDLE`), 60 by
+default; 0 never sleeps.
+
 ## AI radio and listener shares
 
 Stations whose music is composed by AI a few tracks a day (`nixamp station ai`), and stations of

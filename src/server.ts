@@ -122,7 +122,7 @@ import { Porkbun, isIPv4, isIPv6, type DnsZone } from "./dns.ts";
 import { NameError, Names } from "./names.ts";
 import { AcmeIssuer, Certs } from "./certs.ts";
 import { claimName, fetchCert, humanizeSource, labelFor, readCertFiles, writeCertFiles } from "./naming.ts";
-import { forbiddenLibrary, readConfig, readLibrary, writeConfig } from "./library.ts";
+import { forbiddenLibrary, readConfig, readLibrary, stationIdleSeconds, writeConfig } from "./library.ts";
 import { createThrottle, presentedCredential, type Throttle } from "@profullstack/throttle";
 import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
@@ -5940,6 +5940,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
 
+      // A station asleep with nobody listening is woken by whoever asks for
+      // its channel here too, and they are held for its first bytes.
+      if ((action === "hls" || action === undefined) && request.method === "GET" && !channels.has(id) && stationOfChannel(id) && options.stations?.runner.isSleeping(stationOfChannel(id))) {
+        await options.stations.runner.awake(stationOfChannel(id));
+      }
+
       // The same channel as HLS: a playlist of short files, which is what
       // Safari on an iPhone plays live -- it will not take the endless MP4
       // below, and spun on it a few times before giving up. Packaged on
@@ -7455,6 +7461,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     onRestart: (id) => stationUsage.restarted(id),
     onFailure: (id) => stationUsage.failed(id),
     artistOf: (file) => trackFor(engine, file)?.artist ?? "",
+    // Nobody listening for this long and a station sleeps until somebody does.
+    idleSeconds: () => stationIdleSeconds(process.env, readConfig()),
     store: stationStore,
     channels,
     pull: async (channelId, name, files, known) =>
@@ -7729,6 +7737,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     });
   }
   stationRunner.restore();
+  stationRunner.watchIdle();
   // Where each film has got to, written down every so often, so a restart
   // picks it up from about there rather than from the start. Only when it
   // has changed: a server carrying nothing but live television writes
