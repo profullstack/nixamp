@@ -277,7 +277,7 @@ test("an album's single gets filmed Veo shots of the band; the rest the storyboa
     await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
     await label.videos();
     const songs = label.get(artist.key)!.albums[0]!.songs;
-    assert.deepEqual(songs.map((one) => one.videoVersion), [5, undefined, undefined], "the single is filmed; the other songs get no video");
+    assert.deepEqual(songs.map((one) => one.videoVersion), [6, undefined, undefined], "the single is filmed; the other songs get no video");
     assert.equal(shots.length, 2);
     assert.doesNotMatch(shots[0]!.prompt, /Mara Quill/, "never a name");
     assert.match(shots[0]!.prompt, /The lead vocalist is not in this shot/, "the band plays; the singer only in synced close-ups");
@@ -332,7 +332,7 @@ test("a single that comes up short keeps what was filmed, retries a 503, and an 
     await label.videos();
     assert.equal(calls, 11, "the two filmed shots were kept, not paid for twice");
     assert.deepEqual(filmed, [6]);
-    assert.equal(song.videoVersion, 5);
+    assert.equal(song.videoVersion, 6);
   } finally {
     label.stopSchedule();
     rmSync(top, { recursive: true, force: true });
@@ -368,7 +368,7 @@ test("a single is a short film: story scenes from its words, cut in turn with th
     assert.equal(story.length, 4);
     assert.ok(story.every((one) => /Nobody sings, speaks or lip-syncs/.test(one.prompt) && one.references === 0), "no singing, and no portraits pulling the band in");
     assert.deepEqual(cuts[0], ["story-0.mp4", "shot-0.mp4", "story-1.mp4", "shot-1.mp4", "story-2.mp4", "story-3.mp4"], "a scene, then the band, in turn");
-    assert.equal(label.get(artist.key)!.albums[0]!.songs[0]!.videoVersion, 5);
+    assert.equal(label.get(artist.key)!.albums[0]!.songs[0]!.videoVersion, 6);
   } finally {
     label.stopSchedule();
     rmSync(top, { recursive: true, force: true });
@@ -417,7 +417,7 @@ test("a single's singer is filmed in close-ups, each lip-synced to its seconds o
     assert.equal(synced.length, 2, "both close-ups synced");
     assert.ok(synced.every((bytes) => bytes > 1000), "each with its seconds of the song");
     assert.deepEqual(cuts[0]!.pinned.map((one) => one.at), [38, 113], "pinned where they were synced (150 s, no timed words)");
-    assert.equal(song.videoVersion, 5);
+    assert.equal(song.videoVersion, 6);
     assert.equal(readdirSync(dirname(song.file)).filter((name) => name.startsWith(".veo-")).length, 0, "shots cleared once cut");
     // A second single whose syncs fail: the video is the band alone.
     failing = true;

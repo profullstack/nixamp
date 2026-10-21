@@ -812,11 +812,12 @@ export function closeUpTimes(seconds: number, lines: Array<{ start: number }>, c
 }
 
 /**
- * The version of a video cut from Veo footage: the band with nobody singing, and the
- * singer only in close-ups lip-synced to the song. Anything older (a slideshow, or 4:
- * footage whose singers were out of sync) is not shown.
+ * The version of a video cut from Veo footage: story scenes and the band playing with
+ * nobody singing, the singer only in close-ups lip-synced to the song. Anything older
+ * is not shown: a slideshow, 4 (singers out of sync) or 5 (all stage, the singer at
+ * the mic in the wide shots).
  */
-export const FILMED = 5;
+export const FILMED = 6;
 
 /**
  * A single's music video, cut from its filmed shots alone: 4 s cuts, each
