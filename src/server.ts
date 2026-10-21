@@ -80,10 +80,11 @@ import { ListenerStore } from "./library-user.ts";
 import { Importer } from "./handoff.ts";
 import { handleHandoffs } from "./handoff-routes.ts";
 import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
-import { AiLabel } from "./ai-label.ts";
+import { AiLabel, VeoUnavailable } from "./ai-label.ts";
 import { buyLink, handleLabelRoutes, isPublicLabelPath } from "./label-routes.ts";
 import { GrantVerifier, MusicStore, PRICES } from "./music-store.ts";
 import { handleMusicRoutes, isMusicPath, MusicHub, musicPageFor, serverId } from "./music-hub.ts";
+import { VeoBudgetError, VeoStudio } from "./veo-studio.ts";
 import { handleStoreRoutes, isStorePath } from "./store-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
@@ -1963,7 +1964,7 @@ export interface HandlerOptions {
   /** The AI label's songs for sale, nixamp.com only (music-store.ts). */
   musicStore?: MusicStore;
   /** nixamp.com/music: every server's label in one app (music-hub.ts). */
-  music?: { hub: MusicHub; released: (request: IncomingMessage, body: Record<string, unknown>) => Promise<{ status: number; body: unknown }> };
+  music?: { hub: MusicHub; released: (request: IncomingMessage, body: Record<string, unknown>) => Promise<{ status: number; body: unknown }>; veo?: (request: IncomingMessage) => Promise<{ status: number; body: unknown; video?: Buffer }> };
   sharedTranslations?: SharedTranslations;
   /** Translation: texts in another language, by a model here. The same optional library. */
   translator?: Translator;
@@ -3413,6 +3414,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         readBody,
         page: () => { try { return shell ? readFileSync(shell, "utf8") : null; } catch { return null; } },
         released: music.released,
+        ...(music.veo ? { veo: music.veo } : {}),
       })) return;
     }
 
@@ -7685,6 +7687,21 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     root: process.env["NIXAMP_LABEL_ROOT"] || (labelHome ? join(labelHome.root, "ai") : join(stateDir(), "ai-label")),
     owner: options.owner || "",
     mayStart: mayStartStation,
+    // Filmed shots for singles come from nixamp.com's Veo studio, asked as this server's owner, under its monthly cap.
+    veo: async (shot) => {
+      const session = readSession();
+      const here = stations.publicBase?.() ?? "";
+      if (!session?.token || !/^https:\/\//.test(here)) throw new VeoUnavailable("this server is not signed in to nixamp.com");
+      const answer = await fetch(`${session.site.replace(/\/+$/, "")}/api/v1/music/veo`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${session.token}`, "x-nixamp-server": here },
+        body: JSON.stringify({ prompt: shot.prompt, seconds: shot.seconds, references: shot.references.map((one) => one.toString("base64")) }),
+        signal: AbortSignal.timeout(12 * 60_000),
+      });
+      if (answer.status === 402 || answer.status === 404) throw new VeoUnavailable(((await answer.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${answer.status}`);
+      if (!answer.ok) throw new Error(((await answer.json().catch(() => ({}))) as { error?: string }).error ?? `nixamp.com answered ${answer.status}`);
+      return Buffer.from(await answer.arrayBuffer());
+    },
     // A release is told to nixamp.com as this server's owner; nixamp.com tells the artist's followers.
     announce: (release) => {
       const session = readSession();
@@ -7961,6 +7978,36 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
    * followers are told. Only the account that owns a listed server may say
    * so, only for an artist that server's catalogue has, once per release.
    */
+  // Veo shots for label music videos, under a monthly dollar cap (veo-studio.ts). nixamp.com only.
+  const veoStudio = options.directory && process.env["NIXAMP_VEO_API_KEY"] ? new VeoStudio({
+    key: process.env["NIXAMP_VEO_API_KEY"],
+    file: VeoStudio.fileFor(stateDir(), options.port),
+    monthlyUsd: Number(process.env["NIXAMP_VEO_MONTHLY_USD"] ?? 50),
+    usdPerSecond: Number(process.env["NIXAMP_VEO_USD_PER_SECOND"] ?? 0.15),
+  }) : undefined;
+  /** The signed-in account owns a server listed in the directory at this base. */
+  const ownsListed = async (request: IncomingMessage, base: string): Promise<boolean> => {
+    const me = accounts ? await accounts.whoIs(tokenFrom(request.headers)).catch(() => null) : null;
+    return Boolean(me && base && directory?.list().some((one) => one.ownerId === me.id && peerBase(one.url) === base));
+  };
+  const musicVeo = async (request: IncomingMessage): Promise<{ status: number; body: unknown; video?: Buffer }> => {
+    if (!veoStudio) return { status: 404, body: { error: "Veo is not set up here" } };
+    const base = peerBase(String(request.headers["x-nixamp-server"] ?? ""));
+    if (!(await ownsListed(request, base))) return { status: 403, body: { error: "only the owner of a listed server" } };
+    if (request.method === "GET") return { status: 200, body: veoStudio.status() };
+    if (request.method !== "POST") return { status: 405, body: { error: "GET or POST" } };
+    let input: { prompt?: unknown; seconds?: unknown; references?: unknown };
+    try { input = JSON.parse(await readBody(request, 2 * 1024 * 1024)) as typeof input; } catch { return { status: 400, body: { error: "a JSON body under 2 MB" } }; }
+    const prompt = String(input.prompt ?? "").trim();
+    if (prompt.length < 20) return { status: 400, body: { error: "describe the shot" } };
+    const references = (Array.isArray(input.references) ? input.references : []).slice(0, 3).map((one) => Buffer.from(String(one), "base64")).filter((one) => one.length > 1000);
+    try {
+      return { status: 200, body: null, video: await veoStudio.clip({ prompt, seconds: Number(input.seconds ?? 8), references }) };
+    } catch (error) {
+      if (error instanceof VeoBudgetError) return { status: 402, body: { error: error.message, code: "budget", ...veoStudio.status() } };
+      return { status: 422, body: { error: (error as Error).message, code: "refused" } };
+    }
+  };
   const announced = new Set<string>();
   const musicReleased = async (request: IncomingMessage, body: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
     const me = accounts ? await accounts.whoIs(tokenFrom(request.headers)).catch(() => null) : null;
@@ -8544,7 +8591,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(supportPayments ? { support: supportPayments } : {}),
     ...(supportMonthly ? { supportSubscriptions: supportMonthly } : {}),
     ...(musicStore ? { musicStore } : {}),
-    ...(musicHub ? { music: { hub: musicHub, released: musicReleased } } : {}),
+    ...(musicHub ? { music: { hub: musicHub, released: musicReleased, veo: musicVeo } } : {}),
     ...(process.env["COINPAY_WEBHOOK_SECRET"] ? { coinpayWebhookSecret: process.env["COINPAY_WEBHOOK_SECRET"] } : {}),
     ...(sharedTranslations ? { sharedTranslations } : {}),
     ...(translator ? { translator } : {}),

@@ -50,6 +50,7 @@ export const USAGE = `nixamp station — make a collection into a station
                               [--per-day 1] [--new-artists 0.25]   after the first sweep: albums a day, share by new artists
                               [--videos|--no-videos]   a music video per song and a TV station of them
                               [--reset-day 21]   the day the monthly budget renews (the provider's billing day)
+                              [--veo|--no-veo] [--veo-shots 4]   filmed Veo shots of the band in each album's single (nixamp.com caps the month)
   nixamp station label run                   record whatever is due now
   nixamp station label resume                after the provider ran out of credit
 

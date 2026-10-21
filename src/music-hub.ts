@@ -149,7 +149,7 @@ export async function musicPageFor(hub: MusicHub, path: string): Promise<string>
 }
 
 export function isMusicPath(path: string): boolean {
-  return path === "/music" || path.startsWith("/music/") || path === "/api/v1/music" || FILE.test(path) || path === "/api/v1/music/released";
+  return path === "/music" || path.startsWith("/music/") || path === "/api/v1/music" || FILE.test(path) || path === "/api/v1/music/released" || path === "/api/v1/music/veo";
 }
 
 export interface MusicRoutesContext {
@@ -160,6 +160,8 @@ export interface MusicRoutesContext {
   page: () => string | null;
   /** A server says something of its label landed; null when nobody may say so. */
   released?: (request: IncomingMessage, body: Record<string, unknown>) => Promise<{ status: number; body: unknown }>;
+  /** Veo shots for a label server's videos: the month's spend (GET), a clip (POST); answers bytes or JSON. */
+  veo?: (request: IncomingMessage) => Promise<{ status: number; body: unknown; video?: Buffer }>;
 }
 
 export async function handleMusicRoutes(request: IncomingMessage, response: ServerResponse, path: string, ctx: MusicRoutesContext): Promise<boolean> {
@@ -171,6 +173,15 @@ export async function handleMusicRoutes(request: IncomingMessage, response: Serv
     try { body = JSON.parse(await ctx.readBody(request)) as Record<string, unknown>; } catch { ctx.json(response, 400, { error: "the body is not JSON" }); return true; }
     const answer = await ctx.released(request, body);
     ctx.json(response, answer.status, answer.body);
+    return true;
+  }
+  if (path === "/api/v1/music/veo") {
+    if (!ctx.veo) { ctx.json(response, 404, { error: "Veo is not set up here" }); return true; }
+    const answer = await ctx.veo(request);
+    if (answer.video) {
+      response.writeHead(200, { "content-type": "video/mp4", "content-length": String(answer.video.length), "cache-control": "no-store" });
+      response.end(answer.video);
+    } else ctx.json(response, answer.status, answer.body);
     return true;
   }
   if (method !== "GET" && method !== "HEAD") { ctx.json(response, 405, { error: "not like that" }); return true; }
