@@ -5,11 +5,14 @@
  * a Share or a "?play=" link carries, `https://host:port/api/channels/<id>?k=KEY`
  * or `https://host:port/api/live?k=KEY`. A nixamp.com member publishes one with
  * a rights basis, as a station is published; the guide lists it beside the
- * stations, and its card opens /watch?play=<that address>, which plays it as
- * a film or as radio, whichever it carries.
+ * stations; its card opens /room/<name>, which plays it as a film or as
+ * radio, whichever it carries.
  *
- * Nothing here plays anything: the room's own server does, and this only asks
- * it, now and then, whether the room is on the air and what is on it.
+ * /room/<name> is the room under a readable name on this server, which asks
+ * the room's own server for it with the key held here: the page, its state,
+ * the stream and HLS all come from this origin, so no page names the machine
+ * the room is on or carries its key. The old /watch?play=<address> links
+ * still play, straight from the room's server.
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,6 +20,7 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readConfig } from "./library.ts";
 import type { GuideEntry } from "./station-guide.ts";
+import { slugify } from "./radio-slug.ts";
 
 /** Why a room may be broadcast, the same five reasons a station gives. */
 export const ROOM_BASES = ["owned", "permission", "licensed", "creative-commons", "public-domain"] as const;
@@ -74,6 +78,38 @@ export function watchBase(fallback: string, env: Record<string, string | undefin
 
 export const watchPage = (base: string, play: string): string => `${base}/watch?play=${encodeURIComponent(play)}`;
 
+/** A room's page under its name, on this server. */
+export const roomPage = (base: string, slug: string): string => `${base}/room/${slug}`;
+
+export const ROOM_PAGE = /^\/room\/([A-Za-z0-9_-]{1,60})\/?$/;
+export const ROOM_SUB = /^\/room\/([a-z0-9-]{1,60})\/(state|stream|hls\/[A-Za-z0-9._-]{1,64})$/;
+
+export function isRoomPath(path: string): boolean {
+  return ROOM_PAGE.test(path) || ROOM_SUB.test(path);
+}
+
+/**
+ * The rooms by name: "Dropkick Murphys" is /room/dropkick-murphys. Oldest
+ * first, so a name stays with the room that had it; a second one is -2.
+ */
+export function roomSlugs(rooms: GuideRoom[]): Map<string, GuideRoom> {
+  const out = new Map<string, GuideRoom>();
+  const sorted = [...rooms].sort((a, b) => (a.publishedAt - b.publishedAt) || a.id.localeCompare(b.id));
+  for (const room of sorted) {
+    const base = slugify(room.name) || "room";
+    let slug = base;
+    for (let n = 2; out.has(slug); n += 1) slug = `${base}-${n}`;
+    out.set(slug, room);
+  }
+  return out;
+}
+
+/** A room's name here, or "". */
+export function roomSlugOf(slugs: Map<string, GuideRoom>, id: string): string {
+  for (const [slug, one] of slugs) if (one.id === id) return slug;
+  return "";
+}
+
 export class RoomStore {
   private rooms: GuideRoom[] = [];
   constructor(private readonly file: string) {
@@ -128,6 +164,9 @@ export interface RoomState {
   name: string;
   kind: "audio" | "video";
   nowPlaying: { title: string; artist: string } | null;
+  /** A folder or a playlist (more than one file): HLS plays it better than the endless MP4. */
+  folder?: boolean;
+  album?: string;
 }
 
 interface ChannelRow {
@@ -135,7 +174,8 @@ interface ChannelRow {
   name?: string;
   kind?: string;
   live?: boolean;
-  codecs?: { tags?: { title?: string; artist?: string } };
+  playlist?: unknown[];
+  codecs?: { tags?: { title?: string; artist?: string; album?: string } };
 }
 
 /** Asks a room's own server what is on it: its channel list for a channel, the stream's headers for the live stream. */
@@ -175,6 +215,8 @@ export class RoomProbe {
         name: String(row.name ?? address.channel).replace(/\/+$/, "").slice(0, 120),
         kind: row.kind === "video" ? "video" : "audio",
         nowPlaying: tags && (tags.title || tags.artist) ? { title: String(tags.title ?? ""), artist: String(tags.artist ?? "") } : null,
+        folder: address.channel.startsWith("folder-") || (Array.isArray(row.playlist) && row.playlist.length > 1),
+        album: String(tags?.album ?? "").slice(0, 200),
       };
     }
     // The live stream: on the air when it answers with media.
@@ -185,7 +227,7 @@ export class RoomProbe {
       const type = answer.headers.get("content-type") ?? "";
       controller.abort();
       if (!answer.ok) return null;
-      return { live: true, name: "Live", kind: type.startsWith("video/") ? "video" : "audio", nowPlaying: null };
+      return { live: true, name: "Live", kind: type.startsWith("video/") ? "video" : "audio", nowPlaying: null, folder: false, album: "" };
     } finally {
       clearTimeout(timer);
     }
@@ -194,6 +236,7 @@ export class RoomProbe {
 
 /** The rooms as guide cards: the page to open, on the air or not, and what is on. */
 export async function roomEntries(store: RoomStore, probe: RoomProbe, base: string): Promise<GuideEntry[]> {
+  const slugs = roomSlugs(store.list());
   return Promise.all(store.list().map(async (room) => {
     const state = await probe.state(room.play);
     return {
@@ -202,7 +245,7 @@ export async function roomEntries(store: RoomStore, probe: RoomProbe, base: stri
       kind: state?.kind ?? room.kind,
       group: "rooms" as const,
       state: state?.live ? "live" : "offline",
-      page: watchPage(base, room.play),
+      page: roomPage(base, roomSlugOf(slugs, room.id) || room.id),
       nowPlaying: state?.nowPlaying ?? null,
     };
   }));
@@ -281,7 +324,7 @@ export async function handleRooms(request: IncomingMessage, response: ServerResp
     const title = typeof body?.title === "string" ? body.title.trim().slice(0, 120) : "";
     const note = typeof body?.note === "string" ? body.note.trim().slice(0, 300) : "";
     const room = ctx.store.put({ play: address.play, name: title || state.name, kind: state.kind, basis, note, by: taken?.by ?? by });
-    ctx.json(response, 200, { room: { id: room.id, name: room.name, kind: room.kind, basis: room.basis }, page: watchPage(ctx.base, room.play) });
+    ctx.json(response, 200, { room: { id: room.id, name: room.name, kind: room.kind, basis: room.basis }, page: roomPage(ctx.base, roomSlugOf(roomSlugs(ctx.store.list()), room.id) || room.id) });
     return true;
   }
   const one = /^\/api\/v1\/guide\/rooms\/([A-Za-z0-9_-]{1,32})$/.exec(path);
@@ -296,5 +339,136 @@ export async function handleRooms(request: IncomingMessage, response: ServerResp
     return true;
   }
   ctx.json(response, 405, { error: "method not allowed", code: "method_not_allowed" });
+  return true;
+}
+
+// --- /room/<name>: the room through this server ----------------------------------
+
+export interface RoomProxyContext {
+  store: RoomStore;
+  probe: RoomProbe;
+  /** Why an address may not be fetched from this machine, or "" (as the probe's). */
+  refuse: (link: string) => Promise<string>;
+  json: (response: ServerResponse, status: number, body: unknown) => void;
+  fetcher?: typeof fetch;
+}
+
+/** What /room/<name>/state answers: the room as its page shows it, no address or key. */
+export interface RoomView {
+  name: string;
+  kind: "audio" | "video";
+  live: boolean;
+  folder: boolean;
+  hls: boolean;
+  title: string;
+  artist: string;
+  album: string;
+}
+
+/** The room's origin and key, gone from a text answer (a playlist, an error). */
+export function roomRewriter(play: string, slug: string): (text: string) => string {
+  const address = roomAddress(play);
+  if (!address) return (text) => text;
+  const channelPath = address.channel !== null ? `/api/channels/${address.channel}` : "/api/live";
+  return (text) => text
+    .split(`${address.origin}${channelPath}/hls/`).join(`/room/${slug}/hls/`)
+    .split(`${address.origin}${channelPath}`).join(`/room/${slug}/stream`)
+    .split(address.origin).join("")
+    .split(`?k=${address.key}&`).join("?").split(`&k=${address.key}`).join("").split(`?k=${address.key}`).join("")
+    .split(address.key).join("");
+}
+
+/**
+ * Answers /room/<name>/state, /stream and /hls/<file>, asked of the room's
+ * server with its key; false when the path is not one. The page itself is
+ * the caller's (it is the built watch page).
+ */
+export async function handleRoomProxy(request: IncomingMessage, response: ServerResponse, path: string, ctx: RoomProxyContext): Promise<boolean> {
+  const sub = ROOM_SUB.exec(path);
+  if (!sub) return false;
+  const method = request.method ?? "GET";
+  if (method !== "GET" && method !== "HEAD") {
+    ctx.json(response, 405, { error: "a room's page can watch, not drive", code: "method_not_allowed" });
+    return true;
+  }
+  const slug = sub[1]!;
+  const room = roomSlugs(ctx.store.list()).get(slug);
+  const address = room ? roomAddress(room.play) : null;
+  if (!room || !address) {
+    ctx.json(response, 404, { error: "no room by that name", code: "not_found" });
+    return true;
+  }
+  const what = sub[2]!;
+  if (what === "state") {
+    const state = await ctx.probe.state(room.play);
+    if (!state) {
+      ctx.json(response, 404, { error: "that room is not on the air", code: "unavailable" });
+      return true;
+    }
+    const view: RoomView = {
+      name: room.name || state.name,
+      kind: state.kind,
+      live: state.live,
+      folder: state.folder === true,
+      hls: address.channel !== null,
+      title: state.nowPlaying?.title ?? "",
+      artist: state.nowPlaying?.artist ?? "",
+      album: state.album ?? "",
+    };
+    response.setHeader("cache-control", "no-store");
+    ctx.json(response, 200, view);
+    return true;
+  }
+  let upstream: string;
+  if (what === "stream") upstream = address.play;
+  else {
+    if (address.channel === null) {
+      ctx.json(response, 404, { error: "the live stream has no HLS", code: "not_found" });
+      return true;
+    }
+    upstream = `${address.origin}/api/channels/${address.channel}/${what}?k=${address.key}`;
+  }
+  if ((await ctx.refuse(upstream).catch(() => "refused")) !== "") {
+    ctx.json(response, 502, { error: "that room's server cannot be reached from here", code: "upstream" });
+    return true;
+  }
+  const stop = new AbortController();
+  response.on("close", () => stop.abort());
+  const answer = await (ctx.fetcher ?? fetch)(upstream, {
+    method, signal: stop.signal, redirect: "error",
+    headers: { ...(request.headers.range ? { range: String(request.headers.range) } : {}), accept: String(request.headers.accept ?? "*/*") },
+  }).catch(() => null);
+  if (!answer) {
+    ctx.json(response, 502, { error: "that room's server did not answer", code: "upstream" });
+    return true;
+  }
+  const type = answer.headers.get("content-type") ?? "";
+  const text = /json|mpegurl|^text\//i.test(type);
+  const headers: Record<string, string> = { "cache-control": "no-store", "x-content-type-options": "nosniff" };
+  for (const name of ["content-type", "content-length", "content-range", "accept-ranges", "x-accel-buffering", "retry-after"]) {
+    const value = answer.headers.get(name);
+    if (value && !(text && name === "content-length")) headers[name] = value;
+  }
+  if (text) {
+    // A playlist (or an error) is small: read whole, the room's address and key taken out.
+    const body = roomRewriter(room.play, slug)(await answer.text().catch(() => ""));
+    response.writeHead(answer.status, { ...headers, "content-length": String(Buffer.byteLength(body)) });
+    response.end(method === "HEAD" ? undefined : body);
+    return true;
+  }
+  response.writeHead(answer.status, headers);
+  if (!answer.body || method === "HEAD") {
+    response.end();
+    return true;
+  }
+  try {
+    for await (const chunk of answer.body as unknown as AsyncIterable<Uint8Array>) {
+      if (response.destroyed) break;
+      if (!response.write(chunk)) await new Promise((done) => { response.once("drain", done); response.once("close", done); });
+    }
+  } catch {
+    // The viewer left, or the room's server did.
+  }
+  response.end();
   return true;
 }

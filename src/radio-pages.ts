@@ -476,8 +476,8 @@ export function renderMissing(what: string, base: string, nav: string): string {
 /** What a station page's head says: a station of ours or a peer's. */
 export interface StationFace { name: string; description?: string; video?: boolean }
 
-export function stationHead(station: StationFace, slug: string, base: string): string {
-  const url = `${base}/radio/${slug}`;
+export function stationHead(station: StationFace, slug: string, base: string, path = `/radio/${slug}`): string {
+  const url = `${base}${path}`;
   const description = station.description || `${station.name}, live now. Free to listen; tap the artist or album on the air to see more.`;
   return `<title>${escape(station.name)} · live.streaming</title>
     <meta name="description" content="${escape(description)}" />
@@ -492,9 +492,9 @@ export function stationHead(station: StationFace, slug: string, base: string): s
 }
 
 /** The built station page (or the inline one) as /radio/<name> serves it: its head, the header, indexable. */
-export function asRadioPage(html: string, station: StationFace, slug: string, base: string, nav: string): string {
+export function asRadioPage(html: string, station: StationFace, slug: string, base: string, nav: string, path?: string): string {
   return html
-    .replace(/<title>[^<]*<\/title>/, stationHead(station, slug, base))
+    .replace(/<title>[^<]*<\/title>/, stationHead(station, slug, base, path))
     .replace(/\s*<meta name="robots" content="noindex"\s*\/?>/, "")
     .replace(/<body>/, `<body>\n${nav}`);
 }

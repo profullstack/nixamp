@@ -60,6 +60,16 @@ not a failure: no recovery, no restart counted. After a server restart, running 
 asleep. The idle time is `stationIdleSeconds` in config.json (or `NIXAMP_STATION_IDLE`), 60 by
 default; 0 never sleeps.
 
+## Live rooms on the guide
+
+A room a member publishes to the guide (a channel or the live stream of any https nixamp server)
+is listed under its name and opens `/room/<name>` on the guide's own address. The guide holds the
+room's address and key and asks the room's server for it: `/room/<name>/state`, `/stream` and
+`/hls/<file>` answer from the guide's origin with the address and key taken out, so no page names
+the machine the room is on. `/room/<id>` redirects to the name, and an old
+`/watch?play=<address>` link to a published room lands on its `/room/<name>`; any other `?play=`
+link plays straight from its server as before.
+
 ## AI radio and listener shares
 
 Stations whose music is composed by AI a few tracks a day (`nixamp station ai`), and stations of
