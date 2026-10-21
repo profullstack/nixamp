@@ -9,6 +9,7 @@ import "@profullstack/player/player.css";
 import "./styles.css";
 import "./station.css";
 import { albumSlug, artistSlug } from "../../src/radio-slug.ts";
+import { setNowPlaying, setNowPosition } from "./now-playing.ts";
 
 interface NowPlaying { title: string; artist: string; album: string }
 interface TrackFacts {
@@ -79,7 +80,16 @@ const title = (s: StationState): void => {
   const playing = s.nowPlaying;
   $("#title").textContent = playing ? (playing.title || "Untitled") : (s.state === "live" ? "On the air" : "");
   $("#by").textContent = playing ? [playing.artist, playing.album].filter(Boolean).join(" · ") : "";
+  // The car and the lock screen, before the facts (and the cover) arrive, or when there are none.
+  setNowPlaying({
+    title: playing?.title || s.name,
+    artist: playing?.artist || "",
+    album: playing?.album || s.name,
+    art: playing && coverSeen.title === playing.title ? coverSeen.art : "",
+  });
 };
+/** The last track's cover, so a title line for the same song keeps its picture. */
+let coverSeen = { title: "", art: "" };
 
 /** Who made it, AI or not, whose copyright, and how to support them. Text only, never HTML. */
 const showFacts = (f: TrackFacts | null | undefined): void => {
@@ -123,14 +133,8 @@ const showFacts = (f: TrackFacts | null | undefined): void => {
     cover.src = art;
     cover.alt = `Cover of ${f.title || "this track"}`;
   }
-  if ("mediaSession" in navigator && typeof MediaMetadata !== "undefined") {
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: f.title || last?.name || "nixamp",
-      artist: f.artist,
-      album: f.album || last?.name || "",
-      ...(art ? { artwork: [{ src: new URL(art, location.href).href, sizes: "512x512", type: "image/jpeg" }] } : {}),
-    });
-  }
+  coverSeen = { title: f.title, art };
+  setNowPlaying({ title: f.title || last?.name || "nixamp", artist: f.artist, album: f.album || last?.name || "", art });
   const badge = $("#ai-badge");
   badge.hidden = f.ai.generated !== true;
   badge.textContent = f.ai.generated === true ? "AI-generated" : "";
@@ -414,6 +418,7 @@ const tickProgress = (): void => {
     if (clock.duration > 0 && heard > clock.duration && Date.now() - clockAsked > 1000) void askClock();
     if (clock.break || clock.duration <= 0) {
       box.hidden = true;
+      setNowPosition(0, 0);
       return;
     }
     showProgress(Math.min(clock.duration, Math.max(0, heard)), clock.duration);
@@ -421,7 +426,7 @@ const tickProgress = (): void => {
     if (!karaoke || !karaoke.title || !clock.title || karaoke.title.trim().toLowerCase() === clock.title.trim().toLowerCase()) highlightLyrics(heard);
     return;
   }
-  if (!progressSeen) { box.hidden = true; return; }
+  if (!progressSeen) { box.hidden = true; setNowPosition(0, 0); return; }
   const heard = progressSeen.position + (Date.now() - progressSeen.at) / 1000 - ahead();
   const at = Math.min(progressSeen.duration, Math.max(0, heard));
   showProgress(at, progressSeen.duration);
@@ -435,6 +440,8 @@ const showProgress = (at: number, duration: number): void => {
   bar.setAttribute("aria-valuetext", `${clockOf(at)} of ${clockOf(duration)}`);
   $("#progress-time").textContent = `${clockOf(at)} / ${clockOf(duration)}`;
   $("#progress").hidden = false;
+  // The song's own bar on the dashboard, not the endless stream's.
+  setNowPosition(duration, at);
 };
 // Often enough for the words to fill in as they are sung.
 setInterval(tickProgress, 100);
