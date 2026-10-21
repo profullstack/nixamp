@@ -133,9 +133,9 @@ export interface LabelSettings {
   videos: boolean;
   /** Each album's single (song 1) is filmed with Veo, while the month's Veo budget lasts. */
   veo: boolean;
-  /** How many 8 s Veo shots of the band playing (never the singer) a single is cut from. */
+  /** How many 4 s Veo shots of the band playing (never the singer) a single is cut from. */
   veoShots: number;
-  /** How many 8 s Veo story scenes (a short film from the song's words, nobody singing) a single gets. */
+  /** How many 4 s Veo story scenes (a short film from the song's words, nobody singing) a single gets. */
   storyShots: number;
   /** How many close-ups of the singer a single gets, lip-synced to the song (0: none, the band only). */
   lipsyncShots: number;
@@ -144,6 +144,8 @@ export interface LabelSettings {
    * length (shotPlan) and the three above are not used. Setting any of them turns this off.
    */
   coverSong: boolean;
+  /** With coverSong: what one music video may cost in dollars, the shots planned to fit (shotPlan). */
+  videoUsd: number;
   /** Public, listed and owned, so the genre stations are on the guide. */
   publish: boolean;
   /** Songs made at the same time (ElevenLabs takes several requests at once on a paid plan). */
@@ -402,6 +404,7 @@ export const DEFAULTS: Omit<LabelSettings, "pausedReason"> = {
   storyShots: 4,
   lipsyncShots: 2,
   coverSong: true,
+  videoUsd: 8, // VIDEO_USD
   parallel: 1,
   genreOrder: ["Punk", "Blues", "Country", "Jazz", "Classic Rock", "Metal", "Hip-Hop", "Pop", "R&B"],
 };
@@ -807,16 +810,35 @@ export function renderStoryVideo(ffmpeg: string[], input: { audio: string; image
   return runLow(ffmpeg, [...ffmpeg.slice(1), ...args], 60 * 60_000, "the video failed");
 }
 
+/** What a second of Veo and of lip sync is counted at on nixamp.com (veo-studio.ts), and the shots' lengths. */
+export const VEO_USD_PER_SECOND = 0.15;
+export const LIPSYNC_USD_PER_SECOND = 0.1;
+/** Story and band shots: the cut takes 4 s at a time, so a 4 s shot is used whole at half an 8 s one's price. */
+export const SHOT_SECONDS = 4;
+/** The singer's close-ups stay 8 s: each is lip-synced to 8 s of the song. */
+export const SINGER_SECONDS = 8;
+/** What one music video may cost (Anthony, 2026-10-21: "$5-10"); videoUsd in the settings. */
+export const VIDEO_USD = 8;
+
 /**
- * How many shots a single needs so that its footage covers the whole song with
- * nothing shown twice (8 s a shot, the singer's close-ups whole, the rest cut in
- * 4 s halves): about a quarter the singer, a fifth the band, the rest the story.
+ * The shots a single gets for its budget: two lip-synced close-ups of the singer,
+ * then as many 4 s shots as the rest buys, a third the band and the rest the
+ * story. Footage shorter than the song is cut in turn and shown again.
+ * $8 with a singer: 2 close-ups ($4.00 with their sync) and 6 shots ($3.60).
  */
-export function shotPlan(seconds: number, singing: boolean): { story: number; band: number; singer: number } {
-  const total = Math.ceil(Math.max(30, seconds) / 8) + 1;
-  const singer = singing ? Math.max(2, Math.round(total / 4)) : 0;
-  const band = Math.max(2, Math.round(total / 5));
-  return { story: Math.max(2, total - singer - band), band, singer };
+export function shotPlan(_seconds: number, singing: boolean, usd = VIDEO_USD): { story: number; band: number; singer: number } {
+  const closeUp = SINGER_SECONDS * (VEO_USD_PER_SECOND + LIPSYNC_USD_PER_SECOND), shot = SHOT_SECONDS * VEO_USD_PER_SECOND;
+  // Two close-ups when they leave room for at least two shots; one when the budget is tight.
+  const singer = !singing ? 0 : usd >= 2 * closeUp + 2 * shot ? 2 : 1;
+  const left = usd - singer * SINGER_SECONDS * (VEO_USD_PER_SECOND + LIPSYNC_USD_PER_SECOND);
+  const shots = Math.max(2, Math.floor(left / (SHOT_SECONDS * VEO_USD_PER_SECOND) + 1e-9));
+  const band = Math.max(1, Math.round(shots / 3));
+  return { story: Math.max(1, shots - band), band, singer };
+}
+
+/** What a plan costs on nixamp.com, in dollars. */
+export function planUsd(plan: { story: number; band: number; singer: number }): number {
+  return (plan.story + plan.band) * SHOT_SECONDS * VEO_USD_PER_SECOND + plan.singer * SINGER_SECONDS * (VEO_USD_PER_SECOND + LIPSYNC_USD_PER_SECOND);
 }
 
 /**
@@ -1201,6 +1223,8 @@ export class AiLabel {
     // Counts given by hand mean those counts; coverSong says otherwise only when given too.
     if (shots !== undefined || story !== undefined || close !== undefined) this.settings.coverSong = false;
     if (input["coverSong"] !== undefined) this.settings.coverSong = input["coverSong"] === true;
+    const usd = Number(input["videoUsd"]);
+    if (input["videoUsd"] !== undefined && Number.isFinite(usd)) this.settings.videoUsd = Math.min(40, Math.max(2, usd));
     const perDay = whole("albumsPerDay", 0, 24);
     if (perDay !== undefined) this.settings.albumsPerDay = perDay;
     if (input["newArtistChance"] !== undefined) {
@@ -1448,7 +1472,7 @@ export class AiLabel {
     // Paid-for shots live beside the album until the video is cut, so nothing filmed is filmed twice.
     const shots = join(_album.folder, `.veo-${song.n}`);
     const plan = this.settings.coverSong
-      ? shotPlan(seconds, Boolean(this.deps.lipsync))
+      ? shotPlan(seconds, Boolean(this.deps.lipsync), this.settings.videoUsd ?? VIDEO_USD)
       : { story: this.settings.storyShots, band: this.settings.veoShots, singer: this.settings.lipsyncShots };
     const { band: clips, singer } = await this.filmShots(artist, _album, song, shots, scenes, plan);
     const wanted = plan.band + plan.story;
@@ -1458,7 +1482,8 @@ export class AiLabel {
     if (singing && singer.length === 0) throw new Error("the singer's close-ups are not filmed yet");
     const pinned = await this.syncCloseUps(song, singer, seconds, shots);
     await (this.deps.filmedVideo ?? ((input) => renderFilmedVideo(this.deps.ffmpeg, input)))({ audio: song.file, clips, seconds, artist: artist.name, title: song.title, out, ...(pinned.length ? { pinned } : {}) });
-    rmSync(shots, { recursive: true, force: true });
+    // Paid shots are kept until the video is whole (every close-up synced): a re-cut films only what is missing.
+    if (!singing || pinned.length >= plan.singer) rmSync(shots, { recursive: true, force: true });
     return { version: FILMED, ...(singing ? { singer: pinned.length ? "synced" as const : "unsynced" as const } : {}) };
   }
 
@@ -1563,20 +1588,20 @@ export class AiLabel {
     // the portraits: they would pull the whole band into every scene.
     // The singer first: a day's few Veo requests go to what the video is for, then the story and the band.
     const plan = [
-      ...(this.deps.lipsync ? veoPrompts(artist, song, singers, counts.singer, "singer").map((prompt, i) => ({ prompt, file: join(keep, `singer-${i}.mp4`), into: singer, refs: singerRefs })) : []),
-      ...storyFiles.map((file, i) => ({ prompt: storyPrompts[i] ?? "", file, into: story, refs: [] as Buffer[] })),
-      ...veoPrompts(artist, song, players, counts.band).map((prompt, i) => ({ prompt, file: join(keep, `shot-${i}.mp4`), into: band, refs: playerRefs })),
+      ...(this.deps.lipsync ? veoPrompts(artist, song, singers, counts.singer, "singer").map((prompt, i) => ({ prompt, file: join(keep, `singer-${i}.mp4`), into: singer, refs: singerRefs, seconds: SINGER_SECONDS })) : []),
+      ...storyFiles.map((file, i) => ({ prompt: storyPrompts[i] ?? "", file, into: story, refs: [] as Buffer[], seconds: SHOT_SECONDS })),
+      ...veoPrompts(artist, song, players, counts.band).map((prompt, i) => ({ prompt, file: join(keep, `shot-${i}.mp4`), into: band, refs: playerRefs, seconds: SHOT_SECONDS })),
     ];
-    for (const [i, { prompt, file, into, refs }] of plan.entries()) {
+    for (const [i, { prompt, file, into, refs, seconds }] of plan.entries()) {
       try {
-        if (statSync(file).size > 10_000) { into.push({ path: file, seconds: 8 }); continue; }
+        if (statSync(file).size > 10_000) { into.push({ path: file, seconds }); continue; }
       } catch { /* not filmed yet */ }
       if (!prompt) continue;
       try {
         // nixamp.com briefly away (a deploy: 502/503) or the network: twice more, a minute apart.
         let bytes: Buffer | null = null;
         for (let attempt = 0; ; attempt++) {
-          try { bytes = await veo({ prompt, seconds: 8, references: refs }); break; } catch (error) {
+          try { bytes = await veo({ prompt, seconds, references: refs }); break; } catch (error) {
             if (attempt >= 2 || error instanceof VeoUnavailable || !TRANSIENT.test((error as Error).message)) throw error;
             await new Promise((done) => setTimeout(done, this.deps.retryMs ?? 60_000));
           }
@@ -1584,7 +1609,7 @@ export class AiLabel {
         const partial = `${file}.part`;
         writeFileSync(partial, bytes!);
         renameSync(partial, file);
-        into.push({ path: file, seconds: 8 });
+        into.push({ path: file, seconds });
       } catch (error) {
         if (error instanceof VeoUnavailable) {
           this.veoSpentIn = new Date(this.now()).toISOString().slice(0, 7);
