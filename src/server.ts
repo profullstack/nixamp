@@ -166,6 +166,7 @@ import {
   FREE_LISTENERS,
   type PaywallConfig,
   paywallFromEnv,
+  createCrawlGate,
 } from "./paywall.ts";
 import { isRemote, isTransportStream, playsInBrowser, sourceLabel } from "./sources.ts";
 import { codecsOf, probeAsync, transportInputArgs, videoArgs, type Codecs } from "./audio.ts";
@@ -2018,6 +2019,8 @@ export interface HandlerOptions {
    * Response it is refused with.
    */
   throttle?: Throttle;
+  /** The crawl door from paywall.ts (nixamp.com only): a 402 for training crawlers, the /crawl shop. */
+  crawlGate?: { handle: (request: Request) => Promise<Response | null> } | null;
   /**
    * The VAPID pair, read from the environment when the server starts. Only the
    * public half leaves: it is what a browser needs before it can subscribe.
@@ -2212,6 +2215,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // Metered before anything is done for the request, so a caller over its
     // allowance costs nothing but this check. The throttle decides; this only
     // carries its refusal back through Node's response.
+    // Training crawlers buy a day pass before anything else is done for them.
+    if (options.crawlGate) {
+      const sold = await options.crawlGate.handle(requestFor(request));
+      if (sold) {
+        await answerWith(response, sold);
+        return;
+      }
+    }
+
     if (options.throttle) {
       const refused = await options.throttle.handle(requestFor(request));
       if (refused) {
@@ -8314,6 +8326,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     });
     certs = new Certs(pool, zone, issuer, { log: (line) => console.log(`  ${line}`) });
   }
+  // nixamp.com only (it has the database): a self-hosted server never sells crawl passes.
+  const crawlGate = pool
+    ? createCrawlGate(process.env, (request) => /(?:^|;\s*)nixamp_session=/.test(request.headers.get("cookie") ?? ""))
+    : null;
   const throttle = pool
     ? createThrottle({
         rules: [
@@ -8835,6 +8851,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(certs ? { certs } : {}),
     dnsZone: zoneName,
     ...(throttle ? { throttle } : {}),
+    ...(crawlGate ? { crawlGate } : {}),
     ...(partyLine ? { partyLine } : {}),
     // Accounts live where the directory lives, and only there: a nixamp on a
     // laptop has nobody to be an account of.
