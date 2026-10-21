@@ -112,7 +112,8 @@ export async function handleLabelRoutes(
         return true;
       }
       if (path === "/api/v1/label") {
-        ctx.json(response, 200, label.publicView());
+        // Where this catalogue is sold from, for Buy links built elsewhere (nixamp music, MCP).
+        ctx.json(response, 200, { ...label.publicView(), ...(/^https:\/\//.test(ctx.publicBase ?? "") ? { server: ctx.publicBase } : {}) });
         return true;
       }
       const url = new URL(request.url ?? "/", "http://x");

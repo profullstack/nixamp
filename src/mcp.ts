@@ -245,6 +245,29 @@ export const TOOLS: ToolDefinition[] = [
       required: ["server"],
     },
   },
+  {
+    name: "music_catalog",
+    description: "The AI label's catalogue: genres, artists, albums and songs (with lyrics), and each genre's free live station. Read from the server that holds the music, live.streaming by default.",
+    inputSchema: { type: "object", properties: { server: { ...STRING, description: "The music server's https address (default https://live.streaming.pit.world)." } } },
+  },
+  {
+    name: "music_buy",
+    description: "Buy AI label music as files (a song 10¢, an album $1, everything by an artist $2) with crypto via CoinPay. Answers the page to pay on and the receipt link where the zip (MP3s with cover art and lyrics) is downloaded once paid. Pass a nixamp.com/buy link, or server + kind + artist (+ album, + n).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        link: { ...STRING, description: "A nixamp.com/buy?... link." },
+        server: STRING, kind: { type: "string", enum: ["song", "album", "artist"] }, artist: STRING, album: STRING, n: { type: "integer" },
+        email: { ...STRING, description: "Where the receipt goes; the signed-in account's email by default." },
+        coin: { ...STRING, description: "USDC_POL (default), USDC_SOL, SOL, POL, ETH, BTC..." },
+      },
+    },
+  },
+  {
+    name: "music_purchases",
+    description: "The AI label music this account bought, with a fresh download link for each zip. Needs `nixamp login` with the email used to buy.",
+    inputSchema: { type: "object", properties: {} },
+  },
   ...STATION_TOOLS,
   ...(PUBLIC_TOOLS as unknown as ToolDefinition[]),
   ...LIBRARY_TOOLS,
@@ -326,6 +349,21 @@ export async function callTool(name: string, args: Record<string, unknown>, opti
       ...(options.fetcher ? { fetcher: options.fetcher } : {}),
       ...(options.session?.site ? { site: options.session.site } : {}),
     }) as unknown as ToolResult;
+  }
+  // The AI label's music: the catalogue and buying need no sign-in; what was bought does.
+  if (name === "music_catalog" || name === "music_buy" || name === "music_purchases") {
+    const shop = await import("./music-client.ts");
+    try {
+      if (name === "music_catalog") return text(JSON.stringify(await shop.catalogue(typeof args["server"] === "string" && args["server"] ? args["server"] : undefined, options.fetcher), null, 2));
+      if (name === "music_purchases") return text(JSON.stringify(await shop.purchases(options.fetcher), null, 2));
+      const link = typeof args["link"] === "string" ? shop.fromBuyLink(args["link"]) : null;
+      if (typeof args["link"] === "string" && !link) return failed("that is not a nixamp.com/buy link");
+      const pick = (keys: string[]): Record<string, unknown> => Object.fromEntries(keys.filter((key) => args[key] !== undefined).map((key) => [key, args[key]]));
+      const made = await shop.buy({ ...(link ?? pick(["server", "kind", "artist", "album", "n"])), ...(link?.["n"] ? { n: Number(link["n"]) } : {}), coin: typeof args["coin"] === "string" ? args["coin"] : "USDC_POL", ...pick(["email"]) }, options.fetcher);
+      return text(`Pay here: ${made.url}\nReceipt and download, once paid: ${made.receipt}`);
+    } catch (error) {
+      return failed((error as Error).message);
+    }
   }
   // Stations first: on this machine they need the daemon, not a sign-in.
   if (isStationTool(name) || isLibraryTool(name)) {

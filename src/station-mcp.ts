@@ -120,7 +120,10 @@ export const STATION_TOOLS = [
         sound: { ...STRING, description: "The music in words: instruments, tempo, mood. Name no real artist." },
         voice: STRING, bio: STRING, themes: STRING, enabled: { type: "boolean" }, publish: { type: "boolean" }, holder: STRING,
         monthlySeconds: { type: "integer" }, everyDays: { type: "integer" }, seedAlbums: { type: "integer" },
-        songsPerAlbum: { type: "integer" }, songSeconds: { type: "integer" },
+        songsPerAlbum: { type: "integer" }, songSeconds: { type: "integer" }, parallel: { type: "integer" },
+        albumsPerDay: { type: "integer", description: "After the first sweep: new albums a day, by a random artist or a newly invented one." },
+        newArtistChance: { type: "number", description: "0-1: how often the day's album is by a new artist." },
+        genreOrder: { type: "array", items: STRING, description: "Genres whose artists get albums first, in order." },
       },
     },
   },
@@ -250,7 +253,7 @@ export async function callStationTool(name: string, args: Record<string, unknown
       const key = typeof args["key"] === "string" && /^[a-f0-9]{10}$/.test(args["key"]) ? args["key"] : "";
       const answer = action === "status" ? await call("GET", "/api/v1/stations/label")
         : action === "sign" ? await call("POST", "/api/v1/stations/label/artists", pick(["preset", "roster", "name", "genre", "sound", "voice", "bio", "themes", "enabled"]))
-        : action === "configure" ? await call("POST", "/api/v1/stations/label", pick(["holder", "monthlySeconds", "everyDays", "seedAlbums", "songsPerAlbum", "songSeconds", "enabled", "publish"]))
+        : action === "configure" ? await call("POST", "/api/v1/stations/label", pick(["holder", "monthlySeconds", "everyDays", "seedAlbums", "songsPerAlbum", "songSeconds", "parallel", "genreOrder", "albumsPerDay", "newArtistChance", "enabled", "publish"]))
         : action === "run" ? await call("POST", "/api/v1/stations/label/run", {})
         : action === "resume" ? await call("POST", "/api/v1/stations/label", { resume: true })
         : !key ? null

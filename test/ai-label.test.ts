@@ -6,7 +6,7 @@ import { createServer as createHttpServer } from "node:http";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AiLabel, cleanLyrics, fileName, genreSlug, ROSTER, songBase } from "../src/ai-label.ts";
+import { AiLabel, cleanLyrics, fileName, genreSlug, renderVideo, ROSTER, songBase } from "../src/ai-label.ts";
 import { elevenLabsComposer, OutOfCredit, type Composer } from "../src/ai-radio.ts";
 import type { askJson } from "../src/ai-text.ts";
 import { Channels } from "../src/channels.ts";
@@ -46,7 +46,7 @@ async function idle(label: AiLabel, done: () => boolean): Promise<void> {
   for (let tries = 0; tries < 500 && !(done() && !(label.status() as { busy: string }).busy); tries++) await new Promise((r) => setTimeout(r, 10));
 }
 
-function setup(composer: Composer | null, ask: typeof askJson = fakeWriter()) {
+function setup(composer: Composer | null, ask: typeof askJson = fakeWriter(), extra: { now?: () => number; random?: () => number } = {}) {
   const top = mkdtempSync(join(tmpdir(), "nixamp-label-"));
   const index = new LibraryIndex(LibraryIndex.fileFor(top, 1), memory());
   const store = new StationStore(StationStore.fileFor(top, 1), memory());
@@ -61,9 +61,29 @@ function setup(composer: Composer | null, ask: typeof askJson = fakeWriter()) {
     canAsk: () => true,
     cover: async () => Buffer.alloc(2048, 7),
     tag: async (from, to, tags, cover) => { tagged.push({ to, tags, cover }); copyFileSync(from, to); },
+    video: async (audio, _cover, out) => { copyFileSync(audio, out); },
+    ...extra,
   });
   return { top, index, store, runner, channels, label, tagged };
 }
+
+test("a music video is 720p H.264 with the song's audio, cover or not", async () => {
+  const top = mkdtempSync(join(tmpdir(), "nixamp-video-"));
+  try {
+    const run = (args: string[]) => execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...args]);
+    try { run(["-f", "lavfi", "-i", "sine=d=2", "-c:a", "libmp3lame", join(top, "a.mp3")]); } catch { return; } // no ffmpeg here
+    run(["-f", "lavfi", "-i", "color=c=red:s=512x512:d=1", "-frames:v", "1", join(top, "c.jpg")]);
+    for (const cover of [join(top, "c.jpg"), ""]) {
+      const out = join(top, `v${cover ? 1 : 0}.mp4`);
+      await renderVideo(["ffmpeg"], join(top, "a.mp3"), cover, out);
+      const probe = execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=codec_name,width,height", "-of", "csv=p=0", out], { encoding: "utf8" });
+      assert.match(probe, /h264,1280,720/);
+      assert.match(probe, /mp3/);
+    }
+  } finally {
+    rmSync(top, { recursive: true, force: true });
+  }
+});
 
 test("names make safe folders and file names", () => {
   assert.equal(fileName('AC/DC: "Live"?'), "ACDC Live");
@@ -74,12 +94,86 @@ test("names make safe folders and file names", () => {
   assert.equal(cleanLyrics("```\n[Verse]\nline one\n\n\n\nline two\n```"), "[Verse]\nline one\n\nline two");
 });
 
-test("the roster has three artists in every genre, each name once", () => {
+test("the roster has three artists in each of the owner's genres, two or more elsewhere, each name once", () => {
   const byGenre = new Map<string, number>();
   for (const one of Object.values(ROSTER)) byGenre.set(one.genre, (byGenre.get(one.genre) ?? 0) + 1);
-  assert.deepEqual([...byGenre.values()], [...byGenre.values()].map(() => 3));
-  assert.equal(byGenre.size, 6);
+  for (const genre of ["Punk", "Blues", "Country", "Jazz", "Classic Rock", "Metal", "Hip-Hop"]) assert.equal(byGenre.get(genre), 3, genre);
+  for (const [genre, count] of byGenre) assert.ok(count >= 2, genre);
   assert.equal(new Set(Object.values(ROSTER).map((one) => one.name.toLowerCase())).size, Object.keys(ROSTER).length);
+});
+
+test("after the first sweep, one album a day: an artist at random, or a new one invented in the owner's genres", async () => {
+  let clock = Date.UTC(2026, 9, 21, 12);
+  let roll = 0.9; // > newArtistChance: an artist already signed
+  const writer = fakeWriter();
+  const ask: typeof askJson = async (options) => {
+    if (options.system.includes("You invent original recording artists")) return { model: "test-writer", value: { name: "Brand New Band", sound: "loud fast punk, 190 BPM", voice: "shouted", bio: "new", themes: "now" } };
+    return writer(options);
+  };
+  const { top, label } = setup(fakeComposer([]), ask, { now: () => clock, random: () => roll });
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, albumsPerDay: 1, newArtistChance: 0.5, genreOrder: ["Punk"], enabled: false });
+    const one = label.sign({ preset: "the-bent-spokes" });
+    const two = label.sign({ preset: "gutter-velvet" });
+    label.configure({ enabled: true });
+    const albums = (): number => label.list().reduce((sum, artist) => sum + artist.albums.filter((album) => album.doneAt).length, 0);
+    await idle(label, () => albums() === 2);
+    assert.equal(albums(), 2, "the sweep: one each");
+    await label.tick();
+    assert.equal(albums(), 2, "nothing more the same day");
+    clock += 86_400_000;
+    await label.tick();
+    await idle(label, () => albums() === 3);
+    assert.equal(albums(), 3, "a day later, the day's album");
+    assert.equal(label.list().length, 2, "by an artist already signed");
+    clock += 86_400_000;
+    roll = 0.1; // < newArtistChance: somebody new
+    await label.tick();
+    await idle(label, () => albums() === 4);
+    const invented = label.list().find((artist) => artist.name === "Brand New Band");
+    assert.ok(invented, "a new artist was signed");
+    assert.equal(invented!.genre, "Punk");
+    assert.equal(invented!.albums.length, 1);
+    assert.ok([one, two].every((artist) => label.get(artist.key)!.enabled));
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("several songs at once, never the same one twice, albums in the owner's genre order", async () => {
+  const calls: Array<{ prompt: string; seconds: number; lyrics?: string }> = [];
+  let live = 0;
+  let most = 0;
+  const slow: Composer = {
+    name: "slow/music",
+    async compose(input) {
+      live += 1;
+      most = Math.max(most, live);
+      await new Promise((r) => setTimeout(r, 20));
+      calls.push({ prompt: input.prompt, seconds: input.seconds });
+      writeFileSync(input.out, Buffer.alloc(4096, calls.length));
+      live -= 1;
+    },
+  };
+  const { top, label, tagged } = setup(slow);
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, parallel: 3, enabled: false });
+    const pop = label.sign({ preset: "lumi-kestrel" });
+    const punk = label.sign({ preset: "the-bent-spokes" });
+    const blues = label.sign({ preset: "muddy-ledger" });
+    label.configure({ enabled: true });
+    await idle(label, () => [pop, punk, blues].every((one) => label.get(one.key)!.albums[0]?.doneAt));
+    assert.equal(calls.length, 9);
+    assert.ok(most >= 2, `songs were made side by side (at most ${most} at once)`);
+    assert.equal(new Set(tagged.map((one) => one.to)).size, 9, "no song made twice");
+    assert.ok(tagged.every((one) => one.cover), "every song carries its album's cover");
+    const planned = [punk, blues, pop].map((one) => label.get(one.key)!.albums[0]!.plannedAt);
+    assert.ok(planned[0]! <= planned[1]! && planned[1]! <= planned[2]!, "Punk, then Blues, then Pop");
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
 });
 
 test("a ℗ copyright tag reads as its holder, with no doubled mark", async () => {
@@ -92,7 +186,7 @@ test("an artist's albums are planned, written, sung and filed as genre/artist/ye
   const calls: Array<{ prompt: string; seconds: number; lyrics?: string }> = [];
   const { top, store, label, tagged } = setup(fakeComposer(calls));
   try {
-    label.configure({ seedAlbums: 2, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, enabled: false });
+    label.configure({ seedAlbums: 2, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, albumsPerDay: 0, enabled: false });
     const artist = label.sign({ preset: "velvet-ruckus" });
     label.configure({ enabled: true });
     await idle(label, () => label.get(artist.key)!.albums.filter((one) => one.doneAt).length >= 2);
@@ -126,6 +220,14 @@ test("an artist's albums are planned, written, sung and filed as genre/artist/ye
     assert.equal(station.items.length, 6);
     assert.deepEqual([station.visibility, station.listed, station.rights?.basis], ["public", true, "owned"]);
     assert.match(station.rights?.note ?? "", /Profullstack, Inc\./);
+    // A music video for every song, and a TV station of them on the guide.
+    await label.videos();
+    assert.ok(existsSync(join(folder, "001. Song 1-1.mp4")));
+    assert.ok(label.get(artist.key)!.albums.every((album) => album.songs.every((song) => song.video)));
+    const tv = store.list().find((one) => one.auto === "ai:label:videos");
+    assert.ok(tv, "the music videos have a TV station");
+    assert.deepEqual([tv!.items.length, tv!.visibility, tv!.listed], [6, "public", true]);
+    assert.ok(label.zipFor({ kind: "album", artist: artist.key, album: albums[0]!.key, n: 0 })!.entries.some((one) => one.name.endsWith("001. Song 1-1.mp4")), "bought albums carry the videos");
     // The next album is due a month after the last.
     assert.ok(label.dueAt(label.get(artist.key)!) >= albums[1]!.plannedAt + 30 * 86_400_000);
     // What anybody may see.

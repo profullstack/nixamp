@@ -9,6 +9,7 @@ import { t as uiMessage, i18n, terminalUiLanguage, uiLanguage } from "./i18n.ts"
  */
 import { USAGE as STATION_USAGE } from "./station-usage.ts";
 import { LIBRARY_COMMANDS, LIBRARY_USAGE } from "./library-usage.ts";
+import { MUSIC_USAGE } from "./music-cli.ts";
 import { createApp, themes, type BrailleCanvas, type Container, type KeyEvent, type Theme } from "@profullstack/hqtui";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -235,6 +236,7 @@ keeps serving its browser remote. One per user.
   nixamp attach   put the player back in front of it
   nixamp admin    who is connected, and re-stream to them
   nixamp station  make a folder into a station others can join (see: nixamp station help)
+  nixamp music    the AI label's songs as files: catalog, buy (10¢, $1, $2), what you bought (nixamp music help)
 
 From inside the player, d hands the music to a daemon without stopping it.
 `,
@@ -399,6 +401,7 @@ q or d leaves; neither stops anything. \`nixamp daemon stop\` is what stops it.
 export function helpFor(topic: string | undefined): string {
   if (topic === "station" || topic === "stations") return STATION_USAGE;
   if (topic === "library") return LIBRARY_USAGE;
+  if (topic === "music") return MUSIC_USAGE;
   return (topic ? TOPICS[topic] : undefined) ?? HELP;
 }
 
@@ -556,6 +559,11 @@ export async function main(): Promise<void> {
   }
   if (first === "daemon") {
     process.exitCode = await runDaemon(rest);
+    return;
+  }
+  if (first === "music") {
+    const { music } = await import("./music-cli.ts");
+    process.exitCode = await music(rest);
     return;
   }
   if (first === "station" || first === "stations") {
