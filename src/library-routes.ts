@@ -30,6 +30,8 @@ export interface LibraryContext {
   /** Tell the player about tags that changed. */
   retag: (tracks: Track[]) => void;
   sendFile: (request: IncomingMessage, response: ServerResponse, file: string, cache: string) => void;
+  /** The file as a browser plays it (server.ts playFile): the bytes when it can, MP4 or MP3 when not. */
+  play?: (request: IncomingMessage, response: ServerResponse, file: string) => Promise<void>;
   json: (response: ServerResponse, status: number, body: unknown) => void;
   readBody: (request: IncomingMessage) => Promise<string>;
 }
@@ -246,15 +248,20 @@ export async function handleLibrary(
       return true;
     }
 
-    const itemMatch = /^\/api\/v1\/library\/items\/([0-9a-f]{16})(?:\/(stream))?$/.exec(path);
+    const itemMatch = /^\/api\/v1\/library\/items\/([0-9a-f]{16})(?:\/(stream|play))?$/.exec(path);
     if (itemMatch) {
       const item = index.item(itemMatch[1]!);
       if (!item) return fail(404, "not_found", "no such item");
-      if (itemMatch[2] === "stream") {
+      if (itemMatch[2] === "stream" || itemMatch[2] === "play") {
         if (method !== "GET" && method !== "HEAD") return fail(405, "method_not_allowed", "GET");
         if (item.state !== "ready") return fail(409, "not_ready", `that item is ${item.state}`);
         const source = index.source(item.sourceId);
         if (!source?.enabled) return fail(409, "source_disabled", "that item's source is turned off");
+        // On demand: what a VOD link plays, from the start and seekable when the browser takes the file as it is.
+        if (itemMatch[2] === "play" && ctx.play) {
+          await ctx.play(request, response, item.path);
+          return true;
+        }
         // Private: a browser may keep it, a shared cache may not.
         ctx.sendFile(request, response, item.path, "private, max-age=3600");
         return true;

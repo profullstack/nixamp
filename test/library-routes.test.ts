@@ -26,7 +26,7 @@ test("library over HTTP: the owner manages, the listen link reads without paths"
   });
   const retagged: Track[] = [];
   const index = new LibraryIndex(LibraryIndex.fileFor(top, 1));
-  const engine = { snapshot: () => ({ ...emptySnapshot(), root }), command: () => undefined, subscribe: () => () => undefined, trackPath: () => undefined } as unknown as Engine;
+  const engine = { snapshot: () => ({ ...emptySnapshot(), root }), command: () => undefined, subscribe: () => () => undefined, trackPath: (at: number) => (at === 0 ? join(root, "Band", "LP", "01 Song.mp3") : undefined) } as unknown as Engine;
   const server = createServer(engine, { web: null, media: true, version: "test", key: CONTROL, listenKey: LISTEN, library: { index, probe, retag: (tracks) => retagged.push(...tracks) } });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -78,6 +78,14 @@ test("library over HTTP: the owner manages, the listen link reads without paths"
     assert.equal(part.status, 206);
     assert.equal((await part.arrayBuffer()).byteLength, 100);
     assert.match(part.headers.get("cache-control") ?? "", /^private/);
+    // On demand plays the same file, seekable, when a browser takes it as it is.
+    const played = await listener(`/api/v1/library/items/${id}/play`, { headers: { range: "bytes=0-99" } });
+    assert.equal(played.status, 206);
+    assert.equal((await played.arrayBuffer()).byteLength, 100);
+    // Which library item a playlist track is, for publishing it on demand.
+    const named = (await (await listener("/api/media/0/item")).json()) as { id: string; title: string };
+    assert.equal(named.id, id);
+    assert.equal((await listener("/api/media/1/item")).status, 404);
 
     // The same through the CLI and an agent.
     const printed: string[] = [];

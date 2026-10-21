@@ -1,5 +1,5 @@
 /** `nixamp library` subcommands and usage, apart so help does not load the client. */
-export const LIBRARY_COMMANDS = new Set(["status", "sources", "add", "scan", "search", "show", "fix", "remove", "playlists", "playlist"]);
+export const LIBRARY_COMMANDS = new Set(["status", "sources", "add", "scan", "search", "show", "fix", "remove", "playlists", "playlist", "publish", "vods", "unpublish"]);
 
 export const LIBRARY_USAGE = `nixamp library — what this server has, indexed
 
@@ -16,6 +16,11 @@ export const LIBRARY_USAGE = `nixamp library — what this server has, indexed
   nixamp library playlist new NAME [ITEM...]
   nixamp library playlist show|delete PLAYLIST
   nixamp library playlist add PLAYLIST ITEM...
+  nixamp library publish ITEM --basis B [--title T] [--note N]
+                                      on demand on live.streaming: a link that plays it from the start
+                                      (B: owned, permission, licensed, creative-commons, public-domain)
+  nixamp library vods                 what is published on demand, with each link
+  nixamp library unpublish VOD        take one off
 
   --json        machine-readable output
   --url, --key  another server, as with \`nixamp admin\``;

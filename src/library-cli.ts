@@ -161,6 +161,25 @@ export async function libraryTool(argv: string[]): Promise<number> {
         console.error("nixamp library playlist new NAME [ITEM...] | show ID | add ID ITEM... | delete ID");
         return 2;
       }
+      case "publish": {
+        // On demand on this server's guide (guide-vods.ts): the server builds the
+        // file's public address from its own public URL and listen key.
+        const [item] = rest;
+        const basis = flag(argv, "--basis");
+        if (!item || !basis) { console.error("nixamp library publish needs an item id and --basis owned|permission|licensed|creative-commons|public-domain"); return 2; }
+        return out(await call("POST", "/api/v1/guide/vods", { item, basis, agree: true, title: flag(argv, "--title") ?? "", note: flag(argv, "--note") ?? "" }),
+          (body) => `on demand: ${String(body["page"])}`);
+      }
+      case "vods":
+        return out(await call("GET", "/api/v1/guide/vods"), (body) => {
+          const vods = (body["vods"] as Record<string, unknown>[]) ?? [];
+          return vods.length === 0 ? "nothing published on demand" : vods.map((one) => `${String(one["id"])}  ${String(one["name"])}  ${String(one["page"])}${one["state"] === "offline" ? "  [not answering]" : ""}`).join("\n");
+        });
+      case "unpublish": {
+        const [vod] = rest;
+        if (!vod) { console.error("nixamp library unpublish needs a video id (see nixamp library vods)"); return 2; }
+        return out(await call("DELETE", `/api/v1/guide/vods/${vod}`), (body) => `removed ${String(body["removed"])}`);
+      }
       default:
         console.log(LIBRARY_USAGE);
         return 2;

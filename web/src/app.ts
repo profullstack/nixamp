@@ -1550,7 +1550,8 @@ export function start(): void {
     // class; the school and this site keep the same accounts.
     dom.schoolLive.hidden = liveRoomLinkNow() === "" || !keepsAccounts || meId === "";
     // Publishing it on live.streaming needs the room's own address and a nixamp.com account.
-    dom.streamingLive.hidden = roomStreamNow() === "" || remote.session === "";
+    // Or, for a file of the server's own, publishing it on demand (src/guide-vods.ts).
+    dom.streamingLive.hidden = (roomStreamNow() === "" && vodTrackNow() === null) || remote.session === "";
     // Share sits with the transport, for anything with an address safe to hand out.
     dom.shareNow.hidden = shareLinkNow() === "";
     // The trollbox follows whatever live is joined.
@@ -5013,13 +5014,34 @@ export function start(): void {
     return "";
   }
 
+  /**
+   * The server track playing now, when it is a file rather than a live or a
+   * channel: what "Publish on live.streaming" puts on demand instead of as a room.
+   */
+  function vodTrackNow(): number | null {
+    if (mode !== "remote" || channelOn || nowMeta?.kind === "live" || onServerLive()) return null;
+    if (!/^https:\/\/[^/]+\/view\/[A-Za-z0-9_-]+\/?$/.test(shareableLink())) return null;
+    const index = at();
+    return snapshot.tracks?.[index] ? index : null;
+  }
+
+  /** The file's play address on its server, by asking which library item the track is. */
+  async function vodPlayNow(index: number): Promise<string> {
+    const view = /^(https:\/\/[^/]+)\/view\/([A-Za-z0-9_-]+)\/?$/.exec(shareableLink());
+    if (!view) throw new Error("this server has no view link to share");
+    const answer = await fetch(`${view[1]}/api/media/${index}/item?k=${view[2]}`, { cache: "no-store" });
+    const body = (await answer.json().catch(() => ({}))) as { id?: string; error?: string };
+    if (!answer.ok || !body.id) throw new Error(body.error ?? "that file is not in the server's library");
+    return `${view[1]}/api/v1/library/items/${body.id}/play?k=${view[2]}`;
+  }
+
   const streamingNote = need<HTMLElement>("streaming-publish-note");
   const streamingTitle = need<HTMLInputElement>("streaming-publish-title-input");
   const streamingBasis = need<HTMLSelectElement>("streaming-publish-basis");
   const streamingAgree = need<HTMLInputElement>("streaming-publish-agree");
   const streamingGo = need<HTMLButtonElement>("streaming-publish-go");
   dom.streamingLive.addEventListener("click", () => {
-    if (roomStreamNow() === "") return;
+    if (roomStreamNow() === "" && vodTrackNow() === null) return;
     streamingTitle.value = currentShareTitle();
     streamingNote.textContent = "";
     dom.streamingPublish.showModal();
@@ -5032,13 +5054,16 @@ export function start(): void {
 
   /** Lists this room on live.streaming with the member's session, then opens its page there. */
   async function publishOnStreaming(): Promise<void> {
-    const play = roomStreamNow();
-    if (play === "" || streamingGo.disabled) return;
+    const room = roomStreamNow();
+    const track = room === "" ? vodTrackNow() : null;
+    if ((room === "" && track === null) || streamingGo.disabled) return;
     if (!streamingAgree.checked) { streamingNote.textContent = "Tick the box to confirm you may broadcast it."; return; }
     streamingGo.disabled = true;
     streamingNote.textContent = "Publishing…";
     try {
-      const answer = await fetch(`${STREAMING_SITE}/api/v1/guide/rooms`, {
+      // A live or a channel is a room; a file is on demand, played from its start.
+      const play = room || await vodPlayNow(track!);
+      const answer = await fetch(`${STREAMING_SITE}/api/v1/guide/${room ? "rooms" : "vods"}`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${remote.session}` },
         body: JSON.stringify({ play, basis: streamingBasis.value, title: streamingTitle.value.trim(), agree: true }),
@@ -5046,7 +5071,8 @@ export function start(): void {
       const body = (await answer.json().catch(() => ({}))) as { page?: string; error?: string };
       if (!answer.ok || !body.page) throw new Error(body.error ?? "it could not be published");
       dom.streamingPublish.close();
-      note = `Live on live.streaming: ${body.page}`;
+      note = room ? `Live on live.streaming: ${body.page}` : `On demand on live.streaming: ${body.page}`;
+      void navigator.clipboard?.writeText(body.page).catch(() => undefined);
       draw();
       globalThis.open(body.page, "_blank", "noopener");
     } catch (error) {

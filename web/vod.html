@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>On demand · nixamp</title>
+    <meta name="theme-color" content="#080c09" />
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64" />
+  </head>
+  <body>
+    <main class="station-app">
+      <div id="one" class="station-card" hidden>
+        <span id="state" class="station-chip unavailable" role="status">Loading</span>
+        <div id="stage" class="station-stage"></div>
+        <h1 id="name">&nbsp;</h1>
+        <div class="station-now"><div id="by" class="station-by"></div><div id="length" class="station-by"></div></div>
+        <p id="note" class="station-about" hidden></p>
+        <p class="vod-share">
+          <input id="link" type="text" readonly aria-label="Link to this video" />
+          <button id="copy" type="button">Copy link</button>
+          <button id="share" type="button" hidden>Share</button>
+        </p>
+        <p class="station-small"><a id="raw" href="#">Open in another player</a> · <a id="nixamp" href="https://nixamp.com">Open in nixamp</a></p>
+      </div>
+      <section id="all" hidden>
+        <h1>On demand</h1>
+        <p class="station-about">Published files: play from the start, seek anywhere, share the link.</p>
+        <ul id="list" class="vod-list"></ul>
+        <p id="none" class="station-small" hidden>Nothing has been published here yet.</p>
+      </section>
+      <p class="station-small"><a href="/vod">All videos</a> · <a href="/">On the air now</a> · Played by <a href="https://nixamp.com">nixamp</a>.</p>
+      <div id="announce" class="sr-only" aria-live="assertive"></div>
+    </main>
+    <script type="module" src="/src/vod.ts"></script>
+  </body>
+</html>
