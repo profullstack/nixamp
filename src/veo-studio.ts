@@ -11,6 +11,10 @@
  *
  * The key is NIXAMP_VEO_API_KEY, its own name, so nothing else on nixamp.com
  * starts spending Gemini credit because a Gemini key appeared.
+ *
+ * The month's spend is kept in Postgres on nixamp.com (a deploy recreates its
+ * container and would lose a file, and with it the cap), reserved in one
+ * statement that refuses to go over; a file only where there is no database.
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -18,9 +22,65 @@ import { dirname, join } from "node:path";
 export class VeoBudgetError extends Error {}
 export class VeoRefused extends Error {}
 
+/** Where the month's spend lives. `reserve` adds `usd` only if that keeps the month at or under `cap`. */
+export interface VeoLedger {
+  spent(month: string): Promise<number>;
+  reserve(month: string, usd: number, cap: number): Promise<boolean>;
+  refund(month: string, usd: number): Promise<void>;
+}
+
+export interface Queryable { query: (text: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }> }
+
+/** The spend in Postgres, one row a month, reserved atomically. */
+export function pgLedger(db: Queryable): VeoLedger {
+  let ready: Promise<unknown> | null = null;
+  const ensure = (): Promise<unknown> => (ready ??= db.query("CREATE TABLE IF NOT EXISTS veo_spend (month TEXT PRIMARY KEY, usd NUMERIC NOT NULL DEFAULT 0)").catch((error: unknown) => { ready = null; throw error; }));
+  return {
+    async spent(month) {
+      await ensure();
+      return Number((await db.query("SELECT usd FROM veo_spend WHERE month = $1", [month])).rows[0]?.["usd"] ?? 0);
+    },
+    async reserve(month, usd, cap) {
+      await ensure();
+      await db.query("INSERT INTO veo_spend (month, usd) VALUES ($1, 0) ON CONFLICT (month) DO NOTHING", [month]);
+      const done = await db.query("UPDATE veo_spend SET usd = usd + $2 WHERE month = $1 AND usd + $2 <= $3 RETURNING usd", [month, usd, cap + 1e-9]);
+      return done.rows.length > 0;
+    },
+    async refund(month, usd) {
+      await ensure();
+      await db.query("UPDATE veo_spend SET usd = GREATEST(0, usd - $2) WHERE month = $1", [month, usd]);
+    },
+  };
+}
+
+/** The spend in a file, for a nixamp with no database (its own state directory must survive restarts). */
+export function fileLedger(file: string): VeoLedger {
+  let spent: Record<string, number> = {};
+  try { spent = (JSON.parse(readFileSync(file, "utf8")) as { spent?: Record<string, number> }).spent ?? {}; } catch { spent = {}; }
+  const save = (): void => {
+    mkdirSync(dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify({ version: 1, spent }, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temporary, file);
+  };
+  return {
+    spent: async (month) => spent[month] ?? 0,
+    async reserve(month, usd, cap) {
+      if ((spent[month] ?? 0) + usd > cap + 1e-9) return false;
+      spent[month] = (spent[month] ?? 0) + usd;
+      save();
+      return true;
+    },
+    async refund(month, usd) {
+      spent[month] = Math.max(0, (spent[month] ?? 0) - usd);
+      save();
+    },
+  };
+}
+
 export interface VeoStudioOptions {
   key: string;
-  file: string;
+  ledger: VeoLedger;
   monthlyUsd?: number;
   usdPerSecond?: number;
   model?: string;
@@ -32,15 +92,7 @@ export interface VeoStudioOptions {
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 export class VeoStudio {
-  private spent: Record<string, number> = {};
-
-  constructor(private readonly options: VeoStudioOptions) {
-    try {
-      this.spent = (JSON.parse(readFileSync(options.file, "utf8")) as { spent?: Record<string, number> }).spent ?? {};
-    } catch {
-      this.spent = {};
-    }
-  }
+  constructor(private readonly options: VeoStudioOptions) {}
 
   static fileFor(stateDir: string, port: number): string {
     return join(stateDir, `veo-${port}.json`);
@@ -53,15 +105,8 @@ export class VeoStudio {
   private get cap(): number { return this.options.monthlyUsd ?? 50; }
   private get rate(): number { return this.options.usdPerSecond ?? 0.15; }
 
-  private save(): void {
-    mkdirSync(dirname(this.options.file), { recursive: true });
-    const temporary = `${this.options.file}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify({ version: 1, spent: this.spent }, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temporary, this.options.file);
-  }
-
-  status(): { month: string; spentUsd: number; capUsd: number; leftUsd: number; usdPerSecond: number; secondsLeft: number } {
-    const spent = this.spent[this.month()] ?? 0;
+  async status(): Promise<{ month: string; spentUsd: number; capUsd: number; leftUsd: number; usdPerSecond: number; secondsLeft: number }> {
+    const spent = await this.options.ledger.spent(this.month());
     const left = Math.max(0, this.cap - spent);
     return { month: this.month(), spentUsd: Math.round(spent * 100) / 100, capUsd: this.cap, leftUsd: Math.round(left * 100) / 100, usdPerSecond: this.rate, secondsLeft: Math.floor(left / this.rate) };
   }
@@ -71,15 +116,12 @@ export class VeoStudio {
     const seconds = [4, 6, 8].includes(input.seconds) ? input.seconds : 8;
     const cost = seconds * this.rate;
     const month = this.month();
-    if ((this.spent[month] ?? 0) + cost > this.cap + 1e-9) throw new VeoBudgetError(`this month's $${this.cap} of Veo is spent`);
-    // Reserved first, so two at once cannot both squeeze under the cap.
-    this.spent[month] = (this.spent[month] ?? 0) + cost;
-    this.save();
+    // Reserved first, in one step that will not go over: two at once cannot both squeeze under the cap.
+    if (!(await this.options.ledger.reserve(month, cost, this.cap))) throw new VeoBudgetError(`this month's $${this.cap} of Veo is spent`);
     try {
       return await this.make(input.prompt, seconds, input.references.slice(0, 3));
     } catch (error) {
-      this.spent[month] = Math.max(0, (this.spent[month] ?? 0) - cost);
-      this.save();
+      await this.options.ledger.refund(month, cost).catch(() => undefined);
       throw error;
     }
   }

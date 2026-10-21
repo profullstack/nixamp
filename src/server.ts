@@ -84,7 +84,8 @@ import { AiLabel, VeoUnavailable } from "./ai-label.ts";
 import { buyLink, handleLabelRoutes, isPublicLabelPath } from "./label-routes.ts";
 import { GrantVerifier, MusicStore, PRICES } from "./music-store.ts";
 import { handleMusicRoutes, isMusicPath, MusicHub, musicPageFor, serverId } from "./music-hub.ts";
-import { VeoBudgetError, VeoStudio } from "./veo-studio.ts";
+import { fileLedger, pgLedger, VeoBudgetError, VeoStudio } from "./veo-studio.ts";
+import { KnownServers } from "./known-servers.ts";
 import { handleStoreRoutes, isStorePath } from "./store-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
@@ -7964,9 +7965,17 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // The AI label's songs for sale: purchases kept here, the music zipped by the server that holds it.
   const jwtSecret = process.env["NIXAMP_JWT_SECRET"] ?? "";
   // The servers whose music nixamp.com sells and plays: the directory and the guide's peers.
+  // Remembered in Postgres too, so the catalogue and owners are there the moment a deploy restarts us.
+  const knownServers = options.directory && pool ? new KnownServers(pool as unknown as import("./veo-studio.ts").Queryable) : undefined;
+  const listedServers = (): Array<{ base: string; ownerId: string }> =>
+    directory ? directory.list().map((one) => ({ base: peerBase(one.url), ownerId: one.ownerId ?? "" })).filter((one) => one.base) : [];
+  if (knownServers) {
+    void knownServers.load().catch((error: unknown) => console.log(`  music servers not remembered: ${error instanceof Error ? error.message : String(error)}`));
+    setInterval(() => void knownServers.sync(listedServers()).catch(() => undefined), 60_000).unref();
+  }
   const musicServers = (): string[] => {
-    const listed = directory ? directory.list().map((one) => peerBase(one.url)).filter(Boolean) : [];
-    return [...new Set([...guidePeers(), ...listed])];
+    const listed = listedServers().map((one) => one.base);
+    return [...new Set([...guidePeers(), ...listed, ...(knownServers?.list().map((one) => one.base) ?? [])])];
   };
   // nixamp.com/music: every server's label in one catalogue (music-hub.ts).
   const musicHub = options.directory ? new MusicHub({ peers: musicServers }) : undefined;
@@ -7988,20 +7997,25 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // Veo shots for label music videos, under a monthly dollar cap (veo-studio.ts). nixamp.com only.
   const veoStudio = options.directory && process.env["NIXAMP_VEO_API_KEY"] ? new VeoStudio({
     key: process.env["NIXAMP_VEO_API_KEY"],
-    file: VeoStudio.fileFor(stateDir(), options.port),
+    // The month's spend in Postgres: a deploy recreates the container, and a file there would forget it.
+    ledger: pool ? pgLedger(pool as unknown as import("./veo-studio.ts").Queryable) : fileLedger(VeoStudio.fileFor(stateDir(), options.port)),
     monthlyUsd: Number(process.env["NIXAMP_VEO_MONTHLY_USD"] ?? 50),
     usdPerSecond: Number(process.env["NIXAMP_VEO_USD_PER_SECOND"] ?? 0.15),
   }) : undefined;
   /** The signed-in account owns a server listed in the directory at this base. */
   const ownsListed = async (request: IncomingMessage, base: string): Promise<boolean> => {
     const me = accounts ? await accounts.whoIs(tokenFrom(request.headers)).catch(() => null) : null;
-    return Boolean(me && base && directory?.list().some((one) => one.ownerId === me.id && peerBase(one.url) === base));
+    if (!me || !base) return false;
+    const listed = listedServers();
+    // A server listed now answers for itself; one not (yet) back since a restart, by who last owned it.
+    if (listed.some((one) => one.base === base)) return listed.some((one) => one.base === base && one.ownerId === me.id);
+    return Boolean(knownServers?.list().some((one) => one.base === base && one.ownerId === me.id));
   };
   const musicVeo = async (request: IncomingMessage): Promise<{ status: number; body: unknown; video?: Buffer }> => {
     if (!veoStudio) return { status: 404, body: { error: "Veo is not set up here" } };
     const base = peerBase(String(request.headers["x-nixamp-server"] ?? ""));
     if (!(await ownsListed(request, base))) return { status: 403, body: { error: "only the owner of a listed server" } };
-    if (request.method === "GET") return { status: 200, body: veoStudio.status() };
+    if (request.method === "GET") return { status: 200, body: await veoStudio.status() };
     if (request.method !== "POST") return { status: 405, body: { error: "GET or POST" } };
     let input: { prompt?: unknown; seconds?: unknown; references?: unknown };
     try { input = JSON.parse(await readBody(request, 2 * 1024 * 1024)) as typeof input; } catch { return { status: 400, body: { error: "a JSON body under 2 MB" } }; }
@@ -8011,7 +8025,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     try {
       return { status: 200, body: null, video: await veoStudio.clip({ prompt, seconds: Number(input.seconds ?? 8), references }) };
     } catch (error) {
-      if (error instanceof VeoBudgetError) return { status: 402, body: { error: error.message, code: "budget", ...veoStudio.status() } };
+      if (error instanceof VeoBudgetError) return { status: 402, body: { error: error.message, code: "budget", ...(await veoStudio.status()) } };
       return { status: 422, body: { error: (error as Error).message, code: "refused" } };
     }
   };
