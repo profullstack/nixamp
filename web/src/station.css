@@ -64,7 +64,8 @@
 .station-lyrics-text.synced{max-height:min(50vh,420px);overflow-y:auto;scroll-behavior:smooth;padding-right:6px}
 .station-lyrics-text.synced p.lyric-line{margin:0 0 .55em;opacity:.45;transition:opacity .2s}
 .station-lyrics-text.synced p.lyric-line.past{opacity:.6}
-.station-lyrics-text.synced p.lyric-line.now{opacity:1;font-weight:700;font-size:1.08em}
-.station-lyrics-text.synced p.lyric-line.now .lyric-word{opacity:.55;transition:opacity .15s,color .15s}
+/* The line being sung changes colour, never size or weight: nothing rewraps or moves. */
+.station-lyrics-text.synced p.lyric-line.now{opacity:1}
+.station-lyrics-text.synced p.lyric-line.now .lyric-word{opacity:.6;transition:opacity .25s linear,color .25s linear}
 .station-lyrics-text.synced p.lyric-line.now .lyric-word.sung{opacity:1;color:#3ddc84}
 @media (prefers-reduced-motion:reduce){.station-lyrics-text.synced{scroll-behavior:auto}.station-lyrics-text.synced p.lyric-line,.station-lyrics-text.synced .lyric-word{transition:none}}

@@ -194,6 +194,8 @@ const highlightLyrics = (heard: number): void => {
   const { lines, els, words } = karaoke;
   let at = -1;
   for (let i = 0; i < lines.length; i++) if (lines[i]!.start <= heard + 0.1) at = i;
+  // A clock correction of a moment is not the song going back: stay on the line until it is clearly earlier.
+  if (at >= 0 && at < karaoke.at && heard > lines[karaoke.at]!.start - 1) at = karaoke.at;
   if (at !== karaoke.at) {
     els.forEach((el, i) => {
       el.classList.toggle("now", i === at);
@@ -202,8 +204,12 @@ const highlightLyrics = (heard: number): void => {
     karaoke.at = at;
     const box = $("#lyrics-text");
     if (at >= 0 && $<HTMLInputElement>("#lyrics-follow").checked) {
+      // Moved only when the line leaves the upper middle of the box, and gently, to a third of the way down.
       const el = els[at]!;
-      box.scrollTop = Math.max(0, el.offsetTop - box.offsetTop - box.clientHeight / 2 + el.clientHeight / 2);
+      const top = el.offsetTop - box.offsetTop - box.scrollTop;
+      if (top < box.clientHeight * 0.2 || top + el.clientHeight > box.clientHeight * 0.6) {
+        box.scrollTo({ top: Math.max(0, el.offsetTop - box.offsetTop - box.clientHeight / 3), behavior: "smooth" });
+      }
     }
   }
   if (at >= 0) words[at]!.forEach((span, i) => span.classList.toggle("sung", lines[at]!.words[i]!.start <= heard));
