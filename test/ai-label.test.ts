@@ -444,6 +444,93 @@ test("a single's singer is filmed in close-ups, each lip-synced to its seconds o
   }
 });
 
+test("Google's daily Veo quota: the singer is filmed first, nothing more is asked until midnight in California, and no video is cut without the singer", async () => {
+  let now = Date.UTC(2026, 9, 21, 13, 30); // 06:30 in California
+  const { top, label } = setup(fakeComposer([]), fakeWriter(), { now: () => now });
+  const deps = (label as unknown as { deps: Record<string, unknown> }).deps;
+  deps["log"] = (line: string) => { if (process.env["LABEL_DEBUG"]) console.log(line); };
+  deps["retryMs"] = 0;
+  const asked: string[] = [];
+  let allowance = 2; // two requests a day
+  deps["veo"] = async (shot: { prompt: string }) => {
+    asked.push(/whole mouth/.test(shot.prompt) ? "singer" : "band");
+    if (allowance-- <= 0) throw new Error("Veo refused the shot: You exceeded your current quota, please check your plan and billing details.");
+    return Buffer.alloc(20_000, 9);
+  };
+  deps["lipsync"] = async () => Buffer.alloc(20_000, 7);
+  // Syncing is ffmpeg's and fal.ai's (tested above); here every filmed close-up syncs.
+  (label as unknown as { syncCloseUps: (song: unknown, singer: Array<{ path: string }>) => Promise<unknown[]> }).syncCloseUps = async (_song, singer) => singer.map((one, i) => ({ path: one.path, at: i * 10, seconds: 8 }));
+  const cuts: Array<{ pinned: number }> = [];
+  deps["filmedVideo"] = async (input: { audio: string; out: string; pinned?: unknown[] }) => { cuts.push({ pinned: input.pinned?.length ?? 0 }); copyFileSync(input.audio, input.out); };
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, veo: true, veoShots: 2, lipsyncShots: 2, storyShots: 0, enabled: false });
+    const artist = label.sign({ preset: "no-refunds" });
+    label.configure({ enabled: true });
+    await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
+    await label.videos();
+    const song = label.get(artist.key)!.albums[0]!.songs[0]!;
+    assert.deepEqual(asked, ["singer", "singer", "band"], "the singer first; the first refusal stops the day");
+    assert.equal(song.video, undefined, "two singer shots and no band: not enough to cut");
+    // An hour on, still the same Pacific day: nothing is asked at all.
+    now += 61 * 60_000;
+    await label.videos();
+    assert.equal(asked.length, 3);
+    // After midnight in California (07:00 UTC in October): the band, and the singer synced into the cut.
+    now = Date.UTC(2026, 9, 22, 7, 1);
+    allowance = 2;
+    await label.videos();
+    assert.deepEqual(asked.slice(3), ["band", "band"], "only what was missing");
+    assert.deepEqual(cuts, [{ pinned: 2 }]);
+    assert.equal(song.singer, "synced");
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("a filmed video cut before its singer was filmed is filmed again, singer first, and stays up meanwhile", async () => {
+  let now = Date.UTC(2026, 9, 21, 12);
+  const { top, label } = setup(fakeComposer([]), fakeWriter(), { now: () => now });
+  const deps = (label as unknown as { deps: Record<string, unknown> }).deps;
+  deps["log"] = (line: string) => { if (process.env["LABEL_DEBUG"]) console.log(line); };
+  const asked: string[] = [];
+  let filming = false;
+  deps["veo"] = async (shot: { prompt: string }) => {
+    if (!filming) throw new Error("Veo made nothing: filtered");
+    asked.push(/whole mouth/.test(shot.prompt) ? "singer" : "band");
+    return Buffer.alloc(20_000, 9);
+  };
+  deps["lipsync"] = async () => Buffer.alloc(20_000, 7);
+  // Syncing is ffmpeg's and fal.ai's (tested above); here every filmed close-up syncs.
+  (label as unknown as { syncCloseUps: (song: unknown, singer: Array<{ path: string }>) => Promise<unknown[]> }).syncCloseUps = async (_song, singer) => singer.map((one, i) => ({ path: one.path, at: i * 10, seconds: 8 }));
+  const cuts: Array<{ pinned: number }> = [];
+  deps["filmedVideo"] = async (input: { audio: string; out: string; pinned?: unknown[] }) => { cuts.push({ pinned: input.pinned?.length ?? 0 }); copyFileSync(input.audio, input.out); };
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, veo: true, veoShots: 2, lipsyncShots: 2, storyShots: 0, enabled: false });
+    const artist = label.sign({ preset: "no-refunds" });
+    label.configure({ enabled: true });
+    await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
+    // As "Fuel the Fire" was: a filmed video with the band only, from before the singer was required.
+    const song = label.get(artist.key)!.albums[0]!.songs[0]!;
+    song.video = song.file.replace(/\.mp3$/, ".mp4");
+    copyFileSync(song.file, song.video);
+    song.videoVersion = 6;
+    filming = true;
+    now += 2 * 60 * 60_000;
+    await label.videos();
+    assert.deepEqual(asked, ["singer", "singer", "band", "band"]);
+    assert.deepEqual(cuts, [{ pinned: 2 }]);
+    assert.equal(song.singer, "synced");
+    // Done: not filmed again.
+    now += 2 * 60 * 60_000;
+    await label.videos();
+    assert.equal(asked.length, 4);
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
 test("a lip-synced close-up plays at exactly its second of the song, the band cut around it", { timeout: 120_000 }, async () => {
   const top = mkdtempSync(join(tmpdir(), "nixamp-pinned-"));
   try {

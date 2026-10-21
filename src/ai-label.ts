@@ -59,6 +59,12 @@ export interface LabelSong {
   videoTagged?: boolean;
   /** 2 for a storyboard video (scenes that move); absent or 1 for the cover-and-waveform kind, which is made again. */
   videoVersion?: number;
+  /**
+   * The singer in its filmed video: "synced" (close-ups lip-synced), "unsynced" (filmed, but no
+   * sync could be made, so the band plays there). Absent on a filmed video means the singer was
+   * never filmed, and with lip sync on it is filmed again.
+   */
+  singer?: "synced" | "unsynced";
   /** Who wrote the words and who sang them, e.g. "llama-3.3 + elevenlabs/music_v2_5". */
   made: string;
   composedAt: number;
@@ -819,6 +825,17 @@ export function closeUpTimes(seconds: number, lines: Array<{ start: number }>, c
  */
 export const FILMED = 6;
 
+/** Google's answer when the project's daily Veo requests are used up (HTTP 429). */
+export const VEO_QUOTA = /exceeded your current quota|RESOURCE_EXHAUSTED/i;
+
+/** The next midnight in California, when Google's daily quotas reset. */
+export function nextPacificMidnight(now: number): number {
+  const hour = (at: number): number => Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour: "numeric", hourCycle: "h23" }).format(new Date(at)));
+  let at = Math.floor(now / 3_600_000) * 3_600_000 + 3_600_000;
+  for (let i = 0; i < 26 && hour(at) !== 0; i++) at += 3_600_000;
+  return at;
+}
+
 /**
  * A single's music video, cut from its filmed shots alone: 4 s cuts, each
  * shot's first half then its second, round and round the shots until the song
@@ -993,6 +1010,8 @@ export class AiLabel {
   private alignTried = new Set<string>();
   /** The month ("YYYY-MM") Veo said its budget was spent; no more shots until the next. */
   private veoSpentIn = "";
+  /** Until when Google's daily Veo quota is used up (its midnight, Pacific): nothing is asked before. */
+  private veoQuotaUntil = 0;
   /** Old videos already tried as storyboards since this server started. */
   private upgradeTried = new Set<string>();
   /** When each single was last put in front of the camera: one that came up short is tried again an hour on. */
@@ -1328,7 +1347,9 @@ export class AiLabel {
       .filter((album) => album.cover || album.coverTried)
       .flatMap((album) => album.songs.filter((song) => song.file && !this.videoFailed.has(song.file)).map((song) => ({ artist, album, song }))));
     // Only a single is filmed, and only with Veo footage: a song with an older (slideshow) video is filmed when its turn comes.
-    const missing = songs.filter(({ song }) => this.wantsVeo(song) && (song.videoVersion ?? 1) < FILMED && this.now() - (this.filmTriedAt.get(song.file) ?? 0) > 60 * 60_000);
+    // A filmed video whose singer was never filmed (a quota or a refusal took the close-ups) is filmed again while it stays up.
+    const singerless = (song: LabelSong): boolean => Boolean(this.deps.lipsync) && this.settings.lipsyncShots > 0 && (song.videoVersion ?? 1) >= FILMED && !song.singer;
+    const missing = songs.filter(({ song }) => this.wantsVeo(song) && ((song.videoVersion ?? 1) < FILMED || singerless(song)) && this.now() - (this.filmTriedAt.get(song.file) ?? 0) > 60 * 60_000);
     const untagged = songs.filter(({ song }) => song.video && !song.videoTagged && (song.videoVersion ?? 1) >= FILMED);
     const old: typeof songs = [];
     let made = 0;
@@ -1359,7 +1380,9 @@ export class AiLabel {
       const partial = join(album.folder, `.${randomBytes(4).toString("hex")}.video.mp4`);
       const scenes = join(album.folder, `.scenes-${song.n}-${randomBytes(3).toString("hex")}`);
       try {
-        song.videoVersion = await this.filmSong(artist, album, song, scenes, partial, upgrade);
+        const filmed = await this.filmSong(artist, album, song, scenes, partial, upgrade);
+        song.videoVersion = filmed.version;
+        if (filmed.singer) song.singer = filmed.singer;
         renameSync(partial, out);
         song.video = out;
         song.videoTagged = true;
@@ -1382,7 +1405,7 @@ export class AiLabel {
    * Fewer than half the shots filmed (a refusal, the budget spent) makes no
    * video at all: footage stretched that thin would be a loop, not a video.
    */
-  private async filmSong(artist: LabelArtist, _album: LabelAlbum, song: LabelSong, scenes: string, out: string, _upgrade = false): Promise<number> {
+  private async filmSong(artist: LabelArtist, _album: LabelAlbum, song: LabelSong, scenes: string, out: string, _upgrade = false): Promise<{ version: number; singer?: "synced" | "unsynced" }> {
     let seconds = song.seconds;
     try {
       const probed = await this.deps.probe(song.file);
@@ -1393,10 +1416,13 @@ export class AiLabel {
     const { band: clips, singer } = await this.filmShots(artist, _album, song, shots, scenes);
     const wanted = this.settings.veoShots + this.settings.storyShots;
     if (clips.length < Math.max(2, Math.ceil(wanted / 2))) throw new Error(`only ${clips.length} of ${wanted} shots filmed so far`);
+    // The singer is the point of the video: with lip sync on, nothing is cut until a close-up is filmed.
+    const singing = Boolean(this.deps.lipsync) && this.settings.lipsyncShots > 0;
+    if (singing && singer.length === 0) throw new Error("the singer's close-ups are not filmed yet");
     const pinned = await this.syncCloseUps(song, singer, seconds, shots);
     await (this.deps.filmedVideo ?? ((input) => renderFilmedVideo(this.deps.ffmpeg, input)))({ audio: song.file, clips, seconds, artist: artist.name, title: song.title, out, ...(pinned.length ? { pinned } : {}) });
     rmSync(shots, { recursive: true, force: true });
-    return FILMED;
+    return { version: FILMED, ...(singing ? { singer: pinned.length ? "synced" as const : "unsynced" as const } : {}) };
   }
 
   /**
@@ -1447,7 +1473,8 @@ export class AiLabel {
 
   /** Whether this song gets filmed Veo shots: an album's single, Veo on, and the month's budget not spent. */
   private wantsVeo(song: Pick<LabelSong, "n">): boolean {
-    return this.settings.veo && song.n === 1 && Boolean(this.deps.veo) && this.veoSpentIn !== new Date(this.now()).toISOString().slice(0, 7);
+    return this.settings.veo && song.n === 1 && Boolean(this.deps.veo) && this.veoSpentIn !== new Date(this.now()).toISOString().slice(0, 7)
+      && this.now() >= this.veoQuotaUntil;
   }
 
   /**
@@ -1497,10 +1524,11 @@ export class AiLabel {
     }
     // The singer's close-ups only where they can be lip-synced afterwards. Story scenes go without
     // the portraits: they would pull the whole band into every scene.
+    // The singer first: a day's few Veo requests go to what the video is for, then the story and the band.
     const plan = [
+      ...(this.deps.lipsync ? veoPrompts(artist, song, singers, this.settings.lipsyncShots, "singer").map((prompt, i) => ({ prompt, file: join(keep, `singer-${i}.mp4`), into: singer, refs: singerRefs })) : []),
       ...storyFiles.map((file, i) => ({ prompt: storyPrompts[i] ?? "", file, into: story, refs: [] as Buffer[] })),
       ...veoPrompts(artist, song, players, this.settings.veoShots).map((prompt, i) => ({ prompt, file: join(keep, `shot-${i}.mp4`), into: band, refs: playerRefs })),
-      ...(this.deps.lipsync ? veoPrompts(artist, song, singers, this.settings.lipsyncShots, "singer").map((prompt, i) => ({ prompt, file: join(keep, `singer-${i}.mp4`), into: singer, refs: singerRefs })) : []),
     ];
     for (const [i, { prompt, file, into, refs }] of plan.entries()) {
       try {
@@ -1524,6 +1552,12 @@ export class AiLabel {
         if (error instanceof VeoUnavailable) {
           this.veoSpentIn = new Date(this.now()).toISOString().slice(0, 7);
           this.log(`Veo: ${(error as Error).message}; no more videos until next month`);
+          break;
+        }
+        if (VEO_QUOTA.test((error as Error).message)) {
+          // Google's daily request quota: every further ask today is refused, so none is made.
+          this.veoQuotaUntil = nextPacificMidnight(this.now());
+          this.log(`Veo: Google's daily quota is used up; filming resumes after ${new Date(this.veoQuotaUntil).toISOString()}`);
           break;
         }
         this.log(`Veo shot ${i + 1} for "${song.title}": ${(error as Error).message}`);
