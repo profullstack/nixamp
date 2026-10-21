@@ -10,6 +10,7 @@ import { t as uiMessage, i18n, terminalUiLanguage, uiLanguage } from "./i18n.ts"
 import { USAGE as STATION_USAGE } from "./station-usage.ts";
 import { LIBRARY_COMMANDS, LIBRARY_USAGE } from "./library-usage.ts";
 import { MUSIC_USAGE } from "./music-cli.ts";
+import { SCHOOL_USAGE } from "./school-cli.ts";
 import { createApp, themes, type BrailleCanvas, type Container, type KeyEvent, type Theme } from "@profullstack/hqtui";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -237,6 +238,7 @@ keeps serving its browser remote. One per user.
   nixamp admin    who is connected, and re-stream to them
   nixamp station  make a folder into a station others can join (see: nixamp station help)
   nixamp music    the AI label's songs as files: catalog, buy (10¢, $1, $2), what you bought (nixamp music help)
+  nixamp school   classes on backtoschool.help: teach a station live, check, prune (nixamp school help)
 
 From inside the player, d hands the music to a daemon without stopping it.
 `,
@@ -402,6 +404,7 @@ export function helpFor(topic: string | undefined): string {
   if (topic === "station" || topic === "stations") return STATION_USAGE;
   if (topic === "library") return LIBRARY_USAGE;
   if (topic === "music") return MUSIC_USAGE;
+  if (topic === "school") return SCHOOL_USAGE;
   return (topic ? TOPICS[topic] : undefined) ?? HELP;
 }
 
@@ -564,6 +567,11 @@ export async function main(): Promise<void> {
   if (first === "music") {
     const { music } = await import("./music-cli.ts");
     process.exitCode = await music(rest);
+    return;
+  }
+  if (first === "school" || first === "class" || first === "classes") {
+    const { school } = await import("./school-cli.ts");
+    process.exitCode = await school(rest);
     return;
   }
   if (first === "station" || first === "stations") {

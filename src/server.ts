@@ -40,6 +40,7 @@ import {
 } from "./channels.ts";
 import { RtmpListeners } from "./rtmp-in.ts";
 import { Accounts, clearedCookie, sessionCookie, tokenFrom } from "./accounts.ts";
+import { handleSchoolDiscovery, isSchoolSite } from "./school-discovery.ts";
 import { RESET_INVALID, RESET_MESSAGE, resendPasswordReset, type ResetMail } from "./password-reset.ts";
 import { passwordResetPage } from "./password-reset-page.ts";
 import { anonymousHandle, Handles } from "./handles.ts";
@@ -3625,6 +3626,14 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    // backtoschool.help's own llms.txt, OpenAPI and class MCP, ahead of nixamp's (school-discovery.ts).
+    if (options.accounts && webSite && isSchoolSite(webSite.site)) {
+      const accounts = options.accounts;
+      if (await handleSchoolDiscovery(request, response, path, {
+        site: webSite.site, accountSite: options.site ?? "https://nixamp.com", version: options.version,
+        whoIs: (token) => accounts.whoIs(token), token: tokenFrom(request.headers), readBody, json,
+      })) return;
+    }
     // Every way into nixamp, for agents and stores: llms.txt, OpenAPI, health, desktop downloads (discovery.ts).
     if (options.accounts && options.site && await handleDiscovery(request, response, path, { site: options.site, version: options.version, release, json })) return;
 
