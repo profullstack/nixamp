@@ -131,3 +131,6 @@ fieldset.alerts legend { padding: 0 6px; font-weight: 600; }
 fieldset.alerts label { display: flex; gap: 8px; align-items: center; margin: 6px 0; cursor: pointer; }
 fieldset.alerts .phone { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 fieldset.alerts .phone input { flex: 1 1 180px; min-width: 0; padding: 8px; border-radius: 6px; border: 1px solid var(--edge); background: var(--bg); color: var(--fg); font: inherit; }
+
+/* A phone: the header wraps instead of pushing the page sideways. */
+@media (max-width: 520px) { .top { flex-wrap: wrap; gap: 6px 12px; } .top nav { gap: 10px; min-width: 0; } .who { max-width: 100%; } }
