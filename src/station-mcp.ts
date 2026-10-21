@@ -127,6 +127,7 @@ export const STATION_TOOLS = [
         veo: { type: "boolean", description: "Each album's single gets filmed Veo shots of the band (nixamp.com's monthly Veo cap applies)." },
         veoShots: { type: "integer", description: "8 s Veo shots of the band per single (1-8); nobody sings in them." },
         lipsyncShots: { type: "integer", description: "Close-ups of the singer per single, lip-synced to the song on nixamp.com (0-4; 0 = the band only)." },
+        storyShots: { type: "integer", description: "Cinematic story scenes per single, a short film from the song's words, nobody singing (0-8)." },
         genreOrder: { type: "array", items: STRING, description: "Genres whose artists get albums first, in order." },
       },
     },
@@ -257,7 +258,7 @@ export async function callStationTool(name: string, args: Record<string, unknown
       const key = typeof args["key"] === "string" && /^[a-f0-9]{10}$/.test(args["key"]) ? args["key"] : "";
       const answer = action === "status" ? await call("GET", "/api/v1/stations/label")
         : action === "sign" ? await call("POST", "/api/v1/stations/label/artists", pick(["preset", "roster", "name", "genre", "sound", "voice", "bio", "themes", "enabled"]))
-        : action === "configure" ? await call("POST", "/api/v1/stations/label", pick(["holder", "monthlySeconds", "everyDays", "seedAlbums", "songsPerAlbum", "songSeconds", "parallel", "genreOrder", "albumsPerDay", "newArtistChance", "resetDay", "veo", "veoShots", "lipsyncShots", "enabled", "publish"]))
+        : action === "configure" ? await call("POST", "/api/v1/stations/label", pick(["holder", "monthlySeconds", "everyDays", "seedAlbums", "songsPerAlbum", "songSeconds", "parallel", "genreOrder", "albumsPerDay", "newArtistChance", "resetDay", "veo", "veoShots", "lipsyncShots", "storyShots", "enabled", "publish"]))
         : action === "run" ? await call("POST", "/api/v1/stations/label/run", {})
         : action === "resume" ? await call("POST", "/api/v1/stations/label", { resume: true })
         : !key ? null

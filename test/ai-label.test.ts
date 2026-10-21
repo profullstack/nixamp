@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { AiLabel, cleanLyrics, closeUpTimes, fileName, genreSlug, nextReset, periodOf, renderFilmedVideo, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines, VeoUnavailable } from "../src/ai-label.ts";
 import { elevenLabsComposer, OutOfCredit, type Composer } from "../src/ai-radio.ts";
 import type { askJson } from "../src/ai-text.ts";
@@ -271,7 +271,7 @@ test("an album's single gets filmed Veo shots of the band; the rest the storyboa
   deps["storyVideo"] = async () => { throw new Error("never a slideshow"); };
   deps["filmedVideo"] = async (input: { audio: string; out: string; title: string; clips: unknown[] }) => { filmed.push({ title: input.title, clips: input.clips.length }); copyFileSync(input.audio, input.out); };
   try {
-    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, veo: true, veoShots: 2, enabled: false });
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, veo: true, veoShots: 2, storyShots: 0, enabled: false });
     const artist = label.sign({ preset: "velvet-ruckus" });
     label.configure({ enabled: true });
     await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
@@ -280,7 +280,8 @@ test("an album's single gets filmed Veo shots of the band; the rest the storyboa
     assert.deepEqual(songs.map((one) => one.videoVersion), [5, undefined, undefined], "the single is filmed; the other songs get no video");
     assert.equal(shots.length, 2);
     assert.doesNotMatch(shots[0]!.prompt, /Mara Quill/, "never a name");
-    assert.match(shots[0]!.prompt, /the lead vocals from reference image 1/);
+    assert.match(shots[0]!.prompt, /The lead vocalist is not in this shot/, "the band plays; the singer only in synced close-ups");
+    assert.doesNotMatch(shots[0]!.prompt, /lead vocals from reference image/);
     assert.equal(filmed.find((one) => one.title === songs[0]!.title)?.clips, 2);
     const view = label.publicView().genres.flatMap((one) => one.artists).find((one) => one.key === artist.key)!;
     assert.deepEqual(view.albums[0]!.songs.map((one) => Boolean(one.video)), [true, false, false], "only the filmed one is shown");
@@ -315,7 +316,7 @@ test("a single that comes up short keeps what was filmed, retries a 503, and an 
   const filmed: number[] = [];
   deps["filmedVideo"] = async (input: { audio: string; out: string; clips: unknown[] }) => { filmed.push(input.clips.length); copyFileSync(input.audio, input.out); };
   try {
-    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, veo: true, veoShots: 6, enabled: false });
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, veo: true, veoShots: 6, storyShots: 0, enabled: false });
     const artist = label.sign({ preset: "no-refunds" });
     label.configure({ enabled: true });
     await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
@@ -332,6 +333,42 @@ test("a single that comes up short keeps what was filmed, retries a 503, and an 
     assert.equal(calls, 11, "the two filmed shots were kept, not paid for twice");
     assert.deepEqual(filmed, [6]);
     assert.equal(song.videoVersion, 5);
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("a single is a short film: story scenes from its words, cut in turn with the band playing, nobody singing in either", async () => {
+  const writer = fakeWriter();
+  const asked: string[] = [];
+  const ask: typeof askJson = async (options) => {
+    if (options.system.includes("story scenes of a music video")) {
+      asked.push(options.prompt);
+      return { model: "m", value: { scenes: ["A woman in a red coat runs for the last train through a rainy station at night, the camera tracking beside her", "Her hand on the fogged train window, city lights smearing past", "Dawn over an empty platform, a ticket blowing across the tiles", "She steps off at the coast as the sun comes up, slow aerial pull-back"] } };
+    }
+    return writer(options);
+  };
+  const { top, label } = setup(fakeComposer([]), ask, {});
+  const deps = (label as unknown as { deps: Record<string, unknown> }).deps;
+  deps["log"] = (line: string) => { if (process.env["LABEL_DEBUG"]) console.log(line); };
+  const shots: Array<{ prompt: string; references: number }> = [];
+  deps["veo"] = async (shot: { prompt: string; references: Buffer[] }) => { shots.push({ prompt: shot.prompt, references: shot.references.length }); return Buffer.alloc(20_000, 9); };
+  const cuts: string[][] = [];
+  deps["filmedVideo"] = async (input: { audio: string; out: string; clips: Array<{ path: string }> }) => { cuts.push(input.clips.map((one) => basename(one.path))); copyFileSync(input.audio, input.out); };
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, veo: true, veoShots: 2, storyShots: 4, lipsyncShots: 0, enabled: false });
+    const artist = label.sign({ preset: "no-refunds" });
+    label.configure({ enabled: true });
+    await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
+    await label.videos();
+    assert.equal(asked.length, 1, "the story is written once");
+    assert.match(asked[0]!, /Hold on, hold on/, "from the song's words");
+    const story = shots.filter((one) => /red coat|train window|platform|the coast/.test(one.prompt));
+    assert.equal(story.length, 4);
+    assert.ok(story.every((one) => /Nobody sings, speaks or lip-syncs/.test(one.prompt) && one.references === 0), "no singing, and no portraits pulling the band in");
+    assert.deepEqual(cuts[0], ["story-0.mp4", "shot-0.mp4", "story-1.mp4", "shot-1.mp4", "story-2.mp4", "story-3.mp4"], "a scene, then the band, in turn");
+    assert.equal(label.get(artist.key)!.albums[0]!.songs[0]!.videoVersion, 5);
   } finally {
     label.stopSchedule();
     rmSync(top, { recursive: true, force: true });
@@ -367,7 +404,7 @@ test("a single's singer is filmed in close-ups, each lip-synced to its seconds o
     };
     const cuts: Array<{ clips: number; pinned: Array<{ at: number }> }> = [];
     deps["filmedVideo"] = async (input: { audio: string; out: string; clips: unknown[]; pinned?: Array<{ at: number }> }) => { cuts.push({ clips: input.clips.length, pinned: input.pinned ?? [] }); copyFileSync(input.audio, input.out); };
-    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, veo: true, veoShots: 2, lipsyncShots: 2, enabled: false });
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, veo: true, veoShots: 2, lipsyncShots: 2, storyShots: 0, enabled: false });
     const artist = label.sign({ preset: "no-refunds" });
     label.configure({ enabled: true });
     await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
@@ -376,7 +413,7 @@ test("a single's singer is filmed in close-ups, each lip-synced to its seconds o
     await label.videos();
     assert.equal(prompts.length, 4, "two of the band, two of the singer");
     assert.equal(prompts.filter((one) => /whole mouth/.test(one)).length, 2, "the singer's mouth kept clear for the sync");
-    assert.equal(prompts.filter((one) => /Nobody sings/.test(one)).length, 2);
+    assert.equal(prompts.filter((one) => /nobody sings/i.test(one)).length, 2);
     assert.equal(synced.length, 2, "both close-ups synced");
     assert.ok(synced.every((bytes) => bytes > 1000), "each with its seconds of the song");
     assert.deepEqual(cuts[0]!.pinned.map((one) => one.at), [38, 113], "pinned where they were synced (150 s, no timed words)");
