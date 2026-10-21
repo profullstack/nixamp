@@ -663,6 +663,60 @@ test("POST /api/source adds, and only says so when asked to replace", async () =
   }
 });
 
+test("--no-key with an owner (nixamp.com): anyone listens, only the owner administers", async () => {
+  // nixamp.com runs --no-key so the directory is open to everyone, and every
+  // visitor was its admin: /api/admin answered {"allowed":true,"as":"key"}.
+  const site = (async (_url: string | URL, init?: RequestInit) => {
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const ok = headers["authorization"] === "Bearer owners-token";
+    return { ok, json: async () => (ok ? { account: { id: "owner-1" } } : {}) } as unknown as Response;
+  }) as unknown as typeof fetch;
+  const start = async (ownerId: string) => {
+    const engine = new PlayerEngine(
+      [{ path: "/m/a.mp3", title: "a", artist: "", album: "", duration: 0 }],
+      "/m",
+      { ffmpeg: ["ffmpeg"], ffprobe: ["ffprobe"], play: null },
+    );
+    const server = createServer(engine, {
+      web: null, media: false, version: "test", key: null,
+      owner: new Owner({ ownerId, site: "https://nixamp.com", fetcher: site }),
+    });
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const stop = async () => {
+      await new Promise<void>((done) => server.close(() => done()));
+      engine.stop();
+    };
+    return { base, stop };
+  };
+  const admin = async (base: string, headers: Record<string, string> = {}) =>
+    ((await (await fetch(`${base}/api/admin`, { headers })).json()) as { allowed: boolean }).allowed;
+
+  const owned = await start("owner-1");
+  try {
+    assert.equal(await admin(owned.base), false, "a stranger is not the admin");
+    assert.equal(await admin(owned.base, { authorization: "Bearer someone-else" }), false);
+    assert.equal(await admin(owned.base, { authorization: "Bearer owners-token" }), true);
+    // The page on nixamp.com is signed in by cookie, not a header.
+    assert.equal(await admin(owned.base, { cookie: "nixamp_session=owners-token" }), true);
+    // Administering is refused to a stranger and allowed to the owner.
+    assert.equal((await fetch(`${owned.base}/api/connections`)).status, 403);
+    assert.equal((await fetch(`${owned.base}/api/connections`, { headers: { authorization: "Bearer owners-token" } })).status, 200);
+    // Listening needs nothing, as --no-key promises.
+    assert.equal((await fetch(`${owned.base}/api/state`)).status, 200);
+  } finally {
+    await owned.stop();
+  }
+
+  // No owner: --no-key still means anyone may drive it, as it prints.
+  const open = await start("");
+  try {
+    assert.equal(await admin(open.base), true);
+  } finally {
+    await open.stop();
+  }
+});
+
 test("the owner of a server can open it without hunting for its share link", async () => {
   // A key is how somebody who was invited proves it. It is not the only way to
   // be allowed in: signing in to nixamp.com as the person who owns this
