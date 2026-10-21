@@ -153,6 +153,8 @@ export interface MusicStoreOptions {
   secret: string;
   /** The servers whose catalogues may be sold here (the directory and the guide's peers). */
   servers: () => string[];
+  /** The https origin behind an opaque server id, when nixamp.com keeps a hub. */
+  resolveServer?: (id: string) => string;
   fetcher?: typeof fetch;
   now?: () => number;
   log?: (line: string) => void;
@@ -190,7 +192,9 @@ export class MusicStore {
 
   /** What is for sale at this address, with its name and price; refused when there is no such thing. */
   async describe(input: Record<string, unknown>): Promise<Scope & { title: string; artistName: string; amountCents: number; songs: number }> {
-    const server = serverBase(input["server"]);
+    // An opaque server id (music-hub.ts), or an https origin.
+    const asked = String(input["server"] ?? "");
+    const server = /^[a-f0-9]{10}$/.test(asked) ? (this.options.resolveServer?.(asked) ?? "") : serverBase(asked);
     // A server in the directory or the guide's peers, or one named under nixamp.com (whose names
     // and certificates nixamp.com issues): the directory empties on every restart of nixamp.com.
     const named = server ? new URL(server).hostname.endsWith(".nixamp.com") : false;
@@ -276,7 +280,7 @@ export class MusicStore {
     await this.mail(purchase.email, `Your music: ${purchase.title}`, [
       `Thank you. "${purchase.title}" by ${purchase.artistName} is yours: MP3s with the cover art and the lyrics, in one zip.`,
       `Download it, now or any time: ${this.link(purchase.id, purchase.token)}`,
-      `Sign in to nixamp.com with ${purchase.email} and everything you have bought is under My music on ${this.options.site}/radio#music, to play or download again.`,
+      `Sign in to nixamp.com with ${purchase.email} and everything you have bought is under My music on ${this.options.site}/music/me, to play or download again.`,
     ]);
     return purchase;
   }

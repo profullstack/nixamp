@@ -83,6 +83,7 @@ import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
 import { AiLabel } from "./ai-label.ts";
 import { buyLink, handleLabelRoutes, isPublicLabelPath } from "./label-routes.ts";
 import { GrantVerifier, MusicStore, PRICES } from "./music-store.ts";
+import { handleMusicRoutes, isMusicPath, MusicHub, musicPageFor, serverId } from "./music-hub.ts";
 import { handleStoreRoutes, isStorePath } from "./store-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
@@ -1961,6 +1962,8 @@ export interface HandlerOptions {
   coinpayWebhookSecret?: string;
   /** The AI label's songs for sale, nixamp.com only (music-store.ts). */
   musicStore?: MusicStore;
+  /** nixamp.com/music: every server's label in one app (music-hub.ts). */
+  music?: { hub: MusicHub; released: (request: IncomingMessage, body: Record<string, unknown>) => Promise<{ status: number; body: unknown }> };
   sharedTranslations?: SharedTranslations;
   /** Translation: texts in another language, by a model here. The same optional library. */
   translator?: Translator;
@@ -2142,7 +2145,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         query.set("t", station!.listenToken);
         request.url = `/api/v1/stations/${station!.id}/${sub[2]}?${query.toString()}`;
         const here = options.stations.publicBase?.() ?? "";
-        rewriteResponse(response, radioRewriter(station!, sub[1]!, /^https:\/\//.test(here) ? `${storeSite}/buy?server=${encodeURIComponent(here)}&` : ""));
+        rewriteResponse(response, radioRewriter(station!, sub[1]!, /^https:\/\//.test(here) ? `${storeSite}/buy?server=${serverId(here)}&` : ""));
         return handle(request, response);
       }
     }
@@ -2853,6 +2856,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !(isPublicLabelPath(path) && Boolean(options.stations?.label)) &&
       // The music store: its pages, checkout, receipts and grants (nixamp.com).
       !(isStorePath(path) && Boolean(options.musicStore)) &&
+      // nixamp.com/music: the app and its catalogue, for anybody.
+      !(isMusicPath(path) && Boolean(options.music)) &&
+      !(/^\/radio\/(artist|album)\//.test(path) && Boolean(options.music)) &&
       // What is on, as MCP, for anybody.
       path !== "/mcp/public" &&
       // Supporting a copyright holder is for anybody listening.
@@ -3175,6 +3181,16 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // /radio: public, listed stations under readable names, and the artists and
     // albums they play (radio-pages.ts). A station's own paths under its name
     // were answered at the top of this handler.
+    // On nixamp.com, live.streaming's artist and album addresses open the same page of the music app.
+    if (options.music && /^\/radio\/(artist|album)\//.test(path) && (request.method === "GET" || request.method === "HEAD")) {
+      const target = await musicPageFor(options.music.hub, path).catch(() => "");
+      if (target) {
+        response.writeHead(302, { location: target });
+        response.end();
+        return;
+      }
+    }
+
     if (options.stations && isRadioPath(path) && (request.method === "GET" || request.method === "HEAD")) {
       const stations = options.stations;
       const named = radioStations(stations.store.list());
@@ -3376,6 +3392,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         readBody,
       });
       return;
+    }
+
+    if (options.music && isMusicPath(path)) {
+      const music = options.music;
+      const shell = web ? join(web, "music.html") : "";
+      if (await handleMusicRoutes(request, response, path, {
+        hub: music.hub,
+        json,
+        readBody,
+        page: () => { try { return shell ? readFileSync(shell, "utf8") : null; } catch { return null; } },
+        released: music.released,
+      })) return;
     }
 
     if (options.musicStore && options.support && isStorePath(path)) {
@@ -7647,6 +7675,18 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     root: process.env["NIXAMP_LABEL_ROOT"] || (labelHome ? join(labelHome.root, "ai") : join(stateDir(), "ai-label")),
     owner: options.owner || "",
     mayStart: mayStartStation,
+    // A release is told to nixamp.com as this server's owner; nixamp.com tells the artist's followers.
+    announce: (release) => {
+      const session = readSession();
+      const here = stations.publicBase?.() ?? "";
+      if (!session?.token || !/^https:\/\//.test(here)) return;
+      void fetch(`${session.site.replace(/\/+$/, "")}/api/v1/music/released`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${session.token}` },
+        body: JSON.stringify({ ...release, server: here }),
+        signal: AbortSignal.timeout(15_000),
+      }).then((answer) => console.log(`  ai label: nixamp.com was told of "${release.title}" (${answer.status})`)).catch(() => undefined);
+    },
     log: (line) => console.log(line),
   });
   aiRadio.startSchedule();
@@ -7889,18 +7929,50 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   supportMonthly?.startSchedule();
   // The AI label's songs for sale: purchases kept here, the music zipped by the server that holds it.
   const jwtSecret = process.env["NIXAMP_JWT_SECRET"] ?? "";
+  // The servers whose music nixamp.com sells and plays: the directory and the guide's peers.
+  const musicServers = (): string[] => {
+    const listed = directory ? directory.list().map((one) => peerBase(one.url)).filter(Boolean) : [];
+    return [...new Set([...guidePeers(), ...listed])];
+  };
+  // nixamp.com/music: every server's label in one catalogue (music-hub.ts).
+  const musicHub = options.directory ? new MusicHub({ peers: musicServers }) : undefined;
   const musicStore = supportPayments && supportPayments.enabled && pool && jwtSecret ? new MusicStore({
     db: pool as unknown as import("./support.ts").Db,
     support: supportPayments,
     mail: process.env["RESEND_API_KEY"] ? { apiKey: process.env["RESEND_API_KEY"], from: process.env["NIXAMP_MAIL_FROM"] ?? "nixamp <notifications@nixamp.com>" } : null,
     site: nixampSite,
     secret: sha("sha256").update(`music-grant:${jwtSecret}`).digest("hex"),
-    servers: () => {
-      const listed = directory ? directory.list().map((one) => peerBase(one.url)).filter(Boolean) : [];
-      return [...new Set([...guidePeers(), ...listed])];
-    },
+    servers: musicServers,
+    ...(musicHub ? { resolveServer: (id: string) => musicHub.resolve(id) } : {}),
     log: (line) => console.log(line),
   }) : undefined;
+  /**
+   * A server says an album (or song) of its label landed: its artist's
+   * followers are told. Only the account that owns a listed server may say
+   * so, only for an artist that server's catalogue has, once per release.
+   */
+  const announced = new Set<string>();
+  const musicReleased = async (request: IncomingMessage, body: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
+    const me = accounts ? await accounts.whoIs(tokenFrom(request.headers)).catch(() => null) : null;
+    if (!me) return { status: 401, body: { error: "sign in as the server's owner" } };
+    const base = peerBase(String(body["server"] ?? ""));
+    const owns = directory?.list().some((one) => one.ownerId === me.id && peerBase(one.url) === base) ?? false;
+    if (!base || !owns || !musicHub) return { status: 403, body: { error: "that server is not yours, or not listed" } };
+    const catalogue = await musicHub.catalogue();
+    const id = serverId(base);
+    const artist = catalogue.genres.flatMap((one) => one.artists).find((one) => one.server === id && one.key === body["artist"]);
+    const what = String(body["title"] ?? "").replace(/[\r\n]/g, " ").slice(0, 120);
+    if (!artist || !what) return { status: 404, body: { error: "no such artist on that server" } };
+    const key = `${id}:${artist.key}:${what}`;
+    if (announced.has(key)) return { status: 200, body: { told: false, why: "already" } };
+    announced.add(key);
+    tellAudienceOf(artist.follow, {
+      title: `New from ${artist.name}`,
+      body: body["kind"] === "song" ? `"${what}" is out. Listen free on nixamp.` : `The album "${what}" is out. Listen free on nixamp.`,
+      url: `${nixampSite}/music/artist/${id}/${artist.key}`,
+    });
+    return { status: 202, body: { told: true, follow: artist.follow } };
+  };
   if (translationPasses) void translationPasses.access().catch(() => console.error("nixamp: translation checkout could not warm; it will retry on demand"));
   const liveVoice = accounts && process.env["NIXAMP_DUBBING"] !== "off" ? new LiveVoice({
     ...(pool ? { db: pool } : {}),
@@ -8050,8 +8122,14 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       body: `${what} Listen at ${DEFAULT_DIRECTORY}/directory, or call ${CALL_IN_NUMBER} and key ${listing.code}.`.trim(),
       url: listing.url,
     };
+    tellAudienceOf(listing.ownerId, note);
+  };
+
+  /** Everyone following `followed` (an account, or `artist:<slug>`), by every way they asked to be told. */
+  const tellAudienceOf = (followed: string, note: Notification): void => {
+    if (follows === undefined) return;
     void follows
-      .audience(listing.ownerId)
+      .audience(followed)
       .then((audience) =>
         notifyAll(audience, note, {
           ...(process.env["RESEND_API_KEY"]
@@ -8456,6 +8534,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(supportPayments ? { support: supportPayments } : {}),
     ...(supportMonthly ? { supportSubscriptions: supportMonthly } : {}),
     ...(musicStore ? { musicStore } : {}),
+    ...(musicHub ? { music: { hub: musicHub, released: musicReleased } } : {}),
     ...(process.env["COINPAY_WEBHOOK_SECRET"] ? { coinpayWebhookSecret: process.env["COINPAY_WEBHOOK_SECRET"] } : {}),
     ...(sharedTranslations ? { sharedTranslations } : {}),
     ...(translator ? { translator } : {}),

@@ -112,7 +112,7 @@ export async function handleFollowPage(request: IncomingMessage, response: Serve
   if (!me) {
     send(response, 200, page(`Follow ${target.name}`, `<h1>Follow ${escape(target.name)}</h1>
 <p class="by">Sign in to nixamp.com to follow the artists you hear on the radio.</p>
-<a class="go" href="/radio#music">Sign in to nixamp.com</a>
+<a class="go" href="/music/me">Sign in to nixamp.com</a>
 <small>Signed in, open this page again (or press Follow on the artist's page) to follow.</small>${back}`), method);
     return true;
   }

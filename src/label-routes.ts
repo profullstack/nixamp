@@ -11,6 +11,7 @@ import { createReadStream, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { ROSTER, type AiLabel, type PublicArtist } from "./ai-label.ts";
 import { covers, PRICES, type GrantVerifier } from "./music-store.ts";
+import { serverId } from "./music-hub.ts";
 import { writeZip, zipSize } from "./zip-stream.ts";
 import { StationError } from "./stations.ts";
 import { adCsp, withPageAd, type GuideAds } from "./station-guide.ts";
@@ -30,7 +31,8 @@ export function isPublicLabelPath(path: string): boolean {
 
 /** nixamp.com's page that sells this: a song, an album or everything by the artist. */
 export function buyLink(site: string, server: string, kind: "song" | "album" | "artist", artist: string, album = "", n = 0): string {
-  const query = new URLSearchParams({ server, kind, artist, ...(kind !== "artist" ? { album } : {}), ...(kind === "song" ? { n: String(n) } : {}) });
+  // The server goes by its opaque id (music-hub.ts): no link names the machine the music is on.
+  const query = new URLSearchParams({ server: /^https:\/\//.test(server) ? serverId(server) : server, kind, artist, ...(kind !== "artist" ? { album } : {}), ...(kind === "song" ? { n: String(n) } : {}) });
   return `${site}/buy?${query.toString()}`;
 }
 

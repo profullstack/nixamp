@@ -144,8 +144,8 @@ function buildMenu() {
         { label: "nixamp.com", click: () => void shell.openExternal("https://nixamp.com") },
         { type: "separator" },
         // The AI label: free on the live stations, files sold on nixamp.com.
-        { label: "AI label catalogue", click: () => void shell.openExternal("https://live.streaming.pit.world/label") },
-        { label: "My music (bought)", click: () => void shell.openExternal("https://nixamp.com/radio#music") },
+        { label: "Music (AI label)", click: () => void shell.openExternal("https://nixamp.com/music") },
+        { label: "My music (bought)", click: () => void shell.openExternal("https://nixamp.com/music/me") },
       ],
     },
   ]));
