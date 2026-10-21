@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { musicPage, renderMusicPage } from "../src/music-seo.ts";
-import type { HubCatalogue } from "../src/music-hub.ts";
+import { handleMusicRoutes, type HubCatalogue } from "../src/music-hub.ts";
 import { stationImage } from "../src/radio-pages.ts";
 
 const SITE = "https://nixamp.com";
@@ -58,6 +58,28 @@ test("an artist shares its picture and bio; a missing one is a 404 that is not i
   assert.equal(gone.status, 404);
   assert.equal(gone.head.noindex, true);
   assert.match(render("/music/me"), /<meta name="robots" content="noindex" \/>/);
+});
+
+test("not knowing yet is not a 404: an empty catalogue, or one without the page's server, serves the shell", async () => {
+  const ask = async (path: string, cat: HubCatalogue) => {
+    let status = 0;
+    let body = "";
+    const response = { headersSent: false, writeHead: (code: number) => { status = code; return response; }, end: (text?: string) => { body = String(text ?? ""); } };
+    await handleMusicRoutes({ method: "GET", url: path, headers: {} } as never, response as never, path,
+      { hub: { catalogue: async () => cat }, json: () => undefined, readBody: async () => "", page: () => SHELL, site: SITE } as never);
+    return { status, body };
+  };
+  const empty: HubCatalogue = { holders: [], stations: [], genres: [] };
+  const artist = "/music/artist/f5fd7d9747/0243b45872";
+  for (const [label, cat] of [["empty", empty], ["other server", { ...catalogue, genres: catalogue.genres.map((g) => ({ ...g, artists: g.artists.map((a) => ({ ...a, server: "0000000000" })) })) }]] as const) {
+    const answer = await ask(artist, cat);
+    assert.equal(answer.status, 200, label);
+    assert.match(answer.body, /<title>Music · nixamp<\/title>/, label);
+    assert.doesNotMatch(answer.body, /noindex/, label);
+  }
+  // Its server known and the artist still missing: that one is a real 404.
+  assert.equal((await ask("/music/artist/f5fd7d9747/ffffffffff", catalogue)).status, 404);
+  assert.equal((await ask(artist, catalogue)).status, 200);
 });
 
 test("a station's link preview is the cover of an album it plays, or none", () => {

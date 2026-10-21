@@ -228,7 +228,13 @@ export async function handleMusicRoutes(request: IncomingMessage, response: Serv
     ctx.hub.catalogue().catch(() => null),
     new Promise<null>((done) => setTimeout(() => done(null), 2_000).unref?.()),
   ]);
-  const view = catalogue ? musicPage(path, catalogue, site) : null;
+  // An empty catalogue (nixamp.com just restarted, no server has said hello yet) or
+  // one without the server a page names is not knowing, not "no such page": the
+  // shell as it is, never a 404 a crawler would drop the page for.
+  const servers = new Set(catalogue?.genres.flatMap((one) => one.artists.map((artist) => artist.server)) ?? []);
+  const named = /^\/music\/(?:artist|album)\/([a-f0-9]{10})\//.exec(path)?.[1];
+  const known = servers.size > 0 && (!named || servers.has(named));
+  const view = catalogue && known ? musicPage(path, catalogue, site) : null;
   const html = view ? renderMusicPage(shell, view, `${site}${path.replace(/\/+$/, "") || "/music"}`) : shell;
   response.writeHead(view?.status ?? 200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
   response.end(method === "HEAD" ? undefined : html);
