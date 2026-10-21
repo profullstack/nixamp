@@ -855,6 +855,8 @@ export interface AiLabelDeps {
   align?: ((audio: string, text: string) => Promise<TimedWord[]>) | null;
   /** A filmed shot (Veo, through nixamp.com): the MP4, or a VeoUnavailable when the month's budget is spent. */
   veo?: ((input: { prompt: string; seconds: number; references: Buffer[] }) => Promise<Buffer>) | null;
+  /** How long to wait before asking Veo again after nixamp.com or the network failed (60 s). */
+  retryMs?: number;
   /** Cuts a single's filmed shots to its song; ffmpeg by default (renderFilmedVideo). */
   filmedVideo?: (input: { audio: string; clips: Array<{ path: string; seconds: number }>; seconds: number; artist: string; title: string; out: string }) => Promise<void>;
   /** Renders a storyboard music video; ffmpeg by default (renderStoryVideo). */
@@ -892,6 +894,8 @@ export class AiLabel {
   private veoSpentIn = "";
   /** Old videos already tried as storyboards since this server started. */
   private upgradeTried = new Set<string>();
+  /** When each single was last put in front of the camera: one that came up short is tried again an hour on. */
+  private filmTriedAt = new Map<string, number>();
   /** The day's album is tried at most every 30 minutes, so a failing model is not hammered. */
   private dailyTriedAt = 0;
   /** Genre stations are kept in step one change at a time. */
@@ -1219,7 +1223,7 @@ export class AiLabel {
       .filter((album) => album.cover || album.coverTried)
       .flatMap((album) => album.songs.filter((song) => song.file && !this.videoFailed.has(song.file)).map((song) => ({ artist, album, song }))));
     // Only a single is filmed, and only with Veo footage: a song with an older (slideshow) video is filmed when its turn comes.
-    const missing = songs.filter(({ song }) => this.wantsVeo(song) && (song.videoVersion ?? 1) < FILMED && !this.upgradeTried.has(song.file));
+    const missing = songs.filter(({ song }) => this.wantsVeo(song) && (song.videoVersion ?? 1) < FILMED && this.now() - (this.filmTriedAt.get(song.file) ?? 0) > 60 * 60_000);
     const untagged = songs.filter(({ song }) => song.video && !song.videoTagged && (song.videoVersion ?? 1) >= FILMED);
     const old: typeof songs = [];
     let made = 0;
@@ -1242,9 +1246,9 @@ export class AiLabel {
     }
     for (const { artist, album, song } of [...missing, ...old]) {
       if (!this.settings.videos) break;
-      // Tried once a run: a shot Veo refuses today it may make tomorrow.
+      // Tried at most hourly: what was filmed is kept (filmShots), so a retry films only what is missing.
       const upgrade = Boolean(song.video);
-      this.upgradeTried.add(song.file);
+      this.filmTriedAt.set(song.file, this.now());
       if (!this.wantsVeo(song)) break;
       const out = join(album.folder, `${songBase(song)}.mp4`);
       const partial = join(album.folder, `.${randomBytes(4).toString("hex")}.video.mp4`);
@@ -1259,8 +1263,7 @@ export class AiLabel {
         // On the air as soon as it is made, not after the whole pass.
         await this.placeVideos().catch(() => undefined);
       } catch (error) {
-        if (!upgrade) this.videoFailed.add(song.file);
-        this.log(`no filmed video for "${song.title}": ${(error as Error).message}`);
+        this.log(`no filmed video for "${song.title}" yet: ${(error as Error).message}`);
       } finally {
         rmSync(partial, { force: true });
         rmSync(scenes, { recursive: true, force: true });
@@ -1280,9 +1283,12 @@ export class AiLabel {
       const probed = await this.deps.probe(song.file);
       if (probed.duration > 5) seconds = probed.duration;
     } catch { /* the asked-for length */ }
-    const clips = await this.filmShots(artist, song, scenes);
-    if (clips.length < Math.max(2, Math.ceil(this.settings.veoShots / 2))) throw new Error(`only ${clips.length} of ${this.settings.veoShots} shots were filmed`);
+    // Paid-for shots live beside the album until the video is cut, so nothing filmed is filmed twice.
+    const shots = join(_album.folder, `.veo-${song.n}`);
+    const clips = await this.filmShots(artist, song, shots, scenes);
+    if (clips.length < Math.max(2, Math.ceil(this.settings.veoShots / 2))) throw new Error(`only ${clips.length} of ${this.settings.veoShots} shots filmed so far`);
     await (this.deps.filmedVideo ?? ((input) => renderFilmedVideo(this.deps.ffmpeg, input)))({ audio: song.file, clips, seconds, artist: artist.name, title: song.title, out });
+    rmSync(shots, { recursive: true, force: true });
     return FILMED;
   }
 
@@ -1296,10 +1302,11 @@ export class AiLabel {
    * Veo's reference images), on stage, in the song's mood. Stops for the
    * month when the budget is spent; a shot Veo will not make is skipped.
    */
-  private async filmShots(artist: LabelArtist, song: LabelSong, dir: string): Promise<Array<{ path: string; seconds: number }>> {
+  private async filmShots(artist: LabelArtist, song: LabelSong, keep: string, dir: string): Promise<Array<{ path: string; seconds: number }>> {
     const veo = this.deps.veo;
     if (!veo) return [];
     mkdirSync(dir, { recursive: true });
+    mkdirSync(keep, { recursive: true });
     const members = this.cast(artist);
     const references: Buffer[] = [];
     for (const member of members.slice(0, 3)) {
@@ -1315,10 +1322,22 @@ export class AiLabel {
     }
     const clips: Array<{ path: string; seconds: number }> = [];
     for (const [i, prompt] of veoPrompts(artist, song, members, this.settings.veoShots).entries()) {
+      const file = join(keep, `shot-${i}.mp4`);
       try {
-        const bytes = await veo({ prompt, seconds: 8, references });
-        const file = join(dir, `shot-${i}.mp4`);
-        writeFileSync(file, bytes);
+        if (statSync(file).size > 10_000) { clips.push({ path: file, seconds: 8 }); continue; }
+      } catch { /* not filmed yet */ }
+      try {
+        // nixamp.com briefly away (a deploy: 502/503) or the network: twice more, a minute apart.
+        let bytes: Buffer | null = null;
+        for (let attempt = 0; ; attempt++) {
+          try { bytes = await veo({ prompt, seconds: 8, references }); break; } catch (error) {
+            if (attempt >= 2 || error instanceof VeoUnavailable || !/\b50[234]\b|fetch failed|ECONN|timed? ?out/i.test((error as Error).message)) throw error;
+            await new Promise((done) => setTimeout(done, this.deps.retryMs ?? 60_000));
+          }
+        }
+        const partial = `${file}.part`;
+        writeFileSync(partial, bytes!);
+        renameSync(partial, file);
         clips.push({ path: file, seconds: 8 });
       } catch (error) {
         if (error instanceof VeoUnavailable) {

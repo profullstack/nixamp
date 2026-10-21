@@ -298,6 +298,46 @@ test("an album's single gets filmed Veo shots of the band; the rest the storyboa
   }
 });
 
+test("a single that comes up short keeps what was filmed, retries a 503, and an hour on films only what is missing", async () => {
+  let now = Date.UTC(2026, 9, 21, 12);
+  const { top, label } = setup(fakeComposer([]), fakeWriter(), { now: () => now });
+  const deps = (label as unknown as { deps: Record<string, unknown> }).deps;
+  deps["log"] = (line: string) => { if (process.env["LABEL_DEBUG"]) console.log(line); };
+  deps["retryMs"] = 0;
+  let calls = 0;
+  let refusing = true;
+  deps["veo"] = async (shot: { prompt: string }) => {
+    calls += 1;
+    if (calls === 1) throw new Error("nixamp.com answered 503");
+    if (refusing && calls > 3) throw new Error("Veo made nothing: filtered");
+    return Buffer.alloc(20_000, 9);
+  };
+  const filmed: number[] = [];
+  deps["filmedVideo"] = async (input: { audio: string; out: string; clips: unknown[] }) => { filmed.push(input.clips.length); copyFileSync(input.audio, input.out); };
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, veo: true, veoShots: 6, enabled: false });
+    const artist = label.sign({ preset: "no-refunds" });
+    label.configure({ enabled: true });
+    await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
+    await label.videos();
+    const song = label.get(artist.key)!.albums[0]!.songs[0]!;
+    assert.equal(song.video, undefined, "two of six is too few to cut");
+    assert.equal(calls, 7, "the 503 was asked again; the other four were refused");
+    // Within the hour nothing is asked; after it, only the four missing shots.
+    await label.videos();
+    assert.equal(calls, 7);
+    now += 61 * 60_000;
+    refusing = false;
+    await label.videos();
+    assert.equal(calls, 11, "the two filmed shots were kept, not paid for twice");
+    assert.deepEqual(filmed, [6]);
+    assert.equal(song.videoVersion, 4);
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
 test("a filmed music video is Veo footage cut to the whole song, 1080p", { timeout: 120_000 }, async () => {
   const top = mkdtempSync(join(tmpdir(), "nixamp-filmed-"));
   try {
