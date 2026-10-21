@@ -26,6 +26,23 @@ artist, album artist, album, genre, track `n/total`, year, the words (`lyrics-en
 the rights holder as publisher and copyright (`℗ 2026 Profullstack, Inc.`). Words in the tags are
 published to nichedb.dev by `lyrics-publish.ts` like any owned station's.
 
+## Genres, the daily album, videos
+
+- **Roster:** three artists in each of Punk, Blues, Country, Jazz, Classic Rock, Metal and
+  Hip-Hop; Pop and R&B as the mainstream sellers. `genreOrder` (`--genres`) decides whose first
+  albums come first.
+- **Parallel:** `parallel` (`--parallel 4`) songs are made at once, never the same one twice.
+- **Daily autopilot:** once every enabled artist has its first albums, `albumsPerDay`
+  (`--per-day`, 1 by default) new albums a day. Each is by an artist picked at random, or with
+  `newArtistChance` (`--new-artists`, 0.25) by a new artist the language model invents in one of
+  the owner's genres. It runs inside the nixamp daemon on its 5-minute check, so no cron is
+  needed. Plans, words and songs are saved as they are made, so a crash or a restart resumes.
+  Failures back off per artist, and out of credit pauses until `resume`.
+- **Music videos:** each song also gets `001. <title>.mp4`, a 720p video of its cover over a
+  blurred copy with the song's waveform, made by ffmpeg one at a time. They play on a free
+  "<holder> AI · Music Videos" TV station and are included in bought zips. Turn them off with
+  `--no-videos`.
+
 ## Schedule and budget
 
 - A newly signed artist gets `seedAlbums` (1) at once; after that, an album
@@ -72,6 +89,16 @@ are sold on nixamp.com through CoinPay (src/music-store.ts, src/store-routes.ts)
 - **Grants.** nixamp.com signs a grant (what was bought, from which server, valid for a day). The
   music server asks nixamp.com whether a grant is good (`/api/v1/store/grant?g=`) before it
   serves an MP3 or a zip. An MP3 without a grant is refused.
+
+## Every surface
+
+- **CLI:** `nixamp station label …` (run the label) and `nixamp music` (catalog, buy, your
+  purchases, download the zips).
+- **MCP:** `station_label` (run it), `music_catalog`, `music_buy`, `music_purchases`.
+- **PWA:** the Label and My music sections on `/radio`, and the My music link in the player's
+  header.
+- **Desktop:** the same PWA, plus "AI label catalogue" and "My music" in the Help menu.
+- **API:** below.
 
 ## HTTP
 

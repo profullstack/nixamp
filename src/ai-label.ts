@@ -49,6 +49,8 @@ export interface LabelSong {
   /** The MP3, "" until composed. */
   file: string;
   lyricsFile: string;
+  /** Its music video (001. <title>.mp4), "" until made; absent on songs from before videos. */
+  video?: string;
   /** Who wrote the words and who sang them, e.g. "llama-3.3 + elevenlabs/music_v2_5". */
   made: string;
   composedAt: number;
@@ -97,14 +99,28 @@ export interface LabelSettings {
   enabled: boolean;
   /** Seconds of music a month across the label; 0 for no cap. */
   monthlySeconds: number;
-  /** Days between an artist's albums once it has its first ones. */
+  /** Days between an artist's albums once it has its first ones (only when albumsPerDay is 0). */
   everyDays: number;
+  /**
+   * Once every artist has its first albums: new albums a day across the label,
+   * each by an artist picked at random or, now and then, a new one invented
+   * in one of the owner's genres. 0 goes back to one per artist every everyDays.
+   */
+  albumsPerDay: number;
+  /** How often (0-1) the day's album is by a newly invented artist. */
+  newArtistChance: number;
   /** Albums every artist gets as soon as it can. */
   seedAlbums: number;
   songsPerAlbum: number;
   songSeconds: number;
+  /** A music video for every song (the cover over itself, blurred, and the song's waveform), and a TV station of them. */
+  videos: boolean;
   /** Public, listed and owned, so the genre stations are on the guide. */
   publish: boolean;
+  /** Songs made at the same time (ElevenLabs takes several requests at once on a paid plan). */
+  parallel: number;
+  /** Genres whose artists get their albums first, in this order. */
+  genreOrder: string[];
   /** Set by a provider that is out of credit; cleared by `resume`. */
   pausedReason: string;
 }
@@ -152,11 +168,102 @@ export const ROSTER: Record<string, ArtistPreset> = {
     themes: "ruins, resilience, storms, rebuilding from ashes, defiance",
   },
   "iron-lantern-society": {
-    name: "Iron Lantern Society", genre: "Rock",
+    name: "Iron Lantern Society", genre: "Classic Rock",
     sound: "bluesy classic hard rock, swaggering riffs, Hammond organ, cowbell grooves, big guitar solos, 100-128 BPM",
     voice: "gravelly male baritone with a wide rasp and a rock-and-roll howl",
     bio: "Five road dogs who think every song should end in a bar fight or a sunrise.",
     themes: "the open road, hard luck, loyalty among misfits, last calls and new starts",
+  },
+  "highway-sermon": {
+    name: "Highway Sermon", genre: "Classic Rock",
+    sound: "1970s classic rock, twin harmony lead guitars, warm analog bass, piano, big open drums, arena choruses, 96-124 BPM",
+    voice: "soaring, slightly raspy male tenor with a wide vibrato",
+    bio: "Four friends who found a crate of their fathers' records and never gave them back.",
+    themes: "freedom, the open highway, small-town legends, love and leaving",
+  },
+  "copper-jubilee": {
+    name: "Copper Jubilee", genre: "Classic Rock",
+    sound: "southern classic rock, slide guitar, honky-tonk piano, Hammond organ, swampy groove, gospel backing vocals, 88-116 BPM",
+    voice: "powerful bluesy female belter with grit and gospel runs",
+    bio: "A riverboat revue that plugged in and turned it up.",
+    themes: "rivers, revival nights, rebellion, home cooking and heartbreak",
+  },
+  "the-bent-spokes": {
+    name: "The Bent Spokes", genre: "Punk",
+    sound: "fast melodic skate punk, palm-muted power chords, driving eighth-note bass, snappy double-time drums, gang vocal choruses, 180-210 BPM",
+    voice: "snotty, energetic male tenor with shouted group backing vocals",
+    bio: "Three teenagers who never stopped being teenagers, and a drummer who might be a skateboard.",
+    themes: "boredom, suburbia, friendship, skipping school, refusing to grow up",
+  },
+  "gutter-velvet": {
+    name: "Gutter Velvet", genre: "Punk",
+    sound: "raw street punk, distorted buzzsaw guitars, thumping bass, stomping drums, chant-along choruses, 160-190 BPM",
+    voice: "furious, raspy female shouter with a sneer",
+    bio: "Born in a squat, raised on a photocopier.",
+    themes: "rent, landlords, solidarity, the city at 3 a.m., not backing down",
+  },
+  "no-refunds": {
+    name: "No Refunds", genre: "Punk",
+    sound: "pop punk, bright crunchy guitars, bouncy bass, big singalong hooks, half-time bridges, 160-185 BPM",
+    voice: "catchy, slightly nasal male lead with harmonized choruses",
+    bio: "Mall-parking-lot punk with a heart of gold and a dented van.",
+    themes: "crushes, bad jobs, summer, best friends, second chances",
+  },
+  "muddy-ledger": {
+    name: "Muddy Ledger", genre: "Blues",
+    sound: "electric Chicago blues, stinging lead guitar, harmonica, walking bass, shuffle drums, slow 12-bar and mid-tempo shuffles, 60-110 BPM",
+    voice: "deep, gravelly male baritone with call-and-response guitar",
+    bio: "Plays like he owes the guitar money.",
+    themes: "hard times, trains, lost love, payday, getting even",
+  },
+  "delta-ruby": {
+    name: "Delta Ruby", genre: "Blues",
+    sound: "soulful blues, Hammond organ, horn section, slow-burning guitar, brushed and backbeat drums, 60-100 BPM",
+    voice: "rich, powerful female contralto with soaring gospel-blues phrasing",
+    bio: "A juke-joint queen with a voice that rattles the windows.",
+    themes: "heartbreak, strength, the river, Saturday night, survival",
+  },
+  "rattlesnake-porch": {
+    name: "Rattlesnake Porch", genre: "Blues",
+    sound: "acoustic delta blues, slide resonator guitar, foot stomps, harmonica, hand claps, 70-110 BPM",
+    voice: "weathered male voice, half-sung, half-spoken storytelling",
+    bio: "A porch, a slide and a hundred stories, all of them true enough.",
+    themes: "crossroads, floods, the devil's bargains, home, honest work",
+  },
+  "blue-hour-quartet": {
+    name: "The Blue Hour Quartet", genre: "Jazz",
+    sound: "smoky vocal jazz, upright bass, brushed drums, piano trio comping, muted trumpet solos, swing and ballads, 70-140 BPM",
+    voice: "velvety female jazz alto with relaxed phrasing and occasional scat",
+    bio: "A jazz club that only opens after the last train leaves.",
+    themes: "late nights, rain on windows, old flames, city lights, small joys",
+  },
+  "sterling-hayes": {
+    name: "Sterling Hayes", genre: "Jazz",
+    sound: "big band swing and crooner jazz, brass section, walking bass, swing drums, lush strings on ballads, 100-180 BPM",
+    voice: "smooth, warm male crooner baritone",
+    bio: "A crooner who never got the memo that it isn't 1958.",
+    themes: "romance, dancing, champagne nights, wistful goodbyes",
+  },
+  "nightcap-collective": {
+    name: "Nightcap Collective", genre: "Jazz",
+    sound: "modern soul-jazz, Rhodes piano, tenor sax, laid-back hip hop influenced drums, warm bass, 80-100 BPM",
+    voice: "silky male and female duet vocals trading verses",
+    bio: "A rotating cast of night owls who meet at the same bar every Thursday.",
+    themes: "slow evenings, conversation, love that takes its time, the city after dark",
+  },
+  "satin-avenue": {
+    name: "Satin Avenue", genre: "R&B",
+    sound: "smooth modern R&B, lush chords, deep 808s, crisp snaps, warm synth pads, falsetto ad-libs, 65-90 BPM",
+    voice: "silky female R&B soprano with agile runs",
+    bio: "Late-night R&B for the drive home after a long week.",
+    themes: "love, trust, self-worth, late-night phone calls",
+  },
+  "jalen-reign": {
+    name: "Jalen Reign", genre: "R&B",
+    sound: "neo-soul and contemporary R&B, live bass, Rhodes, tight pocket drums, gospel-tinged harmonies, 70-95 BPM",
+    voice: "warm, soulful male tenor with a smooth falsetto",
+    bio: "Church-raised, club-tested, heart on his sleeve.",
+    themes: "devotion, apologies, growing together, Sunday mornings",
   },
   "paper-satellites": {
     name: "Paper Satellites", genre: "Rock",
@@ -249,10 +356,15 @@ export const DEFAULTS: Omit<LabelSettings, "pausedReason"> = {
   enabled: true,
   monthlySeconds: 3600,
   everyDays: 30,
+  albumsPerDay: 1,
+  newArtistChance: 0.25,
   seedAlbums: 1,
   songsPerAlbum: 8,
   songSeconds: 150,
   publish: true,
+  videos: true,
+  parallel: 1,
+  genreOrder: ["Punk", "Blues", "Country", "Jazz", "Classic Rock", "Metal", "Hip-Hop", "Pop", "R&B"],
 };
 
 const DAY = 86_400_000;
@@ -339,6 +451,28 @@ export async function planAlbum(
   return { title, concept, songs: planned, model: answer.model };
 }
 
+const ARTIST_SYSTEM = [
+  "You invent original recording artists for an independent record label whose artists are AI and sing in English.",
+  "The name must be new: never a real artist, band or label, and never imitating one.",
+  "Answer as JSON: {\"name\": \"1-4 words\", \"sound\": \"the music in words, at most 300 characters: subgenre, instruments, production, tempo in BPM\",",
+  "\"voice\": \"the lead voice, at most 150 characters\", \"bio\": \"one striking sentence\", \"themes\": \"what they sing about, at most 150 characters\"}.",
+].join(" ");
+
+/** A new artist for this genre, unlike the ones already signed. */
+export async function inventArtist(genre: string, taken: string[], ask: typeof askJson = askJson): Promise<ArtistPreset> {
+  const answer = await ask({
+    system: ARTIST_SYSTEM,
+    prompt: `Genre: ${genre}\nAlready on the label (do not reuse or echo these names or sounds): ${taken.slice(-40).join(", ") || "nobody yet"}`,
+    maxTokens: 600,
+    timeoutMs: 60_000,
+  });
+  const name = clean(answer.value["name"], 60).replace(/"/g, "");
+  const sound = clean(answer.value["sound"], 400);
+  if (!name || sound.length < 10) throw new Error("the model invented no artist");
+  if (taken.some((one) => one.toLowerCase() === name.toLowerCase())) throw new Error(`the model reused the name ${name}`);
+  return { name, genre, sound, voice: clean(answer.value["voice"], 200) || "expressive lead vocal", bio: clean(answer.value["bio"], 300), themes: clean(answer.value["themes"], 200) };
+}
+
 export async function writeLyrics(
   artist: Pick<LabelArtist, "name" | "genre" | "voice" | "themes">,
   album: Pick<LabelAlbum, "title" | "concept">,
@@ -385,6 +519,27 @@ export async function workersAiCover(prompt: string, env: Record<string, string 
 }
 
 /** Writes the tags (and the cover, as the attached picture) into a copy of the file. */
+/**
+ * A song's music video: its album cover over a blurred copy of itself, the
+ * song's waveform along the bottom, 720p H.264 with the MP3's audio copied in.
+ * Without a cover, a dark plate.
+ */
+export function renderVideo(ffmpeg: string[], audio: string, cover: string, out: string): Promise<void> {
+  const picture = cover ? ["-loop", "1", "-framerate", "25", "-i", cover] : ["-f", "lavfi", "-i", "color=c=0x0d1410:s=1280x720:r=25"];
+  const graph = [
+    "[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,boxblur=24:2,eq=brightness=-0.18[bg]",
+    "[0:v]scale=500:500[fg]",
+    "[1:a]showwaves=s=1280x150:mode=cline:rate=25:colors=white@0.85,format=rgba,colorkey=0x000000:0.1:0[viz]",
+    "[bg][fg]overlay=(W-w)/2:40[a]",
+    "[a][viz]overlay=0:H-160,format=yuv420p[v]",
+  ].join(";");
+  const args = [...ffmpeg.slice(1), "-hide_banner", "-loglevel", "error", "-y", ...picture, "-i", audio, "-filter_complex", graph,
+    "-map", "[v]", "-map", "1:a", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-r", "25", "-c:a", "copy", "-shortest", "-movflags", "+faststart", out];
+  return new Promise((done, fail) => {
+    execFile(ffmpeg[0]!, args, { timeout: 20 * 60_000 }, (error) => (error ? fail(new Error(`the video failed: ${error.message}`)) : done()));
+  });
+}
+
 function tagFile(ffmpeg: string[], from: string, to: string, tags: Record<string, string>, cover: string): Promise<void> {
   const args = [...ffmpeg.slice(1), "-hide_banner", "-loglevel", "error", "-y", "-i", from];
   if (cover) args.push("-i", cover, "-map", "0:a", "-map", "1:v", "-c", "copy", "-disposition:v", "attached_pic");
@@ -417,6 +572,10 @@ export interface AiLabelDeps {
   /** A cover picture for this prompt, or null when nothing can draw one. */
   cover?: (prompt: string) => Promise<Buffer | null>;
   tag?: (from: string, to: string, tags: Record<string, string>, cover: string) => Promise<void>;
+  /** Renders a song's music video to `out`; ffmpeg by default (renderVideo). */
+  video?: (audio: string, cover: string, out: string) => Promise<void>;
+  /** The day's pick (artist, genre, new or not); Math.random by default. */
+  random?: () => number;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -428,7 +587,19 @@ export class AiLabel {
   private artists = new Map<string, LabelArtist>();
   private settings: LabelSettings = { ...DEFAULTS, pausedReason: "" };
   private usage: Record<string, number> = {};
-  private busy = "";
+  private running = false;
+  /** Songs being made now, by `<album>:<n>`. */
+  private claims = new Map<string, { label: string; seconds: number }>();
+  /** Artists whose next album is being planned now. */
+  private planning = new Set<string>();
+  private covering = new Map<string, Promise<void>>();
+  private filming: Promise<number> | null = null;
+  /** Songs whose video failed since this server started. */
+  private videoFailed = new Set<string>();
+  /** The day's album is tried at most every 30 minutes, so a failing model is not hammered. */
+  private dailyTriedAt = 0;
+  /** Genre stations are kept in step one change at a time. */
+  private placing: Promise<void> = Promise.resolve();
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly file: string, private readonly deps: AiLabelDeps) {
@@ -502,6 +673,8 @@ export class AiLabel {
   dueAt(artist: LabelArtist): number {
     if (!artist.enabled) return -1;
     if (artist.albums.length < this.settings.seedAlbums) return 0;
+    // On the daily schedule an artist's next album is whenever the day's pick lands on it.
+    if (this.settings.albumsPerDay > 0) return -1;
     const last = artist.albums[artist.albums.length - 1]!;
     const stagger = (parseInt(artist.key.slice(0, 6), 16) % Math.max(1, Math.floor(this.settings.everyDays / 4))) * DAY;
     return last.plannedAt + this.settings.everyDays * DAY + stagger;
@@ -523,7 +696,8 @@ export class AiLabel {
       root: this.root,
       composer: composer?.name ?? null,
       writer: this.canAsk() ? "language model" : null,
-      busy: this.busy,
+      busy: this.running ? ([...this.claims.values()].map((one) => one.label).join("; ") || "planning") : "",
+      recording: [...this.claims.values()].map((one) => one.label),
       month,
       secondsThisMonth: this.usage[month] ?? 0,
       settings: this.settings,
@@ -561,6 +735,20 @@ export class AiLabel {
     if (typeof input["holder"] === "string" && input["holder"].trim()) this.settings.holder = clean(input["holder"], 120);
     if (input["enabled"] !== undefined) this.settings.enabled = input["enabled"] !== false;
     if (input["publish"] !== undefined) this.settings.publish = input["publish"] !== false;
+    if (input["videos"] !== undefined) this.settings.videos = input["videos"] !== false;
+    const perDay = whole("albumsPerDay", 0, 24);
+    if (perDay !== undefined) this.settings.albumsPerDay = perDay;
+    if (input["newArtistChance"] !== undefined) {
+      const chance = Number(input["newArtistChance"]);
+      if (!Number.isFinite(chance) || chance < 0 || chance > 1) throw new StationError("invalid_newArtistChance", "newArtistChance is from 0 to 1");
+      this.settings.newArtistChance = chance;
+    }
+    const parallel = whole("parallel", 1, 8);
+    if (parallel !== undefined) this.settings.parallel = parallel;
+    if (input["genreOrder"] !== undefined) {
+      const list = Array.isArray(input["genreOrder"]) ? input["genreOrder"] : String(input["genreOrder"]).split(",");
+      this.settings.genreOrder = list.map((one) => clean(one, 40)).filter(Boolean).slice(0, 30);
+    }
     if (input["resume"] === true) this.settings.pausedReason = "";
     this.save();
     if (this.settings.enabled) void this.tick();
@@ -652,9 +840,88 @@ export class AiLabel {
 
   startSchedule(everyMs = 5 * 60_000): void {
     if (this.timer) return;
-    this.timer = setInterval(() => void this.tick(), everyMs);
+    this.timer = setInterval(() => { void this.tick(); void this.videos(); }, everyMs);
     this.timer.unref?.();
     void this.tick();
+    void this.videos();
+  }
+
+  /**
+   * Music videos for every released song without one, one at a time (a
+   * video is CPU, not credit), and the TV station of them kept in step. A
+   * video that fails is tried again after the next restart, not in a loop.
+   */
+  videos(): Promise<number> {
+    if (!this.settings.videos) return Promise.resolve(0);
+    // One run at a time; asking during one waits for it.
+    this.filming ??= this.film().finally(() => { this.filming = null; });
+    return this.filming;
+  }
+
+  private async film(): Promise<number> {
+    let total = 0;
+    // Songs that land while videos are being made are picked up by the next pass.
+    for (let made = await this.filmPass(); made > 0; made = await this.filmPass()) total += made;
+    return total;
+  }
+
+  private async filmPass(): Promise<number> {
+    let made = 0;
+    {
+      for (const artist of this.list()) {
+        for (const album of artist.albums) {
+          if (!album.cover && !album.coverTried) continue;
+          for (const song of album.songs) {
+            if (!song.file || song.video || this.videoFailed.has(song.file) || !this.settings.videos) continue;
+            const out = join(album.folder, `${songBase(song)}.mp4`);
+            const partial = join(album.folder, `.${randomBytes(4).toString("hex")}.video.mp4`);
+            try {
+              await (this.deps.video ?? ((audio, cover, to) => renderVideo(this.deps.ffmpeg, audio, cover, to)))(song.file, album.cover, partial);
+              renameSync(partial, out);
+              song.video = out;
+              made += 1;
+              this.save();
+            } catch (error) {
+              this.videoFailed.add(song.file);
+              this.log(`no video for "${song.title}": ${(error as Error).message}`);
+            } finally {
+              rmSync(partial, { force: true });
+            }
+          }
+        }
+      }
+      if (made > 0) await this.placeVideos();
+    }
+    return made;
+  }
+
+  /** The label's music videos as one TV station: free to watch, with its breaks. */
+  private placeVideos(): Promise<void> {
+    const next = this.placing.then(async () => {
+      await this.deps.index.scan(this.source(), this.deps.probe).done;
+      const files = this.list()
+        .flatMap((artist) => artist.albums.flatMap((album) => album.songs.map((song) => song.video ?? "")))
+        .filter((file) => file && this.deps.index.itemAt(file)?.state === "ready");
+      if (files.length === 0) return;
+      const existing = this.deps.store.byAuto("ai:label:videos");
+      if (existing) {
+        this.deps.store.update(existing.id, {}, files);
+        return;
+      }
+      const label = this.settings.holder.replace(/,?\s+(inc|llc|ltd|gmbh|co)\.?$/i, "");
+      const made = this.deps.store.create({ name: `${label} AI · Music Videos`, description: `Music videos by ${label}'s AI artists, every genre.`, shuffle: true, repeat: true, video: true }, files, this.deps.owner);
+      this.deps.store.markAuto(made.id, "ai:label:videos");
+      if (this.settings.publish) {
+        this.deps.store.setAccess(made.id, {
+          visibility: "public",
+          listed: true,
+          rights: { basis: "owned", note: `Music videos made for ${this.settings.holder} from its AI artists' songs and covers; no third-party material. ℗ ${this.settings.holder}.` },
+        }, this.deps.owner || "ai-label");
+      }
+      if (this.deps.mayStart()) await this.deps.runner.start(made.id).catch(() => undefined);
+    });
+    this.placing = next.catch(() => undefined);
+    return next;
   }
 
   stopSchedule(): void {
@@ -662,49 +929,73 @@ export class AiLabel {
     this.timer = null;
   }
 
-  /** Everything that is due, one song at a time, until nothing is or something stops it. */
+  /**
+   * Everything that is due, `parallel` songs at a time, until nothing is or
+   * something stops it. Each worker claims a song (or an artist to plan for),
+   * so two never make the same one.
+   */
   async tick(limit = 200): Promise<void> {
-    if (this.busy || !this.settings.enabled || this.settings.pausedReason) return;
-    this.busy = "starting";
-    try {
-      for (let steps = 0; steps < limit; steps++) {
-        if (this.settings.pausedReason) break;
-        if ((await this.step().catch(() => "idle" as Step)) === "idle") break;
+    if (this.running || !this.settings.enabled || this.settings.pausedReason) return;
+    this.running = true;
+    let steps = 0;
+    const worker = async (): Promise<void> => {
+      while (steps < limit && !this.settings.pausedReason) {
+        steps += 1;
+        if ((await this.step().catch(() => "idle" as Step)) === "idle") return;
       }
+    };
+    try {
+      await Promise.all(Array.from({ length: Math.max(1, this.settings.parallel) }, worker));
     } finally {
-      this.busy = "";
+      this.running = false;
     }
+  }
+
+  /** Where the artist's genre comes in the owner's order (genreOrder); unlisted genres after. */
+  private rank(genre: string): number {
+    const at = this.settings.genreOrder.findIndex((one) => genreSlug(one) === genreSlug(genre));
+    return at === -1 ? this.settings.genreOrder.length : at;
   }
 
   private async step(): Promise<Step> {
     const now = this.now();
     const composer = this.composer();
     if (!composer) return "idle";
-    // A song of an album already planned, oldest album first.
+    const claimedSeconds = [...this.claims.values()].reduce((sum, one) => sum + one.seconds, 0);
+    // A song of an album already planned that nobody is making, oldest album first.
     const making = this.list()
       .filter((one) => one.enabled && !this.backingOff(one, now))
       .flatMap((artist) => artist.albums.filter((album) => !album.doneAt).map((album) => ({ artist, album })))
       .sort((a, b) => a.album.plannedAt - b.album.plannedAt);
     for (const { artist, album } of making) {
-      const song = album.songs.find((one) => !one.file);
-      if (!song) {
+      if (album.songs.every((one) => one.file)) {
         album.doneAt = now;
         this.save();
         continue;
       }
-      if (song.seconds > this.budgetLeft()) return "idle";
-      await this.compose(artist, album, song, composer);
+      const song = album.songs.find((one) => !one.file && !this.claims.has(`${album.key}:${one.n}`));
+      if (!song) continue;
+      if (song.seconds + claimedSeconds > this.budgetLeft()) return "idle";
+      const claim = `${album.key}:${song.n}`;
+      this.claims.set(claim, { label: `${artist.name}: ${album.title}: ${song.title}`, seconds: song.seconds });
+      try {
+        await this.compose(artist, album, song, composer);
+      } finally {
+        this.claims.delete(claim);
+      }
       return "composed";
     }
-    // Nothing half-made anywhere: the artist most overdue gets its next album.
-    if (this.list().some((one) => one.albums.some((album) => !album.doneAt))) return "idle";
-    if (!this.canAsk() || this.settings.songSeconds > this.budgetLeft()) return "idle";
+    // Room for another album: the artist most overdue (in the owner's genre order) gets its next one.
+    const inProgress = this.list().filter((one) => one.albums.some((album) => !album.doneAt)).length + this.planning.size;
+    if (inProgress >= Math.max(1, this.settings.parallel)) return "idle";
+    if (!this.canAsk() || this.settings.songSeconds + claimedSeconds > this.budgetLeft()) return "idle";
     const due = this.list()
-      .filter((one) => !this.backingOff(one, now))
+      .filter((one) => !this.backingOff(one, now) && !this.planning.has(one.key) && !one.albums.some((album) => !album.doneAt))
       .map((one) => ({ one, at: this.dueAt(one) }))
       .filter(({ at }) => at !== -1 && at <= now)
-      .sort((a, b) => a.one.albums.length - b.one.albums.length || a.at - b.at)[0];
-    if (!due) return "idle";
+      .sort((a, b) => a.one.albums.length - b.one.albums.length || this.rank(a.one.genre) - this.rank(b.one.genre) || a.at - b.at)[0];
+    if (!due) return this.daily(now);
+    this.planning.add(due.one.key);
     try {
       await this.plan(due.one.key);
       due.one.failures = 0;
@@ -714,6 +1005,52 @@ export class AiLabel {
     } catch (error) {
       this.failed(due.one, error);
       throw error;
+    } finally {
+      this.planning.delete(due.one.key);
+    }
+  }
+
+  /**
+   * After the first sweep: the day's album. When the last one was planned a
+   * day ago (or 1/albumsPerDay of one), a random artist gets it, or now and
+   * then an artist invented for one of the owner's genres. Nothing until every
+   * enabled artist has its first albums.
+   */
+  private async daily(now: number): Promise<Step> {
+    const perDay = this.settings.albumsPerDay;
+    if (perDay <= 0) return "idle";
+    const enabled = this.list().filter((one) => one.enabled);
+    if (enabled.some((one) => one.albums.length < this.settings.seedAlbums)) return "idle";
+    const last = Math.max(0, ...this.list().flatMap((one) => one.albums.map((album) => album.plannedAt)));
+    if (now < last + Math.floor(DAY / perDay) || now < this.dailyTriedAt + 30 * 60_000) return "idle";
+    this.dailyTriedAt = now;
+    const random = this.deps.random ?? Math.random;
+    const genres = this.settings.genreOrder.length ? this.settings.genreOrder : [...new Set(enabled.map((one) => one.genre))];
+    let artist: LabelArtist | undefined;
+    if ((enabled.length === 0 || random() < this.settings.newArtistChance) && genres.length > 0) {
+      const genre = genres[Math.floor(random() * genres.length)]!;
+      try {
+        const invented = await inventArtist(genre, this.list().map((one) => one.name), this.deps.ask ?? askJson);
+        artist = this.sign({ ...invented });
+        this.log(`signed a new artist: ${artist.name} (${genre})`);
+      } catch (error) {
+        this.log(`could not invent a ${genre} artist (${(error as Error).message}); an artist already signed gets the album`);
+      }
+    }
+    if (!artist) {
+      const free = enabled.filter((one) => !this.backingOff(one, now) && !this.planning.has(one.key) && !one.albums.some((album) => !album.doneAt));
+      artist = free[Math.floor(random() * free.length)];
+    }
+    if (!artist) return "idle";
+    this.planning.add(artist.key);
+    try {
+      await this.plan(artist.key);
+      return "planned";
+    } catch (error) {
+      this.failed(artist, error);
+      throw error;
+    } finally {
+      this.planning.delete(artist.key);
     }
   }
 
@@ -727,7 +1064,6 @@ export class AiLabel {
   }
 
   private async compose(artist: LabelArtist, album: LabelAlbum, song: LabelSong, composer: Composer): Promise<void> {
-    this.busy = `${artist.name}: ${album.title}: ${song.title}`;
     artist.lastAttemptAt = this.now();
     mkdirSync(album.folder, { recursive: true });
     const raw = join(album.folder, `.${randomBytes(4).toString("hex")}.raw.mp3`);
@@ -778,18 +1114,26 @@ export class AiLabel {
       this.save();
       this.writeAlbumJson(artist, album);
       await this.place(artist.genre);
+      // Its video is made beside it, without holding up the next song.
+      void this.videos();
     } catch (error) {
       this.failed(artist, error);
       throw error;
     } finally {
       rmSync(raw, { force: true });
-      this.busy = "starting";
     }
   }
 
-  private async ensureCover(artist: LabelArtist, album: LabelAlbum): Promise<void> {
-    if (album.cover || album.coverTried) return;
+  /** The album's cover, drawn once; songs made at the same time wait for the same drawing. */
+  private ensureCover(artist: LabelArtist, album: LabelAlbum): Promise<void> {
+    if (album.cover || album.coverTried) return this.covering.get(album.key) ?? Promise.resolve();
     album.coverTried = true;
+    const drawing = this.drawCover(artist, album).finally(() => this.covering.delete(album.key));
+    this.covering.set(album.key, drawing);
+    return drawing;
+  }
+
+  private async drawCover(artist: LabelArtist, album: LabelAlbum): Promise<void> {
     const prompt = `Album cover art for "${album.title}", a ${artist.genre} album by ${artist.name}. ${album.concept} Style: ${artist.sound}. Striking, original, square composition. No text, no letters, no logos, no watermark.`;
     try {
       const picture = await (this.deps.cover ?? ((text) => workersAiCover(text)))(prompt);
@@ -827,7 +1171,13 @@ export class AiLabel {
   }
 
   /** The genre's station gets every song of that genre: made with the first, then kept in step. */
-  private async place(genre: string): Promise<void> {
+  private place(genre: string): Promise<void> {
+    const next = this.placing.then(() => this.placeNow(genre));
+    this.placing = next.catch(() => undefined);
+    return next;
+  }
+
+  private async placeNow(genre: string): Promise<void> {
     await this.deps.index.scan(this.source(), this.deps.probe).done;
     const artists = this.list().filter((one) => genreSlug(one.genre) === genreSlug(genre));
     const files = artists
@@ -928,6 +1278,7 @@ export class AiLabel {
       for (const song of songs) {
         entries.push({ name: `${folder}/${songBase(song)}.mp3`, path: song.file });
         entries.push({ name: `${folder}/${songBase(song)}.lyrics.txt`, bytes: Buffer.from(`${song.lyrics}\n`) });
+        if (song.video) entries.push({ name: `${folder}/${songBase(song)}.mp4`, path: song.video });
       }
       if (album.cover) entries.push({ name: `${folder}/cover.jpg`, path: album.cover });
       entries.push({ name: `${folder}/album.json`, bytes: Buffer.from(`${JSON.stringify({

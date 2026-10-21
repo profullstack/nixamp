@@ -755,7 +755,7 @@ function playMusic(at: number): void {
 async function loadMusic(): Promise<void> {
   // Purchases live on nixamp.com, whichever server is picked.
   if (!onDirectory()) {
-    $("#music-summary").replaceChildren("Your purchases are on ", el("a", { href: "https://nixamp.com/radio#music" }, "nixamp.com/radio"), ".");
+    $("#music-summary").replaceChildren("Your purchases are on ", el("a", { href: "https://nixamp.com/radio#music", target: "_blank", rel: "noopener" }, "nixamp.com/radio"), ".");
     return;
   }
   const response = await fetch("/api/v1/store/purchases", { credentials: "same-origin" });

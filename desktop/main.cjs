@@ -142,6 +142,10 @@ function buildMenu() {
       submenu: [
         { label: "nixamp on GitHub", click: () => void shell.openExternal("https://github.com/profullstack/nixamp") },
         { label: "nixamp.com", click: () => void shell.openExternal("https://nixamp.com") },
+        { type: "separator" },
+        // The AI label: free on the live stations, files sold on nixamp.com.
+        { label: "AI label catalogue", click: () => void shell.openExternal("https://live.streaming.pit.world/label") },
+        { label: "My music (bought)", click: () => void shell.openExternal("https://nixamp.com/radio#music") },
       ],
     },
   ]));
