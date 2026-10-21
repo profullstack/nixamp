@@ -11,7 +11,7 @@
  */
 import type { Channels, ChannelInfo, PullResume } from "./channels.ts";
 import {
-  EXCLUDE_AFTER, OFFLINE_RETRY_MS, RECOVERY_DELAYS_MS, StationError, channelOf, insideRoots, shuffled,
+  EXCLUDE_AFTER, OFFLINE_RETRY_MS, RECOVERY_DELAYS_MS, StationError, channelOf, insideRoots, spreadByArtist,
   stationOfChannel, type Observed, type Station, type StationStore,
 } from "./stations.ts";
 
@@ -29,6 +29,20 @@ export interface RunnerDeps {
   onFailure?: (id: string) => void;
   /** A file for a break on a radio (false) or TV (true) station, or null for none. */
   breaks?: (video: boolean) => Promise<string | null>;
+  /** Who a file is by, from the library's tags, for a shuffle that spreads artists out; "" when unknown. */
+  artistOf?: (file: string) => string;
+}
+
+/**
+ * Who a file is by when the tags do not say: "Artist - Album/track" names
+ * them in the folder, and "Artist/Album/track" one folder up.
+ */
+export function artistFromPath(file: string): string {
+  const parts = file.split(/[\\/]/);
+  const folder = parts[parts.length - 2] ?? "";
+  const dash = folder.indexOf(" - ");
+  if (dash > 0) return folder.slice(0, dash);
+  return parts[parts.length - 3] ?? folder;
 }
 
 /** Something a listener is connected through, that can be ended. */
@@ -151,7 +165,9 @@ export class StationRunner {
           repeat: station.repeat,
           passOver: true,
           // Read at every pass, so turning shuffle on or off lands then.
-          order: (length) => (store.get(id)?.shuffle ? shuffled(length) : [...Array(length).keys()]),
+          order: (length, files) => (store.get(id)?.shuffle
+            ? spreadByArtist(files, (file) => this.deps.artistOf?.(file) || artistFromPath(file))
+            : [...Array(length).keys()]),
           // Read at every track, so an edit lands on the next one.
           current: () => {
             const now = store.get(id);
