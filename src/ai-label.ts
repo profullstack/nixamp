@@ -881,6 +881,8 @@ export class AiLabel {
               song.video = out;
               made += 1;
               this.save();
+              // On the air as soon as it is made, not after the whole pass.
+              await this.placeVideos().catch(() => undefined);
             } catch (error) {
               this.videoFailed.add(song.file);
               this.log(`no video for "${song.title}": ${(error as Error).message}`);
@@ -890,7 +892,6 @@ export class AiLabel {
           }
         }
       }
-      if (made > 0) await this.placeVideos();
     }
     return made;
   }
