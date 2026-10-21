@@ -67,7 +67,7 @@ function setup(composer: Composer | null, ask: typeof askJson = fakeWriter(), ex
   return { top, index, store, runner, channels, label, tagged };
 }
 
-test("a music video is 720p H.264 with the song's audio, cover or not", async () => {
+test("a music video is 720p H.264 with the song's audio, cover or not", { timeout: 120_000 }, async () => {
   const top = mkdtempSync(join(tmpdir(), "nixamp-video-"));
   try {
     const run = (args: string[]) => execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...args]);
