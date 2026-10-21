@@ -20,6 +20,9 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export class VeoBudgetError extends Error {}
+
+/** Google will make no more today (quota) or has no credit left: worth trying fal.ai instead. */
+const GOOGLE_OUT = /quota|prepayment|depleted|RESOURCE_EXHAUSTED|\b429\b/i;
 export class VeoRefused extends Error {}
 
 /** Where the month's spend lives. `reserve` adds `usd` only if that keeps the month at or under `cap`. */
@@ -123,11 +126,67 @@ export class VeoStudio {
     // Reserved first, in one step that will not go over: two at once cannot both squeeze under the cap.
     if (!(await this.options.ledger.reserve(month, cost, this.cap))) throw new VeoBudgetError(`this month's $${this.cap} of Veo is spent`);
     try {
-      return await this.make(input.prompt, seconds, input.references.slice(0, 3));
+      try {
+        return await this.make(input.prompt, seconds, input.references.slice(0, 3));
+      } catch (error) {
+        // Google out of quota for the day, or its prepaid credit spent: the same Veo on fal.ai.
+        if (!this.options.falKey || !(error instanceof VeoRefused) || !GOOGLE_OUT.test(error.message)) throw error;
+        return await this.viaFal(this.options.falKey, input.prompt, seconds, input.references.slice(0, 3));
+      }
     } catch (error) {
       await this.options.ledger.refund(month, cost).catch(() => undefined);
       throw error;
     }
+  }
+
+  /** Veo 3.1 Fast on fal.ai: with the portraits as references when there are any, else from the prompt alone. */
+  private async viaFal(key: string, prompt: string, seconds: number, references: Buffer[]): Promise<Buffer> {
+    const settings = { prompt: prompt.slice(0, 1800), duration: `${seconds}s`, aspect_ratio: "16:9", resolution: "1080p", generate_audio: false };
+    if (references.length) {
+      const image_urls = await Promise.all(references.map((bytes, i) => this.falUpload(key, bytes, "image/jpeg", `ref-${i}.jpg`)));
+      try {
+        return await this.falJob(key, "fal-ai/veo3.1/fast/reference-to-video", { ...settings, image_urls }, "the fal.ai Veo shot");
+      } catch (error) {
+        // A reference shot it will not make is tried once from the words alone.
+        if (!(error instanceof VeoRefused)) throw error;
+      }
+    }
+    return await this.falJob(key, "fal-ai/veo3.1/fast", settings, "the fal.ai Veo shot");
+  }
+
+  /** fal.ai takes inputs by URL only (a data: URI is "invalid"): its own storage first. */
+  private async falUpload(key: string, bytes: Buffer, type: string, name: string): Promise<string> {
+    const send = this.options.fetcher ?? fetch;
+    const init = await send("https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3", { method: "POST", headers: { authorization: `Key ${key}`, "content-type": "application/json" }, body: JSON.stringify({ content_type: type, file_name: name }), signal: AbortSignal.timeout(30_000) });
+    const slot = await init.json().catch(() => ({})) as { upload_url?: string; file_url?: string };
+    if (!slot.upload_url || !slot.file_url) throw new VeoRefused(`fal.ai storage refused the upload (HTTP ${init.status})`);
+    const put = await send(slot.upload_url, { method: "PUT", headers: { "content-type": type }, body: new Uint8Array(bytes), signal: AbortSignal.timeout(120_000) });
+    if (!put.ok) throw new VeoRefused(`fal.ai storage refused the upload (HTTP ${put.status})`);
+    return slot.file_url;
+  }
+
+  /** One fal.ai queue job to its video: submitted, waited on (up to 10 minutes), downloaded. */
+  private async falJob(key: string, model: string, body: Record<string, unknown>, what: string): Promise<Buffer> {
+    const send = this.options.fetcher ?? fetch;
+    const auth = { authorization: `Key ${key}`, "content-type": "application/json" };
+    const started = await send(`https://queue.fal.run/${model}`, { method: "POST", headers: auth, body: JSON.stringify(body), signal: AbortSignal.timeout(60_000) });
+    const job = await started.json().catch(() => ({})) as { status_url?: string; response_url?: string };
+    if (!started.ok || !job.status_url || !job.response_url) throw new VeoRefused(`fal.ai refused ${what}: HTTP ${started.status}`);
+    const sleep = this.options.sleep ?? ((ms: number) => new Promise((done) => setTimeout(done, ms)));
+    for (let tries = 0; tries < 120; tries++) {
+      await sleep(5_000);
+      const state = await (await send(job.status_url, { headers: auth, signal: AbortSignal.timeout(30_000) })).json().catch(() => ({})) as { status?: string };
+      if (state.status !== "COMPLETED") continue;
+      const answer = await send(job.response_url, { headers: auth, signal: AbortSignal.timeout(30_000) });
+      const result = await answer.json().catch(() => ({})) as { video?: { url?: string }; detail?: Array<{ msg?: string }> | string };
+      const why = typeof result.detail === "string" ? result.detail : result.detail?.[0]?.msg;
+      if (!answer.ok || !result.video?.url) throw new VeoRefused(`${what} failed: ${why ?? `HTTP ${answer.status}`}`);
+      const out = await send(result.video.url, { signal: AbortSignal.timeout(120_000) });
+      const bytes = Buffer.from(await out.arrayBuffer());
+      if (!out.ok || bytes.length < 10_000) throw new VeoRefused(`${what} did not download (HTTP ${out.status})`);
+      return bytes;
+    }
+    throw new VeoRefused(`${what} took too long (10 minutes)`);
   }
 
   get canLipsync(): boolean { return Boolean(this.options.falKey); }
@@ -152,35 +211,8 @@ export class VeoStudio {
   }
 
   private async sync(key: string, video: Buffer, audio: Buffer): Promise<Buffer> {
-    const send = this.options.fetcher ?? fetch;
-    const auth = { authorization: `Key ${key}`, "content-type": "application/json" };
-    // fal.ai takes inputs by URL only (a data: URI is "invalid"): its own storage first.
-    const upload = async (bytes: Buffer, type: string, name: string): Promise<string> => {
-      const init = await send("https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3", { method: "POST", headers: auth, body: JSON.stringify({ content_type: type, file_name: name }), signal: AbortSignal.timeout(30_000) });
-      const slot = await init.json().catch(() => ({})) as { upload_url?: string; file_url?: string };
-      if (!slot.upload_url || !slot.file_url) throw new VeoRefused(`fal.ai storage refused the upload (HTTP ${init.status})`);
-      const put = await send(slot.upload_url, { method: "PUT", headers: { "content-type": type }, body: new Uint8Array(bytes), signal: AbortSignal.timeout(120_000) });
-      if (!put.ok) throw new VeoRefused(`fal.ai storage refused the upload (HTTP ${put.status})`);
-      return slot.file_url;
-    };
-    const [videoUrl, audioUrl] = await Promise.all([upload(video, "video/mp4", "shot.mp4"), upload(audio, "audio/mpeg", "vocal.mp3")]);
-    const started = await send("https://queue.fal.run/fal-ai/sync-lipsync/v2", { method: "POST", headers: auth, body: JSON.stringify({ video_url: videoUrl, audio_url: audioUrl }), signal: AbortSignal.timeout(60_000) });
-    const job = await started.json().catch(() => ({})) as { status_url?: string; response_url?: string; detail?: unknown };
-    if (!started.ok || !job.status_url || !job.response_url) throw new VeoRefused(`fal.ai refused the lip sync: HTTP ${started.status}`);
-    const sleep = this.options.sleep ?? ((ms: number) => new Promise((done) => setTimeout(done, ms)));
-    for (let tries = 0; tries < 120; tries++) {
-      await sleep(5_000);
-      const state = await (await send(job.status_url, { headers: auth, signal: AbortSignal.timeout(30_000) })).json().catch(() => ({})) as { status?: string };
-      if (state.status !== "COMPLETED") continue;
-      const answer = await send(job.response_url, { headers: auth, signal: AbortSignal.timeout(30_000) });
-      const result = await answer.json().catch(() => ({})) as { video?: { url?: string }; detail?: Array<{ msg?: string }> };
-      if (!answer.ok || !result.video?.url) throw new VeoRefused(`the lip sync failed: ${result.detail?.[0]?.msg ?? `HTTP ${answer.status}`}`);
-      const out = await send(result.video.url, { signal: AbortSignal.timeout(120_000) });
-      const bytes = Buffer.from(await out.arrayBuffer());
-      if (!out.ok || bytes.length < 10_000) throw new VeoRefused(`the lip-synced clip did not download (HTTP ${out.status})`);
-      return bytes;
-    }
-    throw new VeoRefused("the lip sync took too long (10 minutes)");
+    const [videoUrl, audioUrl] = await Promise.all([this.falUpload(key, video, "video/mp4", "shot.mp4"), this.falUpload(key, audio, "audio/mpeg", "vocal.mp3")]);
+    return await this.falJob(key, "fal-ai/sync-lipsync/v2", { video_url: videoUrl, audio_url: audioUrl }, "the lip sync");
   }
 
   private async make(prompt: string, seconds: number, references: Buffer[]): Promise<Buffer> {

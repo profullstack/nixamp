@@ -122,3 +122,37 @@ test("a lip sync uploads the shot and its seconds of the song to fal.ai, is paid
     rmSync(top, { recursive: true, force: true });
   }
 });
+
+test("when Google is out of quota or credit the same shot is made by Veo on fal.ai, paid once under the cap", async () => {
+  const top = mkdtempSync(join(tmpdir(), "nixamp-falveo-"));
+  try {
+    const models: string[] = [];
+    const fetcher = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith(":predictLongRunning")) return Response.json({ error: { message: "You exceeded your current quota, please check your plan and billing details." } }, { status: 429 });
+      if (url.includes("/storage/upload/initiate")) return Response.json({ upload_url: "https://up.example/put", file_url: `https://cdn.example/${(JSON.parse(String(init?.body)) as { file_name: string }).file_name}` });
+      if (url === "https://up.example/put") return new Response(null, { status: 200 });
+      if (url.startsWith("https://queue.fal.run/")) {
+        const model = url.slice("https://queue.fal.run/".length);
+        models.push(model);
+        const body = JSON.parse(String(init?.body)) as { duration: string; resolution: string; image_urls?: string[] };
+        assert.deepEqual([body.duration, body.resolution], ["8s", "1080p"]);
+        if (model.endsWith("reference-to-video")) assert.deepEqual(body.image_urls, ["https://cdn.example/ref-0.jpg"]);
+        return Response.json({ status_url: "https://queue.example/status", response_url: "https://queue.example/result" });
+      }
+      if (url === "https://queue.example/status") return Response.json({ status: "COMPLETED" });
+      if (url === "https://queue.example/result") return Response.json({ video: { url: "https://cdn.example/veo.mp4" } });
+      if (url === "https://cdn.example/veo.mp4") return new Response(Buffer.alloc(40_000, 3));
+      return new Response("no", { status: 404 });
+    }) as typeof fetch;
+    const studio = new VeoStudio({ key: "k", falKey: "f", ledger: fileLedger(join(top, "veo.json")), monthlyUsd: 10, fetcher, sleep: async () => undefined, now: () => Date.UTC(2026, 9, 21) });
+    const clip = await studio.clip({ prompt: "a band on a stage, wide shot", seconds: 8, references: [Buffer.alloc(2000, 1)] });
+    assert.equal(clip.length, 40_000);
+    assert.deepEqual(models, ["fal-ai/veo3.1/fast/reference-to-video"]);
+    assert.equal((await studio.status()).spentUsd, 1.2, "one shot, counted once");
+    // Without a fal.ai key, Google's refusal stands.
+    const alone = new VeoStudio({ key: "k", ledger: fileLedger(join(top, "v2.json")), fetcher, sleep: async () => undefined });
+    await assert.rejects(alone.clip({ prompt: "a band on a stage, wide shot", seconds: 8, references: [] }), VeoRefused);
+  } finally {
+    rmSync(top, { recursive: true, force: true });
+  }
+});
