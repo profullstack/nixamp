@@ -506,6 +506,7 @@ async function labelCommand(argv: string[], call: Call, show: Show): Promise<num
         resetDay: number("--reset-day"),
         veo: has(argv, "--veo") ? true : has(argv, "--no-veo") ? false : undefined,
         veoShots: number("--veo-shots"),
+        videoUsd: number("--video-usd"),
         lipsyncShots: number("--lipsync-shots"),
         storyShots: number("--story-shots"),
         genreOrder: flag(argv, "--genres"),

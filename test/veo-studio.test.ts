@@ -100,7 +100,7 @@ test("a lip sync uploads the shot and its seconds of the song to fal.ai, is paid
     const fetcher = (async (url: string, init?: RequestInit) => {
       if (url.includes("/storage/upload/initiate")) return Response.json({ upload_url: "https://up.example/put", file_url: `https://cdn.example/${(JSON.parse(String(init?.body)) as { file_name: string }).file_name}` });
       if (url === "https://up.example/put") return new Response(null, { status: 200 });
-      if (url.endsWith("/sync-lipsync/v2")) {
+      if (url.endsWith("/sync-lipsync/v2/pro")) {
         assert.deepEqual(JSON.parse(String(init?.body)), { video_url: "https://cdn.example/shot.mp4", audio_url: "https://cdn.example/vocal.mp3" });
         return Response.json({ status_url: "https://queue.example/status", response_url: "https://queue.example/result" });
       }

@@ -193,7 +193,7 @@ export class VeoStudio {
 
   /**
    * A singer's close-up with the mouth redrawn to `audio` (the same seconds of
-   * the song): Sync's lipsync-2 on fal.ai. Veo's singers mouth a melody of their
+   * the song): Sync's lipsync-2-pro on fal.ai. Veo's singers mouth a melody of their
    * own; this makes them sing ours. Paid under the same monthly cap.
    */
   async lipsync(input: { video: Buffer; audio: Buffer; seconds: number }): Promise<Buffer> {
@@ -212,7 +212,7 @@ export class VeoStudio {
 
   private async sync(key: string, video: Buffer, audio: Buffer): Promise<Buffer> {
     const [videoUrl, audioUrl] = await Promise.all([this.falUpload(key, video, "video/mp4", "shot.mp4"), this.falUpload(key, audio, "audio/mpeg", "vocal.mp3")]);
-    return await this.falJob(key, "fal-ai/sync-lipsync/v2", { video_url: videoUrl, audio_url: audioUrl }, "the lip sync");
+    return await this.falJob(key, "fal-ai/sync-lipsync/v2/pro", { video_url: videoUrl, audio_url: audioUrl }, "the lip sync");
   }
 
   private async make(prompt: string, seconds: number, references: Buffer[]): Promise<Buffer> {
