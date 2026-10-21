@@ -196,3 +196,34 @@ export function applyRemoteConfig(current: PaywallConfig, remote: unknown): Payw
     passMinutes: Number.isFinite(minutes) && minutes > 0 ? Math.floor(minutes) : current.passMinutes,
   };
 }
+
+/**
+ * The crawl door, nixamp.com only: the fleet's day pass ($1 a day over x402, or
+ * any coin / PayPal through CoinPay's hosted checkout) sold on /crawl and charged
+ * to AI training crawlers, headless browsers and SEO scrapers everywhere else.
+ * People, verified search crawlers (Googlebot, Bingbot from their published
+ * ranges) and the AI chat/search fetchers are never charged, nor is anyone
+ * presenting a session. Separate from the listener paywall above, which is about
+ * how busy a stream is rather than who is asking; it signs its passes with its
+ * own secret so a crawl pass is not a listening pass.
+ *
+ * Built only with a scoped key and a payee, so a self-hosted server never sells.
+ */
+export function createCrawlGate(
+  env: NodeJS.ProcessEnv = process.env,
+  exempt: (request: Request) => boolean = () => false,
+) {
+  const apiKey = env["COINPAY_X402_KEY"] ?? "";
+  const payTo = env["CRAWL_PAY_TO"] ?? "";
+  if (!apiKey || !payTo) return null;
+  return createGateway({
+    siteUrl: (env["SITE_URL"] || "https://nixamp.com").replace(/\/+$/, ""),
+    siteName: "nixamp",
+    coinpay: { apiKey },
+    payTo,
+    secret: `${apiKey}:crawl`,
+    contact: "mailto:anthony@profullstack.com",
+    openPaths: ["/api/health", "/llms.txt", "/.well-known/"],
+    exempt,
+  });
+}

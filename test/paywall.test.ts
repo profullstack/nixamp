@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import {
   DEFAULT_PAYWALL,
+  createCrawlGate,
   FREE_LISTENERS,
   applyRemoteConfig,
   isGated,
@@ -149,4 +150,33 @@ test("anything that is not a JSON 402 passes through untouched", async () => {
 
   const broken = new Response("not json", { status: 402, headers: { "content-type": "application/json" } });
   assert.equal((await rewrite(broken, "http://x")).toString("utf8"), "not json");
+});
+
+const CRAWL_ENV = { COINPAY_X402_KEY: "cp_live_test_crawl_key", CRAWL_PAY_TO: "0xCC3b072391AE7A8d10cF00DdC5F61DB2cA5541E5", SITE_URL: "https://nixamp.com" };
+const GPTBOT = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)";
+
+test("the crawl door is off without a key and a payee", () => {
+  assert.equal(createCrawlGate({}), null);
+});
+
+test("the crawl door charges GPTBot with a PAYMENT-REQUIRED header", async () => {
+  const gate = createCrawlGate(CRAWL_ENV)!;
+  const answer = await gate.handle(new Request("http://localhost/", { headers: { "user-agent": GPTBOT, accept: "application/json" } }));
+  assert.equal(answer?.status, 402);
+  assert.ok(answer?.headers.get("payment-required"));
+});
+
+test("the crawl door sells the day pass on /crawl", async () => {
+  const gate = createCrawlGate(CRAWL_ENV)!;
+  const answer = await gate.handle(new Request("http://localhost/crawl", { headers: { "user-agent": "curl/8", accept: "application/json" } }));
+  assert.equal(answer?.status, 402);
+  const body = (await answer!.json()) as { accepts: Array<{ amount: string }> };
+  assert.equal(body.accepts[0]?.amount, "1000000");
+});
+
+test("the crawl door lets a browser and a signed-in session through", async () => {
+  const gate = createCrawlGate(CRAWL_ENV, (r) => (r.headers.get("cookie") ?? "").includes("nixamp_session="))!;
+  const chrome = { "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36", "sec-fetch-mode": "navigate", "sec-fetch-site": "none", "sec-fetch-dest": "document" };
+  assert.equal(await gate.handle(new Request("http://localhost/", { headers: chrome })), null);
+  assert.equal(await gate.handle(new Request("http://localhost/", { headers: { "user-agent": GPTBOT, cookie: "nixamp_session=abc" } })), null);
 });
