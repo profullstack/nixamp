@@ -20,9 +20,12 @@ import { adCsp, withPageAd, type GuideAds } from "./station-guide.ts";
 // MP3 or a zip needs a grant from nixamp.com's store (music-store.ts).
 const FILE = /^\/api\/v1\/label\/([a-f0-9]{10})\/([a-f0-9]{8})\/(\d{1,3}\.(?:txt|mp3)|cover\.jpg)$/;
 
+/** An artist's OpenProfile pages and portraits: artist.md, members/<slug>.md, members/<slug>.jpg. */
+const PROFILE = /^\/api\/v1\/label\/([a-f0-9]{10})\/(artist\.md|members\/[a-z0-9-]{1,40}\.(?:md|jpg))$/;
+
 /** Whether this path is the label's public face (an MP3 or the zip still asks for its grant). */
 export function isPublicLabelPath(path: string): boolean {
-  return path === "/label" || path === "/api/v1/label" || path === "/api/v1/label/zip" || FILE.test(path);
+  return path === "/label" || path === "/api/v1/label" || path === "/api/v1/label/zip" || FILE.test(path) || PROFILE.test(path);
 }
 
 /** nixamp.com's page that sells this: a song, an album or everything by the artist. */
@@ -144,6 +147,16 @@ export async function handleLabelRoutes(
         }
         await writeZip(response, zip.entries).catch(() => response.destroy());
         response.end();
+        return true;
+      }
+      const profile = PROFILE.exec(path);
+      if (profile) {
+        const found = label.profileFile(profile[1]!, profile[2]!);
+        if (!found) {
+          ctx.json(response, 404, { error: "no such profile", code: "not_found" });
+          return true;
+        }
+        sendFile(request, response, found.path, found.type, "");
         return true;
       }
       const [, artist, album, what] = FILE.exec(path)!;
@@ -270,6 +283,11 @@ audio{width:100%;max-width:360px;height:36px}
 details{margin-top:4px}summary{cursor:pointer;color:var(--muted);font-size:.9rem}
 pre.lyrics{white-space:pre-wrap;font:inherit;font-size:.95rem;margin:8px 0 0;padding:12px;border-radius:8px;background:var(--bg)}
 .dl{font-size:.85rem}.soon{color:var(--muted);font-size:.85rem}
+ul.members{list-style:none;margin:12px 0 4px;padding:0;display:flex;flex-wrap:wrap;gap:10px}
+ul.members a{display:flex;gap:8px;align-items:center;color:var(--fg);text-decoration:none;border:1px solid var(--line);border-radius:999px;padding:4px 12px 4px 4px}
+ul.members a:hover,ul.members a:focus-visible{border-color:var(--accent)}
+ul.members img{width:40px;height:40px;border-radius:50%;object-fit:cover;background:var(--line)}
+ul.members span{display:grid;line-height:1.2}ul.members .role{color:var(--muted);font-size:.8rem}
 a.buy{display:inline-block;font-weight:700;text-decoration:none;border:1px solid var(--accent);border-radius:999px;padding:2px 10px}
 footer{margin-top:48px;color:var(--muted);font-size:.85rem}footer a{color:inherit}
 `;
@@ -284,6 +302,16 @@ export const LABEL_CSP = [
 ].join("; ");
 
 type Shop = { site: string; server: string } | undefined;
+
+/** The band: each member's portrait, name and role, linking to their OpenProfile page. */
+function renderMembers(artist: PublicArtist): string {
+  if (!artist.members?.length) return "";
+  const base = `/api/v1/label/${artist.key}`;
+  return `<ul class="members">${artist.members.map((member) => `<li><a href="${base}/members/${escape(member.slug)}.md" title="${escape(member.bio)}">`
+    + `<img src="${base}/members/${escape(member.slug)}.jpg" alt="" width="56" height="56" loading="lazy">`
+    + `<span><strong>${escape(member.name)}</strong><span class="role">${escape(member.role)}</span></span></a></li>`).join("")}</ul>`
+    + `<p class="dl"><a href="${base}/artist.md">${escape(artist.name)}'s profile</a></p>`;
+}
 
 function price(cents: number): string {
   return cents < 100 ? `${cents}¢` : `$${(cents / 100).toFixed(cents % 100 ? 2 : 0)}`;
@@ -313,7 +341,7 @@ export function renderLabel(view: ReturnType<AiLabel["publicView"]>, shop?: Shop
   const nav = view.genres.length > 1 ? `<nav class="genres" aria-label="Genres">${view.genres.map((one) => `<a href="#${escape(one.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}">${escape(one.genre)}</a>`).join("")}</nav>` : "";
   const sections = view.genres.map((genre) => `<section class="genre" id="${escape(genre.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}" aria-labelledby="g-${escape(genre.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}">`
     + `<h2 id="g-${escape(genre.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}">${escape(genre.genre)}${genre.station ? ` <a href="/watch/${escape(genre.station)}">Listen live, free →</a>` : ""}</h2>`
-    + genre.artists.map((artist) => `<article class="artist"><h3>${escape(artist.name)}</h3>${artist.bio ? `<p class="bio">${escape(artist.bio)}</p>` : ""}`
+    + genre.artists.map((artist) => `<article class="artist"><h3>${escape(artist.name)}</h3>${artist.bio ? `<p class="bio">${escape(artist.bio)}</p>` : ""}${renderMembers(artist)}`
       + `${shop ? `<p>${buy(shop, "artist", artist.key, "", 0, "everything by them")}</p>` : ""}`
       + `${artist.albums.map((album) => renderAlbum(artist, album, shop)).join("")}</article>`).join("")
     + `</section>`).join("");

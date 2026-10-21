@@ -26,6 +26,22 @@ artist, album artist, album, genre, track `n/total`, year, the words (`lyrics-en
 the rights holder as publisher and copyright (`℗ 2026 Profullstack, Inc.`). Words in the tags are
 published to nichedb.dev by `lyrics-publish.ts` like any owned station's.
 
+## The people: OpenProfile pages
+
+Each artist is cast once by the language model: one person for a solo act, three to five for a
+band, all fictional. Each member gets an OpenProfile page and a reference portrait in the
+artist's folder:
+
+    <genre>/<artist>/artist.md              the band: genre, label, members, sound, themes, discography
+    <genre>/<artist>/members/<slug>.md      Role, Look, Voice, Personality, Influences, bio
+    <genre>/<artist>/members/<slug>.jpg     the portrait, drawn once from the Look
+
+The pages are the source of truth once written. Edit a member's Look or Voice by hand and the
+next album plan, lyrics, cover and storyboard use the edit, so the same people appear every
+time. If a portrait is missing, it is drawn again. The pages are public at
+`/api/v1/label/<artist>/artist.md` and `…/members/<slug>.md|.jpg`. `/label` shows each band's
+members. A bought artist zip includes them.
+
 ## Genres, the daily album, videos
 
 - **Roster:** three artists in each of Punk, Blues, Country, Jazz, Classic Rock, Metal and
