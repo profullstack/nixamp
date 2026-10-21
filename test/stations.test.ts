@@ -67,6 +67,9 @@ test("a new station is private, stopped and unlisted; public asks on what basis"
     assert.equal(revoked, true);
     assert.equal(hidden.listed, false);
     assert.notEqual(hidden.listenToken, tokenBefore);
+    // ...and forgets its declaration: public again must say on what basis, afresh.
+    assert.equal(hidden.rights, null);
+    assert.throws(() => store.setAccess(station.id, { visibility: "public", listed: true }, "acct"), (error: StationError) => error.code === "rights_required");
 
     // Written down, and read back the same.
     store.setDesired(station.id, "running");

@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { execFileSync } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { AiLabel, cleanLyrics, fileName, genreSlug, renderVideo, ROSTER, songBase } from "../src/ai-label.ts";
+import { dirname, join } from "node:path";
+import { AiLabel, cleanLyrics, fileName, genreSlug, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase } from "../src/ai-label.ts";
 import { elevenLabsComposer, OutOfCredit, type Composer } from "../src/ai-radio.ts";
 import type { askJson } from "../src/ai-text.ts";
 import { Channels } from "../src/channels.ts";
@@ -71,16 +71,77 @@ test("a music video is 720p H.264 with the song's audio, cover or not", async ()
   const top = mkdtempSync(join(tmpdir(), "nixamp-video-"));
   try {
     const run = (args: string[]) => execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...args]);
-    try { run(["-f", "lavfi", "-i", "sine=d=2", "-c:a", "libmp3lame", join(top, "a.mp3")]); } catch { return; } // no ffmpeg here
+    try { run(["-f", "lavfi", "-i", "sine=d=6", "-c:a", "libmp3lame", "-metadata", "title=Song", "-metadata", "artist=Band", "-metadata", "lyrics-eng=[Verse] la la", "-id3v2_version", "3", join(top, "a.mp3")]); } catch { return; } // no ffmpeg here
     run(["-f", "lavfi", "-i", "color=c=red:s=512x512:d=1", "-frames:v", "1", join(top, "c.jpg")]);
+    // A storyboard: scenes that move and cross-fade, as long as the song.
+    const scenes = [0, 1, 2].map((i) => {
+      const file = join(top, `s${i}.jpg`);
+      run(["-f", "lavfi", "-i", `color=c=0x${["2040a0", "a04020", "20a040"][i]}:s=1024x1024:d=1`, "-frames:v", "1", file]);
+      return file;
+    });
+    await renderStoryVideo(["ffmpeg"], { audio: join(top, "a.mp3"), images: scenes, seconds: 6, artist: "Band", title: "Song", out: join(top, "story.mp4") });
+    const story = execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_name,width,height:format_tags=title,artist", "-of", "json", join(top, "story.mp4")], { encoding: "utf8" });
+    assert.match(story, /"width": 1280/);
+    assert.match(story, /"title": "Song"/);
+    assert.ok(Math.abs(Number(/"duration": "([\d.]+)"/.exec(story)![1]) - 6) < 0.5, "as long as the song");
     for (const cover of [join(top, "c.jpg"), ""]) {
       const out = join(top, `v${cover ? 1 : 0}.mp4`);
       await renderVideo(["ffmpeg"], join(top, "a.mp3"), cover, out);
       const probe = execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=codec_name,width,height", "-of", "csv=p=0", out], { encoding: "utf8" });
       assert.match(probe, /h264,1280,720/);
       assert.match(probe, /mp3/);
+      const tags = execFileSync("ffprobe", ["-v", "error", "-show_entries", "format_tags", "-of", "json", out], { encoding: "utf8" });
+      assert.match(tags, /"title": "Song"/);
+      assert.match(tags, /"artist": "Band"/);
+      assert.match(tags, /lyrics-eng/);
     }
+    // One made before videos carried tags gets them without re-encoding.
+    run(["-i", join(top, "v1.mp4"), "-map_metadata", "-1", "-c", "copy", join(top, "bare.mp4")]);
+    await retagVideo(["ffmpeg"], join(top, "bare.mp4"), join(top, "a.mp3"), join(top, "tagged.mp4"));
+    assert.match(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format_tags", "-of", "json", join(top, "tagged.mp4")], { encoding: "utf8" }), /"artist": "Band"/);
   } finally {
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("a song's video is a storyboard of drawn scenes; a cover-only video is made again as one", async () => {
+  const writer = fakeWriter();
+  const asked: string[] = [];
+  const ask: typeof askJson = async (options) => {
+    if (options.system.includes("You storyboard music videos")) {
+      asked.push(options.prompt);
+      return { model: "test-writer", value: { scenes: ["a neon street at night", "a guitarist on a rooftop", "headlights in the rain", "dawn over the city"] } };
+    }
+    return writer(options);
+  };
+  const filmed: Array<{ images: number; seconds: number; title: string }> = [];
+  const { top, label } = setup(fakeComposer([]), ask, {});
+  // Reach the deps the setup made, to add an image model and a storyboard renderer.
+  const deps = (label as unknown as { deps: Record<string, unknown> }).deps;
+  deps["image"] = async () => Buffer.alloc(2048, 3);
+  deps["storyVideo"] = async (input: { images: string[]; seconds: number; title: string; audio: string; out: string }) => {
+    filmed.push({ images: input.images.length, seconds: input.seconds, title: input.title });
+    copyFileSync(input.audio, input.out);
+  };
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, enabled: false });
+    const artist = label.sign({ preset: "no-refunds" });
+    label.configure({ enabled: true });
+    await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
+    await label.videos();
+    const songs = label.get(artist.key)!.albums[0]!.songs;
+    assert.ok(songs.every((song) => song.video && song.videoVersion === 2), "every song has a storyboard video");
+    assert.equal(filmed.length, 3);
+    assert.deepEqual([filmed[0]!.images, filmed[0]!.seconds], [4, 150], "four scenes, as long as the probed song");
+    assert.match(asked[0]!, /Hold on, hold on/, "the storyboard follows the words");
+    assert.equal(readdirSync(dirname(songs[0]!.file)).filter((name) => name.startsWith(".scenes")).length, 0, "scene pictures are cleared away");
+    // An old cover-and-waveform video is made again as a storyboard.
+    songs[0]!.videoVersion = 1;
+    await label.videos();
+    assert.equal(filmed.length, 4);
+    assert.equal(songs[0]!.videoVersion, 2);
+  } finally {
+    label.stopSchedule();
     rmSync(top, { recursive: true, force: true });
   }
 });

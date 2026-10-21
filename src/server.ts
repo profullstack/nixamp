@@ -7370,7 +7370,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   stations.holders = holderStore;
   // Covers read once per file (and its size and time), a few hundred kept.
   const covers = new Map<string, { key: string; picture: { bytes: Buffer; type: string } | null }>();
-  stations.cover = async (file) => {
+  stations.cover = async (playing) => {
+    // A label music video's cover is its song's.
+    const file = aiLabel.audioFor(playing);
     let key = "";
     try { const info = statSync(file); key = `${info.size}:${info.mtimeMs}`; } catch { return null; }
     const hit = covers.get(file);
@@ -7383,7 +7385,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   };
   // The words of what is on: the file's own tag, else nichedb.dev's.
   const lyricsFinder = new LyricsFinder({ tags: (file) => tagReader.read(file), known: (file) => trackFor(engine, file) });
-  stations.lyrics = (_station, file) => lyricsFinder.find(file);
+  stations.lyrics = (_station, file) => lyricsFinder.find(aiLabel.audioFor(file));
   // Our own songs' words, back to nichedb, when a key is set: on any station
   // change, after a library scan, and once at start.
   const lyricsPublisher = new LyricsPublisher({
@@ -7409,9 +7411,11 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     let stamp = "";
     try { stamp = String(Math.round(statSync(file).mtimeMs)); } catch { stamp = ""; }
     const art = picture ? `/api/v1/stations/${station.id}/art?t=${encodeURIComponent(station.listenToken)}&f=${sha("sha1").update(file + stamp).digest("hex").slice(0, 12)}` : "";
-    const words = await lyricsFinder.find(file).catch(() => null);
+    // A label music video is told about as its song: the MP3 holds the tags and the words.
+    const audio = aiLabel.audioFor(file);
+    const words = await lyricsFinder.find(audio).catch(() => null);
     // A label song is for sale on nixamp.com: the song, its album, everything by the artist.
-    const song = aiLabel.songAt(file);
+    const song = aiLabel.songAt(audio);
     const here = stations.publicBase?.() ?? "";
     const shop = (process.env["NIXAMP_SITE"] || "https://nixamp.com").replace(/\/+$/, "");
     const store = song && /^https:\/\//.test(here) ? {
@@ -7425,8 +7429,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       art,
       ...(words ? { lyrics: `/api/v1/stations/${station.id}/lyrics?t=${encodeURIComponent(station.listenToken)}&f=${sha("sha1").update(file + stamp).digest("hex").slice(0, 12)}` } : {}),
       station, file,
-      tags: await tagReader.read(file),
-      known: trackFor(engine, file),
+      tags: await tagReader.read(audio),
+      known: trackFor(engine, audio),
       holders: holderStore.list(),
       share: share ? { basis: share.rights.basis, note: share.rights.note, by: share.by } : null,
       aiTrack: composed ? { made: composed.made } : null,
