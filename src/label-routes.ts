@@ -3,8 +3,8 @@
  *
  * Public, no key: `/label` (the catalogue as a page: every artist, album and
  * song, playable, with its words), `/api/v1/label` (the same as JSON) and
- * `/api/v1/label/<artist>/<album>/<n>.mp3|<n>.txt|cover.jpg` (the released
- * files themselves). The owner's are under /api/v1/stations/label.
+ * `/api/v1/label/<artist>/<album>/<n>.mp3|<n>.txt|<n>.mp4|cover.jpg` (the released
+ * files themselves; a music video is free to watch, like a promo). The owner's are under /api/v1/stations/label.
  */
 import { createHash } from "node:crypto";
 import { createReadStream, statSync } from "node:fs";
@@ -19,7 +19,7 @@ import { adCsp, withPageAd, type GuideAds } from "./station-guide.ts";
 // Listening is free on the live stations (with their breaks); the songs as
 // files are sold, so only the words and the cover are public here, and an
 // MP3 or a zip needs a grant from nixamp.com's store (music-store.ts).
-const FILE = /^\/api\/v1\/label\/([a-f0-9]{10})\/([a-f0-9]{8})\/(\d{1,3}\.(?:txt|mp3)|cover\.jpg)$/;
+const FILE = /^\/api\/v1\/label\/([a-f0-9]{10})\/([a-f0-9]{8})\/(\d{1,3}\.(?:txt|mp3|mp4)|cover\.jpg)$/;
 
 /** An artist's OpenProfile pages and portraits: artist.md, members/<slug>.md, members/<slug>.jpg. */
 const PROFILE = /^\/api\/v1\/label\/([a-f0-9]{10})\/(artist\.md|members\/[a-z0-9-]{1,40}\.(?:md|jpg))$/;

@@ -1662,7 +1662,7 @@ export class AiLabel {
             .filter((album) => album.songs.some((song) => song.file))
             .map((album) => ({
               key: album.key, title: album.title, year: album.year, concept: album.concept, cover: Boolean(album.cover), complete: album.doneAt > 0,
-              songs: album.songs.filter((song) => song.file).map((song) => ({ n: song.n, title: song.title, seconds: song.seconds, lyrics: song.lyrics })),
+              songs: album.songs.filter((song) => song.file).map((song) => ({ n: song.n, title: song.title, seconds: song.seconds, lyrics: song.lyrics, ...(song.video ? { video: true } : {}) })),
             }))
             .reverse(),
         }))
@@ -1671,14 +1671,15 @@ export class AiLabel {
     return { holder: this.settings.holder, genres };
   }
 
-  /** A released file anybody may fetch: a song, its words, or its album's cover. */
+  /** A released file anybody may fetch: its words, its music video, or its album's cover. */
   publicFile(artistKey: string, albumKey: string, what: string): { path: string; type: string } | null {
     const album = this.artists.get(artistKey)?.albums.find((one) => one.key === albumKey);
     if (!album) return null;
     if (what === "cover.jpg") return album.cover ? { path: album.cover, type: "image/jpeg" } : null;
-    const match = /^(\d{1,3})\.(mp3|txt)$/.exec(what);
+    const match = /^(\d{1,3})\.(mp3|txt|mp4)$/.exec(what);
     const song = match ? album.songs.find((one) => one.n === Number(match[1]) && one.file) : undefined;
     if (!song) return null;
+    if (match![2] === "mp4") return song.video ? { path: song.video, type: "video/mp4" } : null;
     return match![2] === "mp3" ? { path: song.file, type: "audio/mpeg" } : { path: song.lyricsFile, type: "text/plain; charset=utf-8" };
   }
 
@@ -1830,5 +1831,5 @@ export interface PublicArtist {
   bio: string;
   /** The people (profile pages at /api/v1/label/<artist>/members/<slug>.md, portraits .jpg). */
   members: Array<{ slug: string; name: string; role: string; bio: string }>;
-  albums: Array<{ key: string; title: string; year: number; concept: string; cover: boolean; complete: boolean; songs: Array<{ n: number; title: string; seconds: number; lyrics: string }> }>;
+  albums: Array<{ key: string; title: string; year: number; concept: string; cover: boolean; complete: boolean; songs: Array<{ n: number; title: string; seconds: number; lyrics: string; video?: boolean }> }>;
 }

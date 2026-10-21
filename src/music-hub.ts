@@ -8,7 +8,7 @@
  * hands covers, portraits and words through itself.
  *
  *   GET /api/v1/music                         the merged catalogue
- *   GET /api/v1/music/file/<server>/<path>    a cover, portrait, profile or words, through nixamp.com
+ *   GET /api/v1/music/file/<server>/<path>    a cover, portrait, profile, words or music video, through nixamp.com
  *   POST /api/v1/music/released               a server says an album or song landed: its followers hear
  */
 import { createHash } from "node:crypto";
@@ -27,7 +27,7 @@ export function artistFollowId(name: string): string {
   return `artist:${slug}`;
 }
 
-interface LabelArtist { key: string; name: string; genre: string; bio: string; members?: Array<{ slug: string; name: string; role: string; bio: string }>; albums: Array<{ key: string; title: string; year: number; concept: string; cover: boolean; complete: boolean; songs: Array<{ n: number; title: string; seconds: number; lyrics?: string }> }> }
+interface LabelArtist { key: string; name: string; genre: string; bio: string; members?: Array<{ slug: string; name: string; role: string; bio: string }>; albums: Array<{ key: string; title: string; year: number; concept: string; cover: boolean; complete: boolean; songs: Array<{ n: number; title: string; seconds: number; lyrics?: string; video?: boolean }> }> }
 interface LabelView { holder: string; genres: Array<{ genre: string; station: string; artists: LabelArtist[] }> }
 interface GuideStation { id: string; name: string; page: string; state: string; group?: string; nowPlaying: { title: string; artist: string } | null }
 
@@ -125,7 +125,7 @@ export class MusicHub {
   }
 }
 
-const FILE = /^\/api\/v1\/music\/file\/([a-f0-9]{10})\/([a-f0-9]{10}\/(?:[a-f0-9]{8}\/(?:\d{1,3}\.txt|cover\.jpg)|artist\.md|members\/[a-z0-9-]{1,40}\.(?:md|jpg)))$/;
+const FILE = /^\/api\/v1\/music\/file\/([a-f0-9]{10})\/([a-f0-9]{10}\/(?:[a-f0-9]{8}\/(?:\d{1,3}\.(?:txt|mp4)|cover\.jpg)|artist\.md|members\/[a-z0-9-]{1,40}\.(?:md|jpg)))$/;
 
 const slugOf = (text: string, max: number): string => text.normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, max);
 
@@ -220,12 +220,15 @@ export async function handleMusicRoutes(request: IncomingMessage, response: Serv
     const base = ctx.hub.resolve(file[1]!);
     if (!base) { ctx.json(response, 404, { error: "no such server" }); return true; }
     try {
-      const upstream = await fetch(`${base}/api/v1/label/${file[2]}`, { signal: AbortSignal.timeout(15_000) });
-      if (!upstream.ok || !upstream.body) { ctx.json(response, upstream.status === 404 ? 404 : 502, { error: "not there" }); return true; }
-      response.writeHead(200, {
+      // A video is asked for in byte ranges (that is how a player seeks); passed on both ways.
+      const range = typeof request.headers.range === "string" ? request.headers.range : "";
+      const upstream = await fetch(`${base}/api/v1/label/${file[2]}`, { signal: AbortSignal.timeout(15_000), ...(range ? { headers: { range } } : {}) });
+      if (!upstream.ok || !upstream.body) { ctx.json(response, upstream.status === 404 ? 404 : upstream.status === 416 ? 416 : 502, { error: "not there" }); return true; }
+      const pass = (name: string): Record<string, string> => (upstream.headers.get(name) ? { [name]: upstream.headers.get(name)! } : {});
+      response.writeHead(upstream.status === 206 ? 206 : 200, {
         "content-type": upstream.headers.get("content-type") ?? "application/octet-stream",
         "cache-control": "public, max-age=3600",
-        ...(upstream.headers.get("content-length") ? { "content-length": upstream.headers.get("content-length")! } : {}),
+        ...pass("content-length"), ...pass("content-range"), ...pass("accept-ranges"),
       });
       if (method === "HEAD") { response.end(); return true; }
       const reader = upstream.body.getReader();

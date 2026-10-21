@@ -78,7 +78,7 @@ test("an empty catalogue (no server has said hello yet) is asked for again in se
 
 test("the app's paths: the pages, the catalogue, files through nixamp.com, and released", () => {
   for (const ok of ["/music", "/music/me", "/music/artist/0123456789/aaaaaaaaaa", "/api/v1/music", "/api/v1/music/released",
-    "/api/v1/music/file/0123456789/aaaaaaaaaa/bbbbbbbb/cover.jpg", "/api/v1/music/file/0123456789/aaaaaaaaaa/bbbbbbbb/3.txt",
+    "/api/v1/music/file/0123456789/aaaaaaaaaa/bbbbbbbb/cover.jpg", "/api/v1/music/file/0123456789/aaaaaaaaaa/bbbbbbbb/3.txt", "/api/v1/music/file/0123456789/aaaaaaaaaa/bbbbbbbb/3.mp4",
     "/api/v1/music/file/0123456789/aaaaaaaaaa/members/kai-rylan.jpg", "/api/v1/music/file/0123456789/aaaaaaaaaa/artist.md"]) assert.ok(isMusicPath(ok), ok);
   for (const no of ["/musical", "/api/v1/music/file/0123456789/aaaaaaaaaa/bbbbbbbb/1.mp3", "/api/v1/music/file/x/../../etc/passwd"]) assert.ok(!isMusicPath(no), no);
 });
