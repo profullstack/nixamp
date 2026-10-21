@@ -83,3 +83,10 @@
 .targets { display: flex; gap: 16px; flex-wrap: wrap; margin: 6px 0; }
 .targets label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
 .targets a { font-size: 13px; }
+
+/* On the air: every public station, for anybody. */
+.on-air-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.on-air-card a { display: grid; gap: 4px; border: 1px solid var(--edge); border-radius: 6px; padding: 8px 10px; color: var(--fg); text-decoration: none; }
+.on-air-card a:hover, .on-air-card a:focus-visible { border-color: var(--green); }
+.on-air-card .state { justify-self: start; }
+.on-air-card .muted { font-size: 12px; overflow-wrap: anywhere; }

@@ -338,6 +338,9 @@ export class StationStore {
     }
     let listed = access.listed === undefined ? station.listed : access.listed === true;
     if (visibility !== "public") listed = false;
+    // Made private, a station forgets what was declared for it: going public
+    // again asks afresh, so a stale (or false) declaration cannot republish it.
+    if (visibility === "private" && !access.rights) station.rights = null;
     if (access.rights) {
       const basis = access.rights.basis;
       if (typeof basis !== "string" || !RIGHTS_BASES.includes(basis as RightsBasis)) {

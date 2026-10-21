@@ -28,7 +28,7 @@
  */
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { aiKey } from "./ai-keys.ts";
 import { composerFromEnv, OutOfCredit, type Composer } from "./ai-radio.ts";
@@ -51,6 +51,10 @@ export interface LabelSong {
   lyricsFile: string;
   /** Its music video (001. <title>.mp4), "" until made; absent on songs from before videos. */
   video?: string;
+  /** Whether the video carries its song's tags (videos from 0.52.1 and before do not, until retagged). */
+  videoTagged?: boolean;
+  /** 2 for a storyboard video (scenes that move); absent or 1 for the cover-and-waveform kind, which is made again. */
+  videoVersion?: number;
   /** Who wrote the words and who sang them, e.g. "llama-3.3 + elevenlabs/music_v2_5". */
   made: string;
   composedAt: number;
@@ -518,11 +522,98 @@ export async function workersAiCover(prompt: string, env: Record<string, string 
   return image;
 }
 
-/** Writes the tags (and the cover, as the attached picture) into a copy of the file. */
+const STORYBOARD_SYSTEM = [
+  "You storyboard music videos for original songs. Write one image prompt per scene, in order, following the song's story and mood.",
+  "Keep the same main character(s), setting and color palette across scenes so it reads as one video; vary the shots (wide, close-up, action, detail).",
+  "Each prompt: cinematic, photorealistic or stylized to suit the genre, at most 300 characters. No text, letters, logos, real people or real brands.",
+  "Answer as JSON: {\"scenes\": [\"prompt\", ...]}.",
+].join(" ");
+
+/** Image prompts for a song's video, one a scene, from its words and mood. */
+export async function writeStoryboard(
+  artist: Pick<LabelArtist, "name" | "genre" | "sound">,
+  album: Pick<LabelAlbum, "title" | "concept">,
+  song: Pick<LabelSong, "title" | "style" | "lyrics">,
+  scenes: number,
+  ask: typeof askJson = askJson,
+): Promise<string[]> {
+  const answer = await ask({
+    system: STORYBOARD_SYSTEM,
+    prompt: [
+      `Song: "${song.title}" by ${artist.name} (${artist.genre}; ${artist.sound}), from "${album.title}"${album.concept ? `: ${album.concept}` : ""}`,
+      `Mood and arrangement: ${song.style}`,
+      song.lyrics ? `Lyrics:\n${song.lyrics.slice(0, 1800)}` : "",
+      `Exactly ${scenes} scenes.`,
+    ].filter(Boolean).join("\n"),
+    maxTokens: 2500,
+    timeoutMs: 90_000,
+  });
+  const list = Array.isArray(answer.value["scenes"]) ? answer.value["scenes"] : [];
+  const prompts = list.map((one) => clean(one, 400)).filter((one) => one.length > 10).slice(0, scenes);
+  if (prompts.length < 2) throw new Error("the model wrote no storyboard");
+  return prompts;
+}
+
+/** The DejaVu bold face most Linux boxes have, for the title card; "" when there is none. */
+function titleFont(): string {
+  for (const file of ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"]) {
+    try { if (statSync(file).isFile()) return file; } catch { /* next */ }
+  }
+  return "";
+}
+
+/** ffmpeg at the lowest priority, so the stations it shares the machine with come first. */
+function runLow(ffmpeg: string[], args: string[], timeout: number, what: string): Promise<void> {
+  const nice = process.platform === "linux" ? (() => { try { return statSync("/usr/bin/nice").isFile(); } catch { return false; } })() : false;
+  const [bin, rest] = nice ? ["/usr/bin/nice", ["-n", "19", ffmpeg[0]!, ...args]] : [ffmpeg[0]!, args];
+  return new Promise((done, fail) => {
+    execFile(bin, rest, { timeout, maxBuffer: 4 * 1024 * 1024 }, (error) => (error ? fail(new Error(`${what}: ${error.message}`)) : done()));
+  });
+}
+
 /**
- * A song's music video: its album cover over a blurred copy of itself, the
- * song's waveform along the bottom, 720p H.264 with the MP3's audio copied in.
- * Without a cover, a dark plate.
+ * A song's music video from its storyboard: each scene's picture moves (a
+ * slow zoom in, a pan, a zoom out, a pan back, in turn), scenes cross-fade,
+ * the artist and title come up at the start, and the MP3's audio and tags
+ * (title, artist, album, words) are copied in. 720p H.264.
+ */
+export function renderStoryVideo(ffmpeg: string[], input: { audio: string; images: string[]; seconds: number; artist: string; title: string; out: string }): Promise<void> {
+  const fade = 1;
+  const count = input.images.length;
+  const each = input.seconds / count + fade;
+  const frames = Math.max(25, Math.round(each * 25));
+  const moves = [
+    `z='1+0.15*on/${frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`,
+    `z='1.15':x='(iw-iw/zoom)*on/${frames}':y='ih/2-(ih/zoom/2)'`,
+    `z='1.15-0.15*on/${frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`,
+    `z='1.15':x='(iw-iw/zoom)*(1-on/${frames})':y='(ih-ih/zoom)*on/${frames}'`,
+  ];
+  const parts: string[] = [];
+  input.images.forEach((_, i) => {
+    parts.push(`[${i}:v]scale=1600:900:force_original_aspect_ratio=increase,crop=1600:900,zoompan=${moves[i % moves.length]}:d=1:s=1280x720:fps=25,setsar=1[v${i}]`);
+  });
+  let last = "v0";
+  for (let i = 1; i < count; i++) {
+    parts.push(`[${last}][v${i}]xfade=transition=fade:duration=${fade}:offset=${(i * (each - fade)).toFixed(2)}[x${i}]`);
+    last = `x${i}`;
+  }
+  const font = titleFont();
+  const card = `${input.artist} — ${input.title}`.replace(/[\\':%]/g, " ").slice(0, 80);
+  parts.push(font
+    ? `[${last}]drawtext=fontfile=${font}:text='${card}':fontcolor=white:fontsize=44:x=60:y=h-110:enable='between(t,0.5,6)':alpha='if(lt(t,1.5),t-0.5,if(gt(t,5),6-t,1))':shadowcolor=black@0.7:shadowx=2:shadowy=2,format=yuv420p[v]`
+    : `[${last}]format=yuv420p[v]`);
+  const args = ["-hide_banner", "-loglevel", "error", "-y", "-threads", "2",
+    ...input.images.flatMap((image) => ["-loop", "1", "-t", each.toFixed(2), "-i", image]),
+    "-i", input.audio, "-filter_complex", parts.join(";"),
+    "-map", "[v]", "-map", `${count}:a`, "-map_metadata", String(count), "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-r", "25", "-c:a", "copy", "-shortest",
+    "-movflags", "+faststart+use_metadata_tags", input.out];
+  return runLow(ffmpeg, [...ffmpeg.slice(1), ...args], 60 * 60_000, "the video failed");
+}
+
+/**
+ * A song's music video without a storyboard: its album cover over a blurred
+ * copy of itself, the song's waveform along the bottom, 720p H.264 with the
+ * MP3's audio and tags copied in. Without a cover, a dark plate.
  */
 export function renderVideo(ffmpeg: string[], audio: string, cover: string, out: string): Promise<void> {
   const picture = cover ? ["-loop", "1", "-framerate", "25", "-i", cover] : ["-f", "lavfi", "-i", "color=c=0x0d1410:s=1280x720:r=25"];
@@ -534,12 +625,21 @@ export function renderVideo(ffmpeg: string[], audio: string, cover: string, out:
     "[a][viz]overlay=0:H-160,format=yuv420p[v]",
   ].join(";");
   const args = [...ffmpeg.slice(1), "-hide_banner", "-loglevel", "error", "-y", ...picture, "-i", audio, "-filter_complex", graph,
-    "-map", "[v]", "-map", "1:a", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-r", "25", "-c:a", "copy", "-shortest", "-movflags", "+faststart", out];
+    "-map", "[v]", "-map", "1:a", "-map_metadata", "1", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-r", "25", "-c:a", "copy", "-shortest",
+    "-movflags", "+faststart+use_metadata_tags", out];
+  return runLow(ffmpeg, args, 20 * 60_000, "the video failed");
+}
+
+/** A video made before videos carried tags, given its song's: streams copied, nothing re-encoded. */
+export function retagVideo(ffmpeg: string[], video: string, audio: string, out: string): Promise<void> {
+  const args = [...ffmpeg.slice(1), "-hide_banner", "-loglevel", "error", "-y", "-i", video, "-i", audio,
+    "-map", "0:v", "-map", "0:a", "-map_metadata", "1", "-c", "copy", "-movflags", "+faststart+use_metadata_tags", out];
   return new Promise((done, fail) => {
-    execFile(ffmpeg[0]!, args, { timeout: 20 * 60_000 }, (error) => (error ? fail(new Error(`the video failed: ${error.message}`)) : done()));
+    execFile(ffmpeg[0]!, args, { timeout: 5 * 60_000 }, (error) => (error ? fail(new Error(`retagging the video failed: ${error.message}`)) : done()));
   });
 }
 
+/** Writes the tags (and the cover, as the attached picture) into a copy of the file. */
 function tagFile(ffmpeg: string[], from: string, to: string, tags: Record<string, string>, cover: string): Promise<void> {
   const args = [...ffmpeg.slice(1), "-hide_banner", "-loglevel", "error", "-y", "-i", from];
   if (cover) args.push("-i", cover, "-map", "0:a", "-map", "1:v", "-c", "copy", "-disposition:v", "attached_pic");
@@ -574,6 +674,10 @@ export interface AiLabelDeps {
   tag?: (from: string, to: string, tags: Record<string, string>, cover: string) => Promise<void>;
   /** Renders a song's music video to `out`; ffmpeg by default (renderVideo). */
   video?: (audio: string, cover: string, out: string) => Promise<void>;
+  /** Renders a storyboard music video; ffmpeg by default (renderStoryVideo). */
+  storyVideo?: (input: { audio: string; images: string[]; seconds: number; artist: string; title: string; out: string }) => Promise<void>;
+  /** A scene's picture for this prompt, or null when nothing can draw one; Workers AI by default. */
+  image?: (prompt: string) => Promise<Buffer | null>;
   /** The day's pick (artist, genre, new or not); Math.random by default. */
   random?: () => number;
   now?: () => number;
@@ -596,6 +700,8 @@ export class AiLabel {
   private filming: Promise<number> | null = null;
   /** Songs whose video failed since this server started. */
   private videoFailed = new Set<string>();
+  /** Old videos already tried as storyboards since this server started. */
+  private upgradeTried = new Set<string>();
   /** The day's album is tried at most every 30 minutes, so a failing model is not hammered. */
   private dailyTriedAt = 0;
   /** Genre stations are kept in step one change at a time. */
@@ -865,35 +971,102 @@ export class AiLabel {
     return total;
   }
 
+  /**
+   * One pass: songs without a video first, then old videos given their
+   * song's tags (seconds each), then old cover-and-waveform videos made again
+   * as storyboards.
+   */
   private async filmPass(): Promise<number> {
+    const songs = this.list().flatMap((artist) => artist.albums
+      .filter((album) => album.cover || album.coverTried)
+      .flatMap((album) => album.songs.filter((song) => song.file && !this.videoFailed.has(song.file)).map((song) => ({ artist, album, song }))));
+    const missing = songs.filter(({ song }) => !song.video);
+    const untagged = songs.filter(({ song }) => song.video && !song.videoTagged);
+    const old = songs.filter(({ song }) => song.video && song.videoTagged && (song.videoVersion ?? 1) < 2 && !this.upgradeTried.has(song.file));
     let made = 0;
-    {
-      for (const artist of this.list()) {
-        for (const album of artist.albums) {
-          if (!album.cover && !album.coverTried) continue;
-          for (const song of album.songs) {
-            if (!song.file || song.video || this.videoFailed.has(song.file) || !this.settings.videos) continue;
-            const out = join(album.folder, `${songBase(song)}.mp4`);
-            const partial = join(album.folder, `.${randomBytes(4).toString("hex")}.video.mp4`);
-            try {
-              await (this.deps.video ?? ((audio, cover, to) => renderVideo(this.deps.ffmpeg, audio, cover, to)))(song.file, album.cover, partial);
-              renameSync(partial, out);
-              song.video = out;
-              made += 1;
-              this.save();
-              // On the air as soon as it is made, not after the whole pass.
-              await this.placeVideos().catch(() => undefined);
-            } catch (error) {
-              this.videoFailed.add(song.file);
-              this.log(`no video for "${song.title}": ${(error as Error).message}`);
-            } finally {
-              rmSync(partial, { force: true });
-            }
-          }
-        }
+    for (const { album, song } of untagged) {
+      if (!this.settings.videos) break;
+      // Made before videos carried tags: give it its song's, in place.
+      const partial = join(album.folder, `.${randomBytes(4).toString("hex")}.retag.mp4`);
+      try {
+        await retagVideo(this.deps.ffmpeg, song.video!, song.file, partial);
+        renameSync(partial, song.video!);
+        song.videoTagged = true;
+        made += 1;
+        this.save();
+      } catch (error) {
+        this.log(`could not tag the video of "${song.title}": ${(error as Error).message}`);
+        song.videoTagged = true; // a storyboard remake brings the tags anyway
+      } finally {
+        rmSync(partial, { force: true });
+      }
+    }
+    for (const { artist, album, song } of [...missing, ...old]) {
+      if (!this.settings.videos) break;
+      // An old video is only made again as a storyboard, and tried once a run.
+      const upgrade = Boolean(song.video);
+      if (upgrade) this.upgradeTried.add(song.file);
+      const out = join(album.folder, `${songBase(song)}.mp4`);
+      const partial = join(album.folder, `.${randomBytes(4).toString("hex")}.video.mp4`);
+      const scenes = join(album.folder, `.scenes-${song.n}-${randomBytes(3).toString("hex")}`);
+      try {
+        song.videoVersion = await this.filmSong(artist, album, song, scenes, partial, upgrade);
+        renameSync(partial, out);
+        song.video = out;
+        song.videoTagged = true;
+        made += 1;
+        this.save();
+        // On the air as soon as it is made, not after the whole pass.
+        await this.placeVideos().catch(() => undefined);
+      } catch (error) {
+        if (!upgrade) this.videoFailed.add(song.file);
+        this.log(`no ${upgrade ? "storyboard " : ""}video for "${song.title}": ${(error as Error).message}`);
+      } finally {
+        rmSync(partial, { force: true });
+        rmSync(scenes, { recursive: true, force: true });
       }
     }
     return made;
+  }
+
+  /**
+   * One song's video: a storyboard of scenes when a model can write it and an
+   * image model can draw it (version 2), else the cover-and-waveform kind (1).
+   */
+  private async filmSong(artist: LabelArtist, album: LabelAlbum, song: LabelSong, scenes: string, out: string, storyOnly = false): Promise<number> {
+    let seconds = song.seconds;
+    try {
+      const probed = await this.deps.probe(song.file);
+      if (probed.duration > 5) seconds = probed.duration;
+    } catch { /* the asked-for length */ }
+    const images: string[] = [];
+    if (this.canAsk()) {
+      try {
+        const count = Math.max(4, Math.min(16, Math.round(seconds / 9)));
+        const prompts = await writeStoryboard(artist, album, song, count, this.deps.ask ?? askJson);
+        mkdirSync(scenes, { recursive: true });
+        const draw = this.deps.image ?? ((prompt: string) => workersAiCover(prompt));
+        // A few at a time: the image model is quick, the machine is shared.
+        for (let i = 0; i < prompts.length; i += 3) {
+          const drawn = await Promise.all(prompts.slice(i, i + 3).map((prompt) => draw(`${prompt} Cinematic 16:9 music video still, no text.`).catch(() => null)));
+          drawn.forEach((picture, j) => {
+            if (!picture) return;
+            const file = join(scenes, `${String(i + j).padStart(2, "0")}.jpg`);
+            writeFileSync(file, picture);
+            images.push(file);
+          });
+        }
+      } catch (error) {
+        this.log(`no storyboard for "${song.title}" (${(error as Error).message}); the cover video instead`);
+      }
+    }
+    if (images.length >= 2) {
+      await (this.deps.storyVideo ?? ((input) => renderStoryVideo(this.deps.ffmpeg, input)))({ audio: song.file, images, seconds, artist: artist.name, title: song.title, out });
+      return 2;
+    }
+    if (storyOnly) throw new Error("no storyboard could be drawn; the video it has stays");
+    await (this.deps.video ?? ((audio, cover, to) => renderVideo(this.deps.ffmpeg, audio, cover, to)))(song.file, album.cover, out);
+    return 1;
   }
 
   /** The label's music videos as one TV station: free to watch, with its breaks. */
@@ -1255,6 +1428,18 @@ export class AiLabel {
       }
     }
     return null;
+  }
+
+  /** The song's MP3 when `file` is one of the label's music videos (it holds the tags, cover and words); else `file`. */
+  audioFor(file: string): string {
+    if (!file.endsWith(".mp4")) return file;
+    for (const artist of this.artists.values()) {
+      for (const album of artist.albums) {
+        const song = album.songs.find((one) => one.video === file);
+        if (song) return song.file;
+      }
+    }
+    return file;
   }
 
   /** A released song's MP3, when this grant's scope covers it. */
