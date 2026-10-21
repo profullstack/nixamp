@@ -22,7 +22,7 @@ export interface PlaylistInput {
    * pass: a station-wide shuffle is one order for everybody listening, drawn
    * again each time round. Unset is the list's own order.
    */
-  order?: (length: number) => number[];
+  order?: (length: number, files: readonly string[]) => number[];
   /** Read at every entry boundary, so an edit to the list lands on the next track. */
   current?: () => string[];
   /** Entries already known not to play, passed over without being tried. */
@@ -56,7 +56,7 @@ export const MAX_FAILURES_IN_A_ROW = 5;
  * whose input codecs differ. Only one entry is encoded at a time, with pipe
  * backpressure bounding read-ahead independently of the directory's size. */
 export class PlaylistInputStream {
-  private entries: { at: number; file: string; start: number; position: number }[] = [];
+  private entries: { at: number; file: string; start: number; position: number; list: readonly string[] }[] = [];
   error: Error | null = null;
   complete = false;
   /**
@@ -68,14 +68,20 @@ export class PlaylistInputStream {
   constructor(private readonly options: PlaylistInput) {}
 
   /** Every entry that has started, in the order it started, with where it sits in the stream. */
-  get history(): ReadonlyArray<{ at: number; file: string; start: number; position: number }> {
+  get history(): ReadonlyArray<{ at: number; file: string; start: number; position: number; list: readonly string[] }> {
     return this.entries;
   }
 
-  place(seconds: number): { at: number; position: number } {
+  /**
+   * What is on at this point of the stream. `at` indexes `list`, the list as
+   * it was when that entry started: a station re-reads its list at every
+   * boundary, so after the library changes the index no longer fits the
+   * list the channel was dialled with.
+   */
+  place(seconds: number): { at: number; position: number; list: readonly string[] } {
     const entry = this.entries.findLast(one => seconds >= one.start) ?? this.entries[0];
-    return entry ? { at: entry.at, position: Math.max(0, seconds - entry.start + entry.position) }
-      : { at: this.options.at, position: this.options.position };
+    return entry ? { at: entry.at, position: Math.max(0, seconds - entry.start + entry.position), list: entry.list }
+      : { at: this.options.at, position: this.options.position, list: this.options.files };
   }
 
   /** The decoder for the entry that is on, so skip() can end it early. */
@@ -101,7 +107,7 @@ export class PlaylistInputStream {
     let first = true;
     try {
       const orderFor = (list: string[]): number[] =>
-        o.order ? o.order(list.length).filter((one) => one >= 0 && one < list.length) : list.map((_, index) => index);
+        o.order ? o.order(list.length, list).filter((one) => one >= 0 && one < list.length) : list.map((_, index) => index);
       let files = o.current?.() ?? o.files;
       if (files.length === 0) throw new Error("The playlist is empty");
       let order = orderFor(files);
@@ -173,7 +179,7 @@ export class PlaylistInputStream {
             const room = o.video && !isBreak && o.breaks && every > 0 ? every - (offset - lastBreak) : Infinity;
             const cut = room >= 1 && full - room > 5;
             const duration = cut ? room : full;
-            this.entries.push({ at, file, start: offset, position });
+            this.entries.push({ at, file, start: offset, position, list: files });
             const hasVideo = Boolean(codecs.video);
             const extra = o.video && !hasVideo
               ? ["-f", "lavfi", "-i", `color=c=black:s=${width}x${height}:r=30`]

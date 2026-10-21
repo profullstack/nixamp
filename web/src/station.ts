@@ -355,8 +355,12 @@ const listen = (): void => {
   source.addEventListener("hello", (e) => {
     events = true;
     const s = JSON.parse((e as MessageEvent).data) as StationState;
-    title(s);
-    if (s.facts !== undefined) showFacts(s.facts); else void loadFacts();
+    // Also sent on every reconnect, mid-song: what the encoder is on, which
+    // the player reaches only after what it already holds.
+    setTimeout(() => {
+      title(s);
+      if (s.facts !== undefined) showFacts(s.facts); else void loadFacts();
+    }, ahead() * 1000);
   });
   source.addEventListener("now", (e) => {
     const s = JSON.parse((e as MessageEvent).data) as StationState;

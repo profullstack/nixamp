@@ -7212,6 +7212,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     breaks: (video) => stationBreaks.next(video ? "video" : "audio"),
     onRestart: (id) => stationUsage.restarted(id),
     onFailure: (id) => stationUsage.failed(id),
+    artistOf: (file) => trackFor(engine, file)?.artist ?? "",
     store: stationStore,
     channels,
     pull: async (channelId, name, files, known) =>
