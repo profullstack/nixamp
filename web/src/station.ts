@@ -29,6 +29,8 @@ interface StationState {
   description: string;
   state: "live" | "starting" | "recovering" | "stopped" | "offline" | string;
   nowPlaying: NowPlaying | null;
+  /** Seconds into what is on, and how long it is, as the server last saw. */
+  progress?: { position: number; duration: number } | null;
   kind: "audio" | "video";
   facts?: TrackFacts | null;
 }
@@ -272,8 +274,36 @@ function again(): void {
   timer = window.setTimeout(() => mount(true), Math.min(15000, 1000 * 2 ** Math.min(retry, 4)));
 }
 
+/** Where the server said the track was, and when we heard it: the bar runs on from there. */
+let progressSeen: { position: number; duration: number; at: number } | null = null;
+
+const clockOf = (seconds: number): string => {
+  const whole = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  const s = String(whole % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+};
+
+/** The progress bar: what the listener hears, so the player's buffer is taken off. */
+const tickProgress = (): void => {
+  const box = $("#progress");
+  if (!progressSeen) { box.hidden = true; return; }
+  const heard = progressSeen.position + (Date.now() - progressSeen.at) / 1000 - ahead();
+  const at = Math.min(progressSeen.duration, Math.max(0, heard));
+  const bar = $<HTMLProgressElement>("#progress-bar");
+  bar.max = progressSeen.duration;
+  bar.value = at;
+  bar.setAttribute("aria-valuetext", `${clockOf(at)} of ${clockOf(progressSeen.duration)}`);
+  $("#progress-time").textContent = `${clockOf(at)} / ${clockOf(progressSeen.duration)}`;
+  box.hidden = false;
+};
+setInterval(tickProgress, 500);
+
 function draw(s: StationState): void {
   last = s;
+  progressSeen = s.progress && s.progress.duration > 0 ? { ...s.progress, at: Date.now() } : null;
+  tickProgress();
   document.title = s.name + " · nixamp";
   $("#name").textContent = s.name;
   $("#about").textContent = s.description || "";

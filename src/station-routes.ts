@@ -66,6 +66,8 @@ export interface StationContext {
   throttle?: () => { retryAfter: number } | null;
   /** What a listener may know about the track on the air (track-facts.ts). */
   facts?: (station: Station, file: string) => Promise<TrackFacts>;
+  /** How long a file is, in seconds (the library's probe); 0 when unknown. For the page's progress bar. */
+  durationOf?: (file: string) => number;
   /** The cover picture inside a file (JPEG/PNG bytes), or null. */
   cover?: (file: string) => Promise<{ bytes: Buffer; type: string } | null>;
   /** The words of a file, from its tags or nichedb; null when none are known. */
@@ -116,6 +118,10 @@ export function publicView(ctx: StationContext, station: Station): PublicStation
   // What the channel is carrying wins over the flag: a station made by hand
   // from films streams video whether or not anyone said so.
   const video = station.video || ctx.channels.kindOf(channelOf(station.id)) === "video";
+  // How far into the song (or film) on the air, by the encoder's clock, and how long it is.
+  const position = file ? ctx.channels.info(channelOf(station.id))?.position : undefined;
+  const duration = file && ctx.durationOf ? ctx.durationOf(file) : 0;
+  const progress = typeof position === "number" && duration > 0 ? { position: Math.round(Math.min(position, duration) * 10) / 10, duration: Math.round(duration * 10) / 10 } : null;
   return {
     id: station.id,
     name: station.name,
@@ -124,6 +130,7 @@ export function publicView(ctx: StationContext, station: Station): PublicStation
     state,
     // Tags, or nothing: a bare file name is the owner's, not the public's.
     nowPlaying: track && (track.title || track.artist) ? track : null,
+    progress,
     kind: video ? "video" : "audio",
     format: state === "stopped" || state === "offline" ? null : video
       ? { codec: "h264+aac", bitrateKbps: station.bitrate, sampleRate: 48_000, channels: 2 }

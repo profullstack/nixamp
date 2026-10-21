@@ -717,6 +717,37 @@ async function makeStation(form: HTMLFormElement): Promise<void> {
   notice(`Station ${made.station.name} made; it is private and stopped. Use "Who can listen" to put it on the air.`, "ok");
 }
 
+/* ---- On the air (public, for anybody) ------------------------------------- */
+
+interface OnAir { id: string; name: string; group?: string; kind: string; state: string; page: string; nowPlaying: { title: string; artist: string } | null }
+
+const GROUP_WORDS: Record<string, string> = { ai: "AI Radio", radio: "Radio", tv: "TV", shared: "Shared by listeners", rooms: "Live rooms", vod: "On demand" };
+
+/** Every public station anywhere, from nixamp.com's guide: no sign-in, no server picked. */
+async function loadOnAir(): Promise<void> {
+  const site = onDirectory() ? "" : "https://nixamp.com";
+  const body = await (await fetch(`${site}/api/v1/stations/guide`)).json() as { stations?: OnAir[] };
+  const stations = (body.stations ?? []).filter((one) => /^https:\/\//.test(one.page));
+  const box = $("#on-air-list");
+  if (stations.length === 0) {
+    box.replaceChildren(el("p", { class: "hint" }, "Nothing is on the air right now."));
+    return;
+  }
+  const groups = [...new Set(stations.map((one) => one.group ?? (one.kind === "video" ? "tv" : "radio")))]
+    .sort((a, b) => Object.keys(GROUP_WORDS).indexOf(a) - Object.keys(GROUP_WORDS).indexOf(b));
+  box.replaceChildren(...groups.map((group) => el("div", { class: "on-air-group" },
+    el("h3", { class: "radio-subtitle" }, GROUP_WORDS[group] ?? group),
+    el("ul", { class: "on-air-cards" }, ...stations.filter((one) => (one.group ?? (one.kind === "video" ? "tv" : "radio")) === group).map((one) =>
+      el("li", { class: "on-air-card" },
+        el("a", { href: one.page, target: "_blank", rel: "noopener" },
+          el("span", { class: `state ${one.state === "live" ? "state-live" : "state-stopped"}` }, one.state === "live" ? "Live" : "Off"),
+          el("strong", {}, one.name),
+          el("span", { class: "muted" }, one.nowPlaying ? [one.nowPlaying.title, one.nowPlaying.artist].filter(Boolean).join(" · ") : ""),
+        ),
+      ))),
+  )));
+}
+
 /* ---- My music (bought on nixamp.com) -------------------------------------- */
 
 interface Bought {
@@ -940,6 +971,9 @@ async function start(): Promise<void> {
   wirePlayer();
   wireLabel();
   wireMusic();
+  // What is on, for anybody: before (and whatever) the sign-in says.
+  void loadOnAir().catch(() => undefined);
+  setInterval(() => void loadOnAir().catch(() => undefined), 30_000);
   $<HTMLFormElement>("#search-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
@@ -1003,9 +1037,11 @@ async function start(): Promise<void> {
   setInterval(() => void loadSummary().catch(() => undefined), 15_000);
   setInterval(() => void loadClasses().then(drawStations).catch(() => undefined), 15_000);
   if (!first) {
-    notice(onDirectory()
-      ? "Sign in to nixamp.com to see your servers here. A server shows up once it has run signed in to your account (nixamp login on that machine)."
-      : "This page manages the server it is on.");
+    // Not an error: anybody may come here for what is on the air. Managing needs a sign-in.
+    const hint = onDirectory()
+      ? "Sign in to nixamp.com to manage your own stations, library and label here. A server shows up once it has run signed in to your account (nixamp login on that machine)."
+      : "This page manages the server it is on.";
+    for (const id of ["#station-list", "#label-artists"]) $(id).replaceChildren(el("p", { class: "hint" }, hint));
     return;
   }
   picker.value = first.id;

@@ -338,6 +338,9 @@ export class StationStore {
     }
     let listed = access.listed === undefined ? station.listed : access.listed === true;
     if (visibility !== "public") listed = false;
+    // Made private, a station forgets what was declared for it: going public
+    // again asks afresh, so a stale (or false) declaration cannot republish it.
+    if (visibility === "private" && !access.rights) station.rights = null;
     if (access.rights) {
       const basis = access.rights.basis;
       if (typeof basis !== "string" || !RIGHTS_BASES.includes(basis as RightsBasis)) {
@@ -470,6 +473,8 @@ export interface PublicStation {
   /** Radio or TV. */
   kind: "audio" | "video";
   nowPlaying: { title: string; artist: string; album: string } | null;
+  /** Seconds into what is on and how long it is, when both are known. */
+  progress?: { position: number; duration: number } | null;
   format: { codec: string; bitrateKbps: number; sampleRate: number; channels: number } | null;
   listeners: number;
 }
