@@ -2889,7 +2889,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // llms.txt, the OpenAPI document, the health check and the desktop downloads (nixamp.com).
       !(isDiscoveryPath(path) && Boolean(options.accounts && options.site)) &&
       // Supporting a copyright holder is for anybody listening.
-      !/^\/support\/[a-z0-9-]{1,40}$/.test(path) && path !== "/support/cancel" && !/^\/api\/v1\/support\/[a-z0-9-]{1,40}$/.test(path) &&
+      !/^\/support\/[a-z0-9-]{1,40}$/.test(path) && path !== "/support/cancel" && !/^\/support\/pay\/[0-9a-f-]{36}\/[0-9a-f]{32}$/.test(path) && !/^\/api\/v1\/support\/[a-z0-9-]{1,40}$/.test(path) &&
       // A station's short link, which sends the browser to wherever it plays.
       !/^\/watch\/[a-z0-9]{10}$/.test(path) &&
       // A live room's page: the room's own key travels in ?play=, checked by its server.
@@ -2981,6 +2981,41 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       const safe = words.replace(/[&<>"']/g, (one) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[one]!);
       response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'", "referrer-policy": "no-referrer" });
       response.end(request.method === "HEAD" ? undefined : `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Support · nixamp</title><body style="margin:0;background:#080c09;color:#e8efe9;font:16px/1.5 system-ui,sans-serif"><main style="max-width:520px;margin:0 auto;padding:48px 16px"><h1 style="font-size:1.4rem">Monthly support</h1><p>${safe}</p><p><a style="color:#3ddc84" href="https://nixamp.com/guide">Back to the stations</a></p></main></body>`);
+      return;
+    }
+
+    /*
+     * A monthly support's "pay this month" link, from its emails: a fresh
+     * CoinPay checkout session each time it is followed (one still open is
+     * reused), so a late payer is never sent to an expired session.
+     */
+    const supportPay = /^\/support\/pay\/([0-9a-f-]{36})\/([0-9a-f]{32})$/.exec(path);
+    if (supportPay && options.supportSubscriptions && (request.method === "GET" || request.method === "HEAD")) {
+      const page = (status: number, words: string, again?: string): void => {
+        const safe = (text: string): string => text.replace(/[&<>"']/g, (one) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[one]!);
+        response.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'", "referrer-policy": "no-referrer", "x-robots-tag": "noindex" });
+        response.end(request.method === "HEAD" ? undefined : `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Support · nixamp</title><body style="margin:0;background:#080c09;color:#e8efe9;font:16px/1.5 system-ui,sans-serif"><main style="max-width:520px;margin:0 auto;padding:48px 16px"><h1 style="font-size:1.4rem">Monthly support</h1><p>${safe(words)}</p>${again ? `<p><a style="color:#3ddc84" href="${safe(again)}">${safe(again.includes("/support/pay/") ? "Try again" : "Start again")}</a></p>` : ""}<p><a style="color:#3ddc84" href="https://nixamp.com/guide">Back to the stations</a></p></main></body>`);
+      };
+      // A HEAD (a mail scanner checking the link) never opens a checkout.
+      if (request.method === "HEAD") { page(200, ""); return; }
+      const verdict = guard.check(`support-pay:${callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, { allowed: 10, windowMs: 60_000 });
+      if (!verdict.ok) { page(429, "Too many at once; wait a minute and open the link again."); return; }
+      try {
+        const opened = await options.supportSubscriptions.open(supportPay[1]!, supportPay[2]!);
+        if (opened.state === "redirect") {
+          response.writeHead(303, { location: opened.url, "cache-control": "no-store", "referrer-policy": "no-referrer" });
+          response.end();
+          return;
+        }
+        const name = options.support?.holder(opened.holder)?.name ?? opened.holder;
+        const site = options.site ?? "https://nixamp.com";
+        if (opened.state === "paid") page(200, `This month's support for ${name} is paid. Thank you. Next month's link comes by email.`);
+        else if (opened.state === "canceled") page(200, `Your monthly support for ${name} was cancelled, so there is nothing to pay.`, `${site}/support/${opened.holder}`);
+        else page(200, `Your monthly support for ${name} stopped after a month went unpaid. Nothing is owed.`, `${site}/support/${opened.holder}`);
+      } catch (error) {
+        if (error instanceof SupportError) page(error.status, error.message, error.status >= 500 ? `${url.pathname}` : undefined);
+        else page(502, "The payment service did not answer; nothing was charged. Try the link again in a minute.", url.pathname);
+      }
       return;
     }
 
@@ -8034,7 +8069,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ? new TranslationPasses({ db: pool, key: coinpayKeyFrom(), site: nixampSite, admins: [options.owner || ""] }) : undefined;
   // Payments to the copyright holders nixamp.com collects for, on its own CoinPay business.
   const supportPayments = accounts ? new Support({ key: coinpayKeyFrom(), site: nixampSite, holders: supportHoldersFrom() }) : undefined;
-  // Monthly support: each month a new CoinPay payment and its link by email.
+  // Monthly support: each month its stable pay link by email (a fresh CoinPay session per click).
   const supportMonthly = supportPayments && supportPayments.enabled && pool ? new SupportSubscriptions({
     db: pool as unknown as import("./support.ts").Db,
     support: supportPayments,
