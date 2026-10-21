@@ -92,7 +92,7 @@ import { LyricsFinder } from "./lyrics.ts";
 import { LyricsPublisher } from "./lyrics-publish.ts";
 import { aiKey } from "./ai-keys.ts";
 import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML, WATCH_APP_CSP } from "./station-page.ts";
-import { handleRooms, RoomProbe, roomEntries, RoomStore, watchBase } from "./guide-rooms.ts";
+import { handleRoomProxy, handleRooms, isRoomPath, ROOM_PAGE, roomAddress, RoomProbe, roomEntries, roomSlugOf, roomSlugs, RoomStore, watchBase } from "./guide-rooms.ts";
 import { handleVods, VodProbe, vodEntries, VodStore, vodView } from "./guide-vods.ts";
 import { withPitFooter } from "./pit-footer.ts";
 import { handleFollowPage } from "./follow-page.ts";
@@ -2861,6 +2861,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !/^\/watch\/[a-z0-9]{10}$/.test(path) &&
       // A live room's page: the room's own key travels in ?play=, checked by its server.
       !(path === "/watch" && Boolean(options.stations?.rooms)) &&
+      // A live room under its name here, asked of its server with the key held here (guide-rooms.ts).
+      !(isRoomPath(path) && Boolean(options.stations?.rooms)) &&
       // Live rooms on the guide: listed for anybody, published by a member (guide-rooms.ts).
       !((path === "/api/v1/guide/rooms" || path.startsWith("/api/v1/guide/rooms/")) && Boolean(options.stations?.rooms)) &&
       // On demand: a file's page and the guide's list of them (guide-vods.ts); the file's own key travels in its play address.
@@ -3076,7 +3078,56 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // A live room's page: /watch?play=<a nixamp server's channel or live
     // stream address>. The built page plays it in @profullstack/player, as a
     // film or as radio; nothing about the room passes through here.
+    if (options.stations?.rooms && isRoomPath(path)) {
+      const rooms = options.stations.rooms;
+      if (await handleRoomProxy(request, response, path, { store: rooms.store, probe: rooms.probe, refuse: (link) => refusedDestination(link), json })) return;
+      const asked = ROOM_PAGE.exec(path)![1]!;
+      const slugs = roomSlugs(rooms.store.list());
+      const room = slugs.get(asked);
+      if (!room) {
+        // A room's id finds its name: /room/<id> goes to /room/<name>.
+        const named = roomSlugOf(slugs, asked);
+        if (named) {
+          response.writeHead(301, { location: `/room/${named}`, "cache-control": "public, max-age=300" });
+          response.end();
+          return;
+        }
+      }
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        json(response, 405, { error: "method not allowed", code: "method_not_allowed" });
+        return;
+      }
+      const built = web !== null && isFile(join(web, "watch.html")) ? readFileSync(join(web, "watch.html"), "utf8") : null;
+      if (!built) {
+        json(response, 404, { error: "this server was started without its web pages" });
+        return;
+      }
+      const base = radioBaseFor(request, options.stations.publicBase?.() ?? "");
+      const nav = radioNav(guideHosts().has(requestHost) ? "/" : "/guide", "live");
+      const face = room ? { name: room.name, description: room.note || `${room.name}, live now on live.streaming.`, video: room.kind === "video" } : { name: "No such room" };
+      response.writeHead(room ? 200 : 404, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-cache",
+        "content-security-policy": adCsp(WATCH_APP_CSP, guideAds()),
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(request.method === "HEAD" ? undefined : withPageAd(asRadioPage(built, face, asked, base, nav, `/room/${asked}`), guideAds()));
+      return;
+    }
+
     if (options.stations?.rooms && path === "/watch" && (request.method === "GET" || request.method === "HEAD")) {
+      // A room published here plays under its name: the old link keeps working and lands there.
+      const play = roomAddress(url.searchParams.get("play") ?? "");
+      if (play) {
+        const slugs = roomSlugs(options.stations.rooms.store.list());
+        const published = [...slugs].find(([, one]) => one.play === play.play)?.[0];
+        if (published) {
+          response.writeHead(302, { location: `/room/${published}`, "cache-control": "no-store", "referrer-policy": "no-referrer" });
+          response.end();
+          return;
+        }
+      }
       const built = web !== null && isFile(join(web, "watch.html")) ? withPageAd(readFileSync(join(web, "watch.html"), "utf8"), guideAds()) : null;
       if (!built) {
         json(response, 404, { error: "this server was started without its web pages" });

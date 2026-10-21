@@ -37,6 +37,12 @@ interface StationState {
   facts?: TrackFacts | null;
 }
 
+/**
+ * The site name the tab shows after the station's: what the server wrote
+ * (" · live.streaming" on a /radio page, " · nixamp" on a station link).
+ */
+const TITLE_SUFFIX = / · [^·]+$/.exec(document.title)?.[0] ?? " · nixamp";
+
 /** /radio/<name>: the same station under a public name, its own paths, no token in the address. */
 const radio = /^\/radio\/[a-z0-9-]+\/?$/.test(location.pathname);
 const id = location.pathname.split("/").filter(Boolean)[1] ?? "";
@@ -385,7 +391,7 @@ function draw(s: StationState): void {
   last = s;
   progressSeen = s.progress && s.progress.duration > 0 ? { ...s.progress, at: Date.now() } : null;
   tickProgress();
-  document.title = s.name + " · nixamp";
+  document.title = s.name + TITLE_SUFFIX;
   $("#name").textContent = s.name;
   $("#about").textContent = s.description || "";
   $("#about").hidden = !s.description;
