@@ -50,23 +50,29 @@ test("the OpenAPI document is 3.1, points at the site, and marks the signed-in r
   assert.ok(doc.paths["/mcp/public"]!["post"]);
 });
 
-test("a failed ask of GitHub keeps the last answer and does not ask again for ten minutes", async () => {
+test("the latest release is read from github.com's redirect, not the rate-limited API, and a failed ask keeps the last answer", async () => {
   let now = 0;
   let calls = 0;
   let fail = false;
-  const fetcher = (async () => {
+  const asked: string[] = [];
+  const fetcher = (async (url: string | URL) => {
     calls += 1;
+    asked.push(String(url));
     if (fail) throw new Error("offline");
-    return new Response(JSON.stringify(release), { headers: { "content-type": "application/json" } });
+    return new Response(null, { status: 302, headers: { location: "https://github.com/profullstack/nixamp/releases/tag/v0.65.1" } });
   }) as unknown as typeof fetch;
   const latest = latestRelease(fetcher, () => now);
-  assert.equal((await latest())?.tag_name, "v0.63.3");
+  const first = await latest();
+  assert.equal(first?.tag_name, "v0.65.1");
+  assert.equal(desktopAsset(first, "mac-arm64"), `${RELEASES}/download/v0.65.1/nixamp-0.65.1-mac-arm64.dmg`);
+  assert.equal(desktopAsset(first, "linux-x64"), `${RELEASES}/download/v0.65.1/nixamp-0.65.1-linux-x86_64.AppImage`);
+  assert.deepEqual(asked, [`${RELEASES}/latest`]);
   now = 60_000;
   await latest();
   assert.equal(calls, 1);
   fail = true;
   now = 11 * 60_000;
-  assert.equal((await latest())?.tag_name, "v0.63.3");
+  assert.equal((await latest())?.tag_name, "v0.65.1");
   assert.equal(calls, 2);
 });
 

@@ -11,7 +11,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export const RELEASES = "https://github.com/profullstack/nixamp/releases";
-const LATEST_API = "https://api.github.com/repos/profullstack/nixamp/releases/latest";
 
 /** Each installer release.yml builds, by the address /download/<target> gives it. */
 export const DESKTOP_TARGETS: ReadonlyArray<{ target: string; label: string; suffix: string }> = [
@@ -39,19 +38,27 @@ export function desktopAsset(release: Release | null, target: string): string | 
 }
 
 /**
- * The latest published release, asked of GitHub at most every ten minutes. A
- * failed ask keeps the last answer; with none, the downloads fall back to the
- * releases page, which is never wrong, only one click longer.
+ * The latest published release, from where github.com/.../releases/latest
+ * redirects (the tag), asked at most every ten minutes. Not the REST API: its
+ * 60 an hour unauthenticated are shared by every site on the box, and ran out.
+ * The installers are named by version (release.yml), and a release is only
+ * published once every one of them is attached. A failed ask keeps the last
+ * answer; with none, the downloads fall back to the releases page.
  */
 export function latestRelease(fetcher: typeof fetch = fetch, now: () => number = Date.now): () => Promise<Release | null> {
   let kept: { at: number; release: Release | null } = { at: -Infinity, release: null };
   return async () => {
     if (now() - kept.at < 10 * 60_000) return kept.release;
     try {
-      const response = await fetcher(LATEST_API, { headers: { accept: "application/vnd.github+json", "user-agent": "nixamp.com" }, signal: AbortSignal.timeout(8_000) });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.json() as Release;
-      kept = { at: now(), release: { tag_name: String(body.tag_name ?? ""), assets: Array.isArray(body.assets) ? body.assets : [] } };
+      const response = await fetcher(`${RELEASES}/latest`, { method: "HEAD", redirect: "manual", headers: { "user-agent": "nixamp.com" }, signal: AbortSignal.timeout(8_000) });
+      const tag = /\/releases\/tag\/(v\d+\.\d+\.\d+)$/.exec(response.headers.get("location") ?? "")?.[1];
+      if (!tag) throw new Error(`no release tag (HTTP ${response.status})`);
+      const version = tag.slice(1);
+      const assets = DESKTOP_TARGETS.map((one) => {
+        const name = `nixamp-${version}${one.suffix}`;
+        return { name, browser_download_url: `${RELEASES}/download/${tag}/${name}` };
+      });
+      kept = { at: now(), release: { tag_name: tag, assets } };
     } catch {
       kept = { at: now(), release: kept.release };
     }
