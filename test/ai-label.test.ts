@@ -6,7 +6,7 @@ import { createServer as createHttpServer } from "node:http";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { AiLabel, cleanLyrics, fileName, genreSlug, nextReset, periodOf, renderFilmedVideo, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines, VeoUnavailable } from "../src/ai-label.ts";
+import { AiLabel, cleanLyrics, closeUpTimes, fileName, genreSlug, nextReset, periodOf, renderFilmedVideo, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines, VeoUnavailable } from "../src/ai-label.ts";
 import { elevenLabsComposer, OutOfCredit, type Composer } from "../src/ai-radio.ts";
 import type { askJson } from "../src/ai-text.ts";
 import { Channels } from "../src/channels.ts";
@@ -334,6 +334,84 @@ test("a single that comes up short keeps what was filmed, retries a 503, and an 
     assert.equal(song.videoVersion, 5);
   } finally {
     label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("close-ups go on sung lines near a quarter and three quarters in, never over the title card or each other", () => {
+  assert.deepEqual(closeUpTimes(120, [], 2), [30, 90], "without timed words: the points themselves");
+  assert.deepEqual(closeUpTimes(120, [{ start: 3 }, { start: 27.5 }, { start: 33 }, { start: 88.25 }, { start: 115 }], 2), [27.5, 88.25], "the nearest sung lines");
+  assert.deepEqual(closeUpTimes(120, [{ start: 2 }, { start: 30 }, { start: 33 }], 2), [30], "never two on top of each other");
+  assert.deepEqual(closeUpTimes(120, [], 1), [40]);
+  assert.deepEqual(closeUpTimes(10, [], 2), [], "a song too short for one");
+  assert.deepEqual(closeUpTimes(120, [], 0), []);
+});
+
+test("a single's singer is filmed in close-ups, each lip-synced to its seconds of the song and pinned there; one that fails is left out", { timeout: 120_000 }, async () => {
+  const { top, label } = setup(fakeComposer([]), fakeWriter(), {});
+  const deps = (label as unknown as { deps: Record<string, unknown> }).deps;
+  const run = (args: string[]) => execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...args]);
+  try {
+    try { run(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=24:d=8", "-c:v", "libx264", "-pix_fmt", "yuv420p", join(top, "tiny.mp4")]); } catch { return; } // no ffmpeg here
+    run(["-f", "lavfi", "-i", "sine=d=150", "-c:a", "libmp3lame", "-b:a", "32k", join(top, "song.mp3")]);
+    const tiny = readFileSync(join(top, "tiny.mp4"));
+    deps["log"] = (line: string) => { if (process.env["LABEL_DEBUG"]) console.log(line); };
+    const prompts: string[] = [];
+    deps["veo"] = async (shot: { prompt: string }) => { prompts.push(shot.prompt); return tiny; };
+    const synced: number[] = [];
+    let failing = false;
+    deps["lipsync"] = async (input: { video: Buffer; audio: Buffer; seconds: number }) => {
+      if (failing) throw new Error("the lip sync failed: no face found");
+      synced.push(input.audio.length);
+      return tiny;
+    };
+    const cuts: Array<{ clips: number; pinned: Array<{ at: number }> }> = [];
+    deps["filmedVideo"] = async (input: { audio: string; out: string; clips: unknown[]; pinned?: Array<{ at: number }> }) => { cuts.push({ clips: input.clips.length, pinned: input.pinned ?? [] }); copyFileSync(input.audio, input.out); };
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, veo: true, veoShots: 2, lipsyncShots: 2, enabled: false });
+    const artist = label.sign({ preset: "no-refunds" });
+    label.configure({ enabled: true });
+    await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
+    const song = label.get(artist.key)!.albums[0]!.songs[0]!;
+    copyFileSync(join(top, "song.mp3"), song.file);
+    await label.videos();
+    assert.equal(prompts.length, 4, "two of the band, two of the singer");
+    assert.equal(prompts.filter((one) => /whole mouth/.test(one)).length, 2, "the singer's mouth kept clear for the sync");
+    assert.equal(prompts.filter((one) => /Nobody sings/.test(one)).length, 2);
+    assert.equal(synced.length, 2, "both close-ups synced");
+    assert.ok(synced.every((bytes) => bytes > 1000), "each with its seconds of the song");
+    assert.deepEqual(cuts[0]!.pinned.map((one) => one.at), [38, 113], "pinned where they were synced (150 s, no timed words)");
+    assert.equal(song.videoVersion, 5);
+    assert.equal(readdirSync(dirname(song.file)).filter((name) => name.startsWith(".veo-")).length, 0, "shots cleared once cut");
+    // A second single whose syncs fail: the video is the band alone.
+    failing = true;
+    const second = label.sign({ preset: "velvet-ruckus" });
+    await idle(label, () => Boolean(label.get(second.key)!.albums[0]?.doneAt));
+    copyFileSync(join(top, "song.mp3"), label.get(second.key)!.albums[0]!.songs[0]!.file);
+    await label.videos();
+    assert.deepEqual(cuts[1]!.pinned, [], "no unsynced singer");
+    assert.equal(cuts[1]!.clips, 2);
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("a lip-synced close-up plays at exactly its second of the song, the band cut around it", { timeout: 120_000 }, async () => {
+  const top = mkdtempSync(join(tmpdir(), "nixamp-pinned-"));
+  try {
+    const run = (args: string[]) => execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...args]);
+    try { run(["-f", "lavfi", "-i", "sine=d=20", "-c:a", "libmp3lame", join(top, "a.mp3")]); } catch { return; }
+    run(["-f", "lavfi", "-i", "color=c=blue:s=1280x720:r=24:d=8", "-c:v", "libx264", "-pix_fmt", "yuv420p", join(top, "band.mp4")]);
+    run(["-f", "lavfi", "-i", "color=c=red:s=1280x720:r=24:d=8", "-c:v", "libx264", "-pix_fmt", "yuv420p", join(top, "singer.mp4")]);
+    await renderFilmedVideo(["ffmpeg"], { audio: join(top, "a.mp3"), clips: [{ path: join(top, "band.mp4"), seconds: 8 }], pinned: [{ path: join(top, "singer.mp4"), at: 7, seconds: 8 }], seconds: 20, artist: "Band", title: "Song", out: join(top, "film.mp4") });
+    const pixel = (at: number): number[] => [...execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-ss", String(at), "-i", join(top, "film.mp4"), "-frames:v", "1", "-vf", "crop=8:8:600:200,scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])];
+    const red = (rgb: number[]): boolean => rgb[0]! > 150 && rgb[2]! < 100;
+    assert.ok(!red(pixel(6.5)), "the band before");
+    assert.ok(red(pixel(7.3)) && red(pixel(14.7)), "the close-up from 7 s to 15 s");
+    assert.ok(!red(pixel(15.5)), "the band after");
+    const length = Number(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", join(top, "film.mp4")], { encoding: "utf8" }));
+    assert.ok(Math.abs(length - 20) < 0.6, `20 s of song, ${length} s of video`);
+  } finally {
     rmSync(top, { recursive: true, force: true });
   }
 });
