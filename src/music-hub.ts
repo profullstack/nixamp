@@ -66,7 +66,10 @@ export class MusicHub {
   catalogue(): Promise<HubCatalogue> {
     if (this.cache && this.now() - this.cache.at < 60_000) return this.cache.value;
     const value = this.gather().catch((error: unknown) => { this.cache = null; throw error; });
-    this.cache = { at: this.now(), value };
+    const entry = { at: this.now(), value };
+    this.cache = entry;
+    // Nothing yet (nixamp.com just restarted and no server has said hello): ask again in 10 s, not a minute.
+    void value.then((one) => { if (one.genres.length === 0 && this.cache === entry) entry.at = this.now() - 50_000; }).catch(() => undefined);
     return value;
   }
 

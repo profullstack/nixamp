@@ -66,6 +66,16 @@ test("live.streaming's /radio artist and album addresses find the same page of t
   assert.equal(await musicPageFor(hub, "/radio/artist/nobody"), "");
 });
 
+test("an empty catalogue (no server has said hello yet) is asked for again in seconds, not a minute", async () => {
+  let now = 0;
+  let peers: string[] = [];
+  const hub = new MusicHub({ peers: () => peers, fetcher: fetcher([]), now: () => now });
+  assert.equal((await hub.catalogue()).genres.length, 0);
+  peers = [S1];
+  now += 11_000;
+  assert.equal((await hub.catalogue()).genres.length, 1);
+});
+
 test("the app's paths: the pages, the catalogue, files through nixamp.com, and released", () => {
   for (const ok of ["/music", "/music/me", "/music/artist/0123456789/aaaaaaaaaa", "/api/v1/music", "/api/v1/music/released",
     "/api/v1/music/file/0123456789/aaaaaaaaaa/bbbbbbbb/cover.jpg", "/api/v1/music/file/0123456789/aaaaaaaaaa/bbbbbbbb/3.txt",
