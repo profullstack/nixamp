@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { VeoBudgetError, VeoRefused, VeoStudio } from "../src/veo-studio.ts";
+import { fileLedger, pgLedger, VeoBudgetError, VeoRefused, VeoStudio } from "../src/veo-studio.ts";
 import { veoPrompts } from "../src/ai-label.ts";
 
 function veoFake(outcome: "ok" | "filtered" | "refused", seen: Array<Record<string, unknown>>): typeof fetch {
@@ -27,17 +27,17 @@ test("Veo shots are paid for under the month's cap, reserved first and given bac
   try {
     const seen: Array<Record<string, unknown>> = [];
     let now = Date.UTC(2026, 9, 21);
-    const make = (outcome: "ok" | "filtered" | "refused") => new VeoStudio({ key: "k", file: join(top, "veo.json"), monthlyUsd: 3, usdPerSecond: 0.15, fetcher: veoFake(outcome, seen), sleep: async () => undefined, now: () => now });
+    const make = (outcome: "ok" | "filtered" | "refused") => new VeoStudio({ key: "k", ledger: fileLedger(join(top, "veo.json")), monthlyUsd: 3, usdPerSecond: 0.15, fetcher: veoFake(outcome, seen), sleep: async () => undefined, now: () => now });
     const studio = make("ok");
     const clip = await studio.clip({ prompt: "a band on a stage, wide shot", seconds: 8, references: [Buffer.alloc(2000, 1)] });
     assert.equal(clip.length, 20_000);
     const asked = seen[0] as { instances: Array<{ referenceImages?: Array<{ referenceType: string; image: { mimeType: string } }> }>; parameters: { durationSeconds: number; aspectRatio: string } };
     assert.deepEqual([asked.parameters.durationSeconds, asked.parameters.aspectRatio, asked.instances[0]!.referenceImages?.[0]?.referenceType], [8, "16:9", "asset"]);
-    assert.deepEqual([studio.status().spentUsd, studio.status().leftUsd], [1.2, 1.8]);
+    assert.deepEqual([(await studio.status()).spentUsd, (await studio.status()).leftUsd], [1.2, 1.8]);
     // A filtered or refused shot costs nothing.
     await assert.rejects(make("filtered").clip({ prompt: "a band on a stage, wide shot", seconds: 8, references: [] }), VeoRefused);
     await assert.rejects(make("refused").clip({ prompt: "a band on a stage, wide shot", seconds: 8, references: [] }), VeoRefused);
-    assert.equal(make("ok").status().spentUsd, 1.2, "kept on disk, and refunds kept too");
+    assert.equal((await make("ok").status()).spentUsd, 1.2, "kept on disk, and refunds kept too");
     // Over the cap: refused before Google is asked.
     await studio.clip({ prompt: "a band on a stage, close-up", seconds: 8, references: [] });
     const before = seen.length;
@@ -45,10 +45,36 @@ test("Veo shots are paid for under the month's cap, reserved first and given bac
     assert.equal(seen.length, before, "nothing was asked of Google");
     // Next month, a fresh cap.
     now = Date.UTC(2026, 10, 2);
-    assert.equal(studio.status().spentUsd, 0);
+    assert.equal((await studio.status()).spentUsd, 0);
   } finally {
     rmSync(top, { recursive: true, force: true });
   }
+});
+
+test("the Postgres ledger keeps the month's spend and never lets a reservation pass the cap", async () => {
+  const rows = new Map<string, number>();
+  const db = {
+    async query(text: string, params: unknown[] = []) {
+      const [month, usd, cap] = params as [string, number, number];
+      if (text.startsWith("CREATE")) return { rows: [] };
+      if (text.startsWith("SELECT")) return { rows: rows.has(month) ? [{ usd: String(rows.get(month)) }] : [] };
+      if (text.startsWith("INSERT")) { if (!rows.has(month)) rows.set(month, 0); return { rows: [] }; }
+      if (text.includes("usd + $2 <= $3")) {
+        if (!rows.has(month) || rows.get(month)! + usd > cap) return { rows: [] };
+        rows.set(month, rows.get(month)! + usd);
+        return { rows: [{ usd: rows.get(month) }] };
+      }
+      if (text.includes("GREATEST")) { if (rows.has(month)) rows.set(month, Math.max(0, rows.get(month)! - usd)); return { rows: [] }; }
+      throw new Error(`unexpected ${text}`);
+    },
+  };
+  const ledger = pgLedger(db);
+  assert.equal(await ledger.spent("2026-10"), 0);
+  assert.equal(await ledger.reserve("2026-10", 1.2, 2), true);
+  assert.equal(await ledger.reserve("2026-10", 1.2, 2), false);
+  await ledger.refund("2026-10", 1.2);
+  assert.equal(await ledger.reserve("2026-10", 2, 2), true, "exactly the cap is allowed");
+  assert.equal(await pgLedger(db).spent("2026-10"), 2, "a new process reads what the last one spent");
 });
 
 test("Veo prompts describe the band by role and look, never by name", () => {
