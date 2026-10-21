@@ -127,3 +127,24 @@ test("skip ends the entry that is on, and the next starts where it stopped", { s
     assert.equal(list.skip(), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("what is on is read from the list its entry came from, not the list the stream began with", { skip: !available, timeout: 60_000 }, async () => {
+  const f = fixture();
+  try {
+    // A library rescan puts a new track ahead of b: b's index moves from 1 to 2.
+    const first = [f.a, f.b];
+    let files = first;
+    const list = stream(files, { repeat: true, current: () => files });
+    let edited = false;
+    await drain(list, 2, () => {
+      if (!edited && list.history.length === 1) { files = [f.a, f.c, f.b]; edited = true; }
+    });
+    for (const one of list.history) {
+      const place = list.place(one.start + 0.1);
+      assert.equal(place.list[place.at], one.file);
+    }
+    // The index alone, looked up in the first list, names the wrong track.
+    const second = list.history[1]!;
+    assert.notEqual(first[list.place(second.start + 0.1).at], second.file);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
