@@ -30,10 +30,33 @@ export const RADIO_ARTIST = /^\/radio\/artist\/([a-z0-9-]{1,90})\/?$/;
 export const RADIO_ALBUM = /^\/radio\/album\/([a-z0-9-]{1,100})(\/cover\.jpg)?\/?$/;
 
 export function isRadioPath(path: string): boolean {
-  return path === "/radio" || path === "/radio/" || RADIO_SUB.test(path) || RADIO_STATION.test(path) || RADIO_ARTIST.test(path) || RADIO_ALBUM.test(path);
+  return path === "/radio" || path === "/radio/" || path === RADIO_BUY || RADIO_SUB.test(path) || RADIO_STATION.test(path) || RADIO_ARTIST.test(path) || RADIO_ALBUM.test(path);
 }
 
-const RESERVED = new Set(["artist", "album", "artists", "albums"]);
+const RESERVED = new Set(["artist", "album", "artists", "albums", "buy"]);
+
+/**
+ * Buy, through this server: a 302 to nixamp.com's store page for it, so the
+ * link on a /radio page does not carry the machine the music is on.
+ */
+export const RADIO_BUY = "/radio/buy";
+
+/** /radio/buy?kind=&artist=&album=&n=, checked: the label's keys and nothing else. */
+export function radioBuyQuery(query: URLSearchParams): { kind: "song" | "album" | "artist"; artist: string; album: string; n: number } | null {
+  const kind = query.get("kind");
+  const artist = query.get("artist") ?? "";
+  const album = query.get("album") ?? "";
+  const n = Number(query.get("n") ?? 0);
+  if (kind !== "song" && kind !== "album" && kind !== "artist") return null;
+  if (!/^[a-f0-9]{10}$/.test(artist)) return null;
+  if (kind !== "artist" && !/^[a-f0-9]{8}$/.test(album)) return null;
+  if (kind === "song" && !(Number.isInteger(n) && n >= 1 && n <= 999)) return null;
+  return { kind, artist, album: kind === "artist" ? "" : album, n: kind === "song" ? n : 0 };
+}
+
+export function radioBuyLink(kind: "song" | "album" | "artist", artist: string, album = "", n = 0): string {
+  return `${RADIO_BUY}?${new URLSearchParams({ kind, artist, ...(kind !== "artist" ? { album } : {}), ...(kind === "song" ? { n: String(n) } : {}) }).toString()}`;
+}
 
 /**
  * Public, listed stations by name. Oldest first, so a name stays with the
@@ -224,11 +247,13 @@ export function rewriteResponse(response: ServerResponse, rewrite: (text: string
 }
 
 /** The station's addresses and token, as /radio/<name> says them instead. */
-export function radioRewriter(station: { id: string; listenToken: string }, slug: string): (text: string) => string {
+export function radioRewriter(station: { id: string; listenToken: string }, slug: string, buyFrom = ""): (text: string) => string {
   const token = station.listenToken;
   const encoded = encodeURIComponent(token);
   return (text) => {
     let out = text.split(`/api/v1/stations/${station.id}/`).join(`/radio/${slug}/`);
+    // The store's links name this server; /radio/buy sends there without saying so.
+    if (buyFrom) out = out.split(buyFrom).join(`${RADIO_BUY}?`);
     for (const one of new Set([encoded, token])) {
       out = out.split(`?t=${one}&`).join("?").split(`&t=${one}`).join("").split(`?t=${one}`).join("").split(one).join("");
     }
