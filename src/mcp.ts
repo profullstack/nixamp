@@ -33,6 +33,7 @@ import { personaLines, readPersona, readVoices, writePersona } from "./profile.t
 import { STATION_TOOLS, callStationTool, isStationTool, type StationToolOptions } from "./station-mcp.ts";
 import { PUBLIC_TOOLS, callPublicTool, isPublicTool, type PublicToolOptions } from "./directory-mcp.ts";
 import { LIBRARY_TOOLS, callLibraryTool, isLibraryTool } from "./library-mcp.ts";
+import { SCHOOL_TOOLS, callSchoolTool, isSchoolTool } from "./school-mcp.ts";
 
 export const PROTOCOL_VERSION = "2025-06-18";
 
@@ -271,6 +272,7 @@ export const TOOLS: ToolDefinition[] = [
   ...STATION_TOOLS,
   ...(PUBLIC_TOOLS as unknown as ToolDefinition[]),
   ...LIBRARY_TOOLS,
+  ...SCHOOL_TOOLS,
 ];
 
 interface TrollboxLine {
@@ -303,6 +305,8 @@ export interface McpOptions {
   /** How a file is described for its record; the tests hand in a fake. */
   describe?: (path: string) => Promise<Described>;
   say?: (line: string) => void;
+  /** Where the class tools go; backtoschool.help (or NIXAMP_SCHOOL_URL) otherwise. */
+  school?: string;
 }
 
 /** A kept transcript, as a tool answers it. */
@@ -364,6 +368,14 @@ export async function callTool(name: string, args: Record<string, unknown>, opti
     } catch (error) {
       return failed((error as Error).message);
     }
+  }
+  // backtoschool.help classes: the same token, sent to the school's host.
+  if (isSchoolTool(name)) {
+    return callSchoolTool(name, args, {
+      ...(options.fetcher ? { fetcher: options.fetcher } : {}),
+      ...(options.session !== undefined ? { token: options.session?.token ?? null } : {}),
+      ...(options.school ? { site: options.school } : {}),
+    });
   }
   // Stations first: on this machine they need the daemon, not a sign-in.
   if (isStationTool(name) || isLibraryTool(name)) {
@@ -653,9 +665,9 @@ export async function handleMessage(message: Request, options: McpOptions = {}):
     return reply({
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "nixamp", title: "nixamp: stations, watch parties, rooms and transcripts", version: "2" },
+      serverInfo: { name: "nixamp", title: "nixamp: stations, classes, watch parties, rooms and transcripts", version: "2" },
       instructions:
-        "Watch parties on nixamp: a party lives on the site hosting the film and is bridged here as a room every nixamp client can join; codes are the ones that site shows, positions are seconds into the film. Rooms: say and read trollbox lines, hear a recording. Transcripts: a file, a link or a live is written down once by nixamp.com's own ear and kept under what it is; ask for it in another language and it is translated once and kept too.",
+        "Watch parties on nixamp: a party lives on the site hosting the film and is bridged here as a room every nixamp client can join; codes are the ones that site shows, positions are seconds into the film. Rooms: say and read trollbox lines, hear a recording. Classes on backtoschool.help: classes_list and class_get for anybody; class_teach puts a station link on the air as a class in one call, classes_check finds live classes whose broadcast stopped playing. Transcripts: a file, a link or a live is written down once by nixamp.com's own ear and kept under what it is; ask for it in another language and it is translated once and kept too.",
     });
   }
   // Notifications carry no id and are answered with silence, which is what
