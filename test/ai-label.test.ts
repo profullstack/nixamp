@@ -6,7 +6,7 @@ import { createServer as createHttpServer } from "node:http";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { AiLabel, cleanLyrics, closeUpTimes, fileName, shotPlan, genreSlug, nextReset, periodOf, renderFilmedVideo, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines, VeoUnavailable } from "../src/ai-label.ts";
+import { AiLabel, cleanLyrics, closeUpTimes, fileName, planUsd, shotPlan, genreSlug, nextReset, periodOf, renderFilmedVideo, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines, VeoUnavailable } from "../src/ai-label.ts";
 import { elevenLabsComposer, OutOfCredit, type Composer } from "../src/ai-radio.ts";
 import type { askJson } from "../src/ai-text.ts";
 import { Channels } from "../src/channels.ts";
@@ -375,13 +375,14 @@ test("a single is a short film: story scenes from its words, cut in turn with th
   }
 });
 
-test("a single films enough to cover its whole song once: a quarter the singer, a fifth the band, the rest the story", () => {
+test("a single's shots fit its budget: $8 is two synced close-ups and six 4 s shots, about $7.60", () => {
   const plan = shotPlan(150, true);
-  assert.deepEqual(plan, { story: 11, band: 4, singer: 5 });
-  const footage = plan.singer * 8 + (plan.story + plan.band) * 8;
-  assert.ok(footage >= 150, `${footage} s of footage for 150 s of song: nothing shown twice`);
+  assert.deepEqual(plan, { story: 4, band: 2, singer: 2 });
+  assert.equal(Math.round(planUsd(plan) * 100) / 100, 7.6);
+  assert.ok(planUsd(shotPlan(150, true, 10)) <= 10 && planUsd(shotPlan(150, true, 5)) <= 5, "never over the budget");
+  assert.ok(planUsd(shotPlan(150, true, 5)) >= 4.5, "and close to it");
   assert.equal(shotPlan(150, false).singer, 0, "no lip sync, no singer");
-  assert.ok(shotPlan(60, true).story >= 2);
+  assert.ok(planUsd(shotPlan(150, false)) <= 8);
 });
 
 test("close-ups go on sung lines near a quarter and three quarters in, never over the title card or each other", () => {
