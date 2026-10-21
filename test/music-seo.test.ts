@@ -87,4 +87,7 @@ test("a station's link preview is the cover of an album it plays, or none", () =
   const catalogue = { artists: new Map(), albums: new Map([album("no-art", ["ai-yacht-rock"], false), album("with-art", ["ai-yacht-rock"], true)]) };
   assert.equal(stationImage(catalogue as never, "ai-yacht-rock", "https://live.streaming.pit.world"), "https://live.streaming.pit.world/radio/album/with-art/cover.jpg");
   assert.equal(stationImage(catalogue as never, "ai-punk", "https://live.streaming.pit.world"), "");
+  // A label album: its cover is the label's, beside the songs.
+  const label = { artists: new Map(), albums: new Map([["rebel", { slug: "rebel", title: "Rebel Wheels", year: 2026, artist: "b", artistName: "B", concept: "", complete: true, tracks: [], stations: ["ai-punk"], label: { artist: "7c9b55343f", album: "778dd0f4", cover: true } }]]) };
+  assert.equal(stationImage(label as never, "ai-punk", "https://live.streaming.pit.world"), "https://live.streaming.pit.world/api/v1/label/7c9b55343f/778dd0f4/cover.jpg");
 });
