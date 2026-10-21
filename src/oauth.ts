@@ -16,7 +16,7 @@
  * address, and both are asked. Without that check, anyone who can add an
  * unverified address at a provider could claim somebody else's nixamp account.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { Account } from "./accounts.ts";
 import type { DeviceGrants } from "./device.ts";
 import type { Queryable } from "./follows.ts";
@@ -33,6 +33,8 @@ export interface Provider {
   scope: string;
   /** Turn the provider's access token into an address it stands behind. */
   identify(accessToken: string, send: typeof fetch): Promise<Identity | null>;
+  /** OAuth 2.1: the round trip carries a PKCE S256 challenge and the exchange its verifier. */
+  pkce?: boolean;
 }
 
 /** Who the provider says this is. `subject` is stable when an address is not. */
@@ -40,6 +42,43 @@ export interface Identity {
   provider: string;
   subject: string;
   email: string;
+  /**
+   * Whether the provider verified the address. Absent means yes (GitHub and
+   * Google are only asked for verified ones). An unverified one never links
+   * to an existing account and is never the new account's address.
+   */
+  verified?: boolean;
+}
+
+/**
+ * CoinPay (coinpayportal.com), the house identity: OAuth 2.1, authorization
+ * code with PKCE S256 and a client secret. CoinPay does not verify the
+ * address it reports, so a CoinPay identity is matched by its `sub` only.
+ */
+export function coinpayProvider(clientId: string, clientSecret: string, base = "https://coinpayportal.com"): Provider {
+  return {
+    id: "coinpay",
+    name: "CoinPay",
+    clientId,
+    clientSecret,
+    authorizeUrl: `${base}/api/oauth/authorize`,
+    tokenUrl: `${base}/api/oauth/token`,
+    scope: "openid profile email",
+    pkce: true,
+    async identify(accessToken, send) {
+      const who = await readJson(await send(`${base}/api/oauth/userinfo`, { headers: { authorization: `Bearer ${accessToken}`, ...AGENT } }));
+      const subject = typeof who["sub"] === "string" ? who["sub"] : "";
+      if (!subject) return null;
+      const email = typeof who["email"] === "string" ? who["email"].toLowerCase() : "";
+      return { provider: "coinpay", subject, email, verified: who["email_verified"] === true };
+    },
+  };
+}
+
+/** A PKCE pair: the verifier kept here, the S256 challenge sent with the browser. */
+export function pkcePair(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(32).toString("base64url");
+  return { verifier, challenge: createHash("sha256").update(verifier).digest("base64url") };
 }
 
 const AGENT = { "user-agent": "nixamp" };
@@ -114,6 +153,9 @@ export function providersFrom(env: Record<string, string | undefined>): Provider
   if (env["GOOGLE_CLIENT_ID"] && env["GOOGLE_CLIENT_SECRET"]) {
     found.push(googleProvider(env["GOOGLE_CLIENT_ID"], env["GOOGLE_CLIENT_SECRET"]));
   }
+  if (env["COINPAY_OAUTH_CLIENT_ID"] && env["COINPAY_OAUTH_CLIENT_SECRET"]) {
+    found.push(coinpayProvider(env["COINPAY_OAUTH_CLIENT_ID"], env["COINPAY_OAUTH_CLIENT_SECRET"], env["COINPAY_OAUTH_BASE"] || undefined));
+  }
   return found;
 }
 
@@ -122,13 +164,17 @@ export function redirectUri(site: string, provider: Provider): string {
 }
 
 /** Where to send the browser. `state` is the only thing standing between this and CSRF. */
-export function authorizeUrl(provider: Provider, site: string, state: string): string {
+export function authorizeUrl(provider: Provider, site: string, state: string, challenge = ""): string {
   const url = new URL(provider.authorizeUrl);
   url.searchParams.set("client_id", provider.clientId);
   url.searchParams.set("redirect_uri", redirectUri(site, provider));
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", provider.scope);
   url.searchParams.set("state", state);
+  if (challenge) {
+    url.searchParams.set("code_challenge", challenge);
+    url.searchParams.set("code_challenge_method", "S256");
+  }
   return url.toString();
 }
 
@@ -138,6 +184,7 @@ export async function exchangeCode(
   code: string,
   site: string,
   send: typeof fetch = fetch,
+  verifier = "",
 ): Promise<string> {
   const answer = await send(provider.tokenUrl, {
     method: "POST",
@@ -154,6 +201,7 @@ export async function exchangeCode(
       code,
       redirect_uri: redirectUri(site, provider),
       grant_type: "authorization_code",
+      ...(verifier ? { code_verifier: verifier } : {}),
     }).toString(),
   });
   const body = await readJson(answer);
@@ -208,7 +256,13 @@ export class Identities {
   }
 
   async resolve(identity: Identity): Promise<Account | null> {
-    if (!identity.subject || !identity.email) return null;
+    if (!identity.subject) return null;
+    // An address the provider did not verify (CoinPay's) is a hint, not a
+    // claim: the account is found by subject alone, and a new one gets an
+    // address nobody can own, so purchases kept by email are never reached
+    // through it.
+    if (identity.verified === false) return this.resolveUnverified(identity);
+    if (!identity.email) return null;
     await this.ensure();
 
     // Already linked. The subject is what is matched, not the address: people
@@ -256,6 +310,37 @@ export class Identities {
     );
     return account;
   }
+
+  /** The account linked to this subject, or a new one whose address is `<provider>-<subject>@<provider>.invalid`. */
+  private async resolveUnverified(identity: Identity): Promise<Account | null> {
+    await this.ensure();
+    const { rows } = await this.db.query(`SELECT user_id, email FROM ${TABLE} WHERE provider = $1 AND subject = $2`, [identity.provider, identity.subject]);
+    const linked = rows[0];
+    const placeholder = `${identity.provider}-${identity.subject.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 60)}@${identity.provider}.invalid`;
+    if (linked) {
+      const id = String(linked["user_id"] ?? "");
+      return id ? { id, email: String(linked["email"] ?? "") || placeholder } : null;
+    }
+    const existing = await this.users.getUserByEmail(placeholder);
+    const account = existing?.id
+      ? { id: existing.id, email: existing.email ?? placeholder }
+      : await (async () => {
+          const made = await this.users.createUser({
+            email: placeholder,
+            password: null,
+            emailVerified: false,
+            profile: { signedUpWith: identity.provider, ...(identity.email ? { providerEmail: identity.email } : {}) },
+          });
+          return { id: String(made.id ?? ""), email: made.email ?? placeholder };
+        })();
+    if (!account.id) return null;
+    await this.db.query(
+      `INSERT INTO ${TABLE} (provider, subject, user_id, email) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (provider, subject) DO NOTHING`,
+      [identity.provider, identity.subject, account.id, placeholder],
+    );
+    return account;
+  }
 }
 
 // --- the sign-in surface ----------------------------------------------------
@@ -273,6 +358,33 @@ export interface Pending {
   /** Set when this round trip is approving a terminal rather than a browser. */
   userCode: string;
   createdAt: number;
+  /** The PKCE verifier, for a provider that takes one. */
+  verifier?: string;
+  /** Where the browser goes once signed in (a path here, or an allowed site); "/" by default. */
+  redirect?: string;
+}
+
+/** The sites a sign-in may return to: NIXAMP_SIGNIN_RETURN_HOSTS, else the ones that send people here. */
+export function signInReturnHosts(env: Record<string, string | undefined> = process.env): string[] {
+  const set = (env["NIXAMP_SIGNIN_RETURN_HOSTS"] ?? "").split(",").map((one) => one.trim().toLowerCase()).filter(Boolean);
+  return set.length ? set : ["live.streaming", "live.streaming.pit.world", "bittorrented.com", "backtoschool.help"];
+}
+
+/**
+ * Where a sign-in may send the browser afterwards: a path on this site, or a
+ * page on one of the sites that send people here to sign in (live.streaming).
+ * Anything else is "/", so a sign-in link cannot be made to bounce elsewhere.
+ */
+export function safeRedirect(value: unknown, allowedHosts: string[] = []): string {
+  if (typeof value !== "string" || value === "") return "/";
+  if (value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\")) return value.slice(0, 500);
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:" && allowedHosts.includes(url.hostname)) return url.href.slice(0, 500);
+  } catch {
+    // not a URL
+  }
+  return "/";
 }
 
 /** A state is only ever open for the length of one sign-in. */
@@ -298,11 +410,12 @@ export class SignIn {
   }
 
   /** Start a round trip, and answer the URL the browser should go to. */
-  begin(provider: Provider, userCode = ""): string {
+  begin(provider: Provider, userCode = "", redirect = "/"): string {
     this.sweep();
     const state = randomBytes(24).toString("base64url");
-    this.states.set(state, { provider: provider.id, userCode, createdAt: this.now() });
-    return authorizeUrl(provider, this.site, state);
+    const pair = provider.pkce ? pkcePair() : null;
+    this.states.set(state, { provider: provider.id, userCode, createdAt: this.now(), redirect, ...(pair ? { verifier: pair.verifier } : {}) });
+    return authorizeUrl(provider, this.site, state, pair?.challenge ?? "");
   }
 
   /** Redeem a state exactly once, so a replayed callback finds nothing. */

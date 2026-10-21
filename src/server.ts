@@ -55,6 +55,8 @@ import {
   devicePage,
   exchangeCode,
   providersFrom,
+  safeRedirect,
+  signInReturnHosts,
   signInFailedPage,
   SignIn,
 } from "./oauth.ts";
@@ -4927,7 +4929,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         // A terminal can link straight here with the code it is showing, which
         // is one hop shorter than the page for somebody who followed the link.
         const grant = signIn.device.find(url.searchParams.get("device") ?? "");
-        response.writeHead(302, { location: signIn.begin(provider, grant?.userCode ?? "") });
+        // Back where the visit was going: a page here, or a site that sends people here to sign in.
+        const redirect = safeRedirect(url.searchParams.get("redirect"), signInReturnHosts());
+        response.writeHead(302, { location: signIn.begin(provider, grant?.userCode ?? "", redirect) });
         response.end();
         return;
       }
@@ -4945,10 +4949,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
 
-      const access = await exchangeCode(provider, code, signIn.site).catch(() => "");
+      const access = await exchangeCode(provider, code, signIn.site, fetch, pending.verifier ?? "").catch(() => "");
       const identity = access ? await provider.identify(access, fetch).catch(() => null) : null;
       if (identity === null) {
-        html(response, 401, signInFailedPage(`${provider.name} did not confirm a verified email address.`));
+        html(response, 401, signInFailedPage(provider.pkce ? `${provider.name} did not finish the sign-in. Try it again.` : `${provider.name} did not confirm a verified email address.`));
         return;
       }
 
@@ -4971,7 +4975,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
 
       response.writeHead(302, {
         "set-cookie": sessionCookie(result.token, secure),
-        location: "/",
+        location: pending.redirect || "/",
       });
       response.end();
       return;

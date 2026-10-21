@@ -33,7 +33,7 @@ test("members are cast once, written as pages with portraits, and read back for 
     const drawn: string[] = [];
     await writeMembers(top, members, { name: "Velvet Ruckus", genre: "Rock", holder: "Profullstack, Inc." }, async (prompt) => { drawn.push(prompt); return Buffer.alloc(2048, 1); });
     assert.equal(drawn.length, 2);
-    assert.match(drawn[0]!, /shaggy bleached-blonde hair.*lead vocals in the Rock band Velvet Ruckus/);
+    assert.match(drawn[0]!, /^Photographic portrait of Mara Quill: late twenties.*shaggy bleached-blonde hair.*lead vocals in the Rock band Velvet Ruckus/);
     assert.ok(readFileSync(join(top, "members", "dex-ortega.jpg")).length > 1000);
     // A hand edit to a page is what the next prompt sees; portraits are not drawn twice.
     writeFileSync(join(top, "members", "dex-ortega.md"), readFileSync(join(top, "members", "dex-ortega.md"), "utf8").replace("thick beard", "clean-shaven"));
