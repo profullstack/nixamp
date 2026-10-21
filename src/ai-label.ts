@@ -690,13 +690,14 @@ const SHOTS = [
 ];
 
 // The singer's close-ups, which are lip-synced to the song afterwards (fal.ai). The mouth
-// must be clear: whatever covers it (a microphone, a hand) is smeared into the face when
-// the mouth is redrawn.
+// must be clear: whatever covers it is smeared into the face when the mouth is redrawn,
+// and Veo puts a microphone in front of it whenever there is one in the scene, however
+// the prompt asks for it held low. So there is none: the singer sings in the story's world.
 const CLOSE_UPS = [
-  "Medium close-up of the lead vocalist singing straight to camera, the microphone stand lowered to chest height so the whole mouth and chin are clear, nothing in front of the face",
-  "Close-up of the lead vocalist singing with feeling, head and shoulders, a handheld microphone held down at the chest, the whole mouth clearly visible",
-  "Medium shot of the lead vocalist singing to the crowd, the microphone held out to the side, face lit and the mouth fully visible",
-  "Close-up of the lead vocalist singing in profile-three-quarter view, no microphone in frame, the mouth clearly visible",
+  "Close-up of the lead vocalist singing straight to camera at night in the rain on a neon-lit street, face and mouth fully lit, no microphone anywhere",
+  "Medium close-up of the lead vocalist singing to camera from the driver's seat of a car at dusk, window down, wind in the hair, no microphone",
+  "Close-up of the lead vocalist singing on an open road at golden hour, the camera slowly circling, face to camera, no microphone",
+  "Close-up of the lead vocalist singing in a dark room lit by one warm lamp, head and shoulders, face to camera, no microphone",
 ];
 
 /**
@@ -707,7 +708,7 @@ const CLOSE_UPS = [
 export function veoPrompts(artist: Pick<LabelArtist, "genre" | "sound">, song: Pick<LabelSong, "style">, members: Array<Pick<Member, "role" | "look">>, count: number, kind: "band" | "singer" = "band"): string[] {
   const cast = members.slice(0, 3).map((one, i) => `the ${one.role} from reference image ${i + 1} (${one.look.replace(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, "")})`).join("; ");
   const rule = kind === "singer"
-    ? "The vocalist sings clearly, the whole mouth always visible, never covered by a microphone or a hand. Cinematic, 35mm film look. No text, no logos."
+    ? "The vocalist sings clearly to camera, the whole mouth always visible. There is no microphone, mic stand or instrument anywhere in the shot, and nothing in front of the face. Cinematic, 35mm film look. No text, no logos."
     : "The lead vocalist is not in this shot, and nobody sings, speaks or lip-syncs on camera. Cinematic, 35mm film look, dynamic camera. No text, no logos.";
   return (kind === "singer" ? CLOSE_UPS : SHOTS).slice(0, count).map((shot) => [
     `Music video for a fictional ${artist.genre} band. ${shot}.`,
