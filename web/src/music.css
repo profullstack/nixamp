@@ -12,7 +12,7 @@ img { display: block; }
 .brand { display: flex; gap: 8px; align-items: center; color: var(--fg); text-decoration: none; font-weight: 800; letter-spacing: .04em; }
 .brand span { color: var(--green); font-weight: 600; }
 .top nav { display: flex; gap: 14px; flex: 1; }
-.top nav a { color: var(--fg); text-decoration: none; padding: 4px 2px; border-bottom: 2px solid transparent; }
+.top nav a { white-space: nowrap; color: var(--fg); text-decoration: none; padding: 4px 2px; border-bottom: 2px solid transparent; }
 .top nav a[aria-current="page"], .top nav a:hover { border-bottom-color: var(--green); }
 .top nav a.muted { color: var(--muted); margin-left: auto; }
 .who { color: var(--muted); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34vw; }
@@ -59,7 +59,8 @@ button.card { font: inherit; text-align: left; cursor: pointer; width: 100%; }
 
 ol.tracks { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--edge); }
 ol.tracks > li { border-bottom: 1px solid var(--edge); padding: 10px 4px; }
-.track { display: grid; grid-template-columns: 2.2em 1fr auto auto; gap: 12px; align-items: center; }
+.track { display: grid; grid-template-columns: 2.2em 1fr auto auto auto; gap: 12px; align-items: center; }
+@media (max-width: 520px) { .track { grid-template-columns: 1.6em 1fr auto auto; gap: 6px 10px; } .track .t { display: none; } }
 .track .n, .track .t { color: var(--muted); font-variant-numeric: tabular-nums; }
 .track a.buy { font-size: .85rem; border: 1px solid var(--edge); border-radius: 999px; padding: 2px 10px; text-decoration: none; white-space: nowrap; }
 .track a.buy:hover { border-color: var(--green); }
