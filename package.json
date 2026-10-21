@@ -50,8 +50,8 @@
     "@profullstack/live-translate": "^0.1.0",
     "@profullstack/notifications": "^0.1.0",
     "@profullstack/synconfig": "^0.1.2",
-    "@profullstack/throttle": "0.2.2",
-    "@profullstack/x402-gateway": "^0.10.1",
+    "@profullstack/throttle": "^0.3.3",
+    "@profullstack/x402-gateway": "^0.11.0",
     "acme-client": "5.4.0",
     "pg": "^8.23.0"
   },
@@ -84,6 +84,6 @@
   "overrides": {
     "https-proxy-agent": "7.0.6",
     "tslib": "2.8.1",
-    "@profullstack/x402-gateway": "^0.10.1"
+    "@profullstack/x402-gateway": "^0.11.0"
   }
 }
