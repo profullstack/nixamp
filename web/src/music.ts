@@ -242,7 +242,8 @@ async function memberView(data: Catalogue, server: string, key: string, who: str
   const profile = answer?.ok ? (await answer.json()) as MemberProfile : null;
   const role = profile?.role || member.role || "member";
   document.title = `${member.name} · ${role} in ${artist.name} · nixamp music`;
-  const fact = (label: string, text: string | undefined): HTMLElement[] => (text ? [el("dt", {}, label), el("dd", {}, text)] : []);
+  // "none" is what a profile says for the voice of someone who does not sing: not a fact worth a row.
+  const fact = (label: string, text: string | undefined): HTMLElement[] => (text && !/^(none|n\/a|-+)\.?$/i.test(text.trim()) ? [el("dt", {}, label), el("dd", {}, text)] : []);
   const facts = profile ? [...fact("Look", profile.look), ...fact(artist.members!.length > 1 && /vocal|sing/i.test(role) ? "Voice" : "Sound", profile.voice), ...fact("Personality", profile.personality), ...fact("Influences", profile.influences)] : [];
   const others = artist.members!.filter((one) => one.slug !== who);
   return [
