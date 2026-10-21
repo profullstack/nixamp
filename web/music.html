@@ -28,12 +28,27 @@
         <strong id="player-title"></strong>
         <span id="player-by"></span>
       </div>
-      <button id="player-toggle" type="button" class="round" aria-label="Pause">❚❚</button>
-      <button id="player-lyrics" type="button" class="ghost" aria-expanded="false" aria-controls="lyrics-panel">Lyrics</button>
+      <div class="player-controls">
+        <button id="player-toggle" type="button" class="round" aria-label="Pause">❚❚</button>
+        <div id="player-progress" class="player-progress" hidden>
+          <span id="player-at" class="time">0:00</span>
+          <progress id="player-bar" max="1" value="0" aria-label="How far into this song"></progress>
+          <span id="player-length" class="time">0:00</span>
+        </div>
+        <span id="player-break" class="muted break" hidden>A short break</span>
+      </div>
+      <div class="player-side">
+        <button id="player-mute" type="button" class="icon" aria-label="Mute" aria-pressed="false">🔊</button>
+        <input id="player-volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume" />
+        <button id="player-lyrics" type="button" class="ghost" aria-expanded="false" aria-controls="lyrics-panel">Lyrics</button>
+      </div>
       <audio id="audio" preload="none"></audio>
     </section>
     <aside id="lyrics-panel" class="lyrics-panel" aria-label="Lyrics" hidden>
-      <h2 id="lyrics-title">Lyrics</h2>
+      <div class="lyrics-head">
+        <h2 id="lyrics-title">Lyrics</h2>
+        <label id="lyrics-follow-box" class="follow" hidden><input id="lyrics-follow" type="checkbox" checked /> Follow along</label>
+      </div>
       <div id="lyrics-text" class="lyrics-text"></div>
     </aside>
     <script type="module" src="/src/music.ts"></script>
