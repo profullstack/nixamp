@@ -98,7 +98,7 @@ import {
   asRadioPage, buildCatalogue, isRadioPath, NAV_STYLE, RADIO_ALBUM, RADIO_ARTIST, RADIO_CSP, RADIO_STATION, RADIO_SUB, radioNav, radioPeers, radioRewriter,
   radioStations, renderAlbum, renderArtist, renderDirectory, renderMissing, rewriteResponse, type PeerRadio, type RadioCatalogue,
 } from "./radio-pages.ts";
-import { guideAds, guideCsp, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
+import { adCsp, guideAds, guideCsp, withPageAd, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
 import { STATION_CONTROL_LIMIT, StationUsage, limitsFromEnv, type Limits } from "./station-metering.ts";
@@ -3056,7 +3056,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       });
       // Behind a guide name (live.streaming) the page asks its own origin, so no server address shows in it.
       const apiBase = guideHosts().has(requestHost) ? "" : options.stations!.publicBase?.() ?? "";
-      const page = renderGuide([...rooms, ...entries, ...named] as GuideEntry[], apiBase, ads, label && label.publicView().genres.length > 0 ? "/label" : "");
+      const page = renderGuide([...rooms, ...entries, ...named] as GuideEntry[], apiBase, ads, label && label.publicView().genres.length > 0 ? "/label" : "", path === "/");
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-cache",
@@ -3074,7 +3074,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // stream address>. The built page plays it in @profullstack/player, as a
     // film or as radio; nothing about the room passes through here.
     if (options.stations?.rooms && path === "/watch" && (request.method === "GET" || request.method === "HEAD")) {
-      const built = web !== null && isFile(join(web, "watch.html")) ? readFileSync(join(web, "watch.html")) : null;
+      const built = web !== null && isFile(join(web, "watch.html")) ? withPageAd(readFileSync(join(web, "watch.html"), "utf8"), guideAds()) : null;
       if (!built) {
         json(response, 404, { error: "this server was started without its web pages" });
         return;
@@ -3082,7 +3082,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-cache",
-        "content-security-policy": WATCH_APP_CSP,
+        "content-security-policy": adCsp(WATCH_APP_CSP, guideAds()),
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
       });
@@ -3110,11 +3110,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       response.writeHead(vodPath[1] && !one ? 404 : 200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-cache",
-        "content-security-policy": WATCH_APP_CSP,
+        "content-security-policy": adCsp(WATCH_APP_CSP, guideAds()),
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
       });
-      response.end(request.method === "HEAD" ? undefined : built.replace(/<title>[^<]*<\/title>/, head));
+      response.end(request.method === "HEAD" ? undefined : withPageAd(built.replace(/<title>[^<]*<\/title>/, head), guideAds()));
       return;
     }
 
@@ -3128,10 +3128,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       const base = radioBaseFor(request, publicBase);
       const nav = radioNav(guideHosts().has(requestHost) ? "/" : "/guide");
       const send = (status: number, page: string, csp = RADIO_CSP): void => {
+        const ads = guideAds();
+        page = withPageAd(page, ads);
         response.writeHead(status, {
           "content-type": "text/html; charset=utf-8",
           "cache-control": status === 200 ? "public, max-age=60" : "no-cache",
-          "content-security-policy": csp,
+          "content-security-policy": adCsp(csp, ads),
           "referrer-policy": "strict-origin-when-cross-origin",
           "x-content-type-options": "nosniff",
         });
@@ -3198,12 +3200,14 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           return send(404, renderMissing("station", base, nav));
         }
         const built = web !== null && isFile(join(web, "station.html")) ? readFileSync(join(web, "station.html"), "utf8") : null;
-        const page = asRadioPage(built ?? STATION_PAGE_HTML, station, slug, base, nav);
+        // The built page carries the one ad; the inline fallback stays as it is.
+        const ads = built ? guideAds() : {};
+        const page = withPageAd(asRadioPage(built ?? STATION_PAGE_HTML, station, slug, base, nav), ads);
         response.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-cache",
           // The inline page names its styles by hash; the header's is one more.
-          "content-security-policy": built ? STATION_APP_CSP : STATION_PAGE_CSP.replace("style-src ", `style-src 'sha256-${sha("sha256").update(NAV_STYLE).digest("base64")}' `),
+          "content-security-policy": built ? adCsp(STATION_APP_CSP, ads) : STATION_PAGE_CSP.replace("style-src ", `style-src 'sha256-${sha("sha256").update(NAV_STYLE).digest("base64")}' `),
           "referrer-policy": "strict-origin-when-cross-origin",
           "x-content-type-options": "nosniff",
         });
@@ -3263,11 +3267,12 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     if (options.stations && STATION_PAGE.test(path) && (request.method === "GET" || request.method === "HEAD")) {
       // The built page plays in @profullstack/player; the inline one is for a
       // server started without the web build.
-      const built = web !== null && isFile(join(web, "station.html")) ? readFileSync(join(web, "station.html")) : null;
+      const ads = guideAds();
+      const built = web !== null && isFile(join(web, "station.html")) ? withPageAd(readFileSync(join(web, "station.html"), "utf8"), ads) : null;
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-cache",
-        "content-security-policy": built ? STATION_APP_CSP : STATION_PAGE_CSP,
+        "content-security-policy": built ? adCsp(STATION_APP_CSP, ads) : STATION_PAGE_CSP,
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
       });
@@ -3328,7 +3333,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       const control = isPublicLabelPath(path) ? { allowed: false } : await controlOf();
       if (await handleLabelRoutes(request, response, path, {
         label: options.stations.label, canControl: control.allowed, json, readBody,
-        grants: storeGrants, site: storeSite, publicBase: options.stations.publicBase?.() ?? "",
+        grants: storeGrants, site: storeSite, publicBase: options.stations.publicBase?.() ?? "", ads: guideAds(),
       })) return;
     }
 
