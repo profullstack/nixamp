@@ -170,7 +170,7 @@ const GROUPS = ["rooms", "vod", "ai", "shared", "radio", "tv"] as const;
  * gateway that cannot run its script against this server (the Moshpit's
  * /n/<name>), and for a crawler. Everything from a station is escaped.
  */
-export function renderGuide(entries: GuideEntry[], apiBase = "", ads: GuideAds = {}): string {
+export function renderGuide(entries: GuideEntry[], apiBase = "", ads: GuideAds = {}, labelHref = ""): string {
   const groupOf = (one: GuideEntry): string => one.group ?? (one.kind === "video" ? "tv" : "radio");
   const cards = (group: string): string => entries
     .filter((one) => groupOf(one) === group && /^https?:\/\//.test(one.page))
@@ -190,6 +190,10 @@ export function renderGuide(entries: GuideEntry[], apiBase = "", ads: GuideAds =
     const slot = ads.slot;
     // The one ad goes at the top of the content, never against the footer.
     page = page.replace('<p class="lead">Radio and TV, on the air now. Pick one and press play.</p>\n', (lead) => `${lead}  <div class="ad-unit ad-${format}"><iframe src="${CRAWLPROOF}/api/ads/frame?slot=${encodeURIComponent(slot)}&amp;format=${format}" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>\n`);
+  }
+  // The AI label's artists and albums, under the AI stations they play on.
+  if (/^\/[a-z]+$/.test(labelHref)) {
+    page = page.replace('<div id="ai" class="grid" aria-live="polite">', `<p class="lead"><a href="${labelHref}">The AI label: every artist, album and song, with the words →</a></p>\n  <div id="ai" class="grid" aria-live="polite">`);
   }
   const api = /^https:\/\/[^\s"<>]+$/.test(apiBase) ? apiBase.replace(/\/+$/, "") : "";
   return (page.replace('<p id="empty" class="empty">', entries.length ? '<p id="empty" class="empty" hidden>' : '<p id="empty" class="empty">')).replace("<body>", api ? `<body data-api="${escape(api)}">` : "<body>");

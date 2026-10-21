@@ -272,6 +272,8 @@ export async function station(argv: string[]): Promise<number> {
       }
       case "ai":
         return await aiCommand(argv.slice(1), call, show, json);
+      case "label":
+        return await labelCommand(argv.slice(1), call, show);
       case "shares":
         return await sharesCommand(argv.slice(1), call, show);
       case "lyrics":
@@ -408,6 +410,106 @@ async function aiCommand(argv: string[], call: Call, show: Show, json: boolean):
     }
     default:
       console.error(`nixamp station ai: no command "${sub}".\n\n${USAGE}`);
+      return 2;
+  }
+}
+
+/** `nixamp station label ...`: AI artists who put out an album a month (ai-label.ts). */
+async function labelCommand(argv: string[], call: Call, show: Show): Promise<number> {
+  const [sub, key] = argv;
+  const when = (at: number): string => at === -1 ? "never (off)" : at === 0 ? "now" : new Date(at).toISOString().slice(0, 10);
+  const describe = (one: Record<string, unknown>): string => {
+    const albums = (one["albums"] as Array<Record<string, unknown>> | undefined) ?? [];
+    return [
+      `${String(one["name"])}  [${String(one["key"])}]  ${String(one["genre"])}${one["enabled"] ? "" : "  (off)"}`,
+      ...albums.map((album) => `  ${String(album["year"])}  ${String(album["title"])}  ${String(album["composed"])}/${String(album["songs"])} songs${album["doneAt"] ? "" : "  (recording)"}`),
+      `  next album ${when(Number(one["nextAlbumAt"] ?? -1))}`,
+      ...(one["lastError"] ? [`  problem    ${String(one["lastError"])}`] : []),
+    ].join("\n");
+  };
+  switch (sub) {
+    case undefined:
+    case "status":
+    case "list":
+      return show(await call("GET", "/api/v1/stations/label"), (body) => {
+        const settings = (body["settings"] ?? {}) as Record<string, unknown>;
+        const artists = (body["artists"] as Record<string, unknown>[] | undefined) ?? [];
+        const roster = (body["roster"] as Array<Record<string, unknown>> | undefined) ?? [];
+        return [
+          `holder     ${String(settings["holder"])}${settings["enabled"] ? "" : "  (off)"}`,
+          `files      ${String(body["root"])}/<genre>/<artist>/<year>-<album>/`,
+          `composer   ${String(body["composer"] ?? "none")}; words by ${String(body["writer"] ?? "nobody (no model key)")}`,
+          `this month ${String(body["secondsThisMonth"])} of ${Number(settings["monthlySeconds"]) === 0 ? "unlimited" : String(settings["monthlySeconds"])} s${body["busy"] ? `; recording ${String(body["busy"])}` : ""}`,
+          `albums     ${String(settings["songsPerAlbum"])} songs of ${String(settings["songSeconds"])} s; ${String(settings["seedAlbums"])} to start, then one every ${String(settings["everyDays"])} days`,
+          ...(body["waiting"] ? [`waiting    ${String(body["waiting"])}`] : []),
+          "",
+          ...(artists.length ? artists.map(describe) : ["Nobody signed yet. nixamp station label sign --roster"]),
+          "",
+          `roster     ${roster.map((one) => `${String(one["key"])}${one["signed"] ? " (signed)" : ""}`).join(", ")}`,
+        ].join("\n");
+      });
+    case "sign": {
+      const body = has(argv, "--roster") ? { roster: true } : {
+        ...(flag(argv, "--preset") ? { preset: flag(argv, "--preset") } : {}),
+        ...(flag(argv, "--name") ? { name: flag(argv, "--name") } : {}),
+        ...(flag(argv, "--genre") ? { genre: flag(argv, "--genre") } : {}),
+        ...(flag(argv, "--sound") ? { sound: flag(argv, "--sound") } : {}),
+        ...(flag(argv, "--voice") ? { voice: flag(argv, "--voice") } : {}),
+        ...(flag(argv, "--bio") ? { bio: flag(argv, "--bio") } : {}),
+        ...(flag(argv, "--themes") ? { themes: flag(argv, "--themes") } : {}),
+      };
+      return show(await call("POST", "/api/v1/stations/label/artists", body), (answer) => {
+        const signed = (answer["artists"] as Array<Record<string, unknown>> | undefined) ?? (answer["artist"] ? [answer["artist"] as Record<string, unknown>] : []);
+        return signed.length ? `Signed ${signed.map((one) => `${String(one["name"])} (${String(one["genre"])})`).join(", ")}. Their first albums are planned and recorded from here.` : "Everybody on the roster is already signed.";
+      });
+    }
+    case "album": {
+      if (!key) { console.error("nixamp station label album needs the artist's key (nixamp station label)"); return 2; }
+      return show(await call("POST", `/api/v1/stations/label/artists/${key}/album`, {}), (answer) => {
+        const album = answer["album"] as Record<string, unknown>;
+        return `Planned "${String(album["title"])}" (${((album["songs"] as unknown[]) ?? []).length} songs); recording now, a song at a time.`;
+      });
+    }
+    case "set": {
+      if (!key) { console.error("nixamp station label set needs the artist's key"); return 2; }
+      const body = {
+        ...(flag(argv, "--sound") ? { sound: flag(argv, "--sound") } : {}),
+        ...(flag(argv, "--voice") ? { voice: flag(argv, "--voice") } : {}),
+        ...(flag(argv, "--bio") ? { bio: flag(argv, "--bio") } : {}),
+        ...(flag(argv, "--themes") ? { themes: flag(argv, "--themes") } : {}),
+        ...(has(argv, "--off") ? { enabled: false } : has(argv, "--on") ? { enabled: true } : {}),
+      };
+      return show(await call("PATCH", `/api/v1/stations/label/artists/${key}`, body), (answer) => `${String((answer["artist"] as Record<string, unknown>)["name"])} updated.`);
+    }
+    case "drop": {
+      if (!key) { console.error("nixamp station label drop needs the artist's key"); return 2; }
+      const files = has(argv, "--files");
+      return show(await call("DELETE", `/api/v1/stations/label/artists/${key}${files ? "?files=1" : ""}`), () =>
+        files ? "Dropped, with their music." : "Dropped. Their albums stay on the air; nothing new will be recorded.");
+    }
+    case "config": {
+      const number = (name: string): number | undefined => (flag(argv, name) === undefined ? undefined : Number(flag(argv, name)));
+      const body = Object.fromEntries(Object.entries({
+        holder: flag(argv, "--holder"),
+        monthlySeconds: number("--budget"),
+        everyDays: number("--every-days"),
+        seedAlbums: number("--seed-albums"),
+        songsPerAlbum: number("--songs"),
+        songSeconds: number("--seconds"),
+        enabled: has(argv, "--off") ? false : has(argv, "--on") ? true : undefined,
+        publish: has(argv, "--unlisted") ? false : has(argv, "--public") ? true : undefined,
+      }).filter(([, value]) => value !== undefined));
+      return show(await call("POST", "/api/v1/stations/label", body), (answer) => {
+        const settings = answer["settings"] as Record<string, unknown>;
+        return `Label: ${String(settings["holder"])}, ${String(settings["songsPerAlbum"])} songs of ${String(settings["songSeconds"])} s an album, every ${String(settings["everyDays"])} days, at most ${Number(settings["monthlySeconds"]) === 0 ? "unlimited" : `${String(settings["monthlySeconds"])} s`} a month${settings["enabled"] ? "" : " (off)"}.`;
+      });
+    }
+    case "run":
+      return show(await call("POST", "/api/v1/stations/label/run", {}), (body) => body["waiting"] ? `Nothing to record now: ${String(body["waiting"])}.` : "Recording whatever is due.");
+    case "resume":
+      return show(await call("POST", "/api/v1/stations/label", { resume: true }), () => "Recording again.");
+    default:
+      console.error(`nixamp station label: no command "${sub}".\n\n${USAGE}`);
       return 2;
   }
 }

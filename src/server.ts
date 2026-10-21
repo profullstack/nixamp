@@ -78,6 +78,8 @@ import { ListenerStore } from "./library-user.ts";
 import { Importer } from "./handoff.ts";
 import { handleHandoffs } from "./handoff-routes.ts";
 import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
+import { AiLabel } from "./ai-label.ts";
+import { handleLabelRoutes, isPublicLabelPath } from "./label-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
 import { HolderStore, TagReader, factsFor } from "./track-facts.ts";
@@ -1746,6 +1748,8 @@ export interface HandlerOptions {
     publicBase?: () => string;
     /** Stations whose music is composed by AI. */
     ai?: AiRadio;
+    /** AI artists and their albums, a genre station each, and the catalogue at /label. */
+    label?: AiLabel;
     /** Tracks anybody may share, sorted onto the air by AI. */
     shares?: ListenerShares;
     /** What a listener may know about the track on the air. */
@@ -2722,6 +2726,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !isStationListenPath(path) &&
       // Sharing a track and reporting one are for anybody the guide reaches.
       !isPublicSharePath(path) &&
+      // The AI label's catalogue, its songs and their words.
+      !(isPublicLabelPath(path) && Boolean(options.stations?.label)) &&
       // What is on, as MCP, for anybody.
       path !== "/mcp/public" &&
       // Supporting a copyright holder is for anybody listening.
@@ -2905,7 +2911,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         ? await roomEntries(options.stations!.rooms.store, options.stations!.rooms.probe, watchBase(options.stations!.publicBase?.() || `${encrypted ? "https" : "http"}://${request.headers.host ?? "localhost"}`))
         : [];
       const ads = guideAds();
-      const page = renderGuide([...rooms, ...entries, ...others] as GuideEntry[], options.stations!.publicBase?.() ?? "", ads);
+      const label = options.stations!.label;
+      const page = renderGuide([...rooms, ...entries, ...others] as GuideEntry[], options.stations!.publicBase?.() ?? "", ads, label && label.publicView().genres.length > 0 ? "/label" : "");
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-cache",
@@ -3065,6 +3072,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         readBody,
       });
       return;
+    }
+
+    if (options.stations?.label && (isPublicLabelPath(path) || path === "/api/v1/stations/label" || path.startsWith("/api/v1/stations/label/"))) {
+      const control = isPublicLabelPath(path) ? { allowed: false } : await controlOf();
+      if (await handleLabelRoutes(request, response, path, { label: options.stations.label, canControl: control.allowed, json, readBody })) return;
     }
 
     if (options.stations && (isPublicSharePath(path) || path.startsWith("/api/v1/stations/ai") || path.startsWith("/api/v1/stations/shares") || path.startsWith("/api/v1/stations/holders"))) {
@@ -7279,10 +7291,27 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ffmpeg: tools.ffmpeg,
     root: join(stateDir(), "ai-music"),
     owner: options.owner || "",
+    holder: () => aiLabel.holder(),
+    mayStart: mayStartStation,
+    log: (line) => console.log(line),
+  });
+  // The AI label: artists who put out albums on their own, filed under the
+  // library as ai/<genre>/<artist>/<year>-<album>/ (NIXAMP_LABEL_ROOT moves it).
+  const labelHome = libraryIndex.sources().find((one) => one.enabled && !one.managed);
+  const aiLabel = new AiLabel(AiLabel.fileFor(stateDir(), options.port), {
+    index: libraryIndex,
+    store: stationStore,
+    runner: stationRunner,
+    probe: probeFile,
+    ffmpeg: tools.ffmpeg,
+    root: process.env["NIXAMP_LABEL_ROOT"] || (labelHome ? join(labelHome.root, "ai") : join(stateDir(), "ai-label")),
+    owner: options.owner || "",
     mayStart: mayStartStation,
     log: (line) => console.log(line),
   });
   aiRadio.startSchedule();
+  aiLabel.startSchedule();
+  stations.label = aiLabel;
   // Tracks anybody shares from the guide, checked by AI before they air.
   const listenerShares = new ListenerShares(ListenerShares.fileFor(stateDir(), options.port), {
     index: libraryIndex,

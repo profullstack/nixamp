@@ -108,6 +108,23 @@ export const STATION_TOOLS = [
     },
   },
   {
+    name: "station_label",
+    description: "The AI label: AI artists (a name, genre, sound and voice) who release albums on their own, written and sung in English, filed as <library>/ai/<genre>/<artist>/<year>-<album>/001. <title>.mp3 with .lyrics.txt, a public station per genre, and the catalogue at /label. action status (default), sign (preset from the roster, roster: true for all of it, or name + genre + sound), album (plan the artist's next album now), update, drop, configure (holder, monthlySeconds, everyDays, seedAlbums, songsPerAlbum, songSeconds, enabled, publish), run, resume.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server: SERVER,
+        action: { type: "string", enum: ["status", "sign", "album", "update", "drop", "configure", "run", "resume"] },
+        key: { ...STRING, description: "The artist's key (10 hex characters), from status." },
+        preset: STRING, roster: { type: "boolean" }, name: STRING, genre: STRING,
+        sound: { ...STRING, description: "The music in words: instruments, tempo, mood. Name no real artist." },
+        voice: STRING, bio: STRING, themes: STRING, enabled: { type: "boolean" }, publish: { type: "boolean" }, holder: STRING,
+        monthlySeconds: { type: "integer" }, everyDays: { type: "integer" }, seedAlbums: { type: "integer" },
+        songsPerAlbum: { type: "integer" }, songSeconds: { type: "integer" },
+      },
+    },
+  },
+  {
     name: "station_shares",
     description: "Listener shares: anybody may share an MP3 link or file from the public guide; AI files it under a genre and holds anything that looks like a commercial release. action status (default; waiting shares), list (state), configure (open, moderation ai|owner, publish, maxMb, perHour), approve, reject, delete.",
     inputSchema: {
@@ -226,6 +243,23 @@ export async function callStationTool(name: string, args: Record<string, unknown
         : undefined;
       if (answer === null) return say("Which AI station? Pass its key from action status.", true);
       if (answer === undefined) return say("action is status, create, generate, update, remove, budget or resume", true);
+      return answer.ok ? say(JSON.stringify(answer.body, null, 2)) : refused(answer.body);
+    }
+    if (name === "station_label") {
+      const action = String(args["action"] ?? "status");
+      const key = typeof args["key"] === "string" && /^[a-f0-9]{10}$/.test(args["key"]) ? args["key"] : "";
+      const answer = action === "status" ? await call("GET", "/api/v1/stations/label")
+        : action === "sign" ? await call("POST", "/api/v1/stations/label/artists", pick(["preset", "roster", "name", "genre", "sound", "voice", "bio", "themes", "enabled"]))
+        : action === "configure" ? await call("POST", "/api/v1/stations/label", pick(["holder", "monthlySeconds", "everyDays", "seedAlbums", "songsPerAlbum", "songSeconds", "enabled", "publish"]))
+        : action === "run" ? await call("POST", "/api/v1/stations/label/run", {})
+        : action === "resume" ? await call("POST", "/api/v1/stations/label", { resume: true })
+        : !key ? null
+        : action === "album" ? await call("POST", `/api/v1/stations/label/artists/${key}/album`, {})
+        : action === "update" ? await call("PATCH", `/api/v1/stations/label/artists/${key}`, pick(["sound", "voice", "bio", "themes", "enabled"]))
+        : action === "drop" ? await call("DELETE", `/api/v1/stations/label/artists/${key}`)
+        : undefined;
+      if (answer === null) return say("Which artist? Pass its key from action status.", true);
+      if (answer === undefined) return say("action is status, sign, album, update, drop, configure, run or resume", true);
       return answer.ok ? say(JSON.stringify(answer.body, null, 2)) : refused(answer.body);
     }
     if (name === "station_holders") {
