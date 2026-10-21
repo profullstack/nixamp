@@ -12,7 +12,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { ROSTER, type AiLabel, type PublicArtist } from "./ai-label.ts";
 import { StationError } from "./stations.ts";
 
-const FILE = /^\/api\/v1\/label\/([a-f0-9]{10})\/([a-f0-9]{8})\/(\d{1,3}\.(?:mp3|txt)|cover\.jpg)$/;
+// Listening is free on the live stations (with their breaks); the songs as
+// files are sold, so only the words and the cover are public here.
+const FILE = /^\/api\/v1\/label\/([a-f0-9]{10})\/([a-f0-9]{8})\/(\d{1,3}\.txt|cover\.jpg)$/;
 
 /** Whether this path is the label's public face. */
 export function isPublicLabelPath(path: string): boolean {
@@ -219,7 +221,7 @@ function hash(text: string): string {
 }
 
 export const LABEL_CSP = [
-  "default-src 'none'", `style-src ${hash(STYLE)}`, "img-src 'self'", "media-src 'self'",
+  "default-src 'none'", `style-src ${hash(STYLE)}`, "img-src 'self'",
   "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
 ].join("; ");
 
@@ -227,9 +229,8 @@ function renderAlbum(artist: PublicArtist, album: PublicArtist["albums"][number]
   const base = `/api/v1/label/${artist.key}/${album.key}`;
   const cover = album.cover ? `<img class="cover" src="${base}/cover.jpg" alt="Cover of ${escape(album.title)}" width="160" height="160" loading="lazy">` : `<div class="blank" aria-hidden="true"></div>`;
   const songs = album.songs.map((song) => `<li><div class="song"><span class="n">${song.n}.</span><span class="t">${escape(song.title)}</span><span class="d">${minutes(song.seconds)}</span></div>`
-    + `<audio controls preload="none" src="${base}/${song.n}.mp3" aria-label="Play ${escape(song.title)}"></audio>`
     + `<details><summary>Lyrics</summary><pre class="lyrics">${escape(song.lyrics)}</pre></details>`
-    + `<div class="dl"><a href="${base}/${song.n}.mp3" download>MP3</a> · <a href="${base}/${song.n}.txt">lyrics.txt</a></div></li>`).join("");
+    + `<div class="dl"><a href="${base}/${song.n}.txt">lyrics.txt</a></div></li>`).join("");
   return `<div class="album">${cover}<div><h4>${escape(album.title)} <span class="d">(${album.year})</span></h4>`
     + `${album.concept ? `<p class="concept">${escape(album.concept)}</p>` : ""}`
     + `${album.complete ? "" : `<p class="soon">Still being recorded: new songs land here as they are finished.</p>`}`
@@ -241,7 +242,7 @@ export function renderLabel(view: ReturnType<AiLabel["publicView"]>): string {
   const label = view.holder.replace(/,?\s+(inc|llc|ltd|gmbh|co)\.?$/i, "");
   const nav = view.genres.length > 1 ? `<nav class="genres" aria-label="Genres">${view.genres.map((one) => `<a href="#${escape(one.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}">${escape(one.genre)}</a>`).join("")}</nav>` : "";
   const sections = view.genres.map((genre) => `<section class="genre" id="${escape(genre.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}" aria-labelledby="g-${escape(genre.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}">`
-    + `<h2 id="g-${escape(genre.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}">${escape(genre.genre)}${genre.station ? ` <a href="/watch/${escape(genre.station)}">Listen live →</a>` : ""}</h2>`
+    + `<h2 id="g-${escape(genre.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}">${escape(genre.genre)}${genre.station ? ` <a href="/watch/${escape(genre.station)}">Listen live, free →</a>` : ""}</h2>`
     + genre.artists.map((artist) => `<article class="artist"><h3>${escape(artist.name)}</h3>${artist.bio ? `<p class="bio">${escape(artist.bio)}</p>` : ""}${artist.albums.map((album) => renderAlbum(artist, album)).join("")}</article>`).join("")
     + `</section>`).join("");
   return `<!doctype html>
@@ -257,7 +258,7 @@ export function renderLabel(view: ReturnType<AiLabel["publicView"]>): string {
 <body>
 <main>
 <h1>${escape(label)} AI Label</h1>
-<p class="lead">Original artists, written and sung by AI, released by ${escape(view.holder)}. Every album, every song, with the words. New albums land every month.</p>
+<p class="lead">Original artists, written and sung by AI, released by ${escape(view.holder)}. Every album, every song, with the words. New albums land every month. Listening on the live stations is always free.</p>
 ${nav}
 ${sections || `<p class="soon">The first albums are being recorded. Check back soon.</p>`}
 <footer>℗ ${new Date().getUTCFullYear()} ${escape(view.holder)}. Music and words made with AI. Played by <a href="https://nixamp.com">nixamp</a>.</footer>

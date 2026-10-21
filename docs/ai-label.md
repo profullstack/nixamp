@@ -53,10 +53,9 @@ Public (no key):
 
 | | |
 | --- | --- |
-| `GET /label` | the catalogue as a page: every artist and album, each song playable, with its words |
+| `GET /label` | the catalogue as a page: every artist and album with its words, and each genre's live station (free, with breaks) |
 | `GET /api/v1/label` | `{holder, genres: [{genre, station, artists: [{albums: [{songs}]}]}]}` |
-| `GET /api/v1/label/:artist/:album/:n.mp3` | a song (byte ranges, so it seeks) |
-| `GET /api/v1/label/:artist/:album/:n.txt` | its words |
+| `GET /api/v1/label/:artist/:album/:n.txt` | a song's words |
 | `GET /api/v1/label/:artist/:album/cover.jpg` | the album's cover |
 
 Owner (control key or owner session):

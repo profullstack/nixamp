@@ -203,20 +203,19 @@ test("the label over HTTP: the catalogue is public, running it is the owner's", 
     // Anybody: the page, the JSON, a song (by range) and its words.
     const page = await fetch(`${base}/label`);
     assert.equal(page.status, 200);
-    assert.match(page.headers.get("content-security-policy") ?? "", /media-src 'self'/);
     const html = await page.text();
     assert.match(html, /Profullstack AI Label/);
     assert.match(html, /Lumi Kestrel/);
-    assert.match(html, new RegExp(`/api/v1/label/${lumi.key}/${album.key}/1\\.mp3`));
+    assert.match(html, /Listen live, free/);
+    assert.doesNotMatch(html, /\.mp3/, "the songs as files are sold, not linked");
     assert.match(html, /Hold on, hold on/);
     const json = (await (await fetch(`${base}/api/v1/label`)).json()) as { holder: string; genres: Array<{ genre: string }> };
     assert.deepEqual([json.holder, json.genres.map((one) => one.genre)], ["Profullstack, Inc.", ["Pop"]]);
-    const part = await fetch(`${base}/api/v1/label/${lumi.key}/${album.key}/1.mp3`, { headers: { range: "bytes=0-99" } });
+    assert.notEqual((await fetch(`${base}/api/v1/label/${lumi.key}/${album.key}/1.mp3`)).status, 200);
+    const part = await fetch(`${base}/api/v1/label/${lumi.key}/${album.key}/2.txt`, { headers: { range: "bytes=0-8" } });
     assert.equal(part.status, 206);
-    assert.equal((await part.arrayBuffer()).byteLength, 100);
-    const words = await fetch(`${base}/api/v1/label/${lumi.key}/${album.key}/2.txt`);
-    assert.match(await words.text(), /\[Verse 1\]/);
-    assert.equal((await fetch(`${base}/api/v1/label/${lumi.key}/${album.key}/1.mp3`, { method: "DELETE" })).status, 405);
+    assert.equal(await part.text(), "[Verse 1]");
+    assert.equal((await fetch(`${base}/api/v1/label/${lumi.key}/${album.key}/2.txt`, { method: "DELETE" })).status, 405);
     // The guide points at the catalogue.
     const guide = await (await fetch(`${base}/guide`)).text();
     assert.match(guide, /href="\/label"/);
