@@ -92,3 +92,33 @@ test("Veo prompts describe the band by role and look, never by name", () => {
     assert.match(prompt, /Nobody sings, speaks or lip-syncs on camera/, "Veo never shows a mouth it cannot sync");
   }
 });
+
+test("a lip sync uploads the shot and its seconds of the song to fal.ai, is paid under the same cap, and costs nothing when it fails", async () => {
+  const top = mkdtempSync(join(tmpdir(), "nixamp-lipsync-"));
+  try {
+    let fail = false;
+    const fetcher = (async (url: string, init?: RequestInit) => {
+      if (url.includes("/storage/upload/initiate")) return Response.json({ upload_url: "https://up.example/put", file_url: `https://cdn.example/${(JSON.parse(String(init?.body)) as { file_name: string }).file_name}` });
+      if (url === "https://up.example/put") return new Response(null, { status: 200 });
+      if (url.endsWith("/sync-lipsync/v2")) {
+        assert.deepEqual(JSON.parse(String(init?.body)), { video_url: "https://cdn.example/shot.mp4", audio_url: "https://cdn.example/vocal.mp3" });
+        return Response.json({ status_url: "https://queue.example/status", response_url: "https://queue.example/result" });
+      }
+      if (url === "https://queue.example/status") return Response.json({ status: "COMPLETED" });
+      if (url === "https://queue.example/result") return fail ? Response.json({ detail: [{ msg: "no face found" }] }, { status: 422 }) : Response.json({ video: { url: "https://cdn.example/out.mp4" } });
+      if (url === "https://cdn.example/out.mp4") return new Response(Buffer.alloc(30_000, 5));
+      return new Response("no", { status: 404 });
+    }) as typeof fetch;
+    const studio = new VeoStudio({ key: "k", falKey: "f", ledger: fileLedger(join(top, "veo.json")), monthlyUsd: 3, lipsyncUsdPerSecond: 0.1, fetcher, sleep: async () => undefined, now: () => Date.UTC(2026, 9, 21) });
+    assert.ok(studio.canLipsync);
+    const out = await studio.lipsync({ video: Buffer.alloc(20_000, 1), audio: Buffer.alloc(4_000, 2), seconds: 8 });
+    assert.equal(out.length, 30_000);
+    assert.equal((await studio.status()).spentUsd, 0.8);
+    fail = true;
+    await assert.rejects(studio.lipsync({ video: Buffer.alloc(20_000, 1), audio: Buffer.alloc(4_000, 2), seconds: 8 }), VeoRefused);
+    assert.equal((await studio.status()).spentUsd, 0.8, "a failed sync is given back");
+    assert.ok(!new VeoStudio({ key: "k", ledger: fileLedger(join(top, "v2.json")) }).canLipsync, "no fal.ai key, no lip sync");
+  } finally {
+    rmSync(top, { recursive: true, force: true });
+  }
+});

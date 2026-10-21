@@ -7736,6 +7736,21 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       if (!answer.ok) throw new Error(((await answer.json().catch(() => ({}))) as { error?: string }).error ?? `nixamp.com answered ${answer.status}`);
       return Buffer.from(await answer.arrayBuffer());
     },
+    // A singer's close-up redrawn to the song's own seconds, by nixamp.com (fal.ai), under the same cap.
+    lipsync: async (input) => {
+      const session = readSession();
+      const here = stations.publicBase?.() ?? "";
+      if (!session?.token || !/^https:\/\//.test(here)) throw new VeoUnavailable("this server is not signed in to nixamp.com");
+      const answer = await fetch(`${session.site.replace(/\/+$/, "")}/api/v1/music/veo`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${session.token}`, "x-nixamp-server": here },
+        body: JSON.stringify({ lipsync: true, seconds: input.seconds, video: input.video.toString("base64"), audio: input.audio.toString("base64") }),
+        signal: AbortSignal.timeout(15 * 60_000),
+      });
+      if (answer.status === 402) throw new VeoUnavailable(((await answer.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${answer.status}`);
+      if (!answer.ok) throw new Error(((await answer.json().catch(() => ({}))) as { error?: string }).error ?? `nixamp.com answered ${answer.status}`);
+      return Buffer.from(await answer.arrayBuffer());
+    },
     // A release is told to nixamp.com as this server's owner; nixamp.com tells the artist's followers.
     announce: (release) => {
       const session = readSession();
@@ -8037,6 +8052,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ledger: pool ? pgLedger(pool as unknown as import("./veo-studio.ts").Queryable) : fileLedger(VeoStudio.fileFor(stateDir(), options.port)),
     monthlyUsd: Number(process.env["NIXAMP_VEO_MONTHLY_USD"] ?? 50),
     usdPerSecond: Number(process.env["NIXAMP_VEO_USD_PER_SECOND"] ?? 0.15),
+    ...(process.env["FAL_KEY"] ? { falKey: process.env["FAL_KEY"] } : {}),
+    lipsyncUsdPerSecond: Number(process.env["NIXAMP_LIPSYNC_USD_PER_SECOND"] ?? 0.1),
   }) : undefined;
   /** The signed-in account owns a server listed in the directory at this base. */
   const ownsListed = async (request: IncomingMessage, base: string): Promise<boolean> => {
@@ -8053,8 +8070,21 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     if (!(await ownsListed(request, base))) return { status: 403, body: { error: "only the owner of a listed server" } };
     if (request.method === "GET") return { status: 200, body: await veoStudio.status() };
     if (request.method !== "POST") return { status: 405, body: { error: "GET or POST" } };
-    let input: { prompt?: unknown; seconds?: unknown; references?: unknown };
-    try { input = JSON.parse(await readBody(request, 2 * 1024 * 1024)) as typeof input; } catch { return { status: 400, body: { error: "a JSON body under 2 MB" } }; }
+    let input: { prompt?: unknown; seconds?: unknown; references?: unknown; lipsync?: unknown; video?: unknown; audio?: unknown };
+    // A lip sync carries an 8 s 1080p shot and its seconds of the song: up to 48 MB as base64.
+    try { input = JSON.parse(await readBody(request, 48 * 1024 * 1024)) as typeof input; } catch { return { status: 400, body: { error: "a JSON body under 48 MB" } }; }
+    if (input.lipsync === true) {
+      if (!veoStudio.canLipsync) return { status: 404, body: { error: "lip sync is not set up here" } };
+      const video = Buffer.from(String(input.video ?? ""), "base64");
+      const audio = Buffer.from(String(input.audio ?? ""), "base64");
+      if (video.length < 10_000 || audio.length < 1_000) return { status: 400, body: { error: "a shot and its audio" } };
+      try {
+        return { status: 200, body: null, video: await veoStudio.lipsync({ video, audio, seconds: Number(input.seconds ?? 8) }) };
+      } catch (error) {
+        if (error instanceof VeoBudgetError) return { status: 402, body: { error: error.message, code: "budget", ...(await veoStudio.status()) } };
+        return { status: 422, body: { error: (error as Error).message, code: "refused" } };
+      }
+    }
     const prompt = String(input.prompt ?? "").trim();
     if (prompt.length < 20) return { status: 400, body: { error: "describe the shot" } };
     const references = (Array.isArray(input.references) ? input.references : []).slice(0, 3).map((one) => Buffer.from(String(one), "base64")).filter((one) => one.length > 1000);
