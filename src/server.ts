@@ -3238,11 +3238,20 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         ], base, nav));
         return;
       }
+      // Our label's artists and albums live on nixamp.com/music, where Follow,
+      // Buy and the player are; live.streaming is the public mirror and sends
+      // them there. Anybody else's keep their page here.
+      const onSite = (() => { try { return new URL(storeSite).host === requestHost; } catch { return true; } })();
+      const toMusic = (kind: "artist" | "album", slug: string): void => {
+        response.writeHead(302, { location: `${storeSite}/radio/${kind}/${encodeURIComponent(slug)}`, "cache-control": "public, max-age=300" });
+        response.end();
+      };
       const artistPath = RADIO_ARTIST.exec(path);
       if (artistPath) {
         const catalogue = radioCatalogue();
         const artist = catalogue.artists.get(artistPath[1]!);
         if (!artist) return send(404, renderMissing("artist", base, nav));
+        if (artist.label && !onSite) return toMusic("artist", artistPath[1]!);
         return send(200, renderArtist(catalogue, artist, { base, nav, shop, site: storeSite, stationNames }));
       }
       const albumPath = RADIO_ALBUM.exec(path);
@@ -3260,6 +3269,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           return;
         }
         if (!album) return send(404, renderMissing("album", base, nav));
+        if (album.label && !onSite) return toMusic("album", albumPath[1]!);
         return send(200, renderAlbum(catalogue, album, { base, nav, shop, site: storeSite, stationNames }));
       }
       const stationPath = RADIO_STATION.exec(path);
