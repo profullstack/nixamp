@@ -6,7 +6,7 @@ import { createServer as createHttpServer } from "node:http";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { AiLabel, cleanLyrics, closeUpTimes, fileName, planUsd, shotPlan, genreSlug, nextReset, periodOf, renderFilmedVideo, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines, VeoUnavailable } from "../src/ai-label.ts";
+import { AiLabel, cleanLyrics, closeUpTimes, writeVeoStory, fileName, planUsd, shotPlan, genreSlug, nextReset, periodOf, renderFilmedVideo, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines, VeoUnavailable } from "../src/ai-label.ts";
 import { elevenLabsComposer, OutOfCredit, type Composer } from "../src/ai-radio.ts";
 import type { askJson } from "../src/ai-text.ts";
 import { Channels } from "../src/channels.ts";
@@ -373,6 +373,15 @@ test("a single is a short film: story scenes from its words, cut in turn with th
     label.stopSchedule();
     rmSync(top, { recursive: true, force: true });
   }
+});
+
+test("a story asked for more scenes than the model wrote is filled with its own scenes from other angles", async () => {
+  const ask: typeof askJson = async () => ({ model: "m", value: { scenes: [{ prompt: "The singer walks out of a diner at dawn", cast: ["lead vocals"] }, { prompt: "Rain on a car windshield at night", cast: [] }] } });
+  const scenes = await writeVeoStory({ genre: "Rock", sound: "loud" }, [{ role: "lead vocals", look: "woman, curly hair" }], { title: "Record", concept: "" }, { title: "Song", style: "fast", lyrics: "" }, 5, ask);
+  assert.equal(scenes.length, 5, "every paid-for shot has a scene");
+  assert.match(scenes[2]!.prompt, /diner at dawn.*Filmed as a different angle/);
+  assert.deepEqual(scenes[2]!.cast, ["lead vocals"], "with the same cast");
+  assert.match(scenes[3]!.prompt, /windshield.*Filmed as a wide establishing angle/);
 });
 
 test("story scenes star the band as their profiles describe them, never strangers", async () => {
