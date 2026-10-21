@@ -698,6 +698,11 @@ export async function writeVeoStory(
     return { prompt: clean(item.prompt, 400), cast: [...new Set(who)].slice(0, 3) };
   }).filter((one) => one.prompt.length > 10).slice(0, scenes);
   if (out.length < 1) throw new Error("the model wrote no story");
+  // A model asked for many scenes often writes fewer: the rest are its own scenes again, from other angles,
+  // so every shot the plan paid for has something to film.
+  const angles = ["a different angle and closer", "a wide establishing angle", "a slow tracking shot", "an overhead angle", "a low angle"];
+  const written = out.length;
+  for (let i = 0; out.length < scenes; i++) out.push({ ...out[i % written]!, prompt: `${out[i % written]!.prompt} Filmed as ${angles[i % angles.length]}.` });
   return out.map((scene) => ({
     cast: scene.cast,
     prompt: `Music video for a fictional ${artist.genre} song. ${scene.prompt} Mood: ${song.style}`.slice(0, 900)
