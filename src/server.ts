@@ -79,7 +79,9 @@ import { Importer } from "./handoff.ts";
 import { handleHandoffs } from "./handoff-routes.ts";
 import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
 import { AiLabel } from "./ai-label.ts";
-import { handleLabelRoutes, isPublicLabelPath } from "./label-routes.ts";
+import { buyLink, handleLabelRoutes, isPublicLabelPath } from "./label-routes.ts";
+import { GrantVerifier, MusicStore } from "./music-store.ts";
+import { handleStoreRoutes, isStorePath } from "./store-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
 import { HolderStore, TagReader, factsFor } from "./track-facts.ts";
@@ -1950,6 +1952,8 @@ export interface HandlerOptions {
   supportSubscriptions?: SupportSubscriptions;
   /** Signing secret of nixamp's CoinPay business, for /api/v1/webhooks/coinpay. */
   coinpayWebhookSecret?: string;
+  /** The AI label's songs for sale, nixamp.com only (music-store.ts). */
+  musicStore?: MusicStore;
   sharedTranslations?: SharedTranslations;
   /** Translation: texts in another language, by a model here. The same optional library. */
   translator?: Translator;
@@ -2040,6 +2044,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     site: process.env["NIXAMP_SITE"] || "https://nixamp.com",
     ...(listenPassKey ? { secret: listenPassKey } : {}),
   });
+  // The music store lives on nixamp.com; a server holding the label's music asks it about grants.
+  const storeSite = (process.env["NIXAMP_SITE"] || "https://nixamp.com").replace(/\/+$/, "");
+  const storeGrants = new GrantVerifier({ site: storeSite });
 
   return async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://localhost");
@@ -2595,6 +2602,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
       let event: ReturnType<typeof readCoinpayWebhook>;
       try { event = readCoinpayWebhook(JSON.parse(raw)); } catch { json(response, 400, { error: "invalid JSON" }); return; }
+      if (options.musicStore) {
+        try {
+          if (await options.musicStore.owns(event.paymentId)) { json(response, 200, await options.musicStore.settle(event.paymentId)); return; }
+        } catch (error) {
+          console.error(`nixamp: CoinPay webhook for ${event.paymentId} (music) could not settle: ${error instanceof Error ? error.message : String(error)}`);
+          json(response, 500, { error: "could not settle; retry" });
+          return;
+        }
+      }
       if (!options.translationPasses) { json(response, 200, { settled: false, reason: "billing is off here" }); return; }
       try {
         json(response, 200, await options.translationPasses.settle(event.paymentId));
@@ -2728,6 +2744,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !isPublicSharePath(path) &&
       // The AI label's catalogue, its songs and their words.
       !(isPublicLabelPath(path) && Boolean(options.stations?.label)) &&
+      // The music store: its pages, checkout, receipts and grants (nixamp.com).
+      !(isStorePath(path) && Boolean(options.musicStore)) &&
       // What is on, as MCP, for anybody.
       path !== "/mcp/public" &&
       // Supporting a copyright holder is for anybody listening.
@@ -3074,9 +3092,24 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    if (options.musicStore && options.support && isStorePath(path)) {
+      const support = options.support;
+      const accounts = options.accounts;
+      if (await handleStoreRoutes(request, response, path, url, {
+        store: options.musicStore,
+        coins: async () => (await support.coins()).coins,
+        account: async () => (accounts ? await accounts.whoIs(tokenFrom(request.headers)) : null),
+        json,
+        readBody,
+      })) return;
+    }
+
     if (options.stations?.label && (isPublicLabelPath(path) || path === "/api/v1/stations/label" || path.startsWith("/api/v1/stations/label/"))) {
       const control = isPublicLabelPath(path) ? { allowed: false } : await controlOf();
-      if (await handleLabelRoutes(request, response, path, { label: options.stations.label, canControl: control.allowed, json, readBody })) return;
+      if (await handleLabelRoutes(request, response, path, {
+        label: options.stations.label, canControl: control.allowed, json, readBody,
+        grants: storeGrants, site: storeSite, publicBase: options.stations.publicBase?.() ?? "",
+      })) return;
     }
 
     if (options.stations && (isPublicSharePath(path) || path.startsWith("/api/v1/stations/ai") || path.startsWith("/api/v1/stations/shares") || path.startsWith("/api/v1/stations/holders"))) {
@@ -7377,7 +7410,18 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     try { stamp = String(Math.round(statSync(file).mtimeMs)); } catch { stamp = ""; }
     const art = picture ? `/api/v1/stations/${station.id}/art?t=${encodeURIComponent(station.listenToken)}&f=${sha("sha1").update(file + stamp).digest("hex").slice(0, 12)}` : "";
     const words = await lyricsFinder.find(file).catch(() => null);
-    return factsFor({
+    // A label song is for sale on nixamp.com: the song, its album, everything by the artist.
+    const song = aiLabel.songAt(file);
+    const here = stations.publicBase?.() ?? "";
+    const shop = (process.env["NIXAMP_SITE"] || "https://nixamp.com").replace(/\/+$/, "");
+    const store = song && /^https:\/\//.test(here) ? {
+      song: buyLink(shop, here, "song", song.artist, song.album, song.n),
+      album: buyLink(shop, here, "album", song.artist, song.album),
+      artist: buyLink(shop, here, "artist", song.artist),
+      artistName: song.artistName,
+      albumTitle: song.albumTitle,
+    } : null;
+    return { ...factsFor({
       art,
       ...(words ? { lyrics: `/api/v1/stations/${station.id}/lyrics?t=${encodeURIComponent(station.listenToken)}&f=${sha("sha1").update(file + stamp).digest("hex").slice(0, 12)}` } : {}),
       station, file,
@@ -7386,7 +7430,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       holders: holderStore.list(),
       share: share ? { basis: share.rights.basis, note: share.rights.note, by: share.by } : null,
       aiTrack: composed ? { made: composed.made } : null,
-    });
+    }), store };
   };
   // Channels as HLS, on demand, for Safari on a phone: one ffmpeg copying a
   // channel's fragments into short files while somebody is asking for them.
@@ -7531,6 +7575,20 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     log: (line) => console.log(line),
   }) : undefined;
   supportMonthly?.startSchedule();
+  // The AI label's songs for sale: purchases kept here, the music zipped by the server that holds it.
+  const jwtSecret = process.env["NIXAMP_JWT_SECRET"] ?? "";
+  const musicStore = supportPayments && supportPayments.enabled && pool && jwtSecret ? new MusicStore({
+    db: pool as unknown as import("./support.ts").Db,
+    support: supportPayments,
+    mail: process.env["RESEND_API_KEY"] ? { apiKey: process.env["RESEND_API_KEY"], from: process.env["NIXAMP_MAIL_FROM"] ?? "nixamp <notifications@nixamp.com>" } : null,
+    site: nixampSite,
+    secret: sha("sha256").update(`music-grant:${jwtSecret}`).digest("hex"),
+    servers: () => {
+      const listed = directory ? directory.list().map((one) => peerBase(one.url)).filter(Boolean) : [];
+      return [...new Set([...guidePeers(), ...listed])];
+    },
+    log: (line) => console.log(line),
+  }) : undefined;
   if (translationPasses) void translationPasses.access().catch(() => console.error("nixamp: translation checkout could not warm; it will retry on demand"));
   const liveVoice = accounts && process.env["NIXAMP_DUBBING"] !== "off" ? new LiveVoice({
     ...(pool ? { db: pool } : {}),
@@ -8085,6 +8143,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(translationPasses ? { translationPasses } : {}),
     ...(supportPayments ? { support: supportPayments } : {}),
     ...(supportMonthly ? { supportSubscriptions: supportMonthly } : {}),
+    ...(musicStore ? { musicStore } : {}),
     ...(process.env["COINPAY_WEBHOOK_SECRET"] ? { coinpayWebhookSecret: process.env["COINPAY_WEBHOOK_SECRET"] } : {}),
     ...(sharedTranslations ? { sharedTranslations } : {}),
     ...(translator ? { translator } : {}),

@@ -31,6 +31,8 @@ export interface TrackFacts {
   art: string;
   /** Where the track's words are, on this station's link; "" when none are known. */
   lyrics: string;
+  /** An AI label song: where to buy it, its album, or everything by the artist (nixamp.com/buy). */
+  store?: { song: string; album: string; artist: string; artistName: string; albumTitle: string } | null;
 }
 
 export interface Holder {

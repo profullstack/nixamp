@@ -84,6 +84,45 @@ export class Support {
     return this.merchant;
   }
 
+  /** Any CoinPay checkout on nixamp's business (a purchase in the store): no holder, no floor but a cent. */
+  async pay(input: { amountUsd: number; coin: unknown; description: string; metadata: Record<string, unknown>; redirect: string; order: string }): Promise<{ url: string; paymentId: string }> {
+    const { business, coins } = await this.coins();
+    const coin = typeof input.coin === "string" ? input.coin.toUpperCase() : "";
+    if (!coins.includes(coin)) throw new SupportError(`Pay with one of: ${coins.join(", ")}.`, 400, "invalid_coin");
+    const created = await this.provider("/api/payments/create", {
+      method: "POST",
+      headers: { "idempotency-key": `nixamp-${input.order}` },
+      body: JSON.stringify({
+        business_id: business,
+        amount_usd: Math.max(0.01, Math.round(input.amountUsd * 100) / 100),
+        currency: coin.toLowerCase(),
+        payment_method: "crypto",
+        description: input.description.slice(0, 200),
+        metadata: { app: "nixamp", ...input.metadata },
+        redirect_url: input.redirect,
+      }),
+    });
+    const payment = created["payment"] as { id?: unknown } | undefined;
+    const id = typeof payment?.id === "string" ? payment.id : "";
+    if (!/^[A-Za-z0-9_-]{6,80}$/.test(id)) throw new SupportError("The checkout did not start; nothing was charged. Try again.", 502, "provider");
+    return { url: `https://coinpayportal.com/pay/${id}`, paymentId: id };
+  }
+
+  /** Whether CoinPay counts this payment as paid; null when it did not answer. */
+  async isPaid(paymentId: string): Promise<boolean | null> {
+    try {
+      const response = await (this.options.fetcher ?? fetch)(`https://coinpayportal.com/api/payments/${encodeURIComponent(paymentId)}`, {
+        signal: AbortSignal.timeout(15_000),
+        headers: { authorization: `Bearer ${this.options.key}` },
+      });
+      if (!response.ok) return null;
+      const body = (await response.json()) as { payment?: { status?: string } };
+      return PAID.has(String(body.payment?.status ?? ""));
+    } catch {
+      return null;
+    }
+  }
+
   /** A CoinPay checkout for this much, to this holder; the address to send the payer to. */
   async checkout(input: { holder?: unknown; amountUsd?: unknown; coin?: unknown; station?: unknown; track?: unknown; metadata?: Record<string, unknown> }): Promise<{ url: string; paymentId: string }> {
     const holder = typeof input.holder === "string" ? this.holder(input.holder) : undefined;

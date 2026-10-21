@@ -10,20 +10,34 @@ import { createHash } from "node:crypto";
 import { createReadStream, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { ROSTER, type AiLabel, type PublicArtist } from "./ai-label.ts";
+import { covers, PRICES, type GrantVerifier } from "./music-store.ts";
+import { writeZip, zipSize } from "./zip-stream.ts";
 import { StationError } from "./stations.ts";
 
 // Listening is free on the live stations (with their breaks); the songs as
-// files are sold, so only the words and the cover are public here.
-const FILE = /^\/api\/v1\/label\/([a-f0-9]{10})\/([a-f0-9]{8})\/(\d{1,3}\.txt|cover\.jpg)$/;
+// files are sold, so only the words and the cover are public here, and an
+// MP3 or a zip needs a grant from nixamp.com's store (music-store.ts).
+const FILE = /^\/api\/v1\/label\/([a-f0-9]{10})\/([a-f0-9]{8})\/(\d{1,3}\.(?:txt|mp3)|cover\.jpg)$/;
 
-/** Whether this path is the label's public face. */
+/** Whether this path is the label's public face (an MP3 or the zip still asks for its grant). */
 export function isPublicLabelPath(path: string): boolean {
-  return path === "/label" || path === "/api/v1/label" || FILE.test(path);
+  return path === "/label" || path === "/api/v1/label" || path === "/api/v1/label/zip" || FILE.test(path);
+}
+
+/** nixamp.com's page that sells this: a song, an album or everything by the artist. */
+export function buyLink(site: string, server: string, kind: "song" | "album" | "artist", artist: string, album = "", n = 0): string {
+  const query = new URLSearchParams({ server, kind, artist, ...(kind !== "artist" ? { album } : {}), ...(kind === "song" ? { n: String(n) } : {}) });
+  return `${site}/buy?${query.toString()}`;
 }
 
 export interface LabelRoutesContext {
   label: AiLabel;
   canControl: boolean;
+  /** Checks a store grant with nixamp.com; without it nothing is sold or handed out. */
+  grants?: GrantVerifier;
+  /** nixamp.com, where the store is, and this server's public address (for Buy links). */
+  site?: string;
+  publicBase?: string;
   json: (response: ServerResponse, status: number, body: unknown) => void;
   readBody: (request: IncomingMessage) => Promise<string>;
 }
@@ -91,7 +105,8 @@ export async function handleLabelRoutes(
         return true;
       }
       if (path === "/label") {
-        const page = renderLabel(label.publicView());
+        const shop = ctx.grants && ctx.site && /^https:\/\//.test(ctx.publicBase ?? "") ? { site: ctx.site, server: ctx.publicBase! } : undefined;
+        const page = renderLabel(label.publicView(), shop);
         response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": LABEL_CSP, "cache-control": "public, max-age=300" });
         response.end(method === "HEAD" ? undefined : page);
         return true;
@@ -100,7 +115,45 @@ export async function handleLabelRoutes(
         ctx.json(response, 200, label.publicView());
         return true;
       }
+      const url = new URL(request.url ?? "/", "http://x");
+      const grant = url.searchParams.get("grant") ?? "";
+      if (path === "/api/v1/label/zip") {
+        const scope = ctx.grants ? await ctx.grants.check(grant) : null;
+        if (!scope) {
+          ctx.json(response, 403, { error: "that download link has expired or is not one of ours: open your purchase again for a fresh one", code: "bad_grant" });
+          return true;
+        }
+        const zip = label.zipFor(scope);
+        if (!zip) {
+          ctx.json(response, 404, { error: "nothing to download yet", code: "not_found" });
+          return true;
+        }
+        response.writeHead(200, {
+          "content-type": "application/zip",
+          "content-length": String(zipSize(zip.entries)),
+          "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(zip.name)}`,
+          "cache-control": "private, no-store",
+        });
+        if (method === "HEAD") {
+          response.end();
+          return true;
+        }
+        await writeZip(response, zip.entries).catch(() => response.destroy());
+        response.end();
+        return true;
+      }
       const [, artist, album, what] = FILE.exec(path)!;
+      if (what!.endsWith(".mp3")) {
+        const scope = ctx.grants && grant ? await ctx.grants.check(grant) : null;
+        const n = Number(what!.split(".")[0]);
+        const file = scope && covers(scope, artist!, album!, n) ? label.songFile(artist!, album!, n) : "";
+        if (!file) {
+          ctx.json(response, 403, { error: "songs as files are for the people who bought them; listening on the live stations is free", code: "not_bought" });
+          return true;
+        }
+        sendFile(request, response, file, "audio/mpeg", file.split("/").pop() ?? "");
+        return true;
+      }
       const found = label.publicFile(artist!, album!, what!);
       if (!found) {
         ctx.json(response, 404, { error: "no such file on the label", code: "not_found" });
@@ -213,6 +266,7 @@ audio{width:100%;max-width:360px;height:36px}
 details{margin-top:4px}summary{cursor:pointer;color:var(--muted);font-size:.9rem}
 pre.lyrics{white-space:pre-wrap;font:inherit;font-size:.95rem;margin:8px 0 0;padding:12px;border-radius:8px;background:var(--bg)}
 .dl{font-size:.85rem}.soon{color:var(--muted);font-size:.85rem}
+a.buy{display:inline-block;font-weight:700;text-decoration:none;border:1px solid var(--accent);border-radius:999px;padding:2px 10px}
 footer{margin-top:48px;color:var(--muted);font-size:.85rem}footer a{color:inherit}
 `;
 
@@ -225,25 +279,39 @@ export const LABEL_CSP = [
   "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
 ].join("; ");
 
-function renderAlbum(artist: PublicArtist, album: PublicArtist["albums"][number]): string {
+type Shop = { site: string; server: string } | undefined;
+
+function price(cents: number): string {
+  return cents < 100 ? `${cents}¢` : `$${(cents / 100).toFixed(cents % 100 ? 2 : 0)}`;
+}
+
+function buy(shop: Shop, kind: "song" | "album" | "artist", artist: string, album = "", n = 0, what = ""): string {
+  if (!shop) return "";
+  return `<a class="buy" href="${escape(buyLink(shop.site, shop.server, kind, artist, album, n))}">Download ${what || kind} · ${price(PRICES[kind])}</a>`;
+}
+
+function renderAlbum(artist: PublicArtist, album: PublicArtist["albums"][number], shop: Shop): string {
   const base = `/api/v1/label/${artist.key}/${album.key}`;
   const cover = album.cover ? `<img class="cover" src="${base}/cover.jpg" alt="Cover of ${escape(album.title)}" width="160" height="160" loading="lazy">` : `<div class="blank" aria-hidden="true"></div>`;
   const songs = album.songs.map((song) => `<li><div class="song"><span class="n">${song.n}.</span><span class="t">${escape(song.title)}</span><span class="d">${minutes(song.seconds)}</span></div>`
     + `<details><summary>Lyrics</summary><pre class="lyrics">${escape(song.lyrics)}</pre></details>`
-    + `<div class="dl"><a href="${base}/${song.n}.txt">lyrics.txt</a></div></li>`).join("");
+    + `<div class="dl"><a href="${base}/${song.n}.txt">lyrics.txt</a>${shop ? ` · ${buy(shop, "song", artist.key, album.key, song.n, "MP3")}` : ""}</div></li>`).join("");
   return `<div class="album">${cover}<div><h4>${escape(album.title)} <span class="d">(${album.year})</span></h4>`
     + `${album.concept ? `<p class="concept">${escape(album.concept)}</p>` : ""}`
     + `${album.complete ? "" : `<p class="soon">Still being recorded: new songs land here as they are finished.</p>`}`
+    + `${shop ? `<p>${buy(shop, "album", artist.key, album.key, 0, "the album, MP3s with art and lyrics")}</p>` : ""}`
     + `<ol class="songs">${songs}</ol></div></div>`;
 }
 
 /** The label's catalogue as a page: no script, plays in any browser. */
-export function renderLabel(view: ReturnType<AiLabel["publicView"]>): string {
+export function renderLabel(view: ReturnType<AiLabel["publicView"]>, shop?: Shop): string {
   const label = view.holder.replace(/,?\s+(inc|llc|ltd|gmbh|co)\.?$/i, "");
   const nav = view.genres.length > 1 ? `<nav class="genres" aria-label="Genres">${view.genres.map((one) => `<a href="#${escape(one.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}">${escape(one.genre)}</a>`).join("")}</nav>` : "";
   const sections = view.genres.map((genre) => `<section class="genre" id="${escape(genre.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}" aria-labelledby="g-${escape(genre.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}">`
     + `<h2 id="g-${escape(genre.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}">${escape(genre.genre)}${genre.station ? ` <a href="/watch/${escape(genre.station)}">Listen live, free →</a>` : ""}</h2>`
-    + genre.artists.map((artist) => `<article class="artist"><h3>${escape(artist.name)}</h3>${artist.bio ? `<p class="bio">${escape(artist.bio)}</p>` : ""}${artist.albums.map((album) => renderAlbum(artist, album)).join("")}</article>`).join("")
+    + genre.artists.map((artist) => `<article class="artist"><h3>${escape(artist.name)}</h3>${artist.bio ? `<p class="bio">${escape(artist.bio)}</p>` : ""}`
+      + `${shop ? `<p>${buy(shop, "artist", artist.key, "", 0, "everything by them")}</p>` : ""}`
+      + `${artist.albums.map((album) => renderAlbum(artist, album, shop)).join("")}</article>`).join("")
     + `</section>`).join("");
   return `<!doctype html>
 <html lang="en">
