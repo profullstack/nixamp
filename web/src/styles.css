@@ -66,13 +66,11 @@ body {
 /* ---- the display ad ---------------------------------------------------- */
 
 /* A bar, never a box: takes no room until ad.js has filled it, then the
-   728x90 leaderboard plus the label ad.js draws above it, or the 40px text
-   bar where there is no room for the leaderboard (app.ts picks). */
-.adnet { display: flex; flex-direction: column; align-items: center; }
+   40px text_link line. Never on the homepage (app.ts). */
+.adnet { display: block; width: 100%; }
 .adnet[hidden] { display: none; }
 .adnet:not([data-cp-filled]) { height: 0; overflow: hidden; }
-.adnet[data-cp-filled][data-format="banner_728x90"] { min-height: 106px; }
-.adnet[data-cp-filled][data-format="text_link"] { min-height: 40px; }
+.adnet[data-cp-filled][data-format="text_link"] { min-height: 40px; margin: 8px 0; }
 
 /* ---- the welcome ------------------------------------------------------- */
 

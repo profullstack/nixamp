@@ -194,11 +194,13 @@
         </section>
       </section>
 
-      <!-- The one ad, a bar between the player and the panels. In the shell
-           so ad.network finds it in the raw HTML; shown, and ad.js loaded, by
-           app.ts only where accounts live (nixamp.com). A nixamp on your own
-           machine never shows it and never fetches the script. -->
-      <aside class="adnet" id="adnet" aria-label="Advertisement" data-ad-network="SSXBxU06ZRXMrzpJ" data-cp-ad data-slot="514646f2-8299-40c1-9d9e-37d60d2d5892" data-format="text_link" hidden></aside>
+      <!-- The one ad, a thin text_link bar between the player and the panels.
+           Empty in the shell, so the homepage's raw HTML carries no ad unit
+           (ad.network verifies from the meta tag in the head). app.ts makes it
+           a unit, and loads ad.js, only where accounts live (nixamp.com) and
+           never on the homepage. A nixamp on your own machine never shows it
+           and never fetches the script. -->
+      <aside class="adnet" id="adnet" aria-label="Advertisement" hidden></aside>
 
       <div class="split" id="zone-top">
         <section class="panel player-only" data-title="Spectrum Analyser" data-i18n-data-title="Spectrum Analyser" id="spectrum-panel">

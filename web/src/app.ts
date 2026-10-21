@@ -5978,12 +5978,17 @@ export function start(): void {
   let adnetShown = false;
   const showAdnet = (): void => {
     if (adnetShown || !keepsAccounts) return;
+    // The homepage carries no ad.
+    if (location.pathname.replace(/\/+$/, "") === "") return;
     adnetShown = true;
+    // Always the low-profile text_link bar (40px, fluid, its own "Sponsored"
+    // mark). The unit's attributes are set here, before ad.js sees it, so the
+    // shell itself never carries one.
+    dom.adnet.dataset.adNetwork = "SSXBxU06ZRXMrzpJ";
+    dom.adnet.dataset.slot = "514646f2-8299-40c1-9d9e-37d60d2d5892";
+    dom.adnet.dataset.format = "text_link";
+    dom.adnet.setAttribute("data-cp-ad", "");
     dom.adnet.hidden = false;
-    // A bar: the 728x90 leaderboard where it fits whole (a creative is drawn
-    // at its pixel width and would crop), else the fluid text bar. Chosen
-    // once, before ad.js sees the unit, so it fills exactly one format.
-    if (dom.adnet.clientWidth >= 728) dom.adnet.dataset.format = "banner_728x90";
     const ads = (): { scan?: () => void } | undefined =>
       (window as unknown as { crawlproofAds?: { scan?: () => void } }).crawlproofAds;
     if (!document.querySelector('script[src="https://crawlproof.com/ad.js"]')) {
