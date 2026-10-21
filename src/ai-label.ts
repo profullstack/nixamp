@@ -626,15 +626,18 @@ export async function writeStoryboard(
 /** Thrown by a Veo dependency when this month's budget is spent: no more shots until next month. */
 export class VeoUnavailable extends Error {}
 
+// Nobody sings on camera: Veo's singers mouth a melody of their own, never the song's,
+// so a mouth in shot is out of sync. The band plays; the vocalist is far off, from
+// behind, in silhouette or between lines, never a close-up of singing.
 const SHOTS = [
-  "Wide shot of the whole band performing on a stage, the crowd in the foreground",
-  "Close-up of the lead singer singing the chorus into the microphone",
-  "The camera moves across the stage between the band members as they play hard",
-  "Low-angle shot of the band at the song's climax, lights flaring behind them",
-  "Over-the-shoulder shot from behind the drums, looking out at the band and the crowd",
-  "Slow push-in on the band in a quieter moment, moody light",
-  "Handheld shot from the crowd, fans with hands up, the band lit on stage",
-  "The band walking out on stage before the show, backlit silhouettes turning into faces",
+  "Wide shot of the whole band performing on a big stage at night, seen from the back of the crowd, the players small against the lights",
+  "Close-up of the guitarist's hands on the fretboard and the strings, shallow focus, stage lights flaring",
+  "The camera glides behind the band members as they play hard, seen from behind, looking out over the crowd",
+  "Low-angle shot of the drummer hitting the cymbals at the song's climax, sticks blurred, sparks of light",
+  "The lead vocalist from behind, arms raised to the crowd between lines, backlit silhouette, no face to camera",
+  "Slow aerial push over the crowd toward the stage, fans with hands up, the band tiny in the distance",
+  "Close-up of the bass player's fingers and the amplifier, then a tilt up to the band in silhouette",
+  "The band walking out on stage before the show, backlit silhouettes, nobody speaking or singing",
 ];
 
 /**
@@ -648,7 +651,7 @@ export function veoPrompts(artist: Pick<LabelArtist, "genre" | "sound">, song: P
     `Music video for a fictional ${artist.genre} band. ${shot}.`,
     cast ? `The performers are exactly the people in the reference images: ${cast}.` : "",
     `Mood and sound: ${song.style} ${artist.sound}.`.slice(0, 400),
-    "Cinematic, 35mm film look, dynamic camera. No text, no logos.",
+    "Nobody sings, speaks or lip-syncs on camera: no mouths in close-up. Cinematic, 35mm film look, dynamic camera. No text, no logos.",
   ].filter(Boolean).join(" "));
 }
 
@@ -732,8 +735,11 @@ export function renderStoryVideo(ffmpeg: string[], input: { audio: string; image
   return runLow(ffmpeg, [...ffmpeg.slice(1), ...args], 60 * 60_000, "the video failed");
 }
 
-/** The version of a video cut from Veo footage only; anything older is a slideshow and is not shown. */
-export const FILMED = 4;
+/**
+ * The version of a video cut from Veo footage with nobody singing on camera; anything
+ * older (a slideshow, or 4: footage whose singers were out of sync) is not shown.
+ */
+export const FILMED = 5;
 
 /**
  * A single's music video, cut from its filmed shots alone: 4 s cuts, each

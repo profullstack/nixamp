@@ -277,7 +277,7 @@ test("an album's single gets filmed Veo shots of the band; the rest the storyboa
     await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
     await label.videos();
     const songs = label.get(artist.key)!.albums[0]!.songs;
-    assert.deepEqual(songs.map((one) => one.videoVersion), [4, undefined, undefined], "the single is filmed; the other songs get no video");
+    assert.deepEqual(songs.map((one) => one.videoVersion), [5, undefined, undefined], "the single is filmed; the other songs get no video");
     assert.equal(shots.length, 2);
     assert.doesNotMatch(shots[0]!.prompt, /Mara Quill/, "never a name");
     assert.match(shots[0]!.prompt, /the lead vocals from reference image 1/);
@@ -331,7 +331,7 @@ test("a single that comes up short keeps what was filmed, retries a 503, and an 
     await label.videos();
     assert.equal(calls, 11, "the two filmed shots were kept, not paid for twice");
     assert.deepEqual(filmed, [6]);
-    assert.equal(song.videoVersion, 4);
+    assert.equal(song.videoVersion, 5);
   } finally {
     label.stopSchedule();
     rmSync(top, { recursive: true, force: true });
