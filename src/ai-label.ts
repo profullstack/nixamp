@@ -139,6 +139,11 @@ export interface LabelSettings {
   storyShots: number;
   /** How many close-ups of the singer a single gets, lip-synced to the song (0: none, the band only). */
   lipsyncShots: number;
+  /**
+   * Film enough for the whole song, nothing shown twice: the counts come from the song's
+   * length (shotPlan) and the three above are not used. Setting any of them turns this off.
+   */
+  coverSong: boolean;
   /** Public, listed and owned, so the genre stations are on the guide. */
   publish: boolean;
   /** Songs made at the same time (ElevenLabs takes several requests at once on a paid plan). */
@@ -396,6 +401,7 @@ export const DEFAULTS: Omit<LabelSettings, "pausedReason"> = {
   veoShots: 2,
   storyShots: 4,
   lipsyncShots: 2,
+  coverSong: true,
   parallel: 1,
   genreOrder: ["Punk", "Blues", "Country", "Jazz", "Classic Rock", "Metal", "Hip-Hop", "Pop", "R&B"],
 };
@@ -698,6 +704,8 @@ const CLOSE_UPS = [
   "Medium close-up of the lead vocalist singing to camera from the driver's seat of a car at dusk, window down, wind in the hair, no microphone",
   "Close-up of the lead vocalist singing on an open road at golden hour, the camera slowly circling, face to camera, no microphone",
   "Close-up of the lead vocalist singing in a dark room lit by one warm lamp, head and shoulders, face to camera, no microphone",
+  "Medium close-up of the lead vocalist singing on a rooftop at night, the city lights behind, face to camera, no microphone",
+  "Close-up of the lead vocalist singing in the back of a moving train at dawn, soft window light on the face, no microphone",
 ];
 
 /**
@@ -710,7 +718,8 @@ export function veoPrompts(artist: Pick<LabelArtist, "genre" | "sound">, song: P
   const rule = kind === "singer"
     ? "The vocalist sings clearly to camera, the whole mouth always visible. There is no microphone, mic stand or instrument anywhere in the shot, and nothing in front of the face. Cinematic, 35mm film look. No text, no logos."
     : "The lead vocalist is not in this shot, and nobody sings, speaks or lip-syncs on camera. Cinematic, 35mm film look, dynamic camera. No text, no logos.";
-  return (kind === "singer" ? CLOSE_UPS : SHOTS).slice(0, count).map((shot) => [
+  const list = kind === "singer" ? CLOSE_UPS : SHOTS;
+  return Array.from({ length: Math.max(0, count) }, (_, i) => list[i % list.length]! + (i >= list.length ? ", from another angle" : "")).map((shot) => [
     `Music video for a fictional ${artist.genre} band. ${shot}.`,
     cast ? `The performers are exactly the people in the reference images: ${cast}.` : "",
     `Mood and sound: ${song.style} ${artist.sound}.`.slice(0, 400),
@@ -799,6 +808,18 @@ export function renderStoryVideo(ffmpeg: string[], input: { audio: string; image
 }
 
 /**
+ * How many shots a single needs so that its footage covers the whole song with
+ * nothing shown twice (8 s a shot, the singer's close-ups whole, the rest cut in
+ * 4 s halves): about a quarter the singer, a fifth the band, the rest the story.
+ */
+export function shotPlan(seconds: number, singing: boolean): { story: number; band: number; singer: number } {
+  const total = Math.ceil(Math.max(30, seconds) / 8) + 1;
+  const singer = singing ? Math.max(2, Math.round(total / 4)) : 0;
+  const band = Math.max(2, Math.round(total / 5));
+  return { story: Math.max(2, total - singer - band), band, singer };
+}
+
+/**
  * Where a single's lip-synced close-ups go: the start of a sung line (its .lrc)
  * nearest a quarter and three quarters in (one: a third in), each `length`
  * seconds, after the title card, never overlapping. Without timed words, those
@@ -806,13 +827,18 @@ export function renderStoryVideo(ffmpeg: string[], input: { audio: string; image
  */
 export function closeUpTimes(seconds: number, lines: Array<{ start: number }>, count: number, length = 8): number[] {
   if (count < 1) return [];
-  const targets = count === 1 ? [1 / 3] : Array.from({ length: count }, (_, i) => 0.25 + (0.5 * i) / (count - 1));
+  // Two: a quarter and three quarters in; more: spread through the song.
+  const edge = count <= 2 ? 0.25 : 0.12;
+  const targets = count === 1 ? [1 / 3] : Array.from({ length: count }, (_, i) => edge + ((1 - 2 * edge) * i) / (count - 1));
   const fits = (t: number): boolean => t >= 6 && t + length <= seconds - 1;
   const starts = lines.map((line) => Math.round(line.start * 100) / 100).filter(fits);
   const chosen: number[] = [];
   for (const share of targets) {
     const want = share * seconds;
-    const pool = (starts.length ? starts : [Math.round(want)]).filter((t) => fits(t) && chosen.every((one) => Math.abs(one - t) >= length));
+    const free = (t: number): boolean => fits(t) && chosen.every((one) => Math.abs(one - t) >= length);
+    // A sung line near the point if one is free, else the point itself.
+    const near = starts.filter(free).filter((t) => Math.abs(t - want) <= seconds / (2 * count));
+    const pool = near.length ? near : [Math.round(want)].filter(free);
     if (pool.length) chosen.push(pool.reduce((best, t) => (Math.abs(t - want) < Math.abs(best - want) ? t : best)));
   }
   return chosen.sort((a, b) => a - b);
@@ -824,7 +850,9 @@ export function closeUpTimes(seconds: number, lines: Array<{ start: number }>, c
  * is not shown: a slideshow, 4 (singers out of sync) or 5 (all stage, the singer at
  * the mic in the wide shots).
  */
-export const FILMED = 6;
+export const FILMED = 7;
+/** The oldest version still shown while its single waits to be filmed again: 6, story and band with a close-up, but footage looped and little singing. */
+export const SHOWN = 6;
 
 /** Google's answer when the project's daily Veo requests are used up (HTTP 429). */
 export const VEO_QUOTA = /exceeded your current quota|RESOURCE_EXHAUSTED/i;
@@ -1170,6 +1198,9 @@ export class AiLabel {
     if (story !== undefined) this.settings.storyShots = story;
     const close = whole("lipsyncShots", 0, 4);
     if (close !== undefined) this.settings.lipsyncShots = close;
+    // Counts given by hand mean those counts; coverSong says otherwise only when given too.
+    if (shots !== undefined || story !== undefined || close !== undefined) this.settings.coverSong = false;
+    if (input["coverSong"] !== undefined) this.settings.coverSong = input["coverSong"] === true;
     const perDay = whole("albumsPerDay", 0, 24);
     if (perDay !== undefined) this.settings.albumsPerDay = perDay;
     if (input["newArtistChance"] !== undefined) {
@@ -1351,7 +1382,7 @@ export class AiLabel {
     // A filmed video whose singer was never filmed (a quota or a refusal took the close-ups) is filmed again while it stays up.
     const singerless = (song: LabelSong): boolean => Boolean(this.deps.lipsync) && this.settings.lipsyncShots > 0 && (song.videoVersion ?? 1) >= FILMED && !song.singer;
     const missing = songs.filter(({ song }) => this.wantsVeo(song) && ((song.videoVersion ?? 1) < FILMED || singerless(song)) && this.now() - (this.filmTriedAt.get(song.file) ?? 0) > 60 * 60_000);
-    const untagged = songs.filter(({ song }) => song.video && !song.videoTagged && (song.videoVersion ?? 1) >= FILMED);
+    const untagged = songs.filter(({ song }) => song.video && !song.videoTagged && (song.videoVersion ?? 1) >= SHOWN);
     const old: typeof songs = [];
     let made = 0;
     for (const { album, song } of untagged) {
@@ -1414,11 +1445,14 @@ export class AiLabel {
     } catch { /* the asked-for length */ }
     // Paid-for shots live beside the album until the video is cut, so nothing filmed is filmed twice.
     const shots = join(_album.folder, `.veo-${song.n}`);
-    const { band: clips, singer } = await this.filmShots(artist, _album, song, shots, scenes);
-    const wanted = this.settings.veoShots + this.settings.storyShots;
+    const plan = this.settings.coverSong
+      ? shotPlan(seconds, Boolean(this.deps.lipsync))
+      : { story: this.settings.storyShots, band: this.settings.veoShots, singer: this.settings.lipsyncShots };
+    const { band: clips, singer } = await this.filmShots(artist, _album, song, shots, scenes, plan);
+    const wanted = plan.band + plan.story;
     if (clips.length < Math.max(2, Math.ceil(wanted / 2))) throw new Error(`only ${clips.length} of ${wanted} shots filmed so far`);
     // The singer is the point of the video: with lip sync on, nothing is cut until a close-up is filmed.
-    const singing = Boolean(this.deps.lipsync) && this.settings.lipsyncShots > 0;
+    const singing = Boolean(this.deps.lipsync) && plan.singer > 0;
     if (singing && singer.length === 0) throw new Error("the singer's close-ups are not filmed yet");
     const pinned = await this.syncCloseUps(song, singer, seconds, shots);
     await (this.deps.filmedVideo ?? ((input) => renderFilmedVideo(this.deps.ffmpeg, input)))({ audio: song.file, clips, seconds, artist: artist.name, title: song.title, out, ...(pinned.length ? { pinned } : {}) });
@@ -1483,7 +1517,7 @@ export class AiLabel {
    * Veo's reference images), on stage, in the song's mood. Stops for the
    * month when the budget is spent; a shot Veo will not make is skipped.
    */
-  private async filmShots(artist: LabelArtist, album: LabelAlbum, song: LabelSong, keep: string, dir: string): Promise<{ band: Array<{ path: string; seconds: number }>; singer: Array<{ path: string; seconds: number }> }> {
+  private async filmShots(artist: LabelArtist, album: LabelAlbum, song: LabelSong, keep: string, dir: string, counts: { story: number; band: number; singer: number }): Promise<{ band: Array<{ path: string; seconds: number }>; singer: Array<{ path: string; seconds: number }> }> {
     const veo = this.deps.veo;
     if (!veo) return { band: [], singer: [] };
     mkdirSync(dir, { recursive: true });
@@ -1514,7 +1548,7 @@ export class AiLabel {
     const story: Array<{ path: string; seconds: number }> = [];
     const singer: Array<{ path: string; seconds: number }> = [];
     // The story is written only while some of its scenes are still to film.
-    const storyFiles = Array.from({ length: this.settings.storyShots }, (_, i) => join(keep, `story-${i}.mp4`));
+    const storyFiles = Array.from({ length: counts.story }, (_, i) => join(keep, `story-${i}.mp4`));
     let storyPrompts: string[] = [];
     if (storyFiles.some((file) => !existsSync(file)) && this.canAsk()) {
       try {
@@ -1527,9 +1561,9 @@ export class AiLabel {
     // the portraits: they would pull the whole band into every scene.
     // The singer first: a day's few Veo requests go to what the video is for, then the story and the band.
     const plan = [
-      ...(this.deps.lipsync ? veoPrompts(artist, song, singers, this.settings.lipsyncShots, "singer").map((prompt, i) => ({ prompt, file: join(keep, `singer-${i}.mp4`), into: singer, refs: singerRefs })) : []),
+      ...(this.deps.lipsync ? veoPrompts(artist, song, singers, counts.singer, "singer").map((prompt, i) => ({ prompt, file: join(keep, `singer-${i}.mp4`), into: singer, refs: singerRefs })) : []),
       ...storyFiles.map((file, i) => ({ prompt: storyPrompts[i] ?? "", file, into: story, refs: [] as Buffer[] })),
-      ...veoPrompts(artist, song, players, this.settings.veoShots).map((prompt, i) => ({ prompt, file: join(keep, `shot-${i}.mp4`), into: band, refs: playerRefs })),
+      ...veoPrompts(artist, song, players, counts.band).map((prompt, i) => ({ prompt, file: join(keep, `shot-${i}.mp4`), into: band, refs: playerRefs })),
     ];
     for (const [i, { prompt, file, into, refs }] of plan.entries()) {
       try {
@@ -1579,7 +1613,7 @@ export class AiLabel {
     const next = this.placing.then(async () => {
       await this.deps.index.scan(this.source(), this.deps.probe).done;
       const files = this.list()
-        .flatMap((artist) => artist.albums.flatMap((album) => album.songs.map((song) => ((song.videoVersion ?? 1) >= FILMED ? song.video ?? "" : ""))))
+        .flatMap((artist) => artist.albums.flatMap((album) => album.songs.map((song) => ((song.videoVersion ?? 1) >= SHOWN ? song.video ?? "" : ""))))
         .filter((file) => file && this.deps.index.itemAt(file)?.state === "ready");
       const existing = this.deps.store.byAuto("ai:label:videos");
       if (files.length === 0) {
@@ -1923,7 +1957,7 @@ export class AiLabel {
             .filter((album) => album.songs.some((song) => song.file))
             .map((album) => ({
               key: album.key, title: album.title, year: album.year, concept: album.concept, cover: Boolean(album.cover), complete: album.doneAt > 0,
-              songs: album.songs.filter((song) => song.file).map((song) => ({ n: song.n, title: song.title, seconds: song.seconds, lyrics: song.lyrics, ...(song.video && (song.videoVersion ?? 1) >= FILMED ? { video: true } : {}) })),
+              songs: album.songs.filter((song) => song.file).map((song) => ({ n: song.n, title: song.title, seconds: song.seconds, lyrics: song.lyrics, ...(song.video && (song.videoVersion ?? 1) >= SHOWN ? { video: true } : {}) })),
             }))
             .reverse(),
         }))
@@ -1940,7 +1974,7 @@ export class AiLabel {
     const match = /^(\d{1,3})\.(mp3|txt|mp4)$/.exec(what);
     const song = match ? album.songs.find((one) => one.n === Number(match[1]) && one.file) : undefined;
     if (!song) return null;
-    if (match![2] === "mp4") return song.video && (song.videoVersion ?? 1) >= FILMED ? { path: song.video, type: "video/mp4" } : null;
+    if (match![2] === "mp4") return song.video && (song.videoVersion ?? 1) >= SHOWN ? { path: song.video, type: "video/mp4" } : null;
     return match![2] === "mp3" ? { path: song.file, type: "audio/mpeg" } : { path: song.lyricsFile, type: "text/plain; charset=utf-8" };
   }
 
@@ -2052,7 +2086,7 @@ export class AiLabel {
         entries.push({ name: `${folder}/${songBase(song)}.mp3`, path: song.file });
         entries.push({ name: `${folder}/${songBase(song)}.lyrics.txt`, bytes: Buffer.from(`${song.lyrics}\n`) });
         if (song.lrc) entries.push({ name: `${folder}/${songBase(song)}.lrc`, path: song.lrc });
-        if (song.video && (song.videoVersion ?? 1) >= FILMED) entries.push({ name: `${folder}/${songBase(song)}.mp4`, path: song.video });
+        if (song.video && (song.videoVersion ?? 1) >= SHOWN) entries.push({ name: `${folder}/${songBase(song)}.mp4`, path: song.video });
       }
       if (album.cover) entries.push({ name: `${folder}/cover.jpg`, path: album.cover });
       entries.push({ name: `${folder}/album.json`, bytes: Buffer.from(`${JSON.stringify({
