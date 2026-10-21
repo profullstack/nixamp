@@ -10,8 +10,17 @@
  *
  *   GET  /follow?id=artist:<name>&name=<shown>&back=<https page>
  *   POST /follow   id, name, back, act=follow|unfollow  -> 303 back to the GET
+ *   GET  /follow/button?id=&name=&back=   the Follow button a /radio page frames
+ *
+ * The button shows "Following" to a follower. Framed on live.streaming it is
+ * a third-party page, which the session cookie (SameSite=Lax) never reaches;
+ * so signing in here also leaves a second, narrow cookie on /follow alone
+ * (SameSite=None): a signed account id that can read whether you follow an
+ * artist and do nothing else. Following and unfollowing stay on /follow, a
+ * top-level page, where the session is first-party. A browser that blocks
+ * third-party cookies shows "Follow", which opens /follow, which knows.
  */
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export interface FollowPageContext {
@@ -24,9 +33,70 @@ export interface FollowPageContext {
     followerCount: (streamer: string) => Promise<number>;
   };
   readBody: (request: IncomingMessage) => Promise<string>;
+  /** Signs the follow-state cookie; without it the button never says "Following". */
+  viewSecret?: string;
+  /** The origins that may frame the button (frame-ancestors). */
+  frameAncestors?: string[];
+  now?: () => number;
 }
 
 const ID = /^artist:[a-z0-9-]{1,90}$/;
+
+/** The follow-state cookie: on /follow only, readable cross-site, for 90 days. */
+export const VIEW_COOKIE = "nixamp_follow_view";
+const VIEW_MS = 90 * 24 * 3600_000;
+
+const viewSign = (secret: string, body: string): string => createHmac("sha256", `follow-view:${secret}`).update(body).digest("base64url");
+
+export function makeView(secret: string, account: string, exp: number): string {
+  const body = `fv1.${Buffer.from(account).toString("base64url")}.${exp}`;
+  return `${body}.${viewSign(secret, body)}`;
+}
+
+/** The account a follow-state cookie names, or "" when it is not ours or has expired. */
+export function readView(secret: string, value: string, now = Date.now()): string {
+  const parts = value.split(".");
+  if (parts.length !== 4 || parts[0] !== "fv1") return "";
+  const body = parts.slice(0, 3).join(".");
+  const expected = Buffer.from(viewSign(secret, body));
+  const given = Buffer.from(parts[3]!);
+  if (expected.length !== given.length || !timingSafeEqual(expected, given)) return "";
+  if (!(Number(parts[2]) > now)) return "";
+  return Buffer.from(parts[1]!, "base64url").toString("utf8");
+}
+
+function cookieValue(request: IncomingMessage, name: string): string {
+  for (const part of String(request.headers.cookie ?? "").split(";")) {
+    const at = part.indexOf("=");
+    if (at > 0 && part.slice(0, at).trim() === name) return decodeURIComponent(part.slice(at + 1).trim());
+  }
+  return "";
+}
+
+function viewCookie(ctx: FollowPageContext, account: string): string | null {
+  if (!ctx.viewSecret) return null;
+  const now = ctx.now?.() ?? Date.now();
+  return `${VIEW_COOKIE}=${encodeURIComponent(makeView(ctx.viewSecret, account, now + VIEW_MS))}; Path=/follow; Max-Age=${VIEW_MS / 1000}; SameSite=None; Secure; HttpOnly`;
+}
+
+const BUTTON_STYLE = `
+:root{color-scheme:light dark;--accent:#1f6feb;--fg:#17171a}
+@media (prefers-color-scheme:dark){:root{--accent:#6aa7ff;--fg:#ececf1}}
+html,body{margin:0;background:transparent;font:700 16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
+a{display:inline-block;max-width:100%;box-sizing:border-box;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none;border:1px solid var(--accent);border-radius:999px;padding:6px 14px;background:var(--accent);color:#fff}
+a.on{background:transparent;color:var(--fg)}
+a:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+`;
+
+export function buttonCsp(ancestors: string[]): string {
+  return ["default-src 'none'", `style-src ${hash(BUTTON_STYLE)}`, "base-uri 'none'", "form-action 'none'", `frame-ancestors ${ancestors.length ? ancestors.join(" ") : "'none'"}`].join("; ");
+}
+
+/** The frame a /radio page shows Follow in. */
+export function followButtonFrame(site: string, id: string, name: string, back: string, label = `Follow ${name}`): string {
+  const src = `${site}/follow/button?${new URLSearchParams({ id, name, back, label }).toString()}`;
+  return `<iframe class="follow" src="${escape(src)}" title="${escape(label)}" loading="lazy" sandbox="allow-top-navigation-by-user-activation allow-same-origin"></iframe>`;
+}
 
 function escape(text: string): string {
   return String(text).replace(/[&<>"']/g, (one) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[one]!);
@@ -74,8 +144,9 @@ export function followTarget(input: URLSearchParams): { id: string; name: string
   return { id, name, back };
 }
 
-/** Answers /follow; false for any other path. */
+/** Answers /follow and /follow/button; false for any other path. */
 export async function handleFollowPage(request: IncomingMessage, response: ServerResponse, path: string, url: URL, ctx: FollowPageContext): Promise<boolean> {
+  if (path === "/follow/button") return followButton(request, response, url, ctx);
   if (path !== "/follow") return false;
   const method = request.method ?? "GET";
   if (method === "POST") {
@@ -94,7 +165,8 @@ export async function handleFollowPage(request: IncomingMessage, response: Serve
       else await ctx.follows.follow(me.id, target.id);
     }
     const again = target ? `/follow?${new URLSearchParams({ id: target.id, name: target.name, ...(target.back ? { back: target.back } : {}) }).toString()}` : "/follow";
-    response.writeHead(303, { location: again, "cache-control": "no-store" });
+    const cookie = me ? viewCookie(ctx, me.id) : null;
+    response.writeHead(303, { location: again, "cache-control": "no-store", ...(cookie ? { "set-cookie": cookie } : {}) });
     response.end();
     return true;
   }
@@ -117,11 +189,41 @@ export async function handleFollowPage(request: IncomingMessage, response: Serve
     return true;
   }
   const [following, count] = await Promise.all([ctx.follows.isFollowing(me.id, target.id), ctx.follows.followerCount(target.id).catch(() => 0)]);
+  // So the Follow button on the artist's page can say "Following" (see the top of this file).
+  const cookie = viewCookie(ctx, me.id);
+  if (cookie) response.setHeader("set-cookie", cookie);
   const hidden = `<input type="hidden" name="id" value="${escape(target.id)}"><input type="hidden" name="name" value="${escape(target.name)}">${target.back ? `<input type="hidden" name="back" value="${escape(target.back)}">` : ""}`;
   send(response, 200, page(`Follow ${target.name}`, `<h1>${escape(target.name)}</h1>
 <p class="by">${following ? "You follow them." : "Follow them to keep them with your follows on nixamp.com."} ${count} follower${count === 1 ? "" : "s"}.</p>
 <form method="post" action="/follow">${hidden}<input type="hidden" name="act" value="${following ? "unfollow" : "follow"}">
 <button type="submit"${following ? ' class="quiet"' : ""}>${following ? "Unfollow" : `Follow ${escape(target.name)}`}</button></form>
 ${back}`), method);
+  return true;
+}
+
+/** The button: "Following" to a follower this browser can show us, "Follow" otherwise; both open /follow. */
+async function followButton(request: IncomingMessage, response: ServerResponse, url: URL, ctx: FollowPageContext): Promise<boolean> {
+  const method = request.method ?? "GET";
+  if (method !== "GET" && method !== "HEAD") {
+    response.writeHead(405, { allow: "GET" }).end();
+    return true;
+  }
+  const target = followTarget(url.searchParams);
+  const headers = { "content-type": "text/html; charset=utf-8", "content-security-policy": buttonCsp(ctx.frameAncestors ?? []), "cache-control": "no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff" };
+  if (!target) {
+    response.writeHead(404, headers);
+    response.end(method === "HEAD" ? undefined : "<!doctype html><title>Follow</title>");
+    return true;
+  }
+  // The session when it reaches us (nixamp.com's own pages), else the follow-state cookie.
+  const me = await ctx.account().catch(() => null);
+  const account = me?.id || (ctx.viewSecret ? readView(ctx.viewSecret, cookieValue(request, VIEW_COOKIE), ctx.now?.() ?? Date.now()) : "");
+  const following = account ? await ctx.follows.isFollowing(account, target.id).catch(() => false) : false;
+  const label = (url.searchParams.get("label") ?? "").replace(/[\u0000-\u001f]/g, " ").trim().slice(0, 140) || `Follow ${target.name}`;
+  const open = `/follow?${new URLSearchParams({ id: target.id, name: target.name, ...(target.back ? { back: target.back } : {}) }).toString()}`;
+  const text = following ? "✓ Following" : label;
+  response.writeHead(200, headers);
+  response.end(method === "HEAD" ? undefined : `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>${escape(text)}</title><style>${BUTTON_STYLE}</style></head>
+<body><a href="${escape(open)}" target="_top"${following ? ' class="on"' : ""} title="${escape(following ? `You follow ${target.name} on nixamp.com` : `${label} on nixamp.com`)}">${escape(text)}</a></body></html>`);
   return true;
 }

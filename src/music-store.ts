@@ -14,6 +14,11 @@
  * nixamp.com never holds the music. It signs a grant -- what was bought, from
  * which server, until when -- and the server asks nixamp.com whether a grant
  * is good before it plays or zips anything (/api/v1/store/grant).
+ *
+ * A Buy link names the store by an opaque id (`store=`), not by the server's
+ * address: the server registers itself once (/api/v1/store/servers) and gets
+ * the id, which nixamp.com alone turns back into the address. `server=` links
+ * made before that still work, under the same rule for which servers sell.
  */
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Db, Support } from "./support.ts";
@@ -72,6 +77,13 @@ export function serverBase(value: unknown): string {
 
 function sign(secret: string, text: string): string {
   return createHmac("sha256", secret).update(text).digest("base64url");
+}
+
+/** A store's id: 16 hex characters that say nothing about the server without the secret. */
+export const STORE_ID = /^[a-f0-9]{16}$/;
+
+export function storeId(secret: string, server: string): string {
+  return createHmac("sha256", `store:${secret}`).update(server).digest("hex").slice(0, 16);
 }
 
 /** `g1.<exp>.<kind>.<artist>.<album|->.<n>.<server, base64url>.<sig>` */
@@ -177,8 +189,58 @@ export class MusicStore {
       await this.options.db.query("CREATE INDEX IF NOT EXISTS music_purchases_email ON music_purchases (lower(email))");
       await this.options.db.query("CREATE INDEX IF NOT EXISTS music_purchases_user ON music_purchases (user_id)");
       await this.options.db.query("CREATE INDEX IF NOT EXISTS music_purchases_payment ON music_purchases (payment_id)");
+      await this.options.db.query("CREATE TABLE IF NOT EXISTS music_stores (id TEXT PRIMARY KEY, server TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())");
     })().catch((error: unknown) => { this.schema = null; throw error; });
     return this.schema;
+  }
+
+  /** Whether a server may sell music here: in the directory or the guide's peers, or named under nixamp.com. */
+  private sells(server: string): boolean {
+    // The directory empties on every restart of nixamp.com; a name under
+    // nixamp.com (whose names and certificates nixamp.com issues) does not.
+    const named = server ? new URL(server).hostname.endsWith(".nixamp.com") : false;
+    return Boolean(server) && (named || this.options.servers().includes(server));
+  }
+
+  /** This server's store id, the one its Buy links carry. */
+  idOf(server: string): string {
+    return storeId(this.options.secret, server);
+  }
+
+  /** The server behind a store id, or "": a server here now, else one registered before. */
+  async serverOf(id: string): Promise<string> {
+    if (!STORE_ID.test(id)) return "";
+    const listed = this.options.servers().find((one) => this.idOf(one) === id);
+    if (listed) return listed;
+    await this.ready();
+    const found = (await this.options.db.query("SELECT server FROM music_stores WHERE id = $1", [id])).rows[0];
+    const server = found ? serverBase(found["server"]) : "";
+    return server && this.idOf(server) === id && this.sells(server) ? server : "";
+  }
+
+  /** A server that sells here takes its store id, after showing it has a catalogue. */
+  async register(input: Record<string, unknown>): Promise<{ id: string }> {
+    const server = serverBase(input["server"]);
+    if (!this.sells(server)) throw new SupportError("That server does not sell music here.", 404, "not_found");
+    const view = await this.catalogue(server);
+    if (!Array.isArray(view.genres)) throw new SupportError("That server has no catalogue.", 404, "not_found");
+    await this.ready();
+    const id = this.idOf(server);
+    await this.options.db.query("INSERT INTO music_stores (id, server) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET server = EXCLUDED.server", [id, server]);
+    return { id };
+  }
+
+  /** An album's cover from the server that holds it, so the Buy page names only nixamp.com. */
+  async cover(input: Record<string, unknown>): Promise<{ type: string; bytes: Buffer } | null> {
+    const server = await this.serverOf(String(input["store"] ?? ""));
+    const artist = String(input["artist"] ?? "");
+    const album = String(input["album"] ?? "");
+    if (!server || !KEY.test(artist) || !ALBUM.test(album)) return null;
+    const response = await (this.options.fetcher ?? fetch)(`${server}/api/v1/label/${artist}/${album}/cover.jpg`, { signal: AbortSignal.timeout(10_000) }).catch(() => null);
+    const type = response?.headers.get("content-type") ?? "";
+    if (!response?.ok || !/^image\//.test(type)) return null;
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return bytes.length > 0 && bytes.length <= 5 * 1024 * 1024 ? { type, bytes } : null;
   }
 
   /** A server's catalogue, as it publishes it at /api/v1/label. */
@@ -189,12 +251,10 @@ export class MusicStore {
   }
 
   /** What is for sale at this address, with its name and price; refused when there is no such thing. */
-  async describe(input: Record<string, unknown>): Promise<Scope & { title: string; artistName: string; amountCents: number; songs: number }> {
-    const server = serverBase(input["server"]);
-    // A server in the directory or the guide's peers, or one named under nixamp.com (whose names
-    // and certificates nixamp.com issues): the directory empties on every restart of nixamp.com.
-    const named = server ? new URL(server).hostname.endsWith(".nixamp.com") : false;
-    if (!server || !(named || this.options.servers().includes(server))) throw new SupportError("That server does not sell music here.", 404, "not_found");
+  async describe(input: Record<string, unknown>): Promise<Scope & { title: string; artistName: string; amountCents: number; songs: number; store: string }> {
+    // By its store id (what Buy links carry now), or by its address (older links).
+    const server = typeof input["store"] === "string" && input["store"] ? await this.serverOf(input["store"]) : serverBase(input["server"]);
+    if (!this.sells(server)) throw new SupportError("That server does not sell music here.", 404, "not_found");
     const kind = String(input["kind"] ?? "") as Kind;
     if (!(kind in PRICES)) throw new SupportError("Buy a song, an album or an artist.", 400, "invalid_kind");
     const artistKey = String(input["artist"] ?? "");
@@ -208,7 +268,7 @@ export class MusicStore {
     if (!artist || (kind !== "artist" && !album) || (kind === "song" && !song)) throw new SupportError("No such music.", 404, "not_found");
     const title = kind === "artist" ? `Everything by ${artist.name}` : kind === "album" ? `${album!.title} (${album!.year})` : `${song!.title}`;
     const songs = kind === "artist" ? artist.albums.reduce((sum, one) => sum + one.songs.length, 0) : kind === "album" ? album!.songs.length : 1;
-    return { server, kind, artist: artistKey, album: albumKey, n, title, artistName: artist.name, amountCents: PRICES[kind], songs };
+    return { server, kind, artist: artistKey, album: albumKey, n, title, artistName: artist.name, amountCents: PRICES[kind], songs, store: this.idOf(server) };
   }
 
   /** A purchase waiting for its payment, and where to pay. Signed in, it is the account's too. */

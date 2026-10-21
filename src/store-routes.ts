@@ -1,10 +1,13 @@
 /**
  * The music store's pages and API on nixamp.com (music-store.ts).
  *
- *   GET  /buy?server=&kind=&artist=&album=&n=     what it is, the price, email + coin, Pay
+ *   GET  /buy?store=&kind=&artist=&album=&n=      what it is, the price, email + coin, Pay
+ *                                                 (store= is the server's opaque id; server= links still work)
+ *   POST /api/v1/store/servers                    {server} -> {id}: a server takes its store id (signed in)
+ *   GET  /api/v1/store/cover?store=&artist=&album= an album's cover, from the server that holds it
  *   GET  /purchases/:id?t=                        the receipt: waiting, or Download the zip
  *   GET  /api/v1/store/coins                      the coins nixamp's CoinPay business takes
- *   POST /api/v1/store/checkout                   {server, kind, artist, album?, n?, email, coin} -> {url}
+ *   POST /api/v1/store/checkout                   {store|server, kind, artist, album?, n?, email, coin} -> {url}
  *   GET  /api/v1/store/purchases                  the signed-in account's music (My music on /radio)
  *   GET  /api/v1/store/purchases/:id?t=           one purchase by its link
  *   GET  /api/v1/store/grant?g=                   a server asks whether a grant is good
@@ -19,7 +22,7 @@ const ONE = /^\/api\/v1\/store\/purchases\/([0-9a-f-]{36})$/;
 
 export function isStorePath(path: string): boolean {
   return path === "/buy" || PURCHASE.test(path) || path === "/api/v1/store/coins" || path === "/api/v1/store/checkout"
-    || path === "/api/v1/store/purchases" || ONE.test(path) || path === "/api/v1/store/grant";
+    || path === "/api/v1/store/purchases" || ONE.test(path) || path === "/api/v1/store/grant" || path === "/api/v1/store/servers" || path === "/api/v1/store/cover";
 }
 
 export interface StoreRoutesContext {
@@ -119,7 +122,7 @@ export async function handleStoreRoutes(request: IncomingMessage, response: Serv
       }
       const me = await ctx.account().catch(() => null);
       const what = item.kind === "song" ? "One song" : item.kind === "album" ? `The album, ${item.songs} songs` : `Everything by ${escape(item.artistName)}, ${item.songs} songs so far`;
-      const cover = item.kind === "artist" ? "" : `<img src="${escape(`${item.server}/api/v1/label/${item.artist}/${item.album}/cover.jpg`)}" alt="" width="160" height="160" style="border-radius:10px;float:right;margin:0 0 8px 12px;max-width:40%;height:auto">`;
+      const cover = item.kind === "artist" ? "" : `<img src="${escape(`/api/v1/store/cover?${new URLSearchParams({ store: item.store, artist: item.artist, album: item.album }).toString()}`)}" alt="" width="160" height="160" style="border-radius:10px;float:right;margin:0 0 8px 12px;max-width:40%;height:auto">`;
       html(response, 200, page(`Download ${item.title}`, `<div class="card">${cover}
 <h1>${escape(item.title)}</h1><p class="by">${escape(item.artistName)}</p>
 <div class="price">${price(item.amountCents)}</div>
@@ -133,7 +136,7 @@ export async function handleStoreRoutes(request: IncomingMessage, response: Serv
 </form>
 <p id="status" role="status" aria-live="polite"></p>
 <small>Payments go through <a href="https://coinpayportal.com">CoinPay</a> to nixamp.com. For small amounts pick a coin with low fees (USDC on Polygon or Solana, SOL, LTC). Listening on the live stations is always free.${me ? "" : ` <a href="/radio#music">Sign in</a> with the same email to keep everything under My music.`}</small>
-</div>`, JSON.stringify({ server: item.server, kind: item.kind, artist: item.artist, album: item.album, n: item.n })), method);
+</div>`, JSON.stringify({ store: item.store, kind: item.kind, artist: item.artist, album: item.album, n: item.n })), method);
       return true;
     }
     const receipt = PURCHASE.exec(path);
@@ -187,6 +190,33 @@ export async function handleStoreRoutes(request: IncomingMessage, response: Serv
         return true;
       }
       ctx.json(response, 200, { purchase: store.view(purchase) });
+      return true;
+    }
+    if (path === "/api/v1/store/servers" && method === "POST") {
+      // Signed in (the server's own `nixamp login`), so a stranger cannot fill the table.
+      const me = await ctx.account().catch(() => null);
+      if (!me) {
+        ctx.json(response, 401, { error: "sign in to register a store", code: "unauthorized" });
+        return true;
+      }
+      let input: Record<string, unknown>;
+      try {
+        input = JSON.parse(await ctx.readBody(request)) as Record<string, unknown>;
+      } catch {
+        ctx.json(response, 400, { error: "the body is not JSON", code: "bad_json" });
+        return true;
+      }
+      ctx.json(response, 200, await store.register(input));
+      return true;
+    }
+    if (path === "/api/v1/store/cover" && (method === "GET" || method === "HEAD")) {
+      const picture = await store.cover(Object.fromEntries(url.searchParams.entries()));
+      if (!picture) {
+        ctx.json(response, 404, { error: "no such cover", code: "not_found" });
+        return true;
+      }
+      response.writeHead(200, { "content-type": picture.type, "content-length": picture.bytes.length, "cache-control": "public, max-age=86400", "x-content-type-options": "nosniff" });
+      response.end(method === "HEAD" ? undefined : picture.bytes);
       return true;
     }
     if (path === "/api/v1/store/grant" && method === "GET") {

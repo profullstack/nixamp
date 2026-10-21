@@ -1,9 +1,15 @@
 /**
- * A live room's page: /watch?play=<a nixamp server's channel or live stream>,
- * what a "?play=" join link opens on live.streaming. It asks the room's own
- * server what the room is (a name, video or sound, what is on) and plays it
- * live in @profullstack/player: a film as a picture, radio as sound. Nothing
- * about the room passes through the server that served this page.
+ * A live room's page, two ways:
+ *
+ *   /room/<name>   a room published to this guide. Everything is asked of this
+ *                  page's own origin (/room/<name>/state, /stream, /hls/...),
+ *                  which asks the room's server with the key it holds, so the
+ *                  page names no other machine and carries no key.
+ *   /watch?play=   a nixamp server's channel or live stream, what a "?play="
+ *                  join link opens: asked of the room's own server directly.
+ *
+ * Either way it plays live in @profullstack/player: a film as a picture,
+ * radio as sound.
  */
 import { createPlayer, type PlayerHandle } from "@profullstack/player";
 import "@profullstack/player/player.css";
@@ -35,7 +41,13 @@ function roomOf(input: string): Room | null {
 }
 
 const $ = <T extends HTMLElement = HTMLElement>(selector: string): T => document.querySelector<T>(selector)!;
-const room = roomOf(new URLSearchParams(location.search).get("play") ?? "");
+/** /room/<name>: the room through this origin. */
+const named = /^\/room\/([a-z0-9-]{1,60})\/?$/.exec(location.pathname)?.[1] ?? "";
+const room = named ? null : roomOf(new URLSearchParams(location.search).get("play") ?? "");
+/** What the server wrote after the room's name in the tab (" · live.streaming" on a /room page). */
+const TITLE_SUFFIX = named ? (/ · [^·]+$/.exec(document.title)?.[0] ?? " · live") : " · live";
+/** Whether this room can be played as HLS (a channel; the live stream cannot). */
+let roomHls = false;
 
 let player: PlayerHandle | null = null;
 let mounted = "";
@@ -57,6 +69,10 @@ const wantsHls = (): boolean => typeof MediaSource === "undefined" && typeof (wi
 
 /** What to hand the player for this room now: always a fresh request, the live edge. */
 function source(seen: Seen): { src: string; kind: "mp4" | "hls" | "audio" } {
+  if (named) {
+    if (seen.kind === "video" && roomHls && (wantsHls() || seen.folder)) return { src: `/room/${named}/hls/index.m3u8`, kind: "hls" };
+    return { src: `/room/${named}/stream?n=${Date.now()}`, kind: seen.kind === "video" ? "mp4" : "audio" };
+  }
   const fresh = `&n=${Date.now()}`;
   if (seen.kind === "video" && room!.channel !== null && (wantsHls() || seen.folder)) {
     return { src: `${room!.origin}/api/channels/${room!.channel}/hls/index.m3u8?k=${room!.key}`, kind: "hls" };
@@ -111,7 +127,7 @@ function again(): void {
 
 function draw(): void {
   if (!last) return;
-  document.title = `${last.name} · live`;
+  document.title = `${last.name}${TITLE_SUFFIX}`;
   $("#name").textContent = last.name;
   $("#title").textContent = last.title;
   $("#by").textContent = last.by;
@@ -122,6 +138,20 @@ function draw(): void {
 
 /** Asks the room's server what it is. A channel is in its channel list; the live stream answers with media. */
 async function look(): Promise<Seen | null> {
+  if (named) {
+    const answer = await fetch(`/room/${named}/state`, { cache: "no-store" });
+    if (!answer.ok) return null;
+    const view = (await answer.json()) as { name?: string; kind?: string; live?: boolean; folder?: boolean; hls?: boolean; title?: string; artist?: string; album?: string };
+    roomHls = view.hls === true;
+    return {
+      name: String(view.name ?? "Live"),
+      kind: view.kind === "video" ? "video" : "audio",
+      live: view.live !== false,
+      folder: view.folder === true,
+      title: String(view.title ?? ""),
+      by: [view.artist, view.album].filter(Boolean).join(" · "),
+    };
+  }
   if (room!.channel !== null) {
     const answer = await fetch(`${room!.origin}/api/channels?k=${room!.key}`, { cache: "no-store" });
     if (!answer.ok) return null;
@@ -165,7 +195,11 @@ async function poll(): Promise<void> {
   }
 }
 
-if (!room) {
+if (named) {
+  $<HTMLAnchorElement>("#raw").href = `/room/${named}/stream`;
+  void poll();
+  setInterval(() => void poll(), 10_000);
+} else if (!room) {
   $("#name").textContent = "That is not a room link";
   $("#about").textContent = "A room link is the address a nixamp Share gives you: https://…/api/channels/<id>?k=…";
   $("#about").hidden = false;

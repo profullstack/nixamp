@@ -22,6 +22,7 @@ import { createHash } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import type { Station } from "./stations.ts";
 import { albumSlug, artistSlug, stationSlug } from "./radio-slug.ts";
+import { followButtonFrame } from "./follow-page.ts";
 
 /** A station's own paths, as the station link opens them. */
 export const RADIO_SUB = /^\/radio\/([a-z0-9-]{1,60})\/(stream|state|listen\.m3u|events|now|art|lyrics)$/;
@@ -247,13 +248,14 @@ export function rewriteResponse(response: ServerResponse, rewrite: (text: string
 }
 
 /** The station's addresses and token, as /radio/<name> says them instead. */
-export function radioRewriter(station: { id: string; listenToken: string }, slug: string, buyFrom = ""): (text: string) => string {
+export function radioRewriter(station: { id: string; listenToken: string }, slug: string, buyFrom: string | string[] = ""): (text: string) => string {
   const token = station.listenToken;
   const encoded = encodeURIComponent(token);
+  const prefixes = (Array.isArray(buyFrom) ? buyFrom : [buyFrom]).filter(Boolean);
   return (text) => {
     let out = text.split(`/api/v1/stations/${station.id}/`).join(`/radio/${slug}/`);
-    // The store's links name this server; /radio/buy sends there without saying so.
-    if (buyFrom) out = out.split(buyFrom).join(`${RADIO_BUY}?`);
+    // The store's links name this server (or its store id); /radio/buy sends there without saying either.
+    for (const prefix of prefixes) out = out.split(prefix).join(`${RADIO_BUY}?`);
     for (const one of new Set([encoded, token])) {
       out = out.split(`?t=${one}&`).join("?").split(`&t=${one}`).join("").split(`?t=${one}`).join("").split(one).join("");
     }
@@ -309,6 +311,7 @@ h1{margin:8px 0 4px;font-size:1.8rem;line-height:1.2;overflow-wrap:anywhere}h2{f
 .actions{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
 a.btn{display:inline-block;font-weight:700;text-decoration:none;border:1px solid var(--accent);border-radius:999px;padding:6px 14px}
 a.btn.primary{background:var(--accent);color:#fff}
+iframe.follow{border:0;width:240px;max-width:100%;height:40px;display:block;color-scheme:light dark}
 ol.songs{list-style:none;margin:0;padding:0}ol.songs li{border-top:1px solid var(--line);padding:8px 0}
 .song{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}.song .t{flex:1 1 200px;font-weight:600;overflow-wrap:anywhere}
 .song .n,.song .d{color:var(--muted);font-variant-numeric:tabular-nums}.song a.btn{padding:2px 10px;font-size:.85rem}
@@ -326,6 +329,12 @@ export const RADIO_CSP = [
   "default-src 'none'", `style-src ${hash(STYLE)}`, "img-src 'self'",
   "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
 ].join("; ");
+
+/** A CSP that may also frame `origin` (nixamp.com's Follow button), merged into any frame-src it has. */
+export function withFrameSrc(csp: string, origin: string): string {
+  if (!/^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(origin)) return csp;
+  return /(^|; )frame-src /.test(csp) ? csp.replace(/(^|; )frame-src /, `$1frame-src ${origin} `) : `${csp}; frame-src ${origin}`;
+}
 
 export interface PageMeta { title: string; description: string; url: string; image?: string; type?: string }
 
@@ -435,7 +444,7 @@ export function renderArtist(catalogue: RadioCatalogue, artist: RadioArtist, ctx
     : `<p class="lead">${albums.length} album${albums.length === 1 ? "" : "s"} on the air here.</p>`;
   const body = `<div class="head">${cover ? `<img class="cover" src="${escape(cover)}" alt="" width="200" height="200">` : `<div class="blank" aria-hidden="true"></div>`}<div>`
     + `<h1>${escape(artist.name)}</h1>${about}`
-    + `<div class="actions"><a class="btn primary" href="${escape(followLink(ctx.site, artist.slug, artist.name, url))}">Follow</a>`
+    + `<div class="actions">${followButtonFrame(ctx.site, `artist:${artist.slug}`, artist.name, url, "Follow")}`
     + `${shop && artist.label ? `<a class="btn" href="${escape(shop.buy("artist", artist.label.key))}">Everything by them · ${price(shop.prices.artist)}</a>` : ""}`
     + `${artist.stations[0] && ctx.stationNames.has(artist.stations[0]) ? `<a class="btn" href="/radio/${escape(artist.stations[0])}">Listen live</a>` : ""}</div></div></div>`
     + `${albumCards ? `<h2>Albums</h2><div class="grid">${albumCards}</div>` : ""}${singles}${stationChips(artist.stations, ctx.stationNames)}`;
@@ -455,7 +464,7 @@ export function renderAlbum(catalogue: RadioCatalogue, album: RadioAlbum, ctx: {
   const body = `<div class="head">${cover ? `<img class="cover" src="${escape(cover)}" alt="Cover of ${escape(album.title)}" width="200" height="200">` : `<div class="blank" aria-hidden="true"></div>`}<div>`
     + `<h1>${escape(album.title)}</h1><p class="lead">by <a href="/radio/artist/${escape(album.artist)}">${escape(album.artistName)}</a>${album.year ? ` · ${album.year}` : ""}${album.tracks.length ? ` · ${album.tracks.length} songs` : ""}</p>`
     + `${album.concept ? `<p>${escape(album.concept)}</p>` : ""}${album.label && !album.complete ? `<p class="lead">Still being recorded: new songs land here as they are finished.</p>` : ""}`
-    + `<div class="actions">${artist ? `<a class="btn primary" href="${escape(followLink(ctx.site, artist.slug, artist.name, `${ctx.base}/radio/artist/${artist.slug}`))}">Follow ${escape(artist.name)}</a>` : ""}`
+    + `<div class="actions">${artist ? followButtonFrame(ctx.site, `artist:${artist.slug}`, artist.name, `${ctx.base}/radio/artist/${artist.slug}`) : ""}`
     + `${shop && album.label ? `<a class="btn" href="${escape(shop.buy("album", album.label.artist, album.label.album))}">Download the album · ${price(shop.prices.album)}</a>` : ""}`
     + `${album.stations[0] && ctx.stationNames.has(album.stations[0]) ? `<a class="btn" href="/radio/${escape(album.stations[0])}">Listen live</a>` : ""}</div></div></div>`
     + `<h2>Songs</h2>${songList(album, shop)}${stationChips(album.stations, ctx.stationNames)}`;
@@ -476,8 +485,8 @@ export function renderMissing(what: string, base: string, nav: string): string {
 /** What a station page's head says: a station of ours or a peer's. */
 export interface StationFace { name: string; description?: string; video?: boolean }
 
-export function stationHead(station: StationFace, slug: string, base: string): string {
-  const url = `${base}/radio/${slug}`;
+export function stationHead(station: StationFace, slug: string, base: string, path = `/radio/${slug}`): string {
+  const url = `${base}${path}`;
   const description = station.description || `${station.name}, live now. Free to listen; tap the artist or album on the air to see more.`;
   return `<title>${escape(station.name)} · live.streaming</title>
     <meta name="description" content="${escape(description)}" />
@@ -492,9 +501,9 @@ export function stationHead(station: StationFace, slug: string, base: string): s
 }
 
 /** The built station page (or the inline one) as /radio/<name> serves it: its head, the header, indexable. */
-export function asRadioPage(html: string, station: StationFace, slug: string, base: string, nav: string): string {
+export function asRadioPage(html: string, station: StationFace, slug: string, base: string, nav: string, path?: string): string {
   return html
-    .replace(/<title>[^<]*<\/title>/, stationHead(station, slug, base))
+    .replace(/<title>[^<]*<\/title>/, stationHead(station, slug, base, path))
     .replace(/\s*<meta name="robots" content="noindex"\s*\/?>/, "")
     .replace(/<body>/, `<body>\n${nav}`);
 }

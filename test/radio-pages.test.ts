@@ -12,8 +12,8 @@ import { StationRunner } from "../src/station-runner.ts";
 import { StationStore, type Station } from "../src/stations.ts";
 import { PeerGuides } from "../src/station-guide.ts";
 import { albumSlug, artistSlug, slugify, stationSlug } from "../src/radio-slug.ts";
-import { buildCatalogue, radioBuyQuery, radioPeers, radioRewriter, radioStations, renderAlbum, renderArtist } from "../src/radio-pages.ts";
-import { followTarget } from "../src/follow-page.ts";
+import { buildCatalogue, radioBuyQuery, radioPeers, radioRewriter, radioStations, renderAlbum, renderArtist, withFrameSrc } from "../src/radio-pages.ts";
+import { followTarget, handleFollowPage, makeView, readView, VIEW_COOKIE } from "../src/follow-page.ts";
 
 const memory = () => ({ read: () => null, write: () => undefined });
 
@@ -107,7 +107,7 @@ test("the catalogue: label artists sell, commercial ones only show", () => {
   const ctx = { base: "https://live.streaming.pit.world", nav: "", shop, site: "https://nixamp.com", stationNames: names };
   const veilPage = renderArtist(catalogue, veil, ctx);
   assert.match(veilPage, /Everything by them · \$2/);
-  assert.match(veilPage, /nixamp\.com\/follow\?id=artist%3Airon-veil/);
+  assert.match(veilPage, /<iframe class="follow" src="https:\/\/nixamp\.com\/follow\/button\?id=artist%3Airon-veil&amp;name=Iron\+Veil&amp;back=https%3A%2F%2Flive\.streaming\.pit\.world%2Fradio%2Fartist%2Firon-veil/);
   assert.match(veilPage, /href="\/radio\/ai-metal"/);
   assert.match(veilPage, /og:url" content="https:\/\/live\.streaming\.pit\.world\/radio\/artist\/iron-veil"/);
   const bandPage = renderArtist(catalogue, band, ctx);
@@ -125,6 +125,51 @@ test("a follow link names an artist and an https page to go back to, nothing els
     { id: "artist:iron-veil", name: "Iron Veil", back: "https://live.streaming.pit.world/radio/artist/iron-veil" });
   assert.equal(followTarget(new URLSearchParams({ id: "streamer-uuid" })), null);
   assert.equal(followTarget(new URLSearchParams({ id: "artist:x", back: "javascript:alert(1)" }))!.back, "");
+});
+
+test("the radio pages may frame nixamp.com's Follow button, merged into a frame-src an ad already has", () => {
+  assert.equal(withFrameSrc("default-src 'none'", "https://nixamp.com"), "default-src 'none'; frame-src https://nixamp.com");
+  assert.equal(withFrameSrc("default-src 'none'; frame-src 'self' https://ads.example", "https://nixamp.com"), "default-src 'none'; frame-src https://nixamp.com 'self' https://ads.example");
+  assert.equal(withFrameSrc("default-src 'none'", "javascript:x"), "default-src 'none'");
+});
+
+test("the framed Follow button says Following to a follower, by the narrow cookie when the session cannot reach it", async () => {
+  const secret = "s3cret";
+  const following = new Set(["acct-1|artist:iron-veil"]);
+  const ctx = {
+    account: async () => null,
+    follows: {
+      follow: async () => true, unfollow: async () => undefined, followerCount: async () => 1,
+      isFollowing: async (who: string, what: string) => following.has(`${who}|${what}`),
+    },
+    readBody: async () => "",
+    viewSecret: secret,
+    frameAncestors: ["https://live.streaming.pit.world"],
+  };
+  const ask = async (cookie: string) => {
+    let status = 0;
+    let headers: Record<string, unknown> = {};
+    let body = "";
+    const response = {
+      writeHead(code: number, h: Record<string, unknown>) { status = code; headers = h; return response; },
+      end(text?: string) { body = text ?? ""; return response; },
+      setHeader() { return response; },
+    };
+    const request = { method: "GET", headers: { cookie } };
+    const url = new URL("https://nixamp.com/follow/button?id=artist:iron-veil&name=Iron+Veil&back=https://live.streaming.pit.world/radio/artist/iron-veil&label=Follow");
+    await handleFollowPage(request as never, response as never, "/follow/button", url, ctx);
+    return { status, headers, body };
+  };
+  const signedOut = await ask("");
+  assert.equal(signedOut.status, 200);
+  assert.match(signedOut.body, />Follow<\/a>/);
+  assert.match(signedOut.body, /target="_top"/);
+  assert.match(String(signedOut.headers["content-security-policy"]), /frame-ancestors https:\/\/live\.streaming\.pit\.world/);
+  const cookie = `${VIEW_COOKIE}=${encodeURIComponent(makeView(secret, "acct-1", Date.now() + 60_000))}`;
+  assert.match((await ask(cookie)).body, /✓ Following/);
+  assert.match((await ask(`${VIEW_COOKIE}=${encodeURIComponent(makeView("other", "acct-1", Date.now() + 60_000))}`)).body, />Follow<\/a>/, "a cookie we did not sign says nothing");
+  assert.match((await ask(`${VIEW_COOKIE}=${encodeURIComponent(makeView(secret, "acct-1", Date.now() - 1))}`)).body, />Follow<\/a>/, "nor an expired one");
+  assert.equal(readView(secret, makeView(secret, "acct-1", Date.now() + 1000)), "acct-1");
 });
 
 test("/radio serves public stations by name, and their routes without the token", async () => {

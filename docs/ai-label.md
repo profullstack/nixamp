@@ -93,7 +93,11 @@ are sold on nixamp.com through CoinPay (src/music-store.ts, src/store-routes.ts)
 
 - **Where to buy.** The now-playing card on a station page shows Download song / Album /
   Everything by the artist for any label song, and `/label` has the same buttons. All of them
-  open `nixamp.com/buy?server=&kind=&artist=&album=&n=`.
+  open `nixamp.com/buy?store=&kind=&artist=&album=&n=`. `store` is the server's opaque store id:
+  the server asks nixamp.com for it once (`POST /api/v1/store/servers`, signed in with its
+  `nixamp login`), and only nixamp.com turns it back into the server. Until then, and in older
+  links, `server=<address>` works as before. The Buy page's cover comes through nixamp.com
+  (`/api/v1/store/cover`), so the page names no music server.
 - **Buying.** The buyer gives an email and picks a coin (low-fee coins first), then pays on
   CoinPay. The purchase is marked paid by CoinPay's webhook, or when the buyer returns to
   `nixamp.com/purchases/<id>?t=`. The receipt email carries that link.
@@ -105,6 +109,23 @@ are sold on nixamp.com through CoinPay (src/music-store.ts, src/store-routes.ts)
 - **Grants.** nixamp.com signs a grant (what was bought, from which server, valid for a day). The
   music server asks nixamp.com whether a grant is good (`/api/v1/store/grant?g=`) before it
   serves an MP3 or a zip. An MP3 without a grant is refused.
+
+## Followers
+
+Follow on a `/radio/artist` or `/radio/album` page follows the artist on nixamp.com
+(`artist:<name>`). The button is a small nixamp.com frame (`/follow/button`) that reads
+"Following" for a follower: signing in at `nixamp.com/follow` leaves a narrow cookie on `/follow`
+(SameSite=None) that can only say whom you follow, because the session cookie is SameSite=Lax and
+never reaches a frame on another site. Browsers that block third-party cookies show "Follow",
+which opens `nixamp.com/follow`, which knows.
+
+When an album's first song lands, and when the album is finished, the server tells nixamp.com,
+signed in as its own account: `POST /api/v1/follows/notify {target, title, body, url, key}`.
+nixamp.com tells the artist's followers by mail, text and web push, as each of them chose, with a
+link to the album's `/radio/album` page. An artist belongs to the first account that announces
+for it; each `key` (`album:<name>:songs`, `album:<name>:done`) is told once; an artist gets at
+most 4 notices a day and an account 40; links must be `/radio` pages on live.streaming or
+nixamp.com (`NIXAMP_NOTIFY_HOSTS`).
 
 ## Every surface
 

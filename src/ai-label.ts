@@ -742,6 +742,21 @@ export interface AiLabelDeps {
   random?: () => number;
   now?: () => number;
   log?: (line: string) => void;
+  /**
+   * New music, for the artist's followers: an album's first song ("song"),
+   * and the album finished ("album"). Told once each; not awaited.
+   */
+  onRelease?: (release: LabelRelease) => void;
+}
+
+export interface LabelRelease {
+  kind: "song" | "album";
+  artistName: string;
+  albumTitle: string;
+  year: number;
+  /** The song that landed (the last one, for "album"). */
+  songTitle: string;
+  songs: number;
 }
 
 /** What one step of the schedule did. */
@@ -1380,13 +1395,22 @@ export class AiLabel {
       song.composedAt = this.now();
       artist.failures = 0;
       artist.lastError = "";
-      if (album.songs.every((one) => one.file)) {
+      const released = album.songs.every((one) => one.file);
+      if (released) {
         album.doneAt = this.now();
         this.log(`${artist.name} released "${album.title}"`);
         void this.ensureProfile(artist).catch(() => undefined);
       }
       this.save();
       this.writeAlbumJson(artist, album);
+      const made = album.songs.filter((one) => one.file).length;
+      const release = { artistName: artist.name, albumTitle: album.title, year: album.year, songTitle: song.title, songs: album.songs.length };
+      try {
+        if (released) this.deps.onRelease?.({ kind: "album", ...release });
+        else if (made === 1) this.deps.onRelease?.({ kind: "song", ...release });
+      } catch {
+        // Telling followers never holds up the label.
+      }
       await this.place(artist.genre);
       // Its words timed to the recording, then its video, without holding up the next song.
       await this.sync(artist, album, song).catch(() => undefined);

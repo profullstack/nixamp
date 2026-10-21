@@ -79,7 +79,10 @@ import { Importer } from "./handoff.ts";
 import { handleHandoffs } from "./handoff-routes.ts";
 import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
 import { AiLabel } from "./ai-label.ts";
-import { buyLink, handleLabelRoutes, isPublicLabelPath } from "./label-routes.ts";
+import { buyLink, buyPrefix, handleLabelRoutes, isPublicLabelPath } from "./label-routes.ts";
+import { FollowNotices, noticeFrom, sendFollowNotice, type FollowNotice } from "./follow-notify.ts";
+import { StoreRef } from "./store-ref.ts";
+import { albumSlug as radioAlbumSlug, artistSlug as radioArtistSlug } from "./radio-slug.ts";
 import { GrantVerifier, MusicStore, PRICES } from "./music-store.ts";
 import { handleStoreRoutes, isStorePath } from "./store-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
@@ -90,12 +93,12 @@ import { LyricsFinder } from "./lyrics.ts";
 import { LyricsPublisher } from "./lyrics-publish.ts";
 import { aiKey } from "./ai-keys.ts";
 import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML, WATCH_APP_CSP } from "./station-page.ts";
-import { handleRooms, RoomProbe, roomEntries, RoomStore, watchBase } from "./guide-rooms.ts";
+import { handleRoomProxy, handleRooms, isRoomPath, ROOM_PAGE, roomAddress, RoomProbe, roomEntries, roomSlugOf, roomSlugs, RoomStore, watchBase } from "./guide-rooms.ts";
 import { handleVods, VodProbe, vodEntries, VodStore, vodView } from "./guide-vods.ts";
 import { withPitFooter } from "./pit-footer.ts";
 import { handleFollowPage } from "./follow-page.ts";
 import {
-  asRadioPage, buildCatalogue, isRadioPath, NAV_STYLE, RADIO_ALBUM, RADIO_ARTIST, RADIO_CSP, RADIO_STATION, RADIO_SUB, RADIO_BUY, radioBuyLink, radioBuyQuery, radioNav, radioPeers, radioRewriter,
+  asRadioPage, withFrameSrc, buildCatalogue, isRadioPath, NAV_STYLE, RADIO_ALBUM, RADIO_ARTIST, RADIO_CSP, RADIO_STATION, RADIO_SUB, RADIO_BUY, radioBuyLink, radioBuyQuery, radioNav, radioPeers, radioRewriter,
   radioStations, renderAlbum, renderArtist, renderDirectory, renderMissing, rewriteResponse, type PeerRadio, type RadioCatalogue,
 } from "./radio-pages.ts";
 import { adCsp, guideAds, guideCsp, withPageAd, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
@@ -1777,6 +1780,8 @@ export interface HandlerOptions {
     rooms?: { store: RoomStore; probe: RoomProbe };
     /** Files members published to this guide to play on demand, and how to ask a file's server about it. */
     vods?: { store: VodStore; probe: VodProbe };
+    /** What Buy links call this server on nixamp.com: its store id, else its address (store-ref.ts). */
+    storeRef?: () => string;
   };
   web: string | null;
   /** Branded clients on this same backend, keyed by an explicitly configured host. */
@@ -1933,6 +1938,13 @@ export interface HandlerOptions {
    * the stream.
    */
   follows?: Follows;
+  /**
+   * An artist's followers told about new music, by the server that made it
+   * (follow-notify.ts). nixamp.com only, like follows.
+   */
+  followNotify?: { notices: FollowNotices; tell: (target: string, note: Notification) => Promise<number> };
+  /** Signs the follow-state cookie the framed Follow button reads, and who may frame it (follow-page.ts). */
+  followView?: { secret: string; ancestors: string[] };
   /** The servers an account hearted. nixamp.com only, like follows. */
   favorites?: Favorites;
   /** Settings sync, on the directory: a member's settings under revisions, reached by the same session. */
@@ -2140,7 +2152,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         query.set("t", station!.listenToken);
         request.url = `/api/v1/stations/${station!.id}/${sub[2]}?${query.toString()}`;
         const here = options.stations.publicBase?.() ?? "";
-        rewriteResponse(response, radioRewriter(station!, sub[1]!, /^https:\/\//.test(here) ? `${storeSite}/buy?server=${encodeURIComponent(here)}&` : ""));
+        const ref = options.stations.storeRef?.() || here;
+        rewriteResponse(response, radioRewriter(station!, sub[1]!, /^https:\/\//.test(here) ? [buyPrefix(storeSite, ref), buyPrefix(storeSite, here)] : ""));
         return handle(request, response);
       }
     }
@@ -2534,13 +2547,49 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     }
 
     // Following an artist from a /radio page, where the nixamp.com session is first-party (follow-page.ts).
-    if (path === "/follow" && options.follows && options.accounts) {
+    if ((path === "/follow" || path === "/follow/button") && options.follows && options.accounts) {
       const accounts = options.accounts;
       if (await handleFollowPage(request, response, path, url, {
         account: () => accounts.whoIs(tokenFrom(request.headers)),
         follows: options.follows,
         readBody: (body) => readBody(body, 8 * 1024),
+        ...(options.followView ? { viewSecret: options.followView.secret, frameAncestors: options.followView.ancestors } : {}),
       })) return;
+    }
+
+    // New music from a server's AI label, for the artist's followers (follow-notify.ts).
+    if (path === "/api/v1/follows/notify" && options.follows && options.accounts && options.followNotify) {
+      if (request.method !== "POST") {
+        json(response, 405, { error: "POST a notice", code: "method_not_allowed" });
+        return;
+      }
+      const me = await options.accounts.whoIs(tokenFrom(request.headers));
+      if (me === null) {
+        json(response, 401, { error: "sign in (the server's nixamp login) to tell followers", code: "unauthorized" });
+        return;
+      }
+      const raw = await readBody(request, 8 * 1024).catch(() => "");
+      const notice = noticeFrom((() => { try { return JSON.parse(raw) as unknown; } catch { return null; } })());
+      if (!notice) {
+        json(response, 400, { error: "a notice is {target: artist:<name>, title, body, url (a /radio page of ours), key}", code: "bad_notice" });
+        return;
+      }
+      const verdict = await options.followNotify.notices.accept(me.id, notice);
+      if (verdict === "not_yours") {
+        json(response, 403, { result: verdict, error: "another account tells that artist's followers" });
+        return;
+      }
+      if (verdict === "too_many") {
+        json(response, 429, { result: verdict, error: "enough notices for today" });
+        return;
+      }
+      if (verdict === "duplicate") {
+        json(response, 200, { result: verdict, told: 0 });
+        return;
+      }
+      const told = await options.followNotify.tell(notice.target, { title: notice.title, body: notice.body, url: notice.url }).catch(() => 0);
+      json(response, 200, { result: verdict, told });
+      return;
     }
 
     if (path.startsWith("/api/v1/follows") && options.follows && options.accounts) {
@@ -2859,6 +2908,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !/^\/watch\/[a-z0-9]{10}$/.test(path) &&
       // A live room's page: the room's own key travels in ?play=, checked by its server.
       !(path === "/watch" && Boolean(options.stations?.rooms)) &&
+      // A live room under its name here, asked of its server with the key held here (guide-rooms.ts).
+      !(isRoomPath(path) && Boolean(options.stations?.rooms)) &&
       // Live rooms on the guide: listed for anybody, published by a member (guide-rooms.ts).
       !((path === "/api/v1/guide/rooms" || path.startsWith("/api/v1/guide/rooms/")) && Boolean(options.stations?.rooms)) &&
       // On demand: a file's page and the guide's list of them (guide-vods.ts); the file's own key travels in its play address.
@@ -2867,7 +2918,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // Public, listed stations under readable names, and their artists and albums (radio-pages.ts).
       !(isRadioPath(path) && Boolean(options.stations)) &&
       // Following an artist from those pages, signed in at nixamp.com.
-      !(path === "/follow" && Boolean(options.follows && options.accounts)) &&
+      !((path === "/follow" || path === "/follow/button") && Boolean(options.follows && options.accounts)) &&
       !isPublicAsset &&
       !isGuidePage &&
       !eventChannelRequest
@@ -3074,7 +3125,56 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // A live room's page: /watch?play=<a nixamp server's channel or live
     // stream address>. The built page plays it in @profullstack/player, as a
     // film or as radio; nothing about the room passes through here.
+    if (options.stations?.rooms && isRoomPath(path)) {
+      const rooms = options.stations.rooms;
+      if (await handleRoomProxy(request, response, path, { store: rooms.store, probe: rooms.probe, refuse: (link) => refusedDestination(link), json })) return;
+      const asked = ROOM_PAGE.exec(path)![1]!;
+      const slugs = roomSlugs(rooms.store.list());
+      const room = slugs.get(asked);
+      if (!room) {
+        // A room's id finds its name: /room/<id> goes to /room/<name>.
+        const named = roomSlugOf(slugs, asked);
+        if (named) {
+          response.writeHead(301, { location: `/room/${named}`, "cache-control": "public, max-age=300" });
+          response.end();
+          return;
+        }
+      }
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        json(response, 405, { error: "method not allowed", code: "method_not_allowed" });
+        return;
+      }
+      const built = web !== null && isFile(join(web, "watch.html")) ? readFileSync(join(web, "watch.html"), "utf8") : null;
+      if (!built) {
+        json(response, 404, { error: "this server was started without its web pages" });
+        return;
+      }
+      const base = radioBaseFor(request, options.stations.publicBase?.() ?? "");
+      const nav = radioNav(guideHosts().has(requestHost) ? "/" : "/guide", "live");
+      const face = room ? { name: room.name, description: room.note || `${room.name}, live now on live.streaming.`, video: room.kind === "video" } : { name: "No such room" };
+      response.writeHead(room ? 200 : 404, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-cache",
+        "content-security-policy": adCsp(WATCH_APP_CSP, guideAds()),
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(request.method === "HEAD" ? undefined : withPageAd(asRadioPage(built, face, asked, base, nav, `/room/${asked}`), guideAds()));
+      return;
+    }
+
     if (options.stations?.rooms && path === "/watch" && (request.method === "GET" || request.method === "HEAD")) {
+      // A room published here plays under its name: the old link keeps working and lands there.
+      const play = roomAddress(url.searchParams.get("play") ?? "");
+      if (play) {
+        const slugs = roomSlugs(options.stations.rooms.store.list());
+        const published = [...slugs].find(([, one]) => one.play === play.play)?.[0];
+        if (published) {
+          response.writeHead(302, { location: `/room/${published}`, "cache-control": "no-store", "referrer-policy": "no-referrer" });
+          response.end();
+          return;
+        }
+      }
       const built = web !== null && isFile(join(web, "watch.html")) ? withPageAd(readFileSync(join(web, "watch.html"), "utf8"), guideAds()) : null;
       if (!built) {
         json(response, 404, { error: "this server was started without its web pages" });
@@ -3134,7 +3234,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         response.writeHead(status, {
           "content-type": "text/html; charset=utf-8",
           "cache-control": status === 200 ? "public, max-age=60" : "no-cache",
-          "content-security-policy": adCsp(csp, ads),
+          // The Follow button on an artist's or album's page is nixamp.com's (follow-page.ts).
+          "content-security-policy": withFrameSrc(adCsp(csp, ads), storeSite),
           "referrer-policy": "strict-origin-when-cross-origin",
           "x-content-type-options": "nosniff",
         });
@@ -3148,7 +3249,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       if (path === RADIO_BUY) {
         const item = radioBuyQuery(url.searchParams);
         if (!item || !shop) return send(404, renderMissing("thing for sale", base, nav));
-        response.writeHead(302, { location: buyLink(storeSite, publicBase, item.kind, item.artist, item.album, item.n), "cache-control": "no-store", "referrer-policy": "no-referrer" });
+        response.writeHead(302, { location: buyLink(storeSite, stations.storeRef?.() || publicBase, item.kind, item.artist, item.album, item.n), "cache-control": "no-store", "referrer-policy": "no-referrer" });
         response.end();
         return;
       }
@@ -3342,6 +3443,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       if (await handleLabelRoutes(request, response, path, {
         label: options.stations.label, canControl: control.allowed, json, readBody,
         grants: storeGrants, site: storeSite, publicBase: options.stations.publicBase?.() ?? "", ads: guideAds(),
+        ...(options.stations.storeRef ? { storeRef: options.stations.storeRef } : {}),
       })) return;
     }
 
@@ -7583,6 +7685,17 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // The AI label: artists who put out albums on their own, filed under the
   // library as ai/<genre>/<artist>/<year>-<album>/ (NIXAMP_LABEL_ROOT moves it).
   const labelHome = libraryIndex.sources().find((one) => one.enabled && !one.managed);
+  const storeSiteOfLabel = (process.env["NIXAMP_SITE"] || "https://nixamp.com").replace(/\/+$/, "");
+  // What this server's Buy links call it on nixamp.com: an opaque store id once asked (store-ref.ts).
+  const storeRef = new StoreRef({
+    site: storeSiteOfLabel,
+    publicBase: () => stations.publicBase?.() ?? "",
+    token: () => readSession()?.token ?? "",
+    log: (line) => console.log(line),
+  });
+  stations.storeRef = () => storeRef.ref();
+  // Asked once the server knows its address; Buy links carry the address until then.
+  setTimeout(() => void storeRef.refresh(), 30_000).unref?.();
   const aiLabel = new AiLabel(AiLabel.fileFor(stateDir(), options.port), {
     index: libraryIndex,
     store: stationStore,
@@ -7593,6 +7706,27 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     owner: options.owner || "",
     mayStart: mayStartStation,
     log: (line) => console.log(line),
+    // New music for the artist's followers, told through nixamp.com (follow-notify.ts).
+    onRelease: (release) => {
+      const guide = watchBase(stations.publicBase?.() ?? "");
+      const artist = radioArtistSlug(release.artistName);
+      const album = radioAlbumSlug(release.artistName, release.albumTitle);
+      if (!artist || !album || !/^https:\/\//.test(guide)) return;
+      const notice: FollowNotice = release.kind === "album"
+        ? {
+          target: `artist:${artist}`, key: `album:${album}:done`,
+          title: `${release.artistName} released ${release.albumTitle}`,
+          body: `${release.albumTitle} (${release.year}) is finished: ${release.songs} songs, free to hear on the radio.`,
+          url: `${guide}/radio/album/${album}`,
+        }
+        : {
+          target: `artist:${artist}`, key: `album:${album}:songs`,
+          title: `New from ${release.artistName}: ${release.songTitle}`,
+          body: `The first song of ${release.albumTitle}, a new album by ${release.artistName}. More land as they are finished.`,
+          url: `${guide}/radio/album/${album}`,
+        };
+      void sendFollowNotice({ site: storeSiteOfLabel, token: readSession()?.token ?? "", log: (line) => console.log(line) }, notice);
+    },
   });
   aiRadio.startSchedule();
   aiLabel.startSchedule();
@@ -7671,9 +7805,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     const here = stations.publicBase?.() ?? "";
     const shop = (process.env["NIXAMP_SITE"] || "https://nixamp.com").replace(/\/+$/, "");
     const store = song && /^https:\/\//.test(here) ? {
-      song: buyLink(shop, here, "song", song.artist, song.album, song.n),
-      album: buyLink(shop, here, "album", song.artist, song.album),
-      artist: buyLink(shop, here, "artist", song.artist),
+      song: buyLink(shop, storeRef.ref(), "song", song.artist, song.album, song.n),
+      album: buyLink(shop, storeRef.ref(), "album", song.artist, song.album),
+      artist: buyLink(shop, storeRef.ref(), "artist", song.artist),
       artistName: song.artistName,
       albumTitle: song.albumTitle,
     } : null;
@@ -7997,8 +8131,13 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     };
     void follows
       .audience(listing.ownerId)
-      .then((audience) =>
-        notifyAll(audience, note, {
+      .then((audience) => notifyAll(audience, note, followerChannels()))
+      .catch(() => {});
+  };
+
+  /** Mail, texts and web push, as configured: every follower notice goes out on these. */
+  function followerChannels(): import("./notify.ts").NotifyChannels {
+    return {
           ...(process.env["RESEND_API_KEY"]
             ? {
                 email: resendEmail({
@@ -8028,12 +8167,10 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
             : {}),
           // A subscription the vendor has retired is a row to delete, not a
           // failure to retry.
-          onGone: (endpoint) => follows.removePush(endpoint),
+          onGone: (endpoint) => follows!.removePush(endpoint),
           onEvent: (message) => console.log(message),
-        }),
-      )
-      .catch(() => {});
-  };
+    };
+  }
 
   // Scheduled event reminders are sent once, three minutes before start.
   // Followers already have email/web preferences, so the same audience and
@@ -8383,6 +8520,22 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     tag: (next) => loadTagged(tools, next),
     ...(directory ? { directory } : {}),
     ...(follows ? { follows, vapidKeys } : {}),
+    ...(follows && pool ? {
+      followNotify: {
+        notices: new FollowNotices(pool),
+        tell: async (target: string, note: Notification) => {
+          const audience = await follows.audience(target);
+          const report = await notifyAll(audience, note, followerChannels());
+          return report.email + report.sms + report.push;
+        },
+      },
+    } : {}),
+    ...(jwtSecret ? {
+      followView: {
+        secret: sha("sha256").update(`follow-view:${jwtSecret}`).digest("hex"),
+        ancestors: (process.env["NIXAMP_FOLLOW_FRAME_ANCESTORS"] ?? "https://live.streaming.pit.world https://live.streaming").split(/[\s,]+/).filter((one) => /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(one)),
+      },
+    } : {}),
     ...(favorites ? { favorites } : {}),
     ...(settingsSync ? { settingsSync } : {}),
     ...(events ? { events, eventWriter: new EventWriter({

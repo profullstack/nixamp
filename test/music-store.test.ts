@@ -1,16 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { covers, makeGrant, MusicStore, readGrant } from "../src/music-store.ts";
+import { covers, makeGrant, MusicStore, readGrant, storeId } from "../src/music-store.ts";
+import { buyLink, buyPrefix } from "../src/label-routes.ts";
 import type { Db, Support } from "../src/support.ts";
 
 /** Just enough of Postgres for music_purchases. */
 function fakeDb(): Db & { rows: Array<Record<string, unknown>> } {
   const rows: Array<Record<string, unknown>> = [];
+  const stores = new Map<string, string>();
   const cols = ["id", "token", "email", "user_id", "server", "kind", "artist", "album", "n", "title", "artist_name", "amount_cents", "coin", "payment_id", "created_at"];
   return {
     rows,
     async query(text: string, params: unknown[] = []) {
       if (/^CREATE/.test(text.trim())) return { rows: [] };
+      if (text.includes("INSERT INTO music_stores")) {
+        stores.set(String(params[0]), String(params[1]));
+        return { rows: [] };
+      }
+      if (text.includes("FROM music_stores")) return { rows: stores.has(String(params[0])) ? [{ server: stores.get(String(params[0])) }] : [] };
       if (text.includes("INSERT INTO music_purchases")) {
         rows.push({ ...Object.fromEntries(cols.map((name, i) => [name, params[i]])), status: "pending", paid_at: null });
         return { rows: [] };
@@ -102,4 +109,30 @@ test("buy: 10 cents a song, $1 an album, $2 an artist; paid once, mailed once, t
   assert.ok(store.check(String(view["grant"])));
   assert.equal(db.rows.find((one) => one["id"] === artist.id)!["user_id"], "user-1");
   assert.deepEqual(await store.settle("pay_unknown"), { settled: false });
+});
+
+test("a Buy link names the store by an opaque id, which nixamp.com alone turns back into the server", async () => {
+  const { store, payments } = setup();
+  const server = "https://server1.example.com:4321";
+  const id = store.idOf(server);
+  assert.match(id, /^[a-f0-9]{16}$/);
+  assert.equal(id, storeId("s3cret", server));
+  assert.notEqual(id, storeId("other", server), "without the secret the id says nothing");
+  // A listed server is found by its id; checkout carries no address.
+  const item = await store.describe({ store: id, kind: "song", artist: "aaaaaaaaaa", album: "bbbbbbbb", n: 1 });
+  assert.equal(item.server, server);
+  assert.equal(item.store, id);
+  await store.checkout({ store: id, kind: "album", artist: "aaaaaaaaaa", album: "bbbbbbbb", email: "a@b.co", coin: "SOL" }, null);
+  assert.equal(payments.length, 1);
+  await assert.rejects(store.describe({ store: "0000000000000000", kind: "song", artist: "aaaaaaaaaa", album: "bbbbbbbb", n: 1 }), /does not sell/);
+  // A server named under nixamp.com registers once, then its id resolves after the directory forgets it.
+  const named = "https://server9.chovy.nixamp.com:4321";
+  await assert.rejects(store.register({ server: "https://evil.example" }), /does not sell/);
+  const registered = await store.register({ server: named });
+  assert.equal(registered.id, store.idOf(named));
+  assert.equal(await store.serverOf(registered.id), named);
+  // Old links by address still work.
+  assert.equal((await store.describe({ server, kind: "artist", artist: "aaaaaaaaaa" })).server, server);
+  assert.equal(buyLink("https://nixamp.com", id, "song", "aaaaaaaaaa", "bbbbbbbb", 2), `https://nixamp.com/buy?store=${id}&kind=song&artist=aaaaaaaaaa&album=bbbbbbbb&n=2`);
+  assert.equal(buyPrefix("https://nixamp.com", server), "https://nixamp.com/buy?server=https%3A%2F%2Fserver1.example.com%3A4321&");
 });

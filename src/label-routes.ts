@@ -28,10 +28,18 @@ export function isPublicLabelPath(path: string): boolean {
   return path === "/label" || path === "/api/v1/label" || path === "/api/v1/label/zip" || FILE.test(path) || PROFILE.test(path);
 }
 
-/** nixamp.com's page that sells this: a song, an album or everything by the artist. */
-export function buyLink(site: string, server: string, kind: "song" | "album" | "artist", artist: string, album = "", n = 0): string {
-  const query = new URLSearchParams({ server, kind, artist, ...(kind !== "artist" ? { album } : {}), ...(kind === "song" ? { n: String(n) } : {}) });
-  return `${site}/buy?${query.toString()}`;
+/**
+ * nixamp.com's page that sells this: a song, an album or everything by the
+ * artist. `store` is the server's store id from nixamp.com (store-ref.ts), or,
+ * before it has one, the server's address.
+ */
+export function buyLink(site: string, store: string, kind: "song" | "album" | "artist", artist: string, album = "", n = 0): string {
+  return `${buyPrefix(site, store)}${new URLSearchParams({ kind, artist, ...(kind !== "artist" ? { album } : {}), ...(kind === "song" ? { n: String(n) } : {}) }).toString()}`;
+}
+
+/** What every Buy link for this store starts with, up to the item. */
+export function buyPrefix(site: string, store: string): string {
+  return `${site}/buy?${new URLSearchParams(/^https?:\/\//.test(store) ? { server: store } : { store }).toString()}&`;
 }
 
 export interface LabelRoutesContext {
@@ -42,6 +50,8 @@ export interface LabelRoutesContext {
   /** nixamp.com, where the store is, and this server's public address (for Buy links). */
   site?: string;
   publicBase?: string;
+  /** What Buy links name this server by: its store id, else its address (store-ref.ts). */
+  storeRef?: () => string;
   /** The one text_link ad /label carries (station-guide.ts withPageAd); none when unset. */
   ads?: GuideAds;
   json: (response: ServerResponse, status: number, body: unknown) => void;
@@ -111,7 +121,7 @@ export async function handleLabelRoutes(
         return true;
       }
       if (path === "/label") {
-        const shop = ctx.grants && ctx.site && /^https:\/\//.test(ctx.publicBase ?? "") ? { site: ctx.site, server: ctx.publicBase! } : undefined;
+        const shop = ctx.grants && ctx.site && /^https:\/\//.test(ctx.publicBase ?? "") ? { site: ctx.site, server: ctx.storeRef?.() || ctx.publicBase! } : undefined;
         const page = withPageAd(renderLabel(label.publicView(), shop), ctx.ads ?? {});
         response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": adCsp(LABEL_CSP, ctx.ads ?? {}), "cache-control": "public, max-age=300" });
         response.end(method === "HEAD" ? undefined : page);
