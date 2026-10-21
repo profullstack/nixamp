@@ -152,6 +152,7 @@ import {
 } from "./transcripts.ts";
 import { handleMessage as mcpMessage } from "./mcp.ts";
 import { PUBLIC_TOOLS, callPublicTool, isPublicTool } from "./directory-mcp.ts";
+import { handleDiscovery, isDiscoveryPath, latestRelease } from "./discovery.ts";
 import { Media, factsFromRequest, holderFrom, mediaId, openFileListing, openFileOf, type MediaRecord } from "./media.ts";
 import { mediaPage, type PageTranscript } from "./media-page.ts";
 import { describeFile, refreshChanged } from "./media-local.ts";
@@ -2030,6 +2031,8 @@ export interface HandlerOptions {
 export function createHandler(engine: Engine, options: HandlerOptions) {
   // One per server, so the counters survive between requests and die with it.
   const guard = new Guard();
+  // nixamp.com's /download asks GitHub which release is latest; one answer per ten minutes.
+  const release = latestRelease();
 
   const tracker = options.connections ?? new Connections();
   const started = Date.now();
@@ -2873,6 +2876,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !(/^\/radio\/(artist|album)\//.test(path) && Boolean(options.music)) &&
       // What is on, as MCP, for anybody.
       path !== "/mcp/public" &&
+      // llms.txt, the OpenAPI document, the health check and the desktop downloads (nixamp.com).
+      !(isDiscoveryPath(path) && Boolean(options.accounts && options.site)) &&
       // Supporting a copyright holder is for anybody listening.
       !/^\/support\/[a-z0-9-]{1,40}$/.test(path) && path !== "/support/cancel" && !/^\/api\/v1\/support\/[a-z0-9-]{1,40}$/.test(path) &&
       // A station's short link, which sends the browser to wherever it plays.
@@ -3555,6 +3560,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       json(response, 200, { name: "nixamp", version: options.version, media: options.media });
       return;
     }
+
+    // Every way into nixamp, for agents and stores: llms.txt, OpenAPI, health, desktop downloads (discovery.ts).
+    if (options.accounts && options.site && await handleDiscovery(request, response, path, { site: options.site, version: options.version, release, json })) return;
 
     if (path === "/reset-password" && options.accounts?.passwordResets) {
       if (request.method !== "GET" && request.method !== "HEAD") {
