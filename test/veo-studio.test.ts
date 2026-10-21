@@ -89,7 +89,7 @@ test("Veo prompts describe the band by role and look, never by name", () => {
     assert.match(prompt, /the lead vocals from reference image 1 \(woman, late twenties/);
     assert.match(prompt, /the lead guitar from reference image 2/);
     assert.doesNotMatch(prompt, /Ava Morales|Ethan/);
-    assert.match(prompt, /Nobody sings, speaks or lip-syncs on camera/, "Veo never shows a mouth it cannot sync");
+    assert.match(prompt, /nobody sings, speaks or lip-syncs on camera/i, "Veo never shows a mouth it cannot sync");
   }
 });
 

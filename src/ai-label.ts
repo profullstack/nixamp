@@ -28,7 +28,7 @@
  */
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { aiKey } from "./ai-keys.ts";
 import { composerFromEnv, OutOfCredit, type Composer } from "./ai-radio.ts";
@@ -127,8 +127,10 @@ export interface LabelSettings {
   videos: boolean;
   /** Each album's single (song 1) is filmed with Veo, while the month's Veo budget lasts. */
   veo: boolean;
-  /** How many 8 s Veo shots of the band a single is cut from. */
+  /** How many 8 s Veo shots of the band playing (never the singer) a single is cut from. */
   veoShots: number;
+  /** How many 8 s Veo story scenes (a short film from the song's words, nobody singing) a single gets. */
+  storyShots: number;
   /** How many close-ups of the singer a single gets, lip-synced to the song (0: none, the band only). */
   lipsyncShots: number;
   /** Public, listed and owned, so the genre stations are on the guide. */
@@ -385,7 +387,8 @@ export const DEFAULTS: Omit<LabelSettings, "pausedReason"> = {
   publish: true,
   videos: true,
   veo: false,
-  veoShots: 6,
+  veoShots: 2,
+  storyShots: 4,
   lipsyncShots: 2,
   parallel: 1,
   genreOrder: ["Punk", "Blues", "Country", "Jazz", "Classic Rock", "Metal", "Hip-Hop", "Pop", "R&B"],
@@ -626,6 +629,42 @@ export async function writeStoryboard(
   return prompts;
 }
 
+const VEO_STORY_SYSTEM = [
+  "You write the story scenes of a music video for an original song, as prompts for a video model that films 8-second moving shots.",
+  "Tell the song's story in cinematic scenes away from any stage: characters, places, action, weather, small details. Keep the same main character(s), setting and color palette across scenes so it reads as one short film; vary the shots (wide, tracking, close detail, aerial) and say how the camera moves.",
+  "Describe people by how they look, never by name. Nobody sings, speaks or lip-syncs, and nobody holds a microphone. Each prompt at most 350 characters. No text, letters, logos, real people or real brands.",
+  "Answer as JSON: {\"scenes\": [\"prompt\", ...]}.",
+].join(" ");
+
+/** A single's story scenes for Veo: a short film from its words, nobody singing, people by look not name. */
+export async function writeVeoStory(
+  artist: Pick<LabelArtist, "genre" | "sound">,
+  members: Array<Pick<Member, "role" | "look">>,
+  album: Pick<LabelAlbum, "title" | "concept">,
+  song: Pick<LabelSong, "title" | "style" | "lyrics">,
+  scenes: number,
+  ask: typeof askJson = askJson,
+): Promise<string[]> {
+  const cast = members.slice(0, 4).map((one) => `${one.role}: ${one.look.replace(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, "")}`).join("; ");
+  const answer = await ask({
+    system: VEO_STORY_SYSTEM,
+    prompt: [
+      `Song: "${song.title}" (${artist.genre}; ${artist.sound}), from "${album.title}"${album.concept ? `: ${album.concept}` : ""}`,
+      cast ? `The band may appear as characters, described by look: ${cast}` : "",
+      `Mood and arrangement: ${song.style}`,
+      song.lyrics ? `Lyrics:\n${song.lyrics.slice(0, 1800)}` : "",
+      `Exactly ${scenes} scenes.`,
+    ].filter(Boolean).join("\n"),
+    maxTokens: 2500,
+    timeoutMs: 90_000,
+  });
+  const list = Array.isArray(answer.value["scenes"]) ? answer.value["scenes"] : [];
+  const prompts = list.map((one) => clean(one, 400)).filter((one) => one.length > 10).slice(0, scenes);
+  if (prompts.length < 1) throw new Error("the model wrote no story");
+  return prompts.map((scene) => `Music video for a fictional ${artist.genre} song. ${scene} Mood: ${song.style}`.slice(0, 900)
+    + " Nobody sings, speaks or lip-syncs on camera. Cinematic, 35mm film look. No text, no logos.");
+}
+
 /** Thrown by a Veo dependency when this month's budget is spent: no more shots until next month. */
 export class VeoUnavailable extends Error {}
 
@@ -636,14 +675,12 @@ const TRANSIENT = /\b50[234]\b|fetch failed|ECONN|timed? ?out/i;
 // so a mouth in shot is out of sync. The band plays; the vocalist is far off, from
 // behind, in silhouette or between lines, never a close-up of singing.
 const SHOTS = [
-  "Wide shot of the whole band performing on a big stage at night, seen from the back of the crowd, the players small against the lights",
   "Close-up of the guitarist's hands on the fretboard and the strings, shallow focus, stage lights flaring",
-  "The camera glides behind the band members as they play hard, seen from behind, looking out over the crowd",
   "Low-angle shot of the drummer hitting the cymbals at the song's climax, sticks blurred, sparks of light",
-  "The lead vocalist from behind, arms raised to the crowd between lines, backlit silhouette, no face to camera",
-  "Slow aerial push over the crowd toward the stage, fans with hands up, the band tiny in the distance",
-  "Close-up of the bass player's fingers and the amplifier, then a tilt up to the band in silhouette",
-  "The band walking out on stage before the show, backlit silhouettes, nobody speaking or singing",
+  "Close-up of the bass player's fingers and the amplifier, then a tilt up to the bassist in silhouette",
+  "The guitarist and the bassist seen from behind, playing hard toward a huge crowd, backlit",
+  "Slow push-in on the drummer in a quiet moment, moody light, sweat and smoke",
+  "Slow aerial push over the crowd toward the stage, fans with hands up, the stage tiny in the distance",
 ];
 
 // The singer's close-ups, which are lip-synced to the song afterwards (fal.ai). The mouth
@@ -665,7 +702,7 @@ export function veoPrompts(artist: Pick<LabelArtist, "genre" | "sound">, song: P
   const cast = members.slice(0, 3).map((one, i) => `the ${one.role} from reference image ${i + 1} (${one.look.replace(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, "")})`).join("; ");
   const rule = kind === "singer"
     ? "The vocalist sings clearly, the whole mouth always visible, never covered by a microphone or a hand. Cinematic, 35mm film look. No text, no logos."
-    : "Nobody sings, speaks or lip-syncs on camera: no mouths in close-up. Cinematic, 35mm film look, dynamic camera. No text, no logos.";
+    : "The lead vocalist is not in this shot, and nobody sings, speaks or lip-syncs on camera. Cinematic, 35mm film look, dynamic camera. No text, no logos.";
   return (kind === "singer" ? CLOSE_UPS : SHOTS).slice(0, count).map((shot) => [
     `Music video for a fictional ${artist.genre} band. ${shot}.`,
     cast ? `The performers are exactly the people in the reference images: ${cast}.` : "",
@@ -1106,8 +1143,10 @@ export class AiLabel {
     if (input["publish"] !== undefined) this.settings.publish = input["publish"] !== false;
     if (input["videos"] !== undefined) this.settings.videos = input["videos"] !== false;
     if (input["veo"] !== undefined) this.settings.veo = input["veo"] === true;
-    const shots = whole("veoShots", 1, 8);
+    const shots = whole("veoShots", 0, 8);
     if (shots !== undefined) this.settings.veoShots = shots;
+    const story = whole("storyShots", 0, 8);
+    if (story !== undefined) this.settings.storyShots = story;
     const close = whole("lipsyncShots", 0, 4);
     if (close !== undefined) this.settings.lipsyncShots = close;
     const perDay = whole("albumsPerDay", 0, 24);
@@ -1350,8 +1389,9 @@ export class AiLabel {
     } catch { /* the asked-for length */ }
     // Paid-for shots live beside the album until the video is cut, so nothing filmed is filmed twice.
     const shots = join(_album.folder, `.veo-${song.n}`);
-    const { band: clips, singer } = await this.filmShots(artist, song, shots, scenes);
-    if (clips.length < Math.max(2, Math.ceil(this.settings.veoShots / 2))) throw new Error(`only ${clips.length} of ${this.settings.veoShots} shots filmed so far`);
+    const { band: clips, singer } = await this.filmShots(artist, _album, song, shots, scenes);
+    const wanted = this.settings.veoShots + this.settings.storyShots;
+    if (clips.length < Math.max(2, Math.ceil(wanted / 2))) throw new Error(`only ${clips.length} of ${wanted} shots filmed so far`);
     const pinned = await this.syncCloseUps(song, singer, seconds, shots);
     await (this.deps.filmedVideo ?? ((input) => renderFilmedVideo(this.deps.ffmpeg, input)))({ audio: song.file, clips, seconds, artist: artist.name, title: song.title, out, ...(pinned.length ? { pinned } : {}) });
     rmSync(shots, { recursive: true, force: true });
@@ -1414,40 +1454,63 @@ export class AiLabel {
    * Veo's reference images), on stage, in the song's mood. Stops for the
    * month when the budget is spent; a shot Veo will not make is skipped.
    */
-  private async filmShots(artist: LabelArtist, song: LabelSong, keep: string, dir: string): Promise<{ band: Array<{ path: string; seconds: number }>; singer: Array<{ path: string; seconds: number }> }> {
+  private async filmShots(artist: LabelArtist, album: LabelAlbum, song: LabelSong, keep: string, dir: string): Promise<{ band: Array<{ path: string; seconds: number }>; singer: Array<{ path: string; seconds: number }> }> {
     const veo = this.deps.veo;
     if (!veo) return { band: [], singer: [] };
     mkdirSync(dir, { recursive: true });
     mkdirSync(keep, { recursive: true });
     const members = this.cast(artist);
-    const references: Buffer[] = [];
-    for (const member of members.slice(0, 3)) {
-      const portrait = join(this.folderOf(artist), "members", `${member.slug}.jpg`);
-      const small = join(dir, `ref-${member.slug}.jpg`);
+    // The players for the band shots, the voice for the close-ups: a singer's portrait in a band
+    // shot puts the singer at a microphone, singing out of sync.
+    const voice = (member: Member): boolean => /vocal|sing/i.test(member.role);
+    const players = members.filter((member) => !voice(member));
+    const singers = members.filter(voice).length ? members.filter(voice) : members.slice(0, 1);
+    const portraits = async (list: Member[]): Promise<Buffer[]> => {
+      const out: Buffer[] = [];
+      for (const member of list.slice(0, 3)) {
+        const portrait = join(this.folderOf(artist), "members", `${member.slug}.jpg`);
+        const small = join(dir, `ref-${member.slug}.jpg`);
+        try {
+          // 512 px is plenty for a face and keeps the request small.
+          await runLow(this.deps.ffmpeg, [...this.deps.ffmpeg.slice(1), "-hide_banner", "-loglevel", "error", "-y", "-i", portrait, "-vf", "scale=512:-2", "-q:v", "4", small], 60_000, "the portrait did not shrink");
+          out.push(readFileSync(small));
+        } catch {
+          // A member without a portrait is described in words only.
+        }
+      }
+      return out;
+    };
+    const [playerRefs, singerRefs] = [await portraits(players), await portraits(singers)];
+    const band: Array<{ path: string; seconds: number }> = [];
+    const story: Array<{ path: string; seconds: number }> = [];
+    const singer: Array<{ path: string; seconds: number }> = [];
+    // The story is written only while some of its scenes are still to film.
+    const storyFiles = Array.from({ length: this.settings.storyShots }, (_, i) => join(keep, `story-${i}.mp4`));
+    let storyPrompts: string[] = [];
+    if (storyFiles.some((file) => !existsSync(file)) && this.canAsk()) {
       try {
-        // 512 px is plenty for a face and keeps the request small.
-        await runLow(this.deps.ffmpeg, [...this.deps.ffmpeg.slice(1), "-hide_banner", "-loglevel", "error", "-y", "-i", portrait, "-vf", "scale=512:-2", "-q:v", "4", small], 60_000, "the portrait did not shrink");
-        references.push(readFileSync(small));
-      } catch {
-        // A member without a portrait is described in words only.
+        storyPrompts = await writeVeoStory(artist, members, album, song, storyFiles.length, this.deps.ask ?? askJson);
+      } catch (error) {
+        this.log(`no story for "${song.title}" yet: ${(error as Error).message}`);
       }
     }
-    const band: Array<{ path: string; seconds: number }> = [];
-    const singer: Array<{ path: string; seconds: number }> = [];
-    // The singer's close-ups only where they can be lip-synced afterwards.
+    // The singer's close-ups only where they can be lip-synced afterwards. Story scenes go without
+    // the portraits: they would pull the whole band into every scene.
     const plan = [
-      ...veoPrompts(artist, song, members, this.settings.veoShots).map((prompt, i) => ({ prompt, file: join(keep, `shot-${i}.mp4`), into: band })),
-      ...(this.deps.lipsync ? veoPrompts(artist, song, members, this.settings.lipsyncShots, "singer").map((prompt, i) => ({ prompt, file: join(keep, `singer-${i}.mp4`), into: singer })) : []),
+      ...storyFiles.map((file, i) => ({ prompt: storyPrompts[i] ?? "", file, into: story, refs: [] as Buffer[] })),
+      ...veoPrompts(artist, song, players, this.settings.veoShots).map((prompt, i) => ({ prompt, file: join(keep, `shot-${i}.mp4`), into: band, refs: playerRefs })),
+      ...(this.deps.lipsync ? veoPrompts(artist, song, singers, this.settings.lipsyncShots, "singer").map((prompt, i) => ({ prompt, file: join(keep, `singer-${i}.mp4`), into: singer, refs: singerRefs })) : []),
     ];
-    for (const [i, { prompt, file, into }] of plan.entries()) {
+    for (const [i, { prompt, file, into, refs }] of plan.entries()) {
       try {
         if (statSync(file).size > 10_000) { into.push({ path: file, seconds: 8 }); continue; }
       } catch { /* not filmed yet */ }
+      if (!prompt) continue;
       try {
         // nixamp.com briefly away (a deploy: 502/503) or the network: twice more, a minute apart.
         let bytes: Buffer | null = null;
         for (let attempt = 0; ; attempt++) {
-          try { bytes = await veo({ prompt, seconds: 8, references }); break; } catch (error) {
+          try { bytes = await veo({ prompt, seconds: 8, references: refs }); break; } catch (error) {
             if (attempt >= 2 || error instanceof VeoUnavailable || !TRANSIENT.test((error as Error).message)) throw error;
             await new Promise((done) => setTimeout(done, this.deps.retryMs ?? 60_000));
           }
@@ -1465,8 +1528,14 @@ export class AiLabel {
         this.log(`Veo shot ${i + 1} for "${song.title}": ${(error as Error).message}`);
       }
     }
-    if (band.length || singer.length) this.log(`Veo: ${band.length + singer.length} filmed shots for "${song.title}" (${artist.name})`);
-    return { band, singer };
+    if (band.length || story.length || singer.length) this.log(`Veo: ${band.length + story.length + singer.length} filmed shots for "${song.title}" (${artist.name})`);
+    // The cut takes them in turn: a story scene, then the band playing, and so on.
+    const mixed: Array<{ path: string; seconds: number }> = [];
+    for (let i = 0; i < Math.max(story.length, band.length); i++) {
+      if (story[i]) mixed.push(story[i]!);
+      if (band[i]) mixed.push(band[i]!);
+    }
+    return { band: mixed, singer };
   }
 
   /** The label's music videos as one TV station: free to watch, with its breaks. */
