@@ -1382,6 +1382,8 @@ export class AiLabel {
     // A filmed video whose singer was never filmed (a quota or a refusal took the close-ups) is filmed again while it stays up.
     const singerless = (song: LabelSong): boolean => Boolean(this.deps.lipsync) && this.settings.lipsyncShots > 0 && (song.videoVersion ?? 1) >= FILMED && !song.singer;
     const missing = songs.filter(({ song }) => this.wantsVeo(song) && ((song.videoVersion ?? 1) < FILMED || singerless(song)) && this.now() - (this.filmTriedAt.get(song.file) ?? 0) > 60 * 60_000);
+    // A single already on /music is filmed again before new ones: the month's budget finishes one video, not starts several.
+    missing.sort((a, b) => Number((b.song.videoVersion ?? 1) >= SHOWN && Boolean(b.song.video)) - Number((a.song.videoVersion ?? 1) >= SHOWN && Boolean(a.song.video)));
     const untagged = songs.filter(({ song }) => song.video && !song.videoTagged && (song.videoVersion ?? 1) >= SHOWN);
     const old: typeof songs = [];
     let made = 0;
