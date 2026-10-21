@@ -12,7 +12,7 @@
  *
  *   NIXAMP_STATION_MAX_LISTENERS   per station (default 200)
  *   NIXAMP_MAX_LISTENERS           across every station (default 500)
- *   NIXAMP_MAX_RUNNING_STATIONS    stations on the air at once (default 20)
+ *   NIXAMP_MAX_RUNNING_STATIONS    stations on the air at once (default 1000)
  *
  * The same names, lower-cased without the prefix, can be kept in config.json
  * under "limits" (e.g. {"limits": {"runningStations": 30}}); the environment
@@ -50,7 +50,7 @@ export function limitsFromEnv(env: Record<string, string | undefined> = process.
   return {
     stationListeners: whole("NIXAMP_STATION_MAX_LISTENERS", "stationListeners", 200),
     totalListeners: whole("NIXAMP_MAX_LISTENERS", "totalListeners", 500),
-    runningStations: whole("NIXAMP_MAX_RUNNING_STATIONS", "runningStations", 20),
+    runningStations: whole("NIXAMP_MAX_RUNNING_STATIONS", "runningStations", 1000),
     monthlyBytes: Math.round(Number(gb ?? 0) * 1024 ** 3) || 0,
   };
 }

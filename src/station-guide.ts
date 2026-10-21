@@ -32,7 +32,7 @@ button.report:hover{color:var(--warn)}
 #share .or{color:var(--muted);font-size:.85rem;margin:8px 0 0}
 #status{margin-top:10px;font-size:.9rem;min-height:1.4em}
 footer{margin-top:40px;color:var(--muted);font-size:.85rem}footer a{color:inherit}
-.ad-unit{margin:28px auto 0;display:flex;justify-content:center}.ad-unit iframe{border:0;display:block;background:transparent}
+.ad-unit{margin:0 auto 16px;display:flex;justify-content:center}.ad-unit iframe{border:0;display:block;background:transparent}
 .ad-banner_300x250 iframe{width:300px;height:250px;max-width:100%}.ad-text_link iframe{width:100%;height:40px}
 `;
 
@@ -185,7 +185,8 @@ export function renderGuide(entries: GuideEntry[], apiBase = "", ads: GuideAds =
   }
   if (ads.site) page = page.replace("</head>", `<script data-site="${escape(ads.site)}" src="${CRAWLPROOF}/stats.js" async></script>\n</head>`);
   if (ads.slot) {
-    const format = ads.format ?? "banner_300x250";
+    // One line by default: a 300x250 box above the stations pushed the guide itself off the first screen.
+    const format = ads.format ?? "text_link";
     const slot = ads.slot;
     // The one ad goes at the top of the content, never against the footer.
     page = page.replace('<p class="lead">Radio and TV, on the air now. Pick one and press play.</p>\n', (lead) => `${lead}  <div class="ad-unit ad-${format}"><iframe src="${CRAWLPROOF}/api/ads/frame?slot=${encodeURIComponent(slot)}&amp;format=${format}" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>\n`);

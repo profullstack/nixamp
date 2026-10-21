@@ -1548,7 +1548,7 @@ export function start(): void {
     dom.copyNixamp.hidden = liveRoomLinkNow() === "";
     // Teaching it needs a live room to point at and an account to own the
     // class; the school and this site keep the same accounts.
-    dom.schoolLive.hidden = liveRoomLinkNow() === "" || !keepsAccounts || meId === "";
+    dom.schoolLive.hidden = teachLinkNow() === "" || !keepsAccounts || meId === "";
     // Publishing it on live.streaming needs the room's own address and a nixamp.com account.
     // Or, for a file of the server's own, publishing it on demand (src/guide-vods.ts).
     dom.streamingLive.hidden = (roomStreamNow() === "" && vodTrackNow() === null) || remote.session === "";
@@ -4963,8 +4963,16 @@ export function start(): void {
    * carries it; the host card comes from the profile, so nothing is asked.
    * The class is started at once and opened in a new tab.
    */
+  /** What a class plays: the live room, or a server file the school's player opens by its place in the playlist. */
+  function teachLinkNow(): string {
+    const room = liveRoomLinkNow();
+    if (room !== "") return room;
+    const track = vodTrackNow();
+    return track === null ? "" : pageLinkFor(`track:${track}`);
+  }
+
   async function teachOnSchool(): Promise<void> {
-    const link = liveRoomLinkNow();
+    const link = teachLinkNow();
     if (link === "" || dom.schoolLive.disabled) return;
     const was = dom.schoolLive.textContent;
     dom.schoolLive.disabled = true;
@@ -5031,6 +5039,8 @@ export function start(): void {
     if (!view) throw new Error("this server has no view link to share");
     const answer = await fetch(`${view[1]}/api/media/${index}/item?k=${view[2]}`, { cache: "no-store" });
     const body = (await answer.json().catch(() => ({}))) as { id?: string; error?: string };
+    // A server before 0.48 has no such route and reads it as a track number.
+    if (answer.status === 404 && body.error === "no such track") throw new Error("this server needs nixamp 0.48 or newer; run `nixamp update` on it");
     if (!answer.ok || !body.id) throw new Error(body.error ?? "that file is not in the server's library");
     return `${view[1]}/api/v1/library/items/${body.id}/play?k=${view[2]}`;
   }

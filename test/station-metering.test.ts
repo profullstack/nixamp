@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { StationUsage, alertsFor, limitsFromEnv, monthOf } from "../src/station-metering.ts";
 
 test("limits come from the environment, with defaults that leave room", () => {
-  assert.deepEqual(limitsFromEnv({}), { stationListeners: 200, totalListeners: 500, runningStations: 20, monthlyBytes: 0 });
+  assert.deepEqual(limitsFromEnv({}), { stationListeners: 200, totalListeners: 500, runningStations: 1000, monthlyBytes: 0 });
   // Kept in config.json, so an update's restart does not lose them; the environment still wins.
   assert.equal(limitsFromEnv({}, { runningStations: 30 }).runningStations, 30);
   assert.equal(limitsFromEnv({ NIXAMP_MAX_RUNNING_STATIONS: "5" }, { runningStations: 30 }).runningStations, 5);
