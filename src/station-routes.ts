@@ -13,7 +13,7 @@
  * reading English.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Channels } from "./channels.ts";
+import { chunkStart, type Channels } from "./channels.ts";
 import type { StationRunner } from "./station-runner.ts";
 import { alertsFor, type Limits, type StationUsage } from "./station-metering.ts";
 import { aiFromTags, type TrackFacts } from "./track-facts.ts";
@@ -28,7 +28,7 @@ import {
 } from "./stations.ts";
 
 /** The three things a station's link opens. */
-const LISTEN = /^\/api\/v1\/stations\/([a-z0-9]{10})\/(stream|state|listen\.m3u|events|now|art|lyrics)$/;
+const LISTEN = /^\/api\/v1\/stations\/([a-z0-9]{10})\/(stream|state|listen\.m3u|events|now|art|lyrics|clock)$/;
 
 /** Whether this path is one a station's own link may open, without the server's key. */
 export function isStationListenPath(path: string): boolean {
@@ -103,6 +103,47 @@ function links(ctx: StationContext, station: Station, base = ctx.base): { page: 
     m3u: `${at}/listen.m3u?${query}`,
     state: `${at}/state?${query}`,
   };
+}
+
+/**
+ * A listener's clock: where each run of the bytes one connection was sent
+ * sits in its channel's byte count. The page asks with its player's
+ * currentTime and is told the song and the second it is hearing, exactly,
+ * whatever the player has buffered. Keyed by the stream's ?n=.
+ */
+interface ListenerClock { runs: Array<{ local: number; global: number }>; local: number; next: number }
+const clocks = new Map<string, ListenerClock>();
+const MAX_CLOCKS = 5000;
+const MAX_RUNS = 500;
+
+/** Records a connection's bytes onto its channel's, through the listener it writes to. */
+export function clockedListener<T extends { write(chunk: Buffer): boolean }>(key: string, out: T): T & { forget(): void } {
+  const clock: ListenerClock = { runs: [], local: 0, next: -1 };
+  if (clocks.size >= MAX_CLOCKS) clocks.delete(clocks.keys().next().value!);
+  clocks.set(key, clock);
+  return Object.assign(Object.create(out) as T, {
+    write: (chunk: Buffer): boolean => {
+      const at = chunkStart(chunk);
+      // Silence written in a break's place carries no start: it stands for the break's bytes.
+      if (at !== undefined && at !== clock.next) {
+        clock.runs.push({ local: clock.local, global: at });
+        if (clock.runs.length > MAX_RUNS) clock.runs.shift();
+      }
+      clock.local += chunk.length;
+      clock.next = (at ?? clock.next) + chunk.length;
+      return out.write(chunk);
+    },
+    forget: (): void => { if (clocks.get(key) === clock) clocks.delete(key); },
+  });
+}
+
+/** Which byte of its channel a connection's player is on, `seconds` into what it was sent; null when unknown. */
+export function heardByte(key: string, seconds: number, kbps: number): number | null {
+  const clock = clocks.get(key);
+  if (!clock || !(seconds >= 0) || kbps <= 0) return null;
+  const local = Math.min(clock.local, (seconds * kbps * 1000) / 8);
+  const run = clock.runs.findLast((one) => one.local <= local);
+  return run ? run.global + (local - run.local) : null;
 }
 
 /** The file on the air now, as the channel's own encoder last reported it. */
@@ -331,6 +372,26 @@ export async function handleStations(
       ctx.json(response, 200, { lyrics: { title: lyrics.title, artist: lyrics.artist, text: lyrics.text, source: lyrics.source, language: lyrics.language, ...(lyrics.synced ? { synced: lyrics.synced } : {}) } });
       return true;
     }
+    if (what === "clock") {
+      // ?n= the stream's nonce, ?ct= the player's currentTime: the song and second being heard.
+      const key = `${station.id}:${url.searchParams.get("n") ?? ""}`;
+      const byte = heardByte(key, Number(url.searchParams.get("ct")), station.bitrate);
+      const place = byte === null ? null : ctx.channels.placeAt(channelOf(station.id), byte);
+      if (!place) {
+        ctx.json(response, 404, { error: "no clock for that stream", code: "not_found" });
+        return true;
+      }
+      const track = place.file ? (place.tags ?? ctx.trackFor(place.file)) : null;
+      const duration = place.file && ctx.durationOf ? ctx.durationOf(place.file) : 0;
+      ctx.json(response, 200, {
+        station: station.id,
+        break: place.file === "",
+        position: Math.round(place.position * 1000) / 1000,
+        duration: Math.round(duration * 10) / 10,
+        nowPlaying: track && (track.title || track.artist) ? { title: track.title, artist: track.artist, album: track.album } : null,
+      });
+      return true;
+    }
     if (what === "now") {
       const file = ctx.runner.observed(station.id) === "live" || ctx.runner.observed(station.id) === "recovering" ? nowPlayingFile(ctx, station) : "";
       ctx.json(response, 200, { station: station.id, facts: file && ctx.facts ? await ctx.facts(station, file).catch(() => null) : null });
@@ -398,9 +459,12 @@ export async function handleStations(
           pending: (): number => response.writableLength,
         }
       : response;
+    const nonce = /^[A-Za-z0-9_-]{1,40}$/.test(url.searchParams.get("n") ?? "") ? url.searchParams.get("n")! : "";
+    const clocked = nonce && !station.video ? clockedListener(`${station.id}:${nonce}`, metered) : null;
+    const out = clocked ?? metered;
     const detach = spared
-      ? ctx.channels.listenWithoutBreaks(channelId, metered, station.bitrate, (out) => quietDuringBreaks(out, station.bitrate, () => true))
-      : ctx.channels.listen(channelId, metered);
+      ? ctx.channels.listenWithoutBreaks(channelId, out, station.bitrate, (quiet) => quietDuringBreaks(quiet, station.bitrate, () => true))
+      : ctx.channels.listen(channelId, out);
     if (detach === null) {
       response.end();
       return true;
@@ -414,6 +478,7 @@ export async function handleStations(
       detach();
       untrack();
       left?.();
+      clocked?.forget();
     };
     request.on("close", leave);
     response.on("close", leave);

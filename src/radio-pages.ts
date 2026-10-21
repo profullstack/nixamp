@@ -24,7 +24,7 @@ import type { Station } from "./stations.ts";
 import { albumSlug, artistSlug, stationSlug } from "./radio-slug.ts";
 
 /** A station's own paths, as the station link opens them. */
-export const RADIO_SUB = /^\/radio\/([a-z0-9-]{1,60})\/(stream|state|listen\.m3u|events|now|art|lyrics)$/;
+export const RADIO_SUB = /^\/radio\/([a-z0-9-]{1,60})\/(stream|state|listen\.m3u|events|now|art|lyrics|clock)$/;
 export const RADIO_STATION = /^\/radio\/([a-z0-9-]{1,60})\/?$/;
 export const RADIO_ARTIST = /^\/radio\/artist\/([a-z0-9-]{1,90})\/?$/;
 export const RADIO_ALBUM = /^\/radio\/album\/([a-z0-9-]{1,100})(\/cover\.jpg)?\/?$/;
