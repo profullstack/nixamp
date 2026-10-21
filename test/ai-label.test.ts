@@ -6,7 +6,7 @@ import { createServer as createHttpServer } from "node:http";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { AiLabel, cleanLyrics, fileName, genreSlug, nextReset, periodOf, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines } from "../src/ai-label.ts";
+import { AiLabel, cleanLyrics, fileName, genreSlug, nextReset, periodOf, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines, VeoUnavailable } from "../src/ai-label.ts";
 import { elevenLabsComposer, OutOfCredit, type Composer } from "../src/ai-radio.ts";
 import type { askJson } from "../src/ai-text.ts";
 import { Channels } from "../src/channels.ts";
@@ -260,6 +260,66 @@ test("the budget month follows the provider's billing day, and a pause for credi
     assert.ok(calls.length >= 3);
   } finally {
     label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("an album's single gets filmed Veo shots of the band; the rest the storyboard; a spent month stops them", async () => {
+  const writer = fakeWriter();
+  const ask: typeof askJson = async (options) => {
+    if (options.system.includes("You cast the members")) return { model: "m", value: { members: [{ name: "Mara Quill", role: "lead vocals", look: "woman, late twenties, curly dark hair", voice: "raspy", personality: "bold", influences: "grunge", bio: "A singer." }] } };
+    if (options.system.includes("You storyboard music videos")) return { model: "m", value: { scenes: ["a neon street at night in the rain", "the band on a rooftop at dawn"] } };
+    return writer(options);
+  };
+  const { top, label } = setup(fakeComposer([]), ask, {});
+  const deps = (label as unknown as { deps: Record<string, unknown> }).deps;
+  const shots: Array<{ prompt: string; references: number }> = [];
+  let spent = false;
+  deps["log"] = (line: string) => { if (process.env["LABEL_DEBUG"]) console.log(line); };
+  deps["image"] = async () => Buffer.alloc(2048, 3);
+  deps["veo"] = async (shot: { prompt: string; references: Buffer[] }) => {
+    if (spent) throw new VeoUnavailable("this month's $50 of Veo is spent");
+    shots.push({ prompt: shot.prompt, references: shot.references.length });
+    return Buffer.alloc(20_000, 9);
+  };
+  const filmed: Array<{ title: string; clips: number }> = [];
+  deps["storyVideo"] = async (input: { audio: string; out: string; title: string; clips?: unknown[] }) => { filmed.push({ title: input.title, clips: input.clips?.length ?? 0 }); copyFileSync(input.audio, input.out); };
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, veo: true, veoShots: 2, enabled: false });
+    const artist = label.sign({ preset: "velvet-ruckus" });
+    label.configure({ enabled: true });
+    await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
+    await label.videos();
+    const songs = label.get(artist.key)!.albums[0]!.songs;
+    assert.deepEqual(songs.map((one) => one.videoVersion), [3, 2, 2], "the single is filmed, the others storyboarded");
+    assert.equal(shots.length, 2);
+    assert.doesNotMatch(shots[0]!.prompt, /Mara Quill/, "never a name");
+    assert.match(shots[0]!.prompt, /the lead vocals from reference image 1/);
+    assert.equal(filmed.find((one) => one.title === songs[0]!.title)?.clips, 2);
+    // The budget runs out: no more shots this month, and nothing is made again for want of them.
+    spent = true;
+    const before = filmed.length;
+    songs[0]!.videoVersion = 2;
+    await label.videos();
+    assert.equal(filmed.length, before, "a single already storyboarded keeps its video when Veo is spent");
+    assert.equal(songs[0]!.videoVersion, 2);
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("a filmed-and-drawn music video is exactly as long as the song", { timeout: 120_000 }, async () => {
+  const top = mkdtempSync(join(tmpdir(), "nixamp-veomix-"));
+  try {
+    const run = (args: string[]) => execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...args]);
+    try { run(["-f", "lavfi", "-i", "sine=d=20", "-c:a", "libmp3lame", join(top, "a.mp3")]); } catch { return; }
+    const stills = [0, 1].map((i) => { const file = join(top, `s${i}.jpg`); run(["-f", "lavfi", "-i", `color=c=0x${["2040a0", "a04020"][i]}:s=1024x1024:d=1`, "-frames:v", "1", file]); return file; });
+    const clips = [0, 1].map((i) => { const file = join(top, `c${i}.mp4`); run(["-f", "lavfi", "-i", "testsrc2=s=1280x720:r=24:d=8", "-c:v", "libx264", "-pix_fmt", "yuv420p", file]); return { path: file, seconds: 8 }; });
+    await renderStoryVideo(["ffmpeg"], { audio: join(top, "a.mp3"), images: stills, clips, seconds: 20, artist: "Band", title: "Song", out: join(top, "mix.mp4") });
+    const length = Number(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", join(top, "mix.mp4")], { encoding: "utf8" }));
+    assert.ok(Math.abs(length - 20) < 0.6, `20 s of song, ${length} s of video`);
+  } finally {
     rmSync(top, { recursive: true, force: true });
   }
 });

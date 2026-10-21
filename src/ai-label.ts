@@ -125,6 +125,10 @@ export interface LabelSettings {
   songSeconds: number;
   /** A music video for every song (the cover over itself, blurred, and the song's waveform), and a TV station of them. */
   videos: boolean;
+  /** Each album's single (song 1) gets filmed Veo shots of the band, while the month's Veo budget lasts. */
+  veo: boolean;
+  /** How many 8 s Veo shots a single gets. */
+  veoShots: number;
   /** Public, listed and owned, so the genre stations are on the guide. */
   publish: boolean;
   /** Songs made at the same time (ElevenLabs takes several requests at once on a paid plan). */
@@ -378,6 +382,8 @@ export const DEFAULTS: Omit<LabelSettings, "pausedReason"> = {
   songSeconds: 150,
   publish: true,
   videos: true,
+  veo: false,
+  veoShots: 4,
   parallel: 1,
   genreOrder: ["Punk", "Blues", "Country", "Jazz", "Classic Rock", "Metal", "Hip-Hop", "Pop", "R&B"],
 };
@@ -617,6 +623,35 @@ export async function writeStoryboard(
   return prompts;
 }
 
+/** Thrown by a Veo dependency when this month's budget is spent: no more shots until next month. */
+export class VeoUnavailable extends Error {}
+
+const SHOTS = [
+  "Wide shot of the whole band performing on a stage, the crowd in the foreground",
+  "Close-up of the lead singer singing the chorus into the microphone",
+  "The camera moves across the stage between the band members as they play hard",
+  "Low-angle shot of the band at the song's climax, lights flaring behind them",
+  "Over-the-shoulder shot from behind the drums, looking out at the band and the crowd",
+  "Slow push-in on the band in a quieter moment, moody light",
+  "Handheld shot from the crowd, fans with hands up, the band lit on stage",
+  "The band walking out on stage before the show, backlit silhouettes turning into faces",
+];
+
+/**
+ * The prompts for a single's filmed shots. The people are the reference
+ * images, described by role and look only: Veo refuses names with faces
+ * ("we can't create videos with real people's names or likenesses").
+ */
+export function veoPrompts(artist: Pick<LabelArtist, "genre" | "sound">, song: Pick<LabelSong, "style">, members: Array<Pick<Member, "role" | "look">>, count: number): string[] {
+  const cast = members.slice(0, 3).map((one, i) => `the ${one.role} from reference image ${i + 1} (${one.look.replace(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, "")})`).join("; ");
+  return SHOTS.slice(0, count).map((shot) => [
+    `Music video for a fictional ${artist.genre} band. ${shot}.`,
+    cast ? `The performers are exactly the people in the reference images: ${cast}.` : "",
+    `Mood and sound: ${song.style} ${artist.sound}.`.slice(0, 400),
+    "Cinematic, 35mm film look, dynamic camera. No text, no logos.",
+  ].filter(Boolean).join(" "));
+}
+
 /** The DejaVu bold face most Linux boxes have, for the title card; "" when there is none. */
 function titleFont(): string {
   for (const file of ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"]) {
@@ -640,10 +675,21 @@ function runLow(ffmpeg: string[], args: string[], timeout: number, what: string)
  * the artist and title come up at the start, and the MP3's audio and tags
  * (title, artist, album, words) are copied in. 720p H.264.
  */
-export function renderStoryVideo(ffmpeg: string[], input: { audio: string; images: string[]; seconds: number; artist: string; title: string; out: string }): Promise<void> {
+export function renderStoryVideo(ffmpeg: string[], input: { audio: string; images: string[]; seconds: number; artist: string; title: string; out: string; clips?: Array<{ path: string; seconds: number }> }): Promise<void> {
   const fade = 1;
-  const count = input.images.length;
-  const each = input.seconds / count + fade;
+  const clips = input.clips ?? [];
+  // Stills fill what the filmed shots do not; each gets at least 3 s, so on a short song some are left out.
+  let images = [...input.images];
+  const clipTime = clips.reduce((sum, one) => sum + one.seconds, 0);
+  const stillFor = (count: number): number => (input.seconds + (count + clips.length - 1) * fade - clipTime) / Math.max(1, count);
+  while (images.length > 0 && stillFor(images.length) < 3) images = images.slice(0, -1);
+  const each = images.length ? stillFor(images.length) : 0;
+  // A still, then a filmed shot, in turn; whatever is left of either at the end.
+  const order: Array<{ kind: "image"; path: string } | { kind: "clip"; path: string; seconds: number }> = [];
+  for (let i = 0; i < Math.max(images.length, clips.length); i++) {
+    if (images[i]) order.push({ kind: "image", path: images[i]! });
+    if (clips[i]) order.push({ kind: "clip", ...clips[i]! });
+  }
   const frames = Math.max(25, Math.round(each * 25));
   const moves = [
     `z='1+0.15*on/${frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`,
@@ -652,12 +698,25 @@ export function renderStoryVideo(ffmpeg: string[], input: { audio: string; image
     `z='1.15':x='(iw-iw/zoom)*(1-on/${frames})':y='(ih-ih/zoom)*on/${frames}'`,
   ];
   const parts: string[] = [];
-  input.images.forEach((_, i) => {
-    parts.push(`[${i}:v]scale=1600:900:force_original_aspect_ratio=increase,crop=1600:900,zoompan=${moves[i % moves.length]}:d=1:s=1280x720:fps=25,setsar=1[v${i}]`);
+  const lengths: number[] = [];
+  let still = 0;
+  order.forEach((item, i) => {
+    if (item.kind === "image") {
+      parts.push(`[${i}:v]scale=1600:900:force_original_aspect_ratio=increase,crop=1600:900,zoompan=${moves[still++ % moves.length]}:d=1:s=1280x720:fps=25,setsar=1[v${i}]`);
+      lengths.push(each);
+    } else {
+      // A filmed shot plays as it was filmed; the last one holds its final frame if the song runs on.
+      const hold = i === order.length - 1 ? `,tpad=stop_mode=clone:stop_duration=${Math.max(0, input.seconds).toFixed(2)}` : "";
+      parts.push(`[${i}:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=25,setsar=1,trim=duration=${item.seconds},setpts=PTS-STARTPTS${hold}[v${i}]`);
+      lengths.push(item.seconds);
+    }
   });
+  const count = order.length;
   let last = "v0";
+  let at = 0;
   for (let i = 1; i < count; i++) {
-    parts.push(`[${last}][v${i}]xfade=transition=fade:duration=${fade}:offset=${(i * (each - fade)).toFixed(2)}[x${i}]`);
+    at += lengths[i - 1]! - fade;
+    parts.push(`[${last}][v${i}]xfade=transition=fade:duration=${fade}:offset=${at.toFixed(2)}[x${i}]`);
     last = `x${i}`;
   }
   const font = titleFont();
@@ -666,7 +725,7 @@ export function renderStoryVideo(ffmpeg: string[], input: { audio: string; image
     ? `[${last}]drawtext=fontfile=${font}:text='${card}':fontcolor=white:fontsize=44:x=60:y=h-110:enable='between(t,0.5,6)':alpha='if(lt(t,1.5),t-0.5,if(gt(t,5),6-t,1))':shadowcolor=black@0.7:shadowx=2:shadowy=2,format=yuv420p[v]`
     : `[${last}]format=yuv420p[v]`);
   const args = ["-hide_banner", "-loglevel", "error", "-y", "-threads", "2",
-    ...input.images.flatMap((image) => ["-loop", "1", "-t", each.toFixed(2), "-i", image]),
+    ...order.flatMap((item) => (item.kind === "image" ? ["-loop", "1", "-t", each.toFixed(2), "-i", item.path] : ["-i", item.path])),
     "-i", input.audio, "-filter_complex", parts.join(";"),
     "-map", "[v]", "-map", `${count}:a`, "-map_metadata", String(count), "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-r", "25", "-c:a", "copy", "-shortest",
     "-movflags", "+faststart+use_metadata_tags", input.out];
@@ -758,8 +817,10 @@ export interface AiLabelDeps {
   video?: (audio: string, cover: string, out: string) => Promise<void>;
   /** Times each sung word in a recording; ElevenLabs forced alignment by default, null without a key. */
   align?: ((audio: string, text: string) => Promise<TimedWord[]>) | null;
+  /** A filmed shot (Veo, through nixamp.com): the MP4, or a VeoUnavailable when the month's budget is spent. */
+  veo?: ((input: { prompt: string; seconds: number; references: Buffer[] }) => Promise<Buffer>) | null;
   /** Renders a storyboard music video; ffmpeg by default (renderStoryVideo). */
-  storyVideo?: (input: { audio: string; images: string[]; seconds: number; artist: string; title: string; out: string }) => Promise<void>;
+  storyVideo?: (input: { audio: string; images: string[]; seconds: number; artist: string; title: string; out: string; clips?: Array<{ path: string; seconds: number }> }) => Promise<void>;
   /** A scene's picture for this prompt, or null when nothing can draw one; Workers AI by default. */
   image?: (prompt: string) => Promise<Buffer | null>;
   /** Tells the world an album landed (nixamp.com tells the artist's followers); never awaited. */
@@ -789,6 +850,8 @@ export class AiLabel {
   private videoFailed = new Set<string>();
   /** Songs whose words were already sent to the aligner since this server started. */
   private alignTried = new Set<string>();
+  /** The month ("YYYY-MM") Veo said its budget was spent; no more shots until the next. */
+  private veoSpentIn = "";
   /** Old videos already tried as storyboards since this server started. */
   private upgradeTried = new Set<string>();
   /** The day's album is tried at most every 30 minutes, so a failing model is not hammered. */
@@ -937,6 +1000,9 @@ export class AiLabel {
     if (input["enabled"] !== undefined) this.settings.enabled = input["enabled"] !== false;
     if (input["publish"] !== undefined) this.settings.publish = input["publish"] !== false;
     if (input["videos"] !== undefined) this.settings.videos = input["videos"] !== false;
+    if (input["veo"] !== undefined) this.settings.veo = input["veo"] === true;
+    const shots = whole("veoShots", 1, 8);
+    if (shots !== undefined) this.settings.veoShots = shots;
     const perDay = whole("albumsPerDay", 0, 24);
     if (perDay !== undefined) this.settings.albumsPerDay = perDay;
     if (input["newArtistChance"] !== undefined) {
@@ -1114,7 +1180,7 @@ export class AiLabel {
       .flatMap((album) => album.songs.filter((song) => song.file && !this.videoFailed.has(song.file)).map((song) => ({ artist, album, song }))));
     const missing = songs.filter(({ song }) => !song.video);
     const untagged = songs.filter(({ song }) => song.video && !song.videoTagged);
-    const old = songs.filter(({ song }) => song.video && song.videoTagged && (song.videoVersion ?? 1) < 2 && !this.upgradeTried.has(song.file));
+    const old = songs.filter(({ song }) => song.video && song.videoTagged && ((song.videoVersion ?? 1) < 2 || (this.wantsVeo(song) && (song.videoVersion ?? 1) < 3)) && !this.upgradeTried.has(song.file));
     let made = 0;
     for (const { album, song } of untagged) {
       if (!this.settings.videos) break;
@@ -1192,13 +1258,63 @@ export class AiLabel {
         this.log(`no storyboard for "${song.title}" (${(error as Error).message}); the cover video instead`);
       }
     }
-    if (images.length >= 2) {
-      await (this.deps.storyVideo ?? ((input) => renderStoryVideo(this.deps.ffmpeg, input)))({ audio: song.file, images, seconds, artist: artist.name, title: song.title, out });
-      return 2;
+    // An album's single gets filmed shots of the band too, while the month's Veo budget lasts.
+    const clips = this.wantsVeo(song) ? await this.filmShots(artist, song, scenes) : [];
+    if (images.length >= 2 || clips.length > 0) {
+      if (storyOnly && (song.videoVersion ?? 1) >= 2 && clips.length === 0) throw new Error("no filmed shots this time; the video it has stays");
+      await (this.deps.storyVideo ?? ((input) => renderStoryVideo(this.deps.ffmpeg, input)))({ audio: song.file, images, seconds, artist: artist.name, title: song.title, out, ...(clips.length ? { clips } : {}) });
+      return clips.length ? 3 : 2;
     }
     if (storyOnly) throw new Error("no storyboard could be drawn; the video it has stays");
     await (this.deps.video ?? ((audio, cover, to) => renderVideo(this.deps.ffmpeg, audio, cover, to)))(song.file, album.cover, out);
     return 1;
+  }
+
+  /** Whether this song gets filmed Veo shots: an album's single, Veo on, and the month's budget not spent. */
+  private wantsVeo(song: Pick<LabelSong, "n">): boolean {
+    return this.settings.veo && song.n === 1 && Boolean(this.deps.veo) && this.veoSpentIn !== new Date(this.now()).toISOString().slice(0, 7);
+  }
+
+  /**
+   * A single's filmed shots: the band, from their portraits (up to three as
+   * Veo's reference images), on stage, in the song's mood. Stops for the
+   * month when the budget is spent; a shot Veo will not make is skipped.
+   */
+  private async filmShots(artist: LabelArtist, song: LabelSong, dir: string): Promise<Array<{ path: string; seconds: number }>> {
+    const veo = this.deps.veo;
+    if (!veo) return [];
+    mkdirSync(dir, { recursive: true });
+    const members = this.cast(artist);
+    const references: Buffer[] = [];
+    for (const member of members.slice(0, 3)) {
+      const portrait = join(this.folderOf(artist), "members", `${member.slug}.jpg`);
+      const small = join(dir, `ref-${member.slug}.jpg`);
+      try {
+        // 512 px is plenty for a face and keeps the request small.
+        await runLow(this.deps.ffmpeg, [...this.deps.ffmpeg.slice(1), "-hide_banner", "-loglevel", "error", "-y", "-i", portrait, "-vf", "scale=512:-2", "-q:v", "4", small], 60_000, "the portrait did not shrink");
+        references.push(readFileSync(small));
+      } catch {
+        // A member without a portrait is described in words only.
+      }
+    }
+    const clips: Array<{ path: string; seconds: number }> = [];
+    for (const [i, prompt] of veoPrompts(artist, song, members, this.settings.veoShots).entries()) {
+      try {
+        const bytes = await veo({ prompt, seconds: 8, references });
+        const file = join(dir, `shot-${i}.mp4`);
+        writeFileSync(file, bytes);
+        clips.push({ path: file, seconds: 8 });
+      } catch (error) {
+        if (error instanceof VeoUnavailable) {
+          this.veoSpentIn = new Date(this.now()).toISOString().slice(0, 7);
+          this.log(`Veo: ${(error as Error).message}; singles get the storyboard until next month`);
+          break;
+        }
+        this.log(`Veo shot ${i + 1} for "${song.title}": ${(error as Error).message}`);
+      }
+    }
+    if (clips.length) this.log(`Veo: ${clips.length} filmed shots for "${song.title}" (${artist.name})`);
+    return clips;
   }
 
   /** The label's music videos as one TV station: free to watch, with its breaks. */
