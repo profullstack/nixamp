@@ -423,6 +423,36 @@ export function shuffled(length: number, random: () => number = Math.random): nu
 }
 
 /**
+ * A radio shuffle: the whole list in a random order, with no artist twice in
+ * a row while another is left to play. A plain shuffle of a genre where a few
+ * artists have whole albums kept playing one artist in series. Each pick is
+ * an artist drawn by how many of their tracks are left, so the spread stays
+ * even to the end, then one of that artist's tracks at random.
+ */
+export function spreadByArtist(files: readonly string[], artistOf: (file: string) => string, random: () => number = Math.random): number[] {
+  const groups = new Map<string, number[]>();
+  files.forEach((file, index) => {
+    const key = artistOf(file).trim().toLowerCase();
+    const group = groups.get(key);
+    if (group) group.push(index); else groups.set(key, [index]);
+  });
+  const left = [...groups.entries()].map(([key, indexes]) => ({ key, indexes: shuffled(indexes.length, random).map((one) => indexes[one]!) }));
+  const order: number[] = [];
+  let last = "";
+  let total = files.length;
+  while (total > 0) {
+    const others = left.filter((one) => one.indexes.length > 0 && one.key !== last);
+    const pool = others.length > 0 ? others : left.filter((one) => one.indexes.length > 0);
+    let pick = random() * pool.reduce((sum, one) => sum + one.indexes.length, 0);
+    const group = pool.find((one) => (pick -= one.indexes.length) < 0) ?? pool[pool.length - 1]!;
+    order.push(group.indexes.pop()!);
+    last = group.key;
+    total -= 1;
+  }
+  return order;
+}
+
+/**
  * Restart after an unexpected end: 2 s, doubling, at most a minute apart.
  * After the last of these the station is offline but still wanted, and is
  * tried again every OFFLINE_RETRY_MS so a source that comes back is found.

@@ -22,7 +22,7 @@ export interface PlaylistInput {
    * pass: a station-wide shuffle is one order for everybody listening, drawn
    * again each time round. Unset is the list's own order.
    */
-  order?: (length: number) => number[];
+  order?: (length: number, files: readonly string[]) => number[];
   /** Read at every entry boundary, so an edit to the list lands on the next track. */
   current?: () => string[];
   /** Entries already known not to play, passed over without being tried. */
@@ -107,7 +107,7 @@ export class PlaylistInputStream {
     let first = true;
     try {
       const orderFor = (list: string[]): number[] =>
-        o.order ? o.order(list.length).filter((one) => one >= 0 && one < list.length) : list.map((_, index) => index);
+        o.order ? o.order(list.length, list).filter((one) => one >= 0 && one < list.length) : list.map((_, index) => index);
       let files = o.current?.() ?? o.files;
       if (files.length === 0) throw new Error("The playlist is empty");
       let order = orderFor(files);

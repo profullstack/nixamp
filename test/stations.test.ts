@@ -10,7 +10,8 @@ import { emptySnapshot } from "../src/protocol.ts";
 import { createServer, pullChannel, type Engine } from "../src/server.ts";
 import { StationRunner } from "../src/station-runner.ts";
 import { station as stationCli } from "../src/station-cli.ts";
-import { StationError, StationStore, channelOf, insideRoots, shuffled } from "../src/stations.ts";
+import { StationError, StationStore, channelOf, insideRoots, shuffled, spreadByArtist } from "../src/stations.ts";
+import { artistFromPath } from "../src/station-runner.ts";
 import { StationUsage } from "../src/station-metering.ts";
 
 const available = spawnSync("ffmpeg", ["-version"]).status === 0 && spawnSync("ffprobe", ["-version"]).status === 0;
@@ -103,6 +104,31 @@ test("shuffle is one order, a permutation", () => {
   const order = shuffled(50, random);
   assert.deepEqual([...order].sort((a, b) => a - b), [...Array(50).keys()]);
   assert.notDeepEqual(order, [...Array(50).keys()]);
+});
+
+test("a radio shuffle never plays one artist twice in a row while another is left", () => {
+  let seed = 7;
+  const random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  // One artist with a whole discography and four with an album each.
+  const files = [
+    ...Array.from({ length: 20 }, (_, i) => `Dropkick Murphys/${i}.mp3`),
+    ...["Bad Religion", "Rancid", "NOFX", "Misfits"].flatMap((artist) => Array.from({ length: 5 }, (_, i) => `${artist}/${i}.mp3`)),
+  ];
+  const artist = (file: string) => file.split("/")[0]!;
+  for (let pass = 0; pass < 20; pass++) {
+    const order = spreadByArtist(files, artist, random);
+    assert.deepEqual([...order].sort((a, b) => a - b), [...Array(files.length).keys()]);
+    for (let i = 1; i < order.length; i++) {
+      const same = artist(files[order[i]!]!) === artist(files[order[i - 1]!]!);
+      // Allowed only when nothing else is left.
+      if (same) assert.ok(order.slice(i).every((one) => artist(files[one]!) === artist(files[order[i]!]!)), `pass ${pass}: repeat at ${i}`);
+    }
+  }
+});
+
+test("a file's artist from its folders when the tags do not say", () => {
+  assert.equal(artistFromPath("/m/Bad Religion - The Dissent Of Man/01. Meeting.mp3"), "Bad Religion");
+  assert.equal(artistFromPath("/m/ai/punk/The Bent Spokes/2026-Rebel Wheels/006. Never Grow Old.mp3"), "The Bent Spokes");
 });
 
 test("stations over HTTP: owner manages, a link only listens, private means private", { skip: !available, timeout: 120_000 }, async () => {
