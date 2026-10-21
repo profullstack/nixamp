@@ -351,7 +351,8 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     tlsCert: process.env["NIXAMP_TLS_CERT"] ?? "",
     tlsKey: process.env["NIXAMP_TLS_KEY"] ?? "",
     x402: false,
-    owner: "",
+    // The account that administers this server, for one with no key but accounts (nixamp.com).
+    owner: process.env["NIXAMP_OWNER"] ?? "",
     ingest: false,
     rtmpIn: 0,
     rtmpStreams: 3,
@@ -2031,6 +2032,10 @@ export interface HandlerOptions {
 export function createHandler(engine: Engine, options: HandlerOptions) {
   // One per server, so the counters survive between requests and die with it.
   const guard = new Guard();
+  // --no-key opens a server to whoever reaches it, unless it has an owner: then
+  // anyone may listen and only the owner (or the control key) administers.
+  // nixamp.com is that server; without this every visitor was its admin.
+  const openToAll = (key: string | null): boolean => key === null && !options.owner?.claimed;
   // nixamp.com's /download asks GitHub which release is latest; one answer per ten minutes.
   const release = latestRelease();
 
@@ -2190,7 +2195,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
             cors: CORS,
             watch: (incoming, outgoing, track) => watch(incoming, outgoing, "stream", track),
             controls: async () => {
-              if (key === null) return true;
+              if (openToAll(key)) return true;
               if (scopeOf(keyFrom(request, url), key, null) === "control") return true;
               if (options.owner) return (await options.owner.check(false, tokenFrom(request.headers))).allowed;
               return false;
@@ -2940,7 +2945,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // or the owner's nixamp.com session. Asked by the routes that do not go
     // through the admin gate further down.
     const controlOf = async (): Promise<{ allowed: boolean; account: string }> => {
-      if (key === null) return { allowed: true, account: "" };
+      if (openToAll(key)) return { allowed: true, account: "" };
       if (scopeOf(keyFrom(request, url), key, listenKey) === "control") return { allowed: true, account: "" };
       if (options.owner) {
         const session = tokenFrom(request.headers) || url.searchParams.get("session") || "";
@@ -5239,11 +5244,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       eventChannelRequest,
     );
     if (options.owner && needsAdmin(path, request.method ?? "GET") && !eventMediaOperation) {
-      // A server started with --no-key has said that anyone who can reach the
-      // port may drive it, and prints exactly that. Locking administration to
-      // nobody would contradict it and leave such a server unadministrable.
+      // A server started with --no-key and no owner has said that anyone who
+      // can reach the port may drive it, and prints exactly that. With an owner
+      // (nixamp.com), --no-key only means anyone may listen: the owner drives.
       const holdsControl =
-        key === null || scopeOf(keyFrom(request, url), key, null) === "control";
+        openToAll(key) || scopeOf(keyFrom(request, url), key, null) === "control";
       // A session in the query as well as in a header or a cookie: from
       // nixamp.com's page a server is another origin, and the cookie stays
       // home, so the session travels the way the key does.
@@ -5401,7 +5406,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       if (path === "/api/catalogs" && request.method === "GET") {
         // Where a list is read from is the administrator's business, not a
         // listener's: it can carry a provider's credentials in the URL.
-        const holdsControl = key === null || scopeOf(keyFrom(request, url), key, null) === "control";
+        const holdsControl = openToAll(key) || scopeOf(keyFrom(request, url), key, null) === "control";
         const admin = options.owner
           ? (await options.owner.check(holdsControl, tokenFrom(request.headers))).allowed
           : holdsControl;
@@ -8922,7 +8927,9 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   }
 
   console.log("");
-  if (key === null) {
+  if (key === null && owner.claimed) {
+    console.log("  No key: anyone who can reach this port can hear it; only its owner can drive it.");
+  } else if (key === null) {
     console.log("  No key: anyone who can reach this port can drive it and hear it.");
   } else {
     console.log("  Open that link once on a phone or a laptop and it stays signed in.");
