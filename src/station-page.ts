@@ -42,10 +42,12 @@ a:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 
 const SCRIPT = `
 (() => {
+  // /radio/<name> is the same station through a public name: its own paths, no token in sight.
+  const radio = /^\/radio\/[a-z0-9-]+\/?$/.test(location.pathname);
   const id = location.pathname.split("/").filter(Boolean)[1] || "";
   const token = new URLSearchParams(location.search).get("t") || "";
-  const q = "?t=" + encodeURIComponent(token);
-  const api = "/api/v1/stations/" + encodeURIComponent(id);
+  const q = radio ? "" : "?t=" + encodeURIComponent(token);
+  const api = radio ? location.pathname.replace(/\/+$/, "") : "/api/v1/stations/" + encodeURIComponent(id);
   const $ = (s) => document.querySelector(s);
   // No media element here: every player in the fleet is @profullstack/player,
   // and this page has no bundle to carry it. Play hands the station to the

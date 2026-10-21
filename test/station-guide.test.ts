@@ -54,7 +54,8 @@ test("the guide lists only what its owner made public and listed", async () => {
     // Rendered in, so it reads through a gateway that cannot run the script; escaped.
     assert.match(front.body, /Public FM &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
     assert.doesNotMatch(front.body, /<script>alert/);
-    assert.match(front.body, /href="https:\/\/server1\.example:4321\/station\//);
+    // Its shareable /radio name, not the raw link with its token (radio-pages.ts).
+    assert.match(front.body, /href="https:\/\/server1\.example:4321\/radio\/public-fm-script-alert-1-script"/);
     assert.doesNotMatch(front.body, /Unlisted FM|Private FM/);
     // Anywhere else, the front page is the server's own and still needs its key.
     assert.equal((await get(port, "/", "server1.example")).status, 401);
@@ -97,7 +98,8 @@ test("the guide lists its peers' public stations, and a peer asking gets only th
     assert.deepEqual(local.stations.map((one) => one.name), ["Server1 FM"], "no ring between two peers");
     const page = (await get(port, "/guide", "server1.example")).body;
     assert.match(page, /Server2 FM/);
-    assert.match(page, /href="https:\/\/server2\.example:4321\/station\/aaaaaaaaaa\?t=tok"/);
+    // By its /radio name here, asked of the peer by this server (radio-pages.ts).
+    assert.match(page, /href="https:\/\/server1\.example:4321\/radio\/server2-fm"/);
     assert.doesNotMatch(page, /Elsewhere/);
     assert.equal(asked.length, 1, "asked once in 15 s");
   } finally {

@@ -120,9 +120,10 @@ test("/watch/<id> sends anybody to a public station's own page, and finds nothin
   try {
     const own = await fetch(`${base}/watch/${mine.id}`, { redirect: "manual" });
     assert.equal(own.status, 302, "no key needed");
-    assert.match(own.headers.get("location") ?? "", new RegExp(`^https://s1\\.example:4321/station/${mine.id}\\?t=`));
+    assert.equal(own.headers.get("location"), "https://s1.example:4321/radio/mine", "its /radio name, no token");
     const peer = await fetch(`${base}/watch/24uy7gidfu`, { redirect: "manual" });
-    assert.equal(peer.headers.get("location"), peerPage, "a peer's station, at its own server");
+    assert.equal(peer.headers.get("location"), "https://s1.example:4321/radio/dsa", "a peer's station, by its /radio name here");
+    assert.ok(peerPage.includes("24uy7gidfu"));
     assert.equal((await fetch(`${base}/watch/${hidden.id}`, { redirect: "manual" })).status, 404, "unlisted is never found");
     assert.equal((await fetch(`${base}/watch/zzzzzzzzzz`, { redirect: "manual" })).status, 404);
   } finally {

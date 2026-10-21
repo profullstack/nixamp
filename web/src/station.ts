@@ -8,6 +8,7 @@ import { createPlayer, type PlayerHandle } from "@profullstack/player";
 import "@profullstack/player/player.css";
 import "./styles.css";
 import "./station.css";
+import { albumSlug, artistSlug } from "../../src/radio-slug.ts";
 
 interface NowPlaying { title: string; artist: string; album: string }
 interface TrackFacts {
@@ -35,10 +36,16 @@ interface StationState {
   facts?: TrackFacts | null;
 }
 
+/** /radio/<name>: the same station under a public name, its own paths, no token in the address. */
+const radio = /^\/radio\/[a-z0-9-]+\/?$/.test(location.pathname);
 const id = location.pathname.split("/").filter(Boolean)[1] ?? "";
 const token = new URLSearchParams(location.search).get("t") ?? "";
-const q = "?t=" + encodeURIComponent(token);
-const api = "/api/v1/stations/" + encodeURIComponent(id);
+const q = radio ? "" : "?t=" + encodeURIComponent(token);
+const api = radio ? location.pathname.replace(/\/+$/, "") : "/api/v1/stations/" + encodeURIComponent(id);
+/** A path with more query on it, whether or not it has one yet. */
+const more = (path: string, query: string): string => path + (path.includes("?") ? "&" : "?") + query;
+/** Where the station's own addresses may point: its routes, or its /radio name's. */
+const ours = (path: string): boolean => path.startsWith("/api/v1/stations/") || (radio && path.startsWith(api + "/"));
 const $ = <T extends HTMLElement = HTMLElement>(selector: string): T => document.querySelector<T>(selector)!;
 
 let player: PlayerHandle | null = null;
@@ -83,14 +90,27 @@ const showFacts = (f: TrackFacts | null | undefined): void => {
   if (f.rights.license) rows.push(["Licence", f.rights.license]);
   else if (f.rights.note && f.rights.source !== "holder") rows.push(["Rights", f.rights.note]);
   const list = $("#facts-list");
+  // On /radio the artist and the album are pages of their own.
+  const pageOf = (name: string): string => !radio ? ""
+    : name === "Artist" && artistSlug(f.artist) ? `/radio/artist/${artistSlug(f.artist)}`
+    : name === "Album" && f.album && albumSlug(f.artist, f.album) ? `/radio/album/${albumSlug(f.artist, f.album)}` : "";
   list.replaceChildren(...rows.flatMap(([name, value]) => {
     const dt = document.createElement("dt"); dt.textContent = name;
-    const dd = document.createElement("dd"); dd.textContent = value;
+    const dd = document.createElement("dd");
+    const href = pageOf(name);
+    if (href) {
+      const a = document.createElement("a");
+      a.href = href;
+      a.textContent = value;
+      dd.append(a);
+    } else {
+      dd.textContent = value;
+    }
     return [dt, dd];
   }));
   // The track's own cover, here and on the lock screen / media keys.
   const cover = $<HTMLImageElement>("#cover");
-  const art = typeof f.art === "string" && f.art.startsWith("/api/v1/stations/") ? f.art : "";
+  const art = typeof f.art === "string" && ours(f.art) ? f.art : "";
   cover.hidden = !art;
   if (art && cover.getAttribute("src") !== art) {
     cover.src = art;
@@ -126,7 +146,7 @@ const showFacts = (f: TrackFacts | null | undefined): void => {
     $<HTMLAnchorElement>("#buy-artist").textContent = `Everything by ${store.artistName || "them"} · $2`;
   }
   box.hidden = false;
-  void loadLyrics(typeof f.lyrics === "string" && f.lyrics.startsWith("/api/v1/stations/") ? f.lyrics : "");
+  void loadLyrics(typeof f.lyrics === "string" && ours(f.lyrics) ? f.lyrics : "");
 };
 
 /** The words, line by line as written; "[Verse 1]" and the like as small headers. Text only, never HTML. */
@@ -218,7 +238,7 @@ const mount = (autoplay: boolean): void => {
   unmount();
   const video = kind === "video";
   const current = createPlayer($("#stage"), {
-    src: api + "/stream" + q + (pass ? "&pass=" + encodeURIComponent(pass) : "") + "&n=" + Date.now(),
+    src: more(api + "/stream" + q + (pass ? (q ? "&" : "?") + "pass=" + encodeURIComponent(pass) : ""), "n=" + Date.now()),
     kind: video ? "mp4" : "audio",
     audio: !video,
     live: true,
