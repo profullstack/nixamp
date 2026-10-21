@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { LICENSE_PRICES, TERMS_VERSION, TIER_NAMES, TIER_USE, licenseTerms, type License, type MusicLicenses, type Quote, type Tier } from "./music-license.ts";
-import { SupportError } from "./support.ts";
+import { SupportError, paidIn, payUrl } from "./support.ts";
 
 const CHECK = /^\/license\/(NXL-[A-Z2-9]{4}-[A-Z2-9]{4})$/;
 const CHECK_JSON = /^\/api\/v1\/licenses\/(NXL-[A-Z2-9]{4}-[A-Z2-9]{4})$/;
@@ -74,14 +74,9 @@ const SCRIPT = `
   if (!form) return;
   const status = $("#status");
   const pay = $("#pay");
-  const label = () => { const one = form.querySelector("input[name=tier]:checked"); pay.textContent = one ? "Pay " + one.dataset.price + " with crypto" : "Pick a licence"; };
+  const label = () => { const one = form.querySelector("input[name=tier]:checked"); pay.textContent = one ? "Pay " + one.dataset.price : "Pick a licence"; };
   form.addEventListener("change", label);
   label();
-  fetch("/api/v1/store/coins").then((r) => r.json()).then((coins) => {
-    const cheap = ["USDC_POL", "USDC_SOL", "SOL", "POL", "LTC", "USDC_BASE", "USDC"];
-    const list = (coins.coins || []).slice().sort((a, b) => (cheap.indexOf(a) + 1 || 99) - (cheap.indexOf(b) + 1 || 99));
-    $("#coin").replaceChildren(...list.map((c) => Object.assign(document.createElement("option"), { value: c, textContent: c })));
-  }).catch(() => { status.textContent = "Payments are not available right now."; });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     pay.disabled = true;
@@ -90,7 +85,7 @@ const SCRIPT = `
     try {
       const r = await fetch("/api/v1/licenses/checkout", { method: "POST", headers: { "content-type": "application/json" }, credentials: "same-origin",
         body: JSON.stringify({ ...JSON.parse(document.body.dataset.item), tier: data.get("tier"), licensee: data.get("licensee"), project: data.get("project"),
-          projectUrl: data.get("projectUrl"), email: data.get("email"), coin: data.get("coin"), agree: data.get("agree") === "on" }) });
+          projectUrl: data.get("projectUrl"), email: data.get("email"), agree: data.get("agree") === "on" }) });
       const body = await r.json();
       if (!r.ok) throw new Error(body.error || "The checkout did not start.");
       status.textContent = "Taking you to CoinPay…";
@@ -181,13 +176,11 @@ export async function handleLicenseRoutes(request: IncomingMessage, response: Se
 <input id="projectUrl" name="projectUrl" type="url" maxlength="300" placeholder="https://">
 <label class="f" for="email">Email (your certificate goes here)</label>
 <input id="email" name="email" type="email" required autocomplete="email" value="${escape(me?.email ?? "")}">
-<label class="f" for="coin">Pay with</label>
-<select id="coin" name="coin" required></select>
 <label class="agree"><input type="checkbox" name="agree" required> <span>I agree to the <a href="/license/terms" target="_blank" rel="noopener">licence terms</a>, including the credit with a link to the artist's page.</span></label>
 <button id="pay" type="submit">Pay</button>
 </form>
 <p id="status" role="status" aria-live="polite"></p>
-<small>Payments go through <a href="https://coinpayportal.com">CoinPay</a> to nixamp.com. You get a certificate with a licence code that anybody can check at ${escape(ctx.site)}/license/&lt;code&gt;.</small>
+<small>Payments go through <a href="https://coinpayportal.com">CoinPay</a> to nixamp.com: pick any coin, or PayPal, on CoinPay's page. You get a certificate with a licence code that anybody can check at ${escape(ctx.site)}/license/&lt;code&gt;.</small>
 </div>`, { data: JSON.stringify({ kind: quote.kind, ...(quote.kind === "catalog" ? {} : { server: ctx.serverId(quote.server), artist: quote.artist, album: quote.album, n: quote.n }) }) }), method);
       return true;
     }
@@ -214,9 +207,9 @@ export async function handleLicenseRoutes(request: IncomingMessage, response: Se
       }
       const body = license.status === "paid"
         ? certificate(license, ctx, true)
-        : `<div class="card"><h1>${escape(TIER_NAMES[license.tier])} licence ${escape(license.code)}</h1><p class="by">${escape(license.title)} · ${price(license.amountCents)} in ${escape(license.coin)}</p>
+        : `<div class="card"><h1>${escape(TIER_NAMES[license.tier])} licence ${escape(license.code)}</h1><p class="by">${escape(license.title)} · ${price(license.amountCents)}${escape(paidIn(license.coin))}</p>
 <p>Waiting for your payment. Once CoinPay confirms it, your certificate is here and in your email (${escape(license.email)}). This page checks again when you reload it.</p>
-<a class="go" href="https://coinpayportal.com/pay/${escape(license.paymentId)}">Open the payment</a></div>`;
+<a class="go" href="${escape(payUrl(license.paymentId))}">Open the payment</a></div>`;
       html(response, 200, page(`Licence ${license.code}`, body), method);
       return true;
     }

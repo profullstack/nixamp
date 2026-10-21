@@ -17,7 +17,7 @@
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Db, Support } from "./support.ts";
-import { SupportError } from "./support.ts";
+import { SupportError, coinOf } from "./support.ts";
 import type { MusicStore } from "./music-store.ts";
 
 export type Tier = "creator" | "indie" | "commercial" | "catalog";
@@ -203,7 +203,8 @@ export class MusicLicenses {
     const code = newCode();
     const checkout = await this.options.support.pay({
       amountUsd: quote.amountCents / 100,
-      coin: input["coin"],
+      email,
+      accountId: account?.id || email,
       order: `license-${id}`,
       description: `${TIER_NAMES[quote.tier]} licence: ${quote.title}${quote.kind === "catalog" ? ", one year" : ` by ${quote.artistName}`} for ${project}`,
       metadata: { product: "music-license", license: id, tier: quote.tier, kind: quote.kind },
@@ -213,7 +214,7 @@ export class MusicLicenses {
       title, artist_name, credit_url, amount_cents, coin, payment_id, terms, created_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
     [id, code, token, email, account?.id ?? "", licensee, project, httpsUrl(input["projectUrl"]), quote.tier, quote.kind, quote.server, quote.artist, quote.album, quote.n,
-      quote.title, quote.artistName, quote.creditUrl, quote.amountCents, String(input["coin"]).toUpperCase(), checkout.paymentId, TERMS_VERSION, new Date(this.now())]);
+      quote.title, quote.artistName, quote.creditUrl, quote.amountCents, coinOf(input["coin"]), checkout.paymentId, TERMS_VERSION, new Date(this.now())]);
     return { url: checkout.url, id, token, code };
   }
 

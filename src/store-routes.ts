@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PRICES, type MusicStore } from "./music-store.ts";
 import { serverId } from "./music-hub.ts";
-import { SupportError } from "./support.ts";
+import { SupportError, paidIn, payUrl } from "./support.ts";
 
 const PURCHASE = /^\/purchases\/([0-9a-f-]{36})$/;
 const ONE = /^\/api\/v1\/store\/purchases\/([0-9a-f-]{36})$/;
@@ -61,12 +61,6 @@ const BUY_SCRIPT = `
 (async () => {
   const $ = (s) => document.querySelector(s);
   const status = $("#status");
-  try {
-    const coins = await (await fetch("/api/v1/store/coins")).json();
-    const cheap = ["USDC_POL", "USDC_SOL", "SOL", "POL", "LTC", "USDC_BASE", "USDC"];
-    const list = (coins.coins || []).slice().sort((a, b) => (cheap.indexOf(a) + 1 || 99) - (cheap.indexOf(b) + 1 || 99));
-    $("#coin").replaceChildren(...list.map((c) => Object.assign(document.createElement("option"), { value: c, textContent: c })));
-  } catch { status.textContent = "Payments are not available right now."; }
   $("#buy").addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = $("#pay");
@@ -75,7 +69,7 @@ const BUY_SCRIPT = `
     const form = new FormData(event.currentTarget);
     try {
       const r = await fetch("/api/v1/store/checkout", { method: "POST", headers: { "content-type": "application/json" }, credentials: "same-origin",
-        body: JSON.stringify({ ...JSON.parse(document.body.dataset.item), email: form.get("email"), coin: form.get("coin") }) });
+        body: JSON.stringify({ ...JSON.parse(document.body.dataset.item), email: form.get("email") }) });
       const body = await r.json();
       if (!r.ok) throw new Error(body.error || "The checkout did not start.");
       status.textContent = "Taking you to CoinPay…";
@@ -128,12 +122,10 @@ export async function handleStoreRoutes(request: IncomingMessage, response: Serv
 <form id="buy">
 <label for="email">Email (your download link goes here)</label>
 <input id="email" name="email" type="email" required autocomplete="email" value="${escape(me?.email ?? "")}">
-<label for="coin">Pay with</label>
-<select id="coin" name="coin" required></select>
-<button id="pay" type="submit">Pay ${price(item.amountCents)} with crypto</button>
+<button id="pay" type="submit">Pay ${price(item.amountCents)}</button>
 </form>
 <p id="status" role="status" aria-live="polite"></p>
-<small>Payments go through <a href="https://coinpayportal.com">CoinPay</a> to nixamp.com. For small amounts pick a coin with low fees (USDC on Polygon or Solana, SOL, LTC). Listening on the live stations is always free.${me ? "" : ` <a href="/?redirect=${encodeURIComponent("/music/me")}#account-panel">Sign in</a> with the same email to keep everything under My music.`}</small>
+<small>Payments go through <a href="https://coinpayportal.com">CoinPay</a> to nixamp.com: pick any coin, or PayPal, on CoinPay's page. For small amounts a coin with low fees (USDC on Polygon or Solana, SOL) or PayPal costs least. Listening on the live stations is always free.${me ? "" : ` <a href="/?redirect=${encodeURIComponent("/music/me")}#account-panel">Sign in</a> with the same email to keep everything under My music.`}</small>
 </div>`, JSON.stringify({ server: serverId(item.server), kind: item.kind, artist: item.artist, album: item.album, n: item.n })), method);
       return true;
     }
@@ -148,9 +140,9 @@ export async function handleStoreRoutes(request: IncomingMessage, response: Serv
         ? `<div class="card"><h1>${escape(purchase.title)}</h1><p class="by">${escape(purchase.artistName)} · paid ${price(purchase.amountCents)}</p>
 <a class="go" href="${escape(store.zipUrl(purchase))}" download>Download the zip</a>
 <small>MP3s with the cover art and lyrics, plus each song's .lyrics.txt, cover.jpg and album.json. Keep this page's address (it is in your email too) to download again. Signed in to nixamp.com as ${escape(purchase.email)}, everything you bought is under <a href="/music/me">My music</a>, to play or download.</small></div>`
-        : `<div class="card"><h1>${escape(purchase.title)}</h1><p class="by">${escape(purchase.artistName)} · ${price(purchase.amountCents)} in ${escape(purchase.coin)}</p>
+        : `<div class="card"><h1>${escape(purchase.title)}</h1><p class="by">${escape(purchase.artistName)} · ${price(purchase.amountCents)}${escape(paidIn(purchase.coin))}</p>
 <p>Waiting for your payment. Once CoinPay confirms it, your download is here and in your email (${escape(purchase.email)}). This page checks again when you reload it.</p>
-<a class="go" href="https://coinpayportal.com/pay/${escape(purchase.paymentId)}">Open the payment</a></div>`;
+<a class="go" href="${escape(payUrl(purchase.paymentId))}">Open the payment</a></div>`;
       html(response, 200, page(purchase.title, body), method);
       return true;
     }

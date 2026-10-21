@@ -17,7 +17,7 @@
  */
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Db, Support } from "./support.ts";
-import { SupportError } from "./support.ts";
+import { SupportError, coinOf } from "./support.ts";
 
 export type Kind = "song" | "album" | "artist";
 
@@ -225,7 +225,8 @@ export class MusicStore {
     const token = randomUUID().replace(/-/g, "");
     const checkout = await this.options.support.pay({
       amountUsd: item.amountCents / 100,
-      coin: input["coin"],
+      email,
+      accountId: account?.id || email,
       order: `music-${id}`,
       description: `${item.title} by ${item.artistName} (${item.kind === "song" ? "song" : item.kind === "album" ? "album" : "every album"}, MP3)`,
       metadata: { product: "music", purchase: id, kind: item.kind },
@@ -233,7 +234,7 @@ export class MusicStore {
     });
     await this.options.db.query(`INSERT INTO music_purchases (id, token, email, user_id, server, kind, artist, album, n, title, artist_name, amount_cents, coin, payment_id, created_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-    [id, token, email, account?.id ?? "", item.server, item.kind, item.artist, item.album, item.n, item.title, item.artistName, item.amountCents, String(input["coin"]).toUpperCase(), checkout.paymentId, new Date(this.now())]);
+    [id, token, email, account?.id ?? "", item.server, item.kind, item.artist, item.album, item.n, item.title, item.artistName, item.amountCents, coinOf(input["coin"]), checkout.paymentId, new Date(this.now())]);
     return { url: checkout.url, id, token };
   }
 

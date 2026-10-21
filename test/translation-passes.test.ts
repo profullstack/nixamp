@@ -123,9 +123,15 @@ test("CoinPay webhooks: signature over the raw body, nested payload, own key bef
   assert.equal(verifyCoinpaySignature(raw, undefined, "whsec"), false);
   assert.equal(verifyCoinpaySignature(raw, "t=1,v1=zz", "whsec"), false);
   // The top-level id is the EVENT; the payment is under data.
-  assert.deepEqual(readCoinpayWebhook(JSON.parse(raw)), { type: "payment.forwarded", paymentId: id, status: "forwarded" });
-  assert.deepEqual(readCoinpayWebhook({ id, status: "CONFIRMED" }), { type: "", paymentId: id, status: "confirmed" }, "older flat test sender");
-  assert.deepEqual(readCoinpayWebhook(null), { type: "", paymentId: "", status: "" });
+  const pick = (event: ReturnType<typeof readCoinpayWebhook>) => ({ type: event.type, paymentId: event.paymentId, status: event.status, sessionId: event.sessionId });
+  assert.deepEqual(pick(readCoinpayWebhook(JSON.parse(raw))), { type: "payment.forwarded", paymentId: id, status: "forwarded", sessionId: "" });
+  assert.deepEqual(pick(readCoinpayWebhook({ id, status: "CONFIRMED" })), { type: "", paymentId: id, status: "confirmed", sessionId: "" }, "older flat test sender");
+  assert.deepEqual(pick(readCoinpayWebhook(null)), { type: "", paymentId: "", status: "", sessionId: "" });
+  // A hosted checkout session's payment carries its session and payer.
+  const session = readCoinpayWebhook({ id: "evt_y", type: "payment.confirmed", data: { payment_id: id, status: "confirmed", checkout_session_id: "cs_AbCdEfGhIjKlMnOpQrStUvWx",
+    customer_email: "a@b.co", account_id: "u1", property: "nixamp.com", metadata: { app: "nixamp" } } });
+  assert.deepEqual({ ...pick(session), email: session.customerEmail, account: session.accountId, property: session.property },
+    { type: "payment.confirmed", paymentId: id, status: "confirmed", sessionId: "cs_AbCdEfGhIjKlMnOpQrStUvWx", email: "a@b.co", account: "u1", property: "nixamp.com" });
   assert.equal(coinpayKeyFrom({ COINPAY_API_KEY: "own", COINPAY_X402_KEY: "fleet" }), "own");
   assert.equal(coinpayKeyFrom({ COINPAY_X402_KEY: "fleet" }), "fleet");
   assert.equal(coinpayKeyFrom({}), "");

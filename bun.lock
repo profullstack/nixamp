@@ -7,7 +7,7 @@
       "dependencies": {
         "@profullstack/auth-system": "^0.8.3",
         "@profullstack/hqtui": "^0.5.0",
-        "@profullstack/live-translate": "^0.1.0",
+        "@profullstack/live-translate": "^0.3.0",
         "@profullstack/notifications": "^0.1.0",
         "@profullstack/synconfig": "^0.1.2",
         "@profullstack/throttle": "^0.3.3",
@@ -204,7 +204,7 @@
 
     "@profullstack/keys": ["@profullstack/keys@0.1.0", "", {}, "sha512-Vys47LvS5ivhdZu4SYOxh9Le3DEmWhjP0+CtrU45RhXAbY0ZFG/2Dk9V1bIIUGDp8UWMJqctvUD21JrNjfh04w=="],
 
-    "@profullstack/live-translate": ["@profullstack/live-translate@0.1.0", "", {}, "sha512-YtVpidlulBUKnTprLDeW6A0a0fLzgw6ADnDEPpfjje+twGVs6eqJj9TcVS9zbf08MufmA4k7cwMevAL7Zvck3A=="],
+    "@profullstack/live-translate": ["@profullstack/live-translate@0.3.0", "", {}, "sha512-oHMTin4LOOfmSpj+5gjRAMU6wK3j4kY8fOu9rDEowZxD6L4/7AqWRrns/pGySzjXDZfGF+nIFSRuItkZHvehrg=="],
 
     "@profullstack/long-string-scroller": ["@profullstack/long-string-scroller@workspace:packages/long-string-scroller"],
 

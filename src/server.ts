@@ -2726,10 +2726,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
       let event: ReturnType<typeof readCoinpayWebhook>;
       try { event = readCoinpayWebhook(JSON.parse(raw)); } catch { json(response, 400, { error: "invalid JSON" }); return; }
+      // A hosted checkout session's payment names its session; the purchase
+      // row holds the session id (cs_...), an older one the payment id.
+      const refs = [event.sessionId, event.paymentId].filter(Boolean);
       if (options.musicStore) {
         try {
-          if (await options.musicStore.owns(event.paymentId)) { json(response, 200, await options.musicStore.settle(event.paymentId)); return; }
-          if (options.musicLicenses && await options.musicLicenses.owns(event.paymentId)) { json(response, 200, await options.musicLicenses.settle(event.paymentId)); return; }
+          for (const ref of refs) {
+            if (await options.musicStore.owns(ref)) { json(response, 200, await options.musicStore.settle(ref)); return; }
+            if (options.musicLicenses && await options.musicLicenses.owns(ref)) { json(response, 200, await options.musicLicenses.settle(ref)); return; }
+          }
         } catch (error) {
           console.error(`nixamp: CoinPay webhook for ${event.paymentId} (music) could not settle: ${error instanceof Error ? error.message : String(error)}`);
           json(response, 500, { error: "could not settle; retry" });
@@ -2738,7 +2743,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       }
       if (!options.translationPasses) { json(response, 200, { settled: false, reason: "billing is off here" }); return; }
       try {
-        json(response, 200, await options.translationPasses.settle(event.paymentId));
+        json(response, 200, await options.translationPasses.settle(event));
       } catch (error) {
         // A 5xx makes CoinPay deliver it again, which is what an unreachable
         // CoinPay or database needs.
@@ -3012,11 +3017,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           }
           let body: Record<string, unknown> = {};
           try { body = JSON.parse(await readBody(request)) as Record<string, unknown>; } catch { body = {}; }
+          // CoinPay files the payment under the payer: a signed-in member by
+          // account id (their email if the form left it empty), a guest by email.
+          const me = options.accounts ? await options.accounts.whoIs(tokenFrom(request.headers)).catch(() => null) : null;
+          const payer = {
+            email: typeof body["email"] === "string" && body["email"].trim() ? body["email"] : me?.email ?? "",
+            accountId: me?.id ?? null,
+          };
           if (body["monthly"] === true) {
             if (!options.supportSubscriptions) throw new SupportError("Monthly support is not set up here.", 503, "unavailable");
-            json(response, 200, await options.supportSubscriptions.start({ ...body, holder: holder.id }));
+            json(response, 200, await options.supportSubscriptions.start({ ...body, ...payer, holder: holder.id }));
           } else {
-            json(response, 200, await support.checkout({ ...body, holder: holder.id }));
+            json(response, 200, await support.checkout({ ...body, ...payer, holder: holder.id }));
           }
           return;
         }
@@ -4107,8 +4119,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           if (!guard.check(`translation-checkout-ip:${caller}`, { allowed: 10, windowMs: 3600_000 }).ok) throw new SpeechError("Too many new checkouts. Resume your pending purchase.", 429);
           let body: Record<string, unknown>;
           try { body = JSON.parse(await readBody(request, 1024)); } catch { throw new SpeechError("Choose a translation pass.", 400); }
-          if (!body || typeof body !== "object" || typeof body["plan"] !== "string" || typeof body["coin"] !== "string" || typeof body["requestKey"] !== "string") throw new SpeechError("Choose a translation pass and payment currency.", 400);
-          json(response, 200, await service.checkout(who.id, body["plan"], body["coin"], body["requestKey"])); return;
+          if (!body || typeof body !== "object" || typeof body["plan"] !== "string" || typeof body["requestKey"] !== "string") throw new SpeechError("Choose a translation pass.", 400);
+          // A CoinPay hosted session (any coin or PayPal) filed under this
+          // account and its email; `coin` only comes from an older open page.
+          const email = who.email || (typeof body["email"] === "string" ? body["email"] : "");
+          json(response, 200, await service.checkout(who.id, body["plan"], typeof body["coin"] === "string" ? body["coin"] : "", body["requestKey"], { email, accountId: who.id })); return;
         }
         const order = path.match(/^\/api\/v1\/translation-passes\/orders\/([^/]+)$/);
         if (order && request.method === "GET") {
