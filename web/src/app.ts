@@ -18,6 +18,7 @@ import { CONTROL_ICONS, drawControlIcon } from "./control-icons.ts";
  * here as well — the phone becomes the remote, or the speaker, or both.
  */
 import { displayName, formatTime } from "./format.ts";
+import { setNowPlaying } from "./now-playing.ts";
 import { beginListNavigation, replaceList } from "./accessibility.ts";
 import { updateLiveList } from "./live-list.ts";
 import { classTitle, liveContext, liveTitle } from "./live-context.ts";
@@ -1143,6 +1144,15 @@ export function start(): void {
     return track?.album || "—";
   };
 
+  /** Who made what is playing, for the car and the lock screen; the server (or nixamp) when nobody is named. */
+  const currentArtist = (): string => {
+    if (!channelOn && !localLink && !onServerLive()) {
+      const track = mode === "remote" ? snapshot.tracks[at()] : local[at()];
+      if (track?.artist) return track.artist;
+    }
+    return serverName || "nixamp";
+  };
+
   /**
    * The line for somebody on a live stream: whose it is, what is on, and how
    * to call in. Joining used to land you on a track name and a dash, with the
@@ -2098,17 +2108,10 @@ export function start(): void {
     // mark otherwise. This is the one place an iPhone shows a live stream's
     // art at all: HLS carries no picture, the page does.
     const art = channelOn ? artUrl(lastAir?.channels.find((one) => one.id === channelOn?.id)?.art ?? channelOn.art) : "";
-    const key = JSON.stringify([currentName(), currentAlbum(), art]);
+    const key = JSON.stringify([currentName(), currentAlbum(), currentArtist(), art]);
     if (key === mediaSessionKey) return;
     mediaSessionKey = key;
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: currentName(),
-      album: currentAlbum(),
-      artist: "nixamp",
-      artwork: art !== ""
-        ? [{ src: art }]
-        : [{ src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" }],
-    });
+    setNowPlaying({ title: currentName(), album: currentAlbum(), artist: currentArtist(), art });
     navigator.mediaSession.setActionHandler("play", () => void toggle());
     navigator.mediaSession.setActionHandler("pause", () => void toggle());
     navigator.mediaSession.setActionHandler("nexttrack", () => void step(1));

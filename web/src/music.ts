@@ -7,6 +7,7 @@
  * a station while you browse; listening is free, files are bought on /buy.
  */
 import "./music.css";
+import { setNowActions, setNowPlaying, setNowPosition, setNowState } from "./now-playing.ts";
 import { pushSupport, subscribe as subscribePush, unsubscribe as unsubscribePush } from "@profullstack/notifications/client";
 
 interface Member { slug: string; name: string; role: string; bio: string }
@@ -403,6 +404,7 @@ function join(): void {
   const audio = audioEl();
   audio.src = `${playing.listen}/stream?${q(playing)}&n=${nonce}`;
   void audio.play().catch(() => undefined);
+  setNowState("playing");
   $("#player-toggle").textContent = "❚❚";
   $("#player-toggle").setAttribute("aria-label", "Pause");
 }
@@ -415,6 +417,8 @@ function play(station: Station): void {
   $("#player").hidden = false;
   $("#player-title").textContent = station.nowPlaying?.title || station.name;
   $("#player-by").textContent = station.nowPlaying?.artist || station.name;
+  // The car and the lock screen get the station at once, and the song's cover on refreshNow.
+  setNowPlaying({ title: station.nowPlaying?.title || station.name, artist: station.nowPlaying?.artist || "", album: station.name });
   say(`Playing ${station.name}`);
   void refreshNow();
 }
@@ -450,13 +454,14 @@ function tick(): void {
   const audio = audioEl();
   const clock = clockSeen && clockSeen.nonce === nonce && !audio.paused ? clockSeen : null;
   const progress = $("#player-progress");
-  if (!clock) { progress.hidden = true; $("#player-break").hidden = true; return; }
+  if (!clock) { progress.hidden = true; $("#player-break").hidden = true; setNowPosition(0, 0); return; }
   const heard = clock.position + (audio.currentTime - clock.ct);
   // Past the song's end the player is on the next one: ask again (not more than once a second).
   if (clock.duration > 0 && heard > clock.duration && Date.now() - clockAsked > 1000) void askClock();
   $("#player-break").hidden = !clock.break;
-  if (clock.break || clock.duration <= 0) { progress.hidden = true; return; }
+  if (clock.break || clock.duration <= 0) { progress.hidden = true; setNowPosition(0, 0); return; }
   const at = Math.min(clock.duration, Math.max(0, heard));
+  setNowPosition(clock.duration, at);
   const bar = $<HTMLProgressElement>("#player-bar");
   bar.max = clock.duration;
   bar.value = at;
@@ -503,6 +508,7 @@ async function refreshNow(): Promise<void> {
   $("#player-by").textContent = [facts.artist, facts.album].filter(Boolean).join(" · ");
   const art = $<HTMLImageElement>("#player-art");
   if (facts.art && art.dataset["src"] !== facts.art) { art.dataset["src"] = facts.art; art.src = base + facts.art; }
+  setNowPlaying({ title: facts.title || station.name, artist: facts.artist || "", album: facts.album || station.name, art: facts.art ? base + facts.art : "" });
   const panel = $("#lyrics-panel");
   if (facts.lyrics && panel.dataset["src"] !== facts.lyrics) {
     panel.dataset["src"] = facts.lyrics;
@@ -543,18 +549,27 @@ const recall = (name: string): string | null => { try { return localStorage.getI
 
 function wirePlayer(): void {
   const audio = audioEl();
+  const stop = (): void => {
+    // Live: paused is gone, and play rejoins where the station is now.
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+    clockSeen = null;
+    setNowState("paused");
+    $("#player-toggle").textContent = "▶";
+    $("#player-toggle").setAttribute("aria-label", "Play");
+  };
   $("#player-toggle").addEventListener("click", () => {
     if (!playing) return;
     if (audio.paused) join();
-    else {
-      // Live: paused is gone, and play rejoins where the station is now.
-      audio.pause();
-      audio.removeAttribute("src");
-      audio.load();
-      clockSeen = null;
-      $("#player-toggle").textContent = "▶";
-      $("#player-toggle").setAttribute("aria-label", "Play");
-    }
+    else stop();
+  });
+  // The dashboard's buttons, the steering wheel's and the lock screen's. A live station cannot seek.
+  setNowActions({
+    play: () => { if (playing && audio.paused) join(); },
+    pause: () => { if (playing && !audio.paused) stop(); },
+    stop: () => { if (playing && !audio.paused) stop(); },
+    seekto: null, seekbackward: null, seekforward: null,
   });
   // Volume and mute, kept for next time.
   const volume = $<HTMLInputElement>("#player-volume");
