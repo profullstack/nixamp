@@ -38,13 +38,13 @@ export const USAGE = `nixamp station — make a collection into a station
 
   AI label (AI artists who release albums on their own; a station per genre; the catalogue at /label):
   nixamp station label                       artists, albums, this month's seconds, what it is waiting for
-  nixamp station label sign --roster         the first roster: velvet-ruckus, juno-kincaid, chrome-orchard, delta-wren,
-                                             ashen-cartography, lumi-kestrel
+  nixamp station label sign --roster         the roster: three artists in each of Rock, Hip-Hop, Synthwave, Country,
+                                             Metal and Pop (nixamp station label lists their keys)
   nixamp station label sign (--preset KEY | --name NAME --genre GENRE --sound TEXT [--voice TEXT] [--bio TEXT] [--themes TEXT])
   nixamp station label album KEY             plan the artist's next album now and record it
   nixamp station label set KEY [--sound TEXT] [--voice TEXT] [--bio TEXT] [--themes TEXT] [--off|--on]
   nixamp station label drop KEY [--files]
-  nixamp station label config [--holder "Profullstack, Inc."] [--budget SECONDS] [--every-days 30] [--seed-albums 2]
+  nixamp station label config [--holder "Profullstack, Inc."] [--budget SECONDS] [--every-days 30] [--seed-albums 1]
                               [--songs 8] [--seconds 150] [--on|--off] [--public|--unlisted]
   nixamp station label run                   record whatever is due now
   nixamp station label resume                after the provider ran out of credit
