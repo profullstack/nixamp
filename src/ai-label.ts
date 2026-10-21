@@ -987,7 +987,8 @@ export class AiLabel {
       return "composed";
     }
     // Room for another album: the artist most overdue (in the owner's genre order) gets its next one.
-    const inProgress = this.list().filter((one) => one.albums.some((album) => !album.doneAt)).length + this.planning.size;
+    // A paused artist's unfinished album waits without holding a slot.
+    const inProgress = this.list().filter((one) => one.enabled && one.albums.some((album) => !album.doneAt)).length + this.planning.size;
     if (inProgress >= Math.max(1, this.settings.parallel)) return "idle";
     if (!this.canAsk() || this.settings.songSeconds + claimedSeconds > this.budgetLeft()) return "idle";
     const due = this.list()

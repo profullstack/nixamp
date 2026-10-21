@@ -85,6 +85,31 @@ test("a music video is 720p H.264 with the song's audio, cover or not", async ()
   }
 });
 
+test("a model's JSON with real line breaks inside the lyrics still reads", async () => {
+  const { firstObject } = await import("../src/ai-text.ts");
+  assert.deepEqual(firstObject('{"lyrics": "[Verse]\nline one\nline \\"two\\""}'), { lyrics: "[Verse]\nline one\nline \"two\"" });
+  assert.deepEqual(firstObject('Sure!\n{"title": "A",\n "songs": [{"title": "B\tC"}]}'), { title: "A", songs: [{ title: "B\tC" }] });
+});
+
+test("a paused artist's unfinished album does not hold a recording slot", async () => {
+  const calls: Array<{ prompt: string; seconds: number }> = [];
+  const { top, label } = setup(fakeComposer(calls));
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, parallel: 1, enabled: false });
+    const paused = label.sign({ preset: "velvet-ruckus" });
+    await label.plan(paused.key);
+    label.update(paused.key, { enabled: false });
+    const other = label.sign({ preset: "delta-ruby" });
+    label.configure({ enabled: true });
+    await idle(label, () => Boolean(label.get(other.key)!.albums[0]?.doneAt));
+    assert.ok(label.get(other.key)!.albums[0]!.doneAt > 0, "the enabled artist recorded");
+    assert.equal(label.get(paused.key)!.albums[0]!.doneAt, 0, "the paused one waits");
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
 test("names make safe folders and file names", () => {
   assert.equal(fileName('AC/DC: "Live"?'), "ACDC Live");
   assert.equal(fileName("..."), "Untitled");

@@ -115,14 +115,25 @@ export function elevenLabsComposer(key: string, fetcher: typeof fetch = fetch, m
           ...(words ? { lyrics_text: words } : { force_instrumental: !vocals }),
         }),
       });
-      let response = await ask(prompt);
+      // Too many at once (several songs are made in parallel): wait and ask again, a few times.
+      const patient = async (text: string): Promise<Response> => {
+        let answer = await ask(text);
+        for (const wait of [15_000, 30_000, 60_000]) {
+          if (answer.status !== 429) break;
+          await answer.body?.cancel().catch(() => undefined);
+          await new Promise((done) => setTimeout(done, wait));
+          answer = await ask(text);
+        }
+        return answer;
+      };
+      let response = await patient(prompt);
       if (response.status === 400) {
         // A brief it will not make (an artist's name, a lyric) comes back
         // with one it will; take it once.
         const body = await response.json().catch(() => ({})) as { detail?: { status?: string; data?: { prompt_suggestion?: string } } };
         const suggestion = body.detail?.data?.prompt_suggestion;
         if (!suggestion) throw new Error(`elevenlabs refused the brief (${body.detail?.status ?? "HTTP 400"})`);
-        response = await ask(suggestion);
+        response = await patient(suggestion);
       }
       if (response.status === 401 || response.status === 402) throw new OutOfCredit(`elevenlabs answered HTTP ${response.status}: the key or the plan's credit`);
       if (!response.ok) {

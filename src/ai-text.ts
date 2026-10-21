@@ -35,9 +35,34 @@ export class NoModel extends Error {
   }
 }
 
+/**
+ * Raw line breaks and tabs inside JSON strings, escaped: models writing song
+ * words often break the lines for real inside the quotes, which JSON refuses.
+ */
+export function escapeInStrings(text: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (const char of text) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === "\"") inString = false;
+      else if (char === "\n") { out += "\\n"; continue; }
+      else if (char === "\r") continue;
+      else if (char === "\t") { out += "\\t"; continue; }
+    } else if (char === "\"") inString = true;
+    out += char;
+  }
+  return out;
+}
+
 /** The first JSON object in a model's answer. */
 export function firstObject(text: string): Record<string, unknown> {
-  const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+  const fenced = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+  const cleaned = (() => {
+    try { JSON.parse(fenced); return fenced; } catch { return escapeInStrings(fenced); }
+  })();
   try {
     const parsed = JSON.parse(cleaned) as unknown;
     if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
