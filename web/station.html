@@ -16,6 +16,10 @@
         <h1 id="name">&nbsp;</h1>
         <p id="about" class="station-about" hidden></p>
         <div class="station-now" aria-live="polite"><div id="title" class="station-title"></div><div id="by" class="station-by"></div></div>
+        <div id="progress" class="station-progress" hidden>
+          <progress id="progress-bar" max="1" value="0" aria-label="How far into this track"></progress>
+          <span id="progress-time" class="station-progress-time"></span>
+        </div>
         <section id="facts" class="station-facts" aria-label="About this track" hidden>
           <div class="station-facts-head"><h2>Now playing</h2><span id="ai-badge" class="station-ai" hidden></span></div>
           <div class="station-facts-body">
