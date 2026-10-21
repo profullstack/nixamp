@@ -13,7 +13,8 @@
  */
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { musicPage, renderMusicPage } from "./music-seo.ts";
+import { memberProfile, musicPage, renderMusicPage } from "./music-seo.ts";
+import { readMember } from "./label-profiles.ts";
 
 /** A server's opaque id: the first 10 hex of the SHA-256 of its https origin. Both sides can work it out. */
 export function serverId(base: string): string {
@@ -149,8 +150,11 @@ export async function musicPageFor(hub: MusicHub, path: string): Promise<string>
   return "";
 }
 
+/** A band member's OpenProfile as JSON (music-seo.ts memberProfile), read from their page on the server that holds it. */
+const MEMBER_JSON = /^\/api\/v1\/music\/member\/([a-f0-9]{10})\/([a-f0-9]{10})\/([a-z0-9-]{1,40})\.json$/;
+
 export function isMusicPath(path: string): boolean {
-  return path === "/music" || path.startsWith("/music/") || path === "/api/v1/music" || FILE.test(path) || path === "/api/v1/music/released" || path === "/api/v1/music/veo";
+  return path === "/music" || path.startsWith("/music/") || path === "/api/v1/music" || FILE.test(path) || MEMBER_JSON.test(path) || path === "/api/v1/music/released" || path === "/api/v1/music/veo";
 }
 
 export interface MusicRoutesContext {
@@ -190,6 +194,25 @@ export async function handleMusicRoutes(request: IncomingMessage, response: Serv
   if (method !== "GET" && method !== "HEAD") { ctx.json(response, 405, { error: "not like that" }); return true; }
   if (path === "/api/v1/music") {
     ctx.json(response, 200, await ctx.hub.catalogue());
+    return true;
+  }
+  const person = MEMBER_JSON.exec(path);
+  if (person) {
+    const [, server, artistKey, slug] = person as unknown as [string, string, string, string];
+    const base = ctx.hub.resolve(server);
+    if (!base) { ctx.json(response, 404, { error: "no such server" }); return true; }
+    try {
+      const upstream = await fetch(`${base}/api/v1/label/${artistKey}/members/${slug}.md`, { signal: AbortSignal.timeout(10_000) });
+      const member = upstream.ok ? readMember(await upstream.text(), slug) : null;
+      if (!member) { ctx.json(response, 404, { error: "no such person" }); return true; }
+      const catalogue = await ctx.hub.catalogue().catch(() => null);
+      const band = catalogue?.genres.flatMap((one) => one.artists).find((one) => one.server === server && one.key === artistKey)?.name ?? "";
+      const profile = memberProfile(member, { site: (ctx.site ?? "https://nixamp.com").replace(/\/+$/, ""), server, artist: artistKey, band, holder: catalogue?.holders[0] ?? "Profullstack, Inc." });
+      response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=300", "access-control-allow-origin": "*" });
+      response.end(method === "HEAD" ? undefined : JSON.stringify(profile, null, 2));
+    } catch {
+      if (!response.headersSent) ctx.json(response, 502, { error: "the server holding it did not answer" });
+    }
     return true;
   }
   const file = FILE.exec(path);
@@ -232,7 +255,7 @@ export async function handleMusicRoutes(request: IncomingMessage, response: Serv
   // one without the server a page names is not knowing, not "no such page": the
   // shell as it is, never a 404 a crawler would drop the page for.
   const servers = new Set(catalogue?.genres.flatMap((one) => one.artists.map((artist) => artist.server)) ?? []);
-  const named = /^\/music\/(?:artist|album)\/([a-f0-9]{10})\//.exec(path)?.[1];
+  const named = /^\/music\/(?:artist|album|member)\/([a-f0-9]{10})\//.exec(path)?.[1];
   const known = servers.size > 0 && (!named || servers.has(named));
   const view = catalogue && known ? musicPage(path, catalogue, site) : null;
   const html = view ? renderMusicPage(shell, view, `${site}${path.replace(/\/+$/, "") || "/music"}`) : shell;

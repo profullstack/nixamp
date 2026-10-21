@@ -9,6 +9,7 @@
  *   /music/genre/<slug>                     a genre's artists
  *   /music/artist/<server>/<artist>         an artist: bio, members, albums
  *   /music/album/<server>/<artist>/<album>  an album: cover, songs
+ *   /music/member/<server>/<artist>/<slug>  a band member: photo, job, OpenProfile (JSON at /api/v1/music/member/...json)
  *   /music/me                               the listener's own page: never indexed
  */
 import type { HubArtist, HubCatalogue } from "./music-hub.ts";
@@ -20,6 +21,56 @@ const clip = (text: string, max: number): string => {
   return one.length <= max ? one : `${one.slice(0, max - 1).replace(/\s+\S*$/, "")}…`;
 };
 const clock = (seconds: number): string => `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, "0")}`;
+
+const capital = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+
+/** What someone does, said as a job: "lead vocals in Hollow Sovereign", "bass in Harbor Lights Society". */
+export function memberJob(role: string, band: string): string {
+  return `${role || "member"} in ${band}`;
+}
+
+/** A band member's OpenProfile, as JSON: the page's fields, with every address absolute. */
+export interface MemberProfile {
+  openprofile: string;
+  type: "person";
+  kind: string;
+  name: string;
+  role: string;
+  job: string;
+  band: { name: string; url: string };
+  avatar: string;
+  bio: string;
+  look: string;
+  voice: string;
+  personality: string;
+  influences: string;
+  parent: string;
+  url: string;
+  source: string;
+}
+
+export function memberProfile(member: { slug: string; name: string; role: string; bio: string; look: string; voice: string; personality: string; influences: string },
+  where: { site: string; server: string; artist: string; band: string; holder: string }): MemberProfile {
+  const files = `${where.site}/api/v1/music/file/${where.server}/${where.artist}/members/${member.slug}`;
+  return {
+    openprofile: "1",
+    type: "person",
+    kind: "fictional musician, made with AI",
+    name: member.name,
+    role: member.role,
+    job: memberJob(member.role, where.band),
+    band: { name: where.band, url: `${where.site}/music/artist/${where.server}/${where.artist}` },
+    avatar: `${files}.jpg`,
+    bio: member.bio,
+    look: member.look,
+    voice: member.voice,
+    personality: member.personality,
+    influences: member.influences,
+    parent: where.holder,
+    url: `${where.site}/music/member/${where.server}/${where.artist}/${member.slug}`,
+    source: `${files}.md`,
+  };
+}
 
 interface Head {
   title: string;
@@ -60,6 +111,36 @@ export function musicPage(path: string, catalogue: HubCatalogue, site: string): 
       status: 200,
       head: { title: "My music · nixamp", description: "The songs and albums you bought on nixamp, and the artists you follow.", type: "website", noindex: true },
       body: "<h1>My music</h1><p>Sign in to see what you bought and who you follow.</p>",
+    };
+  }
+
+  if (parts[0] === "member" && parts[1] && parts[2] && parts[3]) {
+    const artist = artists.find((one) => one.server === parts[1] && one.key === parts[2]);
+    const member = artist?.members?.find((one) => one.slug === parts[3]);
+    if (!artist || !member) return missing("person");
+    const job = memberJob(member.role, artist.name);
+    const portrait = file(artist.server, `${artist.key}/members/${member.slug}.jpg`);
+    const json = `/api/v1/music/member/${artist.server}/${artist.key}/${member.slug}.json`;
+    return {
+      status: 200,
+      head: {
+        title: `${member.name} · ${job} · nixamp music`,
+        description: clip(member.bio || `${member.name}, ${job}.`, 200),
+        type: "profile",
+        image: { url: portrait, alt: `${member.name} of ${artist.name}` },
+        extra: [["profile:username", member.slug]],
+        ld: {
+          "@context": "https://schema.org", "@type": "Person", name: member.name, url: at(`/music/member/${artist.server}/${artist.key}/${member.slug}`),
+          ...(member.role ? { jobTitle: member.role } : {}),
+          ...(member.bio ? { description: member.bio } : {}),
+          image: portrait,
+          memberOf: { "@type": "MusicGroup", name: artist.name, url: at(artistLink(artist)) },
+        },
+      },
+      body: `<p><a href="/music">Music</a> / <a href="${artistLink(artist)}">${escape(artist.name)}</a></p><h1>${escape(member.name)}</h1>`
+        + `<p>${escape(capital(member.role || "member"))} in <a href="${artistLink(artist)}">${escape(artist.name)}</a></p>`
+        + (member.bio ? `<p>${escape(member.bio)}</p>` : "")
+        + `<p><a href="${json}">OpenProfile as JSON</a></p>`,
     };
   }
 
