@@ -34,6 +34,7 @@ import { aiKey } from "./ai-keys.ts";
 import { composerFromEnv, OutOfCredit, type Composer } from "./ai-radio.ts";
 import { askJson, hasModel } from "./ai-text.ts";
 import { formatLrc, type SyncedLine } from "./lyrics.ts";
+import { bandMarkdown, castLine, inventMembers, readMembers, writeMembers, type Member } from "./label-profiles.ts";
 import type { LibraryIndex, Probed } from "./library-index.ts";
 import type { StationRunner } from "./station-runner.ts";
 import { StationError, type StationStore } from "./stations.ts";
@@ -94,6 +95,8 @@ export interface LabelArtist {
   themes: string;
   enabled: boolean;
   albums: LabelAlbum[];
+  /** Its people, by slug: each has members/<slug>.md and .jpg in the artist's folder (label-profiles.ts). */
+  members?: string[];
   createdAt: number;
   lastAttemptAt: number;
   lastError: string;
@@ -426,7 +429,7 @@ const LYRICS_SYSTEM = [
 ].join(" ");
 
 export async function planAlbum(
-  artist: Pick<LabelArtist, "name" | "genre" | "sound" | "voice" | "bio" | "themes" | "albums">,
+  artist: Pick<LabelArtist, "name" | "genre" | "sound" | "voice" | "bio" | "themes" | "albums"> & { cast?: string },
   songs: number,
   ask: typeof askJson = askJson,
 ): Promise<{ title: string; concept: string; songs: Array<{ title: string; style: string }>; model: string }> {
@@ -440,6 +443,7 @@ export async function planAlbum(
       `Voice: ${artist.voice}`,
       artist.bio ? `Who they are: ${artist.bio}` : "",
       artist.themes ? `What they sing about: ${artist.themes}` : "",
+      artist.cast ? `The band, as they are (write for these people): ${artist.cast}` : "",
       before.length ? `Albums already out (do not reuse their titles or song titles; take the story somewhere new): ${before.join(" | ")}` : "This is the artist's debut album.",
       `The album has exactly ${songs} songs.`,
     ].filter(Boolean).join("\n"),
@@ -481,7 +485,7 @@ export async function inventArtist(genre: string, taken: string[], ask: typeof a
 }
 
 export async function writeLyrics(
-  artist: Pick<LabelArtist, "name" | "genre" | "voice" | "themes">,
+  artist: Pick<LabelArtist, "name" | "genre" | "voice" | "themes"> & { cast?: string },
   album: Pick<LabelAlbum, "title" | "concept">,
   song: Pick<LabelSong, "title" | "style" | "seconds">,
   ask: typeof askJson = askJson,
@@ -491,6 +495,7 @@ export async function writeLyrics(
     prompt: [
       `Artist: ${artist.name} (${artist.genre}); voice: ${artist.voice}`,
       artist.themes ? `What they sing about: ${artist.themes}` : "",
+      artist.cast ? `Who sings and plays it (their voice and personality shape the words): ${artist.cast}` : "",
       `Album: "${album.title}"${album.concept ? `: ${album.concept}` : ""}`,
       `Song: "${song.title}": ${song.style}`,
       `The song lasts about ${song.seconds} seconds: keep the words under ${Math.max(600, Math.round(song.seconds * 10))} characters.`,
@@ -583,7 +588,7 @@ const STORYBOARD_SYSTEM = [
 
 /** Image prompts for a song's video, one a scene, from its words and mood. */
 export async function writeStoryboard(
-  artist: Pick<LabelArtist, "name" | "genre" | "sound">,
+  artist: Pick<LabelArtist, "name" | "genre" | "sound"> & { cast?: string },
   album: Pick<LabelAlbum, "title" | "concept">,
   song: Pick<LabelSong, "title" | "style" | "lyrics">,
   scenes: number,
@@ -593,6 +598,7 @@ export async function writeStoryboard(
     system: STORYBOARD_SYSTEM,
     prompt: [
       `Song: "${song.title}" by ${artist.name} (${artist.genre}; ${artist.sound}), from "${album.title}"${album.concept ? `: ${album.concept}` : ""}`,
+      artist.cast ? `The band (these are the only performers; whenever one appears, name them and repeat their full look in that prompt, the image model remembers nothing): ${artist.cast}` : "",
       `Mood and arrangement: ${song.style}`,
       song.lyrics ? `Lyrics:\n${song.lyrics.slice(0, 1800)}` : "",
       `Exactly ${scenes} scenes.`,
@@ -746,6 +752,7 @@ export class AiLabel {
   private settings: LabelSettings = { ...DEFAULTS, pausedReason: "" };
   private usage: Record<string, number> = {};
   private running = false;
+  private profiling = false;
   /** Songs being made now, by `<album>:<n>`. */
   private claims = new Map<string, { label: string; seconds: number }>();
   /** Artists whose next album is being planned now. */
@@ -976,7 +983,8 @@ export class AiLabel {
     if (!this.canAsk()) throw new StationError("no_writer", "no language model to write the album: set GEMINI_API_KEY, OPENAI_API_KEY (or NIXAMP_OPENAI_URL) or ANTHROPIC_API_KEY", 409);
     const pending = artist.albums.find((one) => !one.doneAt);
     if (pending) throw new StationError("album_in_progress", `"${pending.title}" is still being made`, 409);
-    const plan = await planAlbum(artist, this.settings.songsPerAlbum, this.deps.ask ?? askJson);
+    await this.ensureProfile(artist).catch(() => undefined);
+    const plan = await planAlbum({ ...artist, cast: this.castOf(artist) }, this.settings.songsPerAlbum, this.deps.ask ?? askJson);
     const year = new Date(this.now()).getUTCFullYear();
     let title = plan.title;
     if (artist.albums.some((one) => one.title.toLowerCase() === title.toLowerCase())) title = `${title} II`;
@@ -1005,7 +1013,8 @@ export class AiLabel {
     this.timer = setInterval(() => { void this.tick(); void this.videos(); }, everyMs);
     this.timer.unref?.();
     void this.tick();
-    void this.videos();
+    // Profiles first (quick), so videos made after cast the right people.
+    void this.profiles().finally(() => void this.videos());
   }
 
   /**
@@ -1132,7 +1141,7 @@ export class AiLabel {
     if (this.canAsk()) {
       try {
         const count = Math.max(4, Math.min(16, Math.round(seconds / 9)));
-        const prompts = await writeStoryboard(artist, album, song, count, this.deps.ask ?? askJson);
+        const prompts = await writeStoryboard({ ...artist, cast: this.castOf(artist) }, album, song, count, this.deps.ask ?? askJson);
         mkdirSync(scenes, { recursive: true });
         const draw = this.deps.image ?? ((prompt: string) => workersAiCover(prompt));
         // A few at a time: the image model is quick, the machine is shared.
@@ -1334,7 +1343,7 @@ export class AiLabel {
     try {
       let writer = song.made || album.writer;
       if (!song.lyrics) {
-        const written = await writeLyrics(artist, album, song, this.deps.ask ?? askJson);
+        const written = await writeLyrics({ ...artist, cast: this.castOf(artist) }, album, song, this.deps.ask ?? askJson);
         song.lyrics = written.lyrics;
         writer = written.model;
         song.made = writer;
@@ -1374,6 +1383,7 @@ export class AiLabel {
       if (album.songs.every((one) => one.file)) {
         album.doneAt = this.now();
         this.log(`${artist.name} released "${album.title}"`);
+        void this.ensureProfile(artist).catch(() => undefined);
       }
       this.save();
       this.writeAlbumJson(artist, album);
@@ -1399,7 +1409,8 @@ export class AiLabel {
   }
 
   private async drawCover(artist: LabelArtist, album: LabelAlbum): Promise<void> {
-    const prompt = `Album cover art for "${album.title}", a ${artist.genre} album by ${artist.name}. ${album.concept} Style: ${artist.sound}. Striking, original, square composition. No text, no letters, no logos, no watermark.`;
+    const cast = this.castOf(artist);
+    const prompt = `Album cover art for "${album.title}", a ${artist.genre} album by ${artist.name}. ${album.concept} Style: ${artist.sound}.${cast ? ` If the band appears, they look exactly like this: ${cast}.` : ""} Striking, original, square composition. No text, no letters, no logos, no watermark.`;
     try {
       const picture = await (this.deps.cover ?? ((text) => workersAiCover(text)))(prompt);
       if (picture) {
@@ -1485,6 +1496,7 @@ export class AiLabel {
         .filter((one) => one.genre === genre)
         .map((one) => ({
           key: one.key, name: one.name, genre: one.genre, bio: one.bio,
+          members: this.cast(one).map((member) => ({ slug: member.slug, name: member.name, role: member.role, bio: member.bio })),
           albums: one.albums
             .filter((album) => album.songs.some((song) => song.file))
             .map((album) => ({
@@ -1518,6 +1530,67 @@ export class AiLabel {
       }
     }
     return null;
+  }
+
+  /** The artist's folder: <root>/<genre>/<artist>/, where its albums and profile pages live. */
+  folderOf(artist: Pick<LabelArtist, "genre" | "name">): string {
+    return join(this.root, genreSlug(artist.genre), fileName(artist.name));
+  }
+
+  /** The artist's people as their pages say now (hand edits win). */
+  cast(artist: LabelArtist): Member[] {
+    return readMembers(this.folderOf(artist), artist.members ?? []);
+  }
+
+  /** The people in one line, for a prompt; "" before they are cast. */
+  castOf(artist: LabelArtist): string {
+    return castLine(this.cast(artist));
+  }
+
+  /**
+   * The artist's profile: its members invented once (and their portraits
+   * drawn), and artist.md written again with what it has released.
+   */
+  async ensureProfile(artist: LabelArtist): Promise<void> {
+    const folder = this.folderOf(artist);
+    mkdirSync(folder, { recursive: true });
+    const band = { name: artist.name, genre: artist.genre, holder: this.settings.holder };
+    const draw = this.deps.image === undefined ? (prompt: string) => workersAiCover(prompt) : this.deps.image;
+    if (!artist.members?.length && this.canAsk()) {
+      const invented = await inventMembers(artist, this.deps.ask ?? askJson);
+      const written = await writeMembers(folder, invented, band, draw);
+      artist.members = written.map((one) => one.slug);
+      this.save();
+      this.log(`${artist.name}: ${written.map((one) => `${one.name} (${one.role})`).join(", ")}`);
+    } else if (artist.members?.length) {
+      // Portraits that are missing (a page added by hand, a failed drawing) are drawn now.
+      await writeMembers(folder, this.cast(artist), band, draw);
+    }
+    writeFileSync(join(folder, "artist.md"), bandMarkdown({
+      ...artist, holder: this.settings.holder, members: this.cast(artist),
+      albums: artist.albums.filter((one) => one.doneAt || one.songs.some((song) => song.file)).map((one) => ({ year: one.year, title: one.title })),
+    }));
+  }
+
+  /** Every artist's profile, made or brought up to date; one at a time. */
+  async profiles(): Promise<void> {
+    if (this.profiling) return;
+    this.profiling = true;
+    try {
+      for (const artist of this.list()) await this.ensureProfile(artist).catch((error: unknown) => this.log(`no profile for ${artist.name}: ${(error as Error).message}`));
+    } finally {
+      this.profiling = false;
+    }
+  }
+
+  /** A profile file anybody may read: artist.md, members/<slug>.md or members/<slug>.jpg. */
+  profileFile(artistKey: string, what: string): { path: string; type: string } | null {
+    const artist = this.artists.get(artistKey);
+    if (!artist) return null;
+    if (what === "artist.md") return { path: join(this.folderOf(artist), "artist.md"), type: "text/markdown; charset=utf-8" };
+    const match = /^members\/([a-z0-9-]{1,40})\.(md|jpg)$/.exec(what);
+    if (!match || !(artist.members ?? []).includes(match[1]!)) return null;
+    return { path: join(this.folderOf(artist), "members", `${match[1]}.${match[2]}`), type: match[2] === "md" ? "text/markdown; charset=utf-8" : "image/jpeg" };
   }
 
   /** The song's MP3 when `file` is one of the label's music videos (it holds the tags, cover and words); else `file`. */
@@ -1566,6 +1639,18 @@ export class AiLabel {
       }, null, 2)}\n`) });
     }
     if (entries.length === 0) return null;
+    // Everything by an artist comes with who they are: the band's page, each member's page and portrait.
+    if (scope.kind === "artist") {
+      const folder = this.folderOf(artist);
+      const exists = (path: string): boolean => { try { return statSync(path).isFile(); } catch { return false; } };
+      if (exists(join(folder, "artist.md"))) entries.push({ name: `${top}/artist.md`, path: join(folder, "artist.md") });
+      for (const slug of artist.members ?? []) {
+        for (const ext of ["md", "jpg"]) {
+          const path = join(folder, "members", `${slug}.${ext}`);
+          if (exists(path)) entries.push({ name: `${top}/members/${slug}.${ext}`, path });
+        }
+      }
+    }
     const what = scope.kind === "artist" ? "Discography" : scope.kind === "album" ? albums[0]!.title : this.songFile(scope.artist, scope.album, scope.n) ? albums[0]!.songs.find((one) => one.n === scope.n)!.title : "Song";
     return { name: `${fileName(artist.name)} - ${fileName(what)}.zip`, entries };
   }
@@ -1582,5 +1667,7 @@ export interface PublicArtist {
   name: string;
   genre: string;
   bio: string;
+  /** The people (profile pages at /api/v1/label/<artist>/members/<slug>.md, portraits .jpg). */
+  members: Array<{ slug: string; name: string; role: string; bio: string }>;
   albums: Array<{ key: string; title: string; year: number; concept: string; cover: boolean; complete: boolean; songs: Array<{ n: number; title: string; seconds: number; lyrics: string }> }>;
 }

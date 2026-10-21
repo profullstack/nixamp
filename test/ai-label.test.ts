@@ -181,6 +181,46 @@ test("words timed to the recording become an enhanced .lrc the station page foll
   }
 });
 
+test("a band is cast once and its people are in every album, lyric and storyboard prompt", async () => {
+  const writer = fakeWriter();
+  const prompts: Array<{ system: string; prompt: string }> = [];
+  const ask: typeof askJson = async (options) => {
+    prompts.push({ system: options.system, prompt: options.prompt });
+    if (options.system.includes("You cast the members")) {
+      return { model: "m", value: { members: [{ name: "Mara Quill", role: "lead vocals", look: "late twenties, shaggy bleached-blonde hair, torn grey band tee", voice: "raspy alto", personality: "fearless", influences: "grunge", bio: "A singer." }] } };
+    }
+    if (options.system.includes("You storyboard music videos")) return { model: "m", value: { scenes: ["Mara Quill, late twenties, shaggy bleached-blonde hair, at the mic", "the crowd"] } };
+    return writer(options);
+  };
+  const { top, label } = setup(fakeComposer([]), ask, {});
+  const deps = (label as unknown as { deps: Record<string, unknown> }).deps;
+  deps["image"] = async () => Buffer.alloc(2048, 3);
+  deps["storyVideo"] = async (input: { audio: string; out: string }) => { copyFileSync(input.audio, input.out); };
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, enabled: false });
+    const artist = label.sign({ preset: "velvet-ruckus" });
+    label.configure({ enabled: true });
+    await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
+    await label.videos();
+    assert.deepEqual(label.get(artist.key)!.members, ["mara-quill"]);
+    const folder = label.folderOf(artist);
+    assert.match(readFileSync(join(folder, "members", "mara-quill.md"), "utf8"), /^# Mara Quill/);
+    assert.ok(existsSync(join(folder, "members", "mara-quill.jpg")));
+    assert.match(readFileSync(join(folder, "artist.md"), "utf8"), /\[Mara Quill\]\(members\/mara-quill\.md\) \(lead vocals\)/);
+    const by = (marker: string) => prompts.filter((one) => one.system.includes(marker)).map((one) => one.prompt);
+    assert.equal(by("You cast the members").length, 1, "cast once");
+    for (const marker of ["Plan one album", "You write original English song lyrics", "You storyboard music videos"]) {
+      assert.ok(by(marker).every((prompt) => /Mara Quill \(lead vocals\): late twenties, shaggy bleached-blonde hair/.test(prompt)), `${marker} knows the band`);
+    }
+    assert.deepEqual(label.publicView().genres[0]!.artists[0]!.members.map((one) => one.name), ["Mara Quill"]);
+    assert.equal(label.profileFile(artist.key, "members/mara-quill.jpg")?.type, "image/jpeg");
+    assert.equal(label.profileFile(artist.key, "members/nobody.jpg"), null);
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
 test("a model's JSON with real line breaks inside the lyrics still reads", async () => {
   const { firstObject } = await import("../src/ai-text.ts");
   assert.deepEqual(firstObject('{"lyrics": "[Verse]\nline one\nline \\"two\\""}'), { lyrics: "[Verse]\nline one\nline \"two\"" });
