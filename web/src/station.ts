@@ -318,7 +318,10 @@ const mount = (autoplay: boolean): void => {
   });
   media.addEventListener("error", () => { if (mine()) again(); });
   media.addEventListener("ended", () => { if (mine()) again(); });
-  media.addEventListener("stalled", () => { if (mine() && media.readyState < 3) again(); });
+  // A station asleep with nobody listening takes a few seconds to wake and
+  // send its first bytes; that is not a stall to rejoin over.
+  const mountedAt = Date.now();
+  media.addEventListener("stalled", () => { if (mine() && media.readyState < 3 && Date.now() - mountedAt > 12_000) again(); });
   // A station does not wait for anyone: playing again after a pause joins
   // where it is now, not where this page left it.
   media.addEventListener("pause", () => {

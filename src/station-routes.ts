@@ -114,14 +114,16 @@ function nowPlayingFile(ctx: StationContext, station: Station): string {
 
 export function publicView(ctx: StationContext, station: Station): PublicStation {
   const state = ctx.runner.observed(station.id);
-  const file = state === "live" || state === "recovering" ? nowPlayingFile(ctx, station) : "";
+  // Asleep, what it will wake on: the first listener hears that next.
+  const asleep = ctx.runner.isSleeping?.(station.id) ?? false;
+  const file = asleep ? ctx.runner.nextUp(station.id) : state === "live" || state === "recovering" ? nowPlayingFile(ctx, station) : "";
   // The tags the player read when it put this file on, else the library's.
   const track = file ? (ctx.channels.tagsOf(channelOf(station.id), file) ?? ctx.trackFor(file)) : null;
   // What the channel is carrying wins over the flag: a station made by hand
   // from films streams video whether or not anyone said so.
   const video = station.video || ctx.channels.kindOf(channelOf(station.id)) === "video";
   // How far into the song (or film) on the air, by the encoder's clock, and how long it is.
-  const position = file ? ctx.channels.info(channelOf(station.id))?.position : undefined;
+  const position = file && !asleep ? ctx.channels.info(channelOf(station.id))?.position : undefined;
   const duration = file && ctx.durationOf ? ctx.durationOf(file) : 0;
   const progress = typeof position === "number" && duration > 0 ? { position: Math.round(Math.min(position, duration) * 10) / 10, duration: Math.round(duration * 10) / 10 } : null;
   return {
@@ -161,11 +163,13 @@ export function guideEntries(ctx: StationContext): Array<PublicStation & { page:
   return [...names].map(([slug, one]) => ({ ...publicView(ctx, one), page: links(ctx, one, base).page, m3u: links(ctx, one, base).m3u, group: guideGroup(one), radio: `${radioBase}/radio/${slug}` }));
 }
 
-export function ownerView(ctx: StationContext, station: Station): OwnerStation & { links: ReturnType<typeof links>; nowPlaying: string } {
+export function ownerView(ctx: StationContext, station: Station): OwnerStation & { links: ReturnType<typeof links>; nowPlaying: string; sleeping: boolean } {
   const { failures, idempotencyKey: _key, ...rest } = station;
   return {
     ...rest,
     state: ctx.runner.observed(station.id),
+    // On the air with nobody listening: no encoder until somebody does.
+    sleeping: ctx.runner.isSleeping?.(station.id) ?? false,
     excluded: Object.entries(failures).filter(([, count]) => count >= 3).map(([file]) => file),
     listeners: ctx.runner.listeners(station.id),
     error: ctx.runner.error(station.id),
@@ -348,16 +352,29 @@ export async function handleStations(
       return true;
     }
     const channelId = channelOf(station.id);
-    if (!ctx.channels.has(channelId)) {
-      ctx.json(response, 503, { error: "the station is not on the air", code: "not_live", state: ctx.runner.observed(station.id) });
+    // Asleep, a HEAD is told what it would get without waking it.
+    if (method === "HEAD" && ctx.runner.isSleeping?.(station.id)) {
+      response.writeHead(200, { ...ctx.headers, "content-type": station.video ? "video/mp4" : "audio/mpeg", "cache-control": "no-store" });
+      response.end();
       return true;
     }
     // Admitted only within the station's and the server's limits, and the
-    // month's allowance; refused with what to do about it.
+    // month's allowance; refused with what to do about it. Before waking it:
+    // a listener turned away is no reason to start the encoder.
     const refused = method === "GET" && ctx.usage && ctx.limits ? ctx.usage.admit(station.id, ctx.limits) : null;
     if (refused) {
       response.writeHead(refused.status, { ...ctx.headers, "content-type": "application/json; charset=utf-8", "retry-after": String(refused.retryAfter) });
       response.end(JSON.stringify({ error: refused.error, code: refused.code, retryAfter: refused.retryAfter }));
+      return true;
+    }
+    // The first listener wakes a sleeping station, and is held until it
+    // starts sending, so they hear it begin rather than a stream that ends.
+    let closed = false;
+    response.once("close", () => { closed = true; });
+    await ctx.runner.awake?.(station.id, undefined, () => closed);
+    if (closed) return true;
+    if (!ctx.channels.has(channelId)) {
+      ctx.json(response, 503, { error: "the station is not on the air", code: "not_live", state: ctx.runner.observed(station.id) });
       return true;
     }
     // Signed in at nixamp.com: no breaks, starting a little behind live so

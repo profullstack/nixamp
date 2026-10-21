@@ -39,6 +39,19 @@ export interface Config {
   limits?: Record<string, unknown>;
   /** Proxies whose X-Forwarded-For is believed for listener shares (`nixamp station shares trust ADDRESS`). */
   trustedProxies?: string[];
+  /** Seconds with nobody listening before a station sleeps; 0 never. 60 when unset. */
+  stationIdleSeconds?: number;
+}
+
+/** A station with nobody listening sleeps after this many seconds, unless config or NIXAMP_STATION_IDLE says otherwise. */
+export const DEFAULT_STATION_IDLE_SECONDS = 60;
+
+/** How long a station waits with nobody listening before it sleeps: env, then config, then 60; 0 is never. */
+export function stationIdleSeconds(env: Record<string, string | undefined>, config: Config): number {
+  const raw = env["NIXAMP_STATION_IDLE"];
+  if (raw !== undefined && raw.trim() !== "" && Number.isFinite(Number(raw)) && Number(raw) >= 0) return Number(raw);
+  const set = config.stationIdleSeconds;
+  return typeof set === "number" && Number.isFinite(set) && set >= 0 ? set : DEFAULT_STATION_IDLE_SECONDS;
 }
 
 export function configPath(): string {
@@ -55,6 +68,7 @@ export function readConfig(): Config {
       ...(typeof record["publish"] === "boolean" ? { publish: record["publish"] } : {}),
       ...(typeof record["autoStations"] === "object" && record["autoStations"] !== null ? { autoStations: record["autoStations"] as Record<string, unknown> } : {}),
       ...(typeof record["limits"] === "object" && record["limits"] !== null ? { limits: record["limits"] as Record<string, unknown> } : {}),
+      ...(typeof record["stationIdleSeconds"] === "number" ? { stationIdleSeconds: record["stationIdleSeconds"] } : {}),
       ...(Array.isArray(record["trustedProxies"]) ? { trustedProxies: (record["trustedProxies"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
       ...(Array.isArray(record["guideHosts"]) ? { guideHosts: (record["guideHosts"] as unknown[]).filter((one): one is string => typeof one === "string") } : {}),
       ...(typeof record["guideAds"] === "object" && record["guideAds"] !== null ? { guideAds: record["guideAds"] as Config["guideAds"] } : {}),

@@ -325,6 +325,19 @@ export class Channel {
     return done;
   }
 
+  /** How far listeners have got into this dial of a list, by the encoder's progress. */
+  private heard = 0;
+
+  /** Where a list would pick up after what listeners hear now (PlaylistInputStream.resumePoint). */
+  resumePoint(): { file: string; upcoming: string[]; sinceBreak: number } | null {
+    return this.playlistInput?.resumePoint(this.heard) ?? null;
+  }
+
+  /** Whether listeners would get sound (and, for a picture, its opening) if they joined now. */
+  get flowing(): boolean {
+    return this.info.bytes > 0 && (!this.fragments || this.fragments.ready);
+  }
+
   /** An entry's tags, as read when it was put on. */
   tagsOf(file: string): { title: string; artist: string; album: string } | undefined {
     return this.playlistInput?.tags.get(file);
@@ -503,6 +516,7 @@ export class Channel {
         ...resume.rotation,
       }) : null;
       this.playlistInput = playlistInput;
+      this.heard = 0;
       const through = this.outroOn ? null : playlistInput
         ? { format: "mpegts", open: async (signal: AbortSignal) => playlistInput.open(signal) }
         : this.options.through?.(this.info, from, input, audio) ?? null;
@@ -585,6 +599,7 @@ export class Channel {
           if (match) {
             const seconds = Number(match[1]) / 1e6;
             if (playlistInput) {
+              this.heard = seconds;
               const place = playlistInput.place(seconds);
               // A break (-1) belongs to no list; a track's index belongs to its own.
               if (place.at >= 0 && this.info.playlist !== place.list) this.info.playlist = place.list as string[];
@@ -1448,6 +1463,21 @@ export class Channels {
   /** An entry's tags on a channel playing a list of files. */
   tagsOf(id: string, file: string): { title: string; artist: string; album: string } | undefined {
     return this.open.get(id)?.tagsOf(file);
+  }
+
+  /** Where a channel playing a list would pick up after what is on now; null when it is not one. */
+  resumePoint(id: string): { file: string; upcoming: string[]; sinceBreak: number } | null {
+    return this.open.get(id)?.resumePoint() ?? null;
+  }
+
+  /** Whether a channel is up and has started sending. */
+  flowing(id: string): boolean {
+    return this.open.get(id)?.flowing ?? false;
+  }
+
+  /** Who is attached to one channel: listeners, relays, packagers. */
+  listenersOf(id: string): number {
+    return this.open.get(id)?.listeners.size ?? 0;
   }
 
   /** The next entry, now, on a channel playing a list of files. */
