@@ -20,7 +20,8 @@ interface TrackFacts {
   lyrics?: string;
   store?: { song: string; album: string; artist: string; artistName: string; albumTitle: string } | null;
 }
-interface Lyrics { title: string; artist: string; text: string; source: string; language: string }
+interface SyncedLine { start: number; end: number; text: string; words: Array<{ start: number; end: number; text: string }> }
+interface Lyrics { title: string; artist: string; text: string; source: string; language: string; synced?: SyncedLine[] }
 const BASIS: Record<string, string> = {
   owned: "owned by the station", permission: "broadcast with permission", licensed: "licensed for broadcast",
   "creative-commons": "Creative Commons", "public-domain": "public domain",
@@ -150,7 +151,63 @@ const showFacts = (f: TrackFacts | null | undefined): void => {
 };
 
 /** The words, line by line as written; "[Verse 1]" and the like as small headers. Text only, never HTML. */
+/** Karaoke: the timed lines on show, their elements, and which one is being sung. */
+let karaoke: { lines: SyncedLine[]; els: HTMLElement[]; words: HTMLElement[][]; at: number } | null = null;
+
+const drawSynced = (words: Lyrics, lines: SyncedLine[]): void => {
+  const els: HTMLElement[] = [];
+  const wordEls: HTMLElement[][] = [];
+  for (const line of lines) {
+    const p = document.createElement("p");
+    p.className = "lyric-line";
+    const spans = line.words.length
+      ? line.words.map((word, i) => {
+        const span = document.createElement("span");
+        span.className = "lyric-word";
+        span.textContent = (i ? " " : "") + word.text;
+        return span;
+      })
+      : [];
+    if (spans.length) p.append(...spans); else p.textContent = line.text;
+    els.push(p);
+    wordEls.push(spans);
+  }
+  const box = $("#lyrics-text");
+  box.classList.add("synced");
+  box.replaceChildren(...els);
+  karaoke = { lines, els, words: wordEls, at: -1 };
+  $("#lyrics-follow-box").hidden = false;
+  $("#lyrics-for").textContent = words.title ? `· ${words.title}` : "";
+  $("#lyrics-source").textContent = "Timed to the recording; the line being sung lights up.";
+  $("#lyrics").hidden = false;
+};
+
+/** Light the line (and word) being heard; with Follow along, keep it in view inside the lyrics box only. */
+const highlightLyrics = (heard: number): void => {
+  if (!karaoke) return;
+  const { lines, els, words } = karaoke;
+  let at = -1;
+  for (let i = 0; i < lines.length; i++) if (lines[i]!.start <= heard + 0.1) at = i;
+  if (at !== karaoke.at) {
+    els.forEach((el, i) => {
+      el.classList.toggle("now", i === at);
+      el.classList.toggle("past", i < at);
+    });
+    karaoke.at = at;
+    const box = $("#lyrics-text");
+    if (at >= 0 && $<HTMLInputElement>("#lyrics-follow").checked) {
+      const el = els[at]!;
+      box.scrollTop = Math.max(0, el.offsetTop - box.offsetTop - box.clientHeight / 2 + el.clientHeight / 2);
+    }
+  }
+  if (at >= 0) words[at]!.forEach((span, i) => span.classList.toggle("sung", lines[at]!.words[i]!.start <= heard));
+};
+
 const drawLyrics = (words: Lyrics): void => {
+  if (words.synced?.length) { drawSynced(words, words.synced); return; }
+  karaoke = null;
+  $("#lyrics-text").classList.remove("synced");
+  $("#lyrics-follow-box").hidden = true;
   const lines = words.text.split("\n");
   const out: HTMLElement[] = [];
   let stanza: string[] = [];
@@ -317,6 +374,7 @@ const tickProgress = (): void => {
   bar.setAttribute("aria-valuetext", `${clockOf(at)} of ${clockOf(progressSeen.duration)}`);
   $("#progress-time").textContent = `${clockOf(at)} / ${clockOf(progressSeen.duration)}`;
   box.hidden = false;
+  highlightLyrics(at);
 };
 setInterval(tickProgress, 500);
 
@@ -389,6 +447,15 @@ const listen = (): void => {
   source.addEventListener("state", () => void poll());
   source.onerror = () => { events = false; };
 };
+
+// Follow along is the listener's: scrolling the lyrics yourself turns it off, and the choice is remembered.
+{
+  const follow = $<HTMLInputElement>("#lyrics-follow");
+  try { follow.checked = localStorage.getItem("nixamp.lyrics.follow") !== "0"; } catch { /* default on */ }
+  follow.addEventListener("change", () => { try { localStorage.setItem("nixamp.lyrics.follow", follow.checked ? "1" : "0"); } catch { /* fine */ } });
+  const stop = (): void => { if (follow.checked) { follow.checked = false; follow.dispatchEvent(new Event("change")); } };
+  for (const kind of ["wheel", "touchmove"]) $("#lyrics-text").addEventListener(kind, stop, { passive: true });
+}
 
 void poll();
 void loadFacts();

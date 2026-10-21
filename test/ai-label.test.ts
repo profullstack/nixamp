@@ -6,7 +6,7 @@ import { createServer as createHttpServer } from "node:http";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { AiLabel, cleanLyrics, fileName, genreSlug, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase } from "../src/ai-label.ts";
+import { AiLabel, cleanLyrics, fileName, genreSlug, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines } from "../src/ai-label.ts";
 import { elevenLabsComposer, OutOfCredit, type Composer } from "../src/ai-radio.ts";
 import type { askJson } from "../src/ai-text.ts";
 import { Channels } from "../src/channels.ts";
@@ -62,6 +62,7 @@ function setup(composer: Composer | null, ask: typeof askJson = fakeWriter(), ex
     cover: async () => Buffer.alloc(2048, 7),
     tag: async (from, to, tags, cover) => { tagged.push({ to, tags, cover }); copyFileSync(from, to); },
     video: async (audio, _cover, out) => { copyFileSync(audio, out); },
+    align: null,
     ...extra,
   });
   return { top, index, store, runner, channels, label, tagged };
@@ -140,6 +141,40 @@ test("a song's video is a storyboard of drawn scenes; a cover-only video is made
     await label.videos();
     assert.equal(filmed.length, 4);
     assert.equal(songs[0]!.videoVersion, 2);
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("words timed to the recording become an enhanced .lrc the station page follows", async () => {
+  const { formatLrc, parseLrc, LyricsFinder } = await import("../src/lyrics.ts");
+  const lyrics = "[Verse 1]\nWe drove all night\n\n[Chorus]\nHold on tight";
+  const timed = [["We", 1], ["drove", 1.4], ["all", 1.9], ["night", 2.2], ["Hold", 10], ["on", 10.5], ["tight", 11]].map(([text, start]) => ({ text: String(text), start: Number(start), end: Number(start) + 0.3 }));
+  const lines = syncLines(lyrics, timed);
+  assert.deepEqual(lines.map((line) => [line.text, line.start]), [["We drove all night", 1], ["Hold on tight", 10]]);
+  assert.deepEqual(lines[1]!.words.map((word) => word.text), ["Hold", "on", "tight"]);
+  const lrc = formatLrc(lines, { title: "T", artist: "A" });
+  assert.match(lrc, /^\[ar:A\]\n\[ti:T\]\n\[00:01\.00\] <00:01\.00>We <00:01\.40>drove/);
+  const back = parseLrc(lrc);
+  assert.deepEqual(back.map((line) => [line.text, line.start, line.end]), [["We drove all night", 1, 10], ["Hold on tight", 10, 14]]);
+  assert.equal(back[0]!.words[1]!.end, 1.9, "a word lasts until the next");
+  // A song gets its .lrc, and the lyrics beside the file come back synced.
+  const { top, label } = setup(fakeComposer([]), fakeWriter(), {});
+  (label as unknown as { deps: Record<string, unknown> }).deps["align"] = async () => [["We", 1], ["drove", 2], ["all", 3], ["night", 4], ["to", 5], ["find", 6], ["the", 7], ["morning", 8], ["light", 9], ["Hold", 20], ["on", 21]].map(([text, start]) => ({ text: String(text), start: Number(start), end: Number(start) + 0.5 }));
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, enabled: false });
+    const artist = label.sign({ preset: "delta-ruby" });
+    label.configure({ enabled: true });
+    await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
+    await label.videos();
+    const song = label.get(artist.key)!.albums[0]!.songs[0]!;
+    assert.match(song.lrc ?? "", /001\. Song 1-1\.lrc$/);
+    const finder = new LyricsFinder({ tags: async () => ({ title: "Song 1-1", artist: "Delta Ruby", "lyrics-eng": song.lyrics }), base: "" });
+    const found = await finder.find(song.file);
+    assert.equal(found?.synced?.[0]?.text, "We drove all night to find the morning light");
+    assert.equal(found?.synced?.[1]?.words[0]?.start, 20);
+    assert.ok(label.zipFor({ kind: "song", artist: artist.key, album: label.get(artist.key)!.albums[0]!.key, n: 1 })!.entries.some((one) => one.name.endsWith(".lrc")));
   } finally {
     label.stopSchedule();
     rmSync(top, { recursive: true, force: true });
