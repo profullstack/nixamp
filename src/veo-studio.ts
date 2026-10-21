@@ -111,7 +111,7 @@ export class VeoStudio {
     return { month: this.month(), spentUsd: Math.round(spent * 100) / 100, capUsd: this.cap, leftUsd: Math.round(left * 100) / 100, usdPerSecond: this.rate, secondsLeft: Math.floor(left / this.rate) };
   }
 
-  /** One shot: 4, 6 or 8 seconds, 16:9, with up to three reference images (JPEG). */
+  /** One shot: 4, 6 or 8 seconds, 16:9 1080p, with up to three reference images (JPEG). */
   async clip(input: { prompt: string; seconds: number; references: Buffer[] }): Promise<Buffer> {
     const seconds = [4, 6, 8].includes(input.seconds) ? input.seconds : 8;
     const cost = seconds * this.rate;
@@ -139,7 +139,8 @@ export class VeoStudio {
           prompt: prompt.slice(0, 1800),
           ...(references.length ? { referenceImages: references.map((bytes) => ({ image: { bytesBase64Encoded: bytes.toString("base64"), mimeType: "image/jpeg" }, referenceType: "asset" })) } : {}),
         }],
-        parameters: { aspectRatio: "16:9", durationSeconds: seconds },
+        // 1080p, counted at the same rate; the cut is 1080p too (renderFilmedVideo).
+        parameters: { aspectRatio: "16:9", durationSeconds: seconds, resolution: "1080p" },
       }),
     });
     const operation = await started.json().catch(() => ({})) as { name?: string; error?: { message?: string } };

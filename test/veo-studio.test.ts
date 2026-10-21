@@ -31,8 +31,8 @@ test("Veo shots are paid for under the month's cap, reserved first and given bac
     const studio = make("ok");
     const clip = await studio.clip({ prompt: "a band on a stage, wide shot", seconds: 8, references: [Buffer.alloc(2000, 1)] });
     assert.equal(clip.length, 20_000);
-    const asked = seen[0] as { instances: Array<{ referenceImages?: Array<{ referenceType: string; image: { mimeType: string } }> }>; parameters: { durationSeconds: number; aspectRatio: string } };
-    assert.deepEqual([asked.parameters.durationSeconds, asked.parameters.aspectRatio, asked.instances[0]!.referenceImages?.[0]?.referenceType], [8, "16:9", "asset"]);
+    const asked = seen[0] as { instances: Array<{ referenceImages?: Array<{ referenceType: string; image: { mimeType: string } }> }>; parameters: { durationSeconds: number; aspectRatio: string; resolution: string } };
+    assert.deepEqual([asked.parameters.durationSeconds, asked.parameters.aspectRatio, asked.parameters.resolution, asked.instances[0]!.referenceImages?.[0]?.referenceType], [8, "16:9", "1080p", "asset"]);
     assert.deepEqual([(await studio.status()).spentUsd, (await studio.status()).leftUsd], [1.2, 1.8]);
     // A filtered or refused shot costs nothing.
     await assert.rejects(make("filtered").clip({ prompt: "a band on a stage, wide shot", seconds: 8, references: [] }), VeoRefused);

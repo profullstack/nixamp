@@ -123,11 +123,11 @@ export interface LabelSettings {
   seedAlbums: number;
   songsPerAlbum: number;
   songSeconds: number;
-  /** A music video for every song (the cover over itself, blurred, and the song's waveform), and a TV station of them. */
+  /** Music videos, and a TV station of them. Only ever filmed ones (Veo footage end to end); no song gets a slideshow. */
   videos: boolean;
-  /** Each album's single (song 1) gets filmed Veo shots of the band, while the month's Veo budget lasts. */
+  /** Each album's single (song 1) is filmed with Veo, while the month's Veo budget lasts. */
   veo: boolean;
-  /** How many 8 s Veo shots a single gets. */
+  /** How many 8 s Veo shots a single is cut from. */
   veoShots: number;
   /** Public, listed and owned, so the genre stations are on the guide. */
   publish: boolean;
@@ -383,7 +383,7 @@ export const DEFAULTS: Omit<LabelSettings, "pausedReason"> = {
   publish: true,
   videos: true,
   veo: false,
-  veoShots: 4,
+  veoShots: 6,
   parallel: 1,
   genreOrder: ["Punk", "Blues", "Country", "Jazz", "Classic Rock", "Metal", "Hip-Hop", "Pop", "R&B"],
 };
@@ -732,6 +732,42 @@ export function renderStoryVideo(ffmpeg: string[], input: { audio: string; image
   return runLow(ffmpeg, [...ffmpeg.slice(1), ...args], 60 * 60_000, "the video failed");
 }
 
+/** The version of a video cut from Veo footage only; anything older is a slideshow and is not shown. */
+export const FILMED = 4;
+
+/**
+ * A single's music video, cut from its filmed shots alone: 4 s cuts, each
+ * shot's first half then its second, round and round the shots until the song
+ * ends, so no picture holds still. The artist and title come up at the start;
+ * the MP3's audio and tags are copied in. 1080p H.264.
+ */
+export function renderFilmedVideo(ffmpeg: string[], input: { audio: string; clips: Array<{ path: string; seconds: number }>; seconds: number; artist: string; title: string; out: string }): Promise<void> {
+  if (input.clips.length === 0) return Promise.reject(new Error("no footage to cut"));
+  const cut = 4;
+  const cuts: Array<{ path: string; start: number; length: number }> = [];
+  for (let at = 0, i = 0; at < input.seconds; i++) {
+    const clip = input.clips[i % input.clips.length]!;
+    const half = Math.floor(i / input.clips.length) % 2;
+    const start = Math.min(half * cut, Math.max(0, clip.seconds - cut));
+    const length = Math.min(cut, clip.seconds - start, input.seconds - at + 0.5);
+    cuts.push({ path: clip.path, start, length });
+    at += length;
+  }
+  const parts = cuts.map((_, i) => `[${i}:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=25,setsar=1,setpts=PTS-STARTPTS[c${i}]`);
+  parts.push(`${cuts.map((_, i) => `[c${i}]`).join("")}concat=n=${cuts.length}:v=1:a=0[cut]`);
+  const font = titleFont();
+  const card = `${input.artist} — ${input.title}`.replace(/[\\':%]/g, " ").slice(0, 80);
+  parts.push(font
+    ? `[cut]drawtext=fontfile=${font}:text='${card}':fontcolor=white:fontsize=60:x=80:y=h-150:enable='between(t,0.5,6)':alpha='if(lt(t,1.5),t-0.5,if(gt(t,5),6-t,1))':shadowcolor=black@0.7:shadowx=3:shadowy=3,format=yuv420p[v]`
+    : "[cut]format=yuv420p[v]");
+  const args = ["-hide_banner", "-loglevel", "error", "-y", "-threads", "2",
+    ...cuts.flatMap((one) => ["-ss", one.start.toFixed(2), "-t", one.length.toFixed(2), "-i", one.path]),
+    "-i", input.audio, "-filter_complex", parts.join(";"),
+    "-map", "[v]", "-map", `${cuts.length}:a`, "-map_metadata", String(cuts.length), "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-r", "25", "-c:a", "copy", "-shortest",
+    "-movflags", "+faststart+use_metadata_tags", input.out];
+  return runLow(ffmpeg, [...ffmpeg.slice(1), ...args], 60 * 60_000, "the video failed");
+}
+
 /**
  * A song's music video without a storyboard: its album cover over a blurred
  * copy of itself, the song's waveform along the bottom, 720p H.264 with the
@@ -819,6 +855,8 @@ export interface AiLabelDeps {
   align?: ((audio: string, text: string) => Promise<TimedWord[]>) | null;
   /** A filmed shot (Veo, through nixamp.com): the MP4, or a VeoUnavailable when the month's budget is spent. */
   veo?: ((input: { prompt: string; seconds: number; references: Buffer[] }) => Promise<Buffer>) | null;
+  /** Cuts a single's filmed shots to its song; ffmpeg by default (renderFilmedVideo). */
+  filmedVideo?: (input: { audio: string; clips: Array<{ path: string; seconds: number }>; seconds: number; artist: string; title: string; out: string }) => Promise<void>;
   /** Renders a storyboard music video; ffmpeg by default (renderStoryVideo). */
   storyVideo?: (input: { audio: string; images: string[]; seconds: number; artist: string; title: string; out: string; clips?: Array<{ path: string; seconds: number }> }) => Promise<void>;
   /** A scene's picture for this prompt, or null when nothing can draw one; Workers AI by default. */
@@ -1133,6 +1171,8 @@ export class AiLabel {
     let total = 0;
     // Songs that land while videos are being made are picked up by the next pass.
     for (let made = await this.filmPass(); made > 0; made = await this.filmPass()) total += made;
+    // Also when nothing was made: the station keeps up with what may be shown.
+    await this.placeVideos().catch(() => undefined);
     return total;
   }
 
@@ -1178,9 +1218,10 @@ export class AiLabel {
     const songs = this.list().flatMap((artist) => artist.albums
       .filter((album) => album.cover || album.coverTried)
       .flatMap((album) => album.songs.filter((song) => song.file && !this.videoFailed.has(song.file)).map((song) => ({ artist, album, song }))));
-    const missing = songs.filter(({ song }) => !song.video);
-    const untagged = songs.filter(({ song }) => song.video && !song.videoTagged);
-    const old = songs.filter(({ song }) => song.video && song.videoTagged && ((song.videoVersion ?? 1) < 2 || (this.wantsVeo(song) && (song.videoVersion ?? 1) < 3)) && !this.upgradeTried.has(song.file));
+    // Only a single is filmed, and only with Veo footage: a song with an older (slideshow) video is filmed when its turn comes.
+    const missing = songs.filter(({ song }) => this.wantsVeo(song) && (song.videoVersion ?? 1) < FILMED && !this.upgradeTried.has(song.file));
+    const untagged = songs.filter(({ song }) => song.video && !song.videoTagged && (song.videoVersion ?? 1) >= FILMED);
+    const old: typeof songs = [];
     let made = 0;
     for (const { album, song } of untagged) {
       if (!this.settings.videos) break;
@@ -1201,9 +1242,10 @@ export class AiLabel {
     }
     for (const { artist, album, song } of [...missing, ...old]) {
       if (!this.settings.videos) break;
-      // An old video is only made again as a storyboard, and tried once a run.
+      // Tried once a run: a shot Veo refuses today it may make tomorrow.
       const upgrade = Boolean(song.video);
-      if (upgrade) this.upgradeTried.add(song.file);
+      this.upgradeTried.add(song.file);
+      if (!this.wantsVeo(song)) break;
       const out = join(album.folder, `${songBase(song)}.mp4`);
       const partial = join(album.folder, `.${randomBytes(4).toString("hex")}.video.mp4`);
       const scenes = join(album.folder, `.scenes-${song.n}-${randomBytes(3).toString("hex")}`);
@@ -1218,7 +1260,7 @@ export class AiLabel {
         await this.placeVideos().catch(() => undefined);
       } catch (error) {
         if (!upgrade) this.videoFailed.add(song.file);
-        this.log(`no ${upgrade ? "storyboard " : ""}video for "${song.title}": ${(error as Error).message}`);
+        this.log(`no filmed video for "${song.title}": ${(error as Error).message}`);
       } finally {
         rmSync(partial, { force: true });
         rmSync(scenes, { recursive: true, force: true });
@@ -1228,46 +1270,20 @@ export class AiLabel {
   }
 
   /**
-   * One song's video: a storyboard of scenes when a model can write it and an
-   * image model can draw it (version 2), else the cover-and-waveform kind (1).
+   * A single's video: Veo shots of the band, cut to the whole song (FILMED).
+   * Fewer than half the shots filmed (a refusal, the budget spent) makes no
+   * video at all: footage stretched that thin would be a loop, not a video.
    */
-  private async filmSong(artist: LabelArtist, album: LabelAlbum, song: LabelSong, scenes: string, out: string, storyOnly = false): Promise<number> {
+  private async filmSong(artist: LabelArtist, _album: LabelAlbum, song: LabelSong, scenes: string, out: string, _upgrade = false): Promise<number> {
     let seconds = song.seconds;
     try {
       const probed = await this.deps.probe(song.file);
       if (probed.duration > 5) seconds = probed.duration;
     } catch { /* the asked-for length */ }
-    const images: string[] = [];
-    if (this.canAsk()) {
-      try {
-        const count = Math.max(4, Math.min(16, Math.round(seconds / 9)));
-        const prompts = await writeStoryboard({ ...artist, cast: this.castOf(artist) }, album, song, count, this.deps.ask ?? askJson);
-        mkdirSync(scenes, { recursive: true });
-        const draw = this.deps.image ?? ((prompt: string) => workersAiCover(prompt));
-        // A few at a time: the image model is quick, the machine is shared.
-        for (let i = 0; i < prompts.length; i += 3) {
-          const drawn = await Promise.all(prompts.slice(i, i + 3).map((prompt) => draw(`${prompt} Cinematic 16:9 music video still, no text.`).catch(() => null)));
-          drawn.forEach((picture, j) => {
-            if (!picture) return;
-            const file = join(scenes, `${String(i + j).padStart(2, "0")}.jpg`);
-            writeFileSync(file, picture);
-            images.push(file);
-          });
-        }
-      } catch (error) {
-        this.log(`no storyboard for "${song.title}" (${(error as Error).message}); the cover video instead`);
-      }
-    }
-    // An album's single gets filmed shots of the band too, while the month's Veo budget lasts.
-    const clips = this.wantsVeo(song) ? await this.filmShots(artist, song, scenes) : [];
-    if (images.length >= 2 || clips.length > 0) {
-      if (storyOnly && (song.videoVersion ?? 1) >= 2 && clips.length === 0) throw new Error("no filmed shots this time; the video it has stays");
-      await (this.deps.storyVideo ?? ((input) => renderStoryVideo(this.deps.ffmpeg, input)))({ audio: song.file, images, seconds, artist: artist.name, title: song.title, out, ...(clips.length ? { clips } : {}) });
-      return clips.length ? 3 : 2;
-    }
-    if (storyOnly) throw new Error("no storyboard could be drawn; the video it has stays");
-    await (this.deps.video ?? ((audio, cover, to) => renderVideo(this.deps.ffmpeg, audio, cover, to)))(song.file, album.cover, out);
-    return 1;
+    const clips = await this.filmShots(artist, song, scenes);
+    if (clips.length < Math.max(2, Math.ceil(this.settings.veoShots / 2))) throw new Error(`only ${clips.length} of ${this.settings.veoShots} shots were filmed`);
+    await (this.deps.filmedVideo ?? ((input) => renderFilmedVideo(this.deps.ffmpeg, input)))({ audio: song.file, clips, seconds, artist: artist.name, title: song.title, out });
+    return FILMED;
   }
 
   /** Whether this song gets filmed Veo shots: an album's single, Veo on, and the month's budget not spent. */
@@ -1307,7 +1323,7 @@ export class AiLabel {
       } catch (error) {
         if (error instanceof VeoUnavailable) {
           this.veoSpentIn = new Date(this.now()).toISOString().slice(0, 7);
-          this.log(`Veo: ${(error as Error).message}; singles get the storyboard until next month`);
+          this.log(`Veo: ${(error as Error).message}; no more videos until next month`);
           break;
         }
         this.log(`Veo shot ${i + 1} for "${song.title}": ${(error as Error).message}`);
@@ -1322,17 +1338,21 @@ export class AiLabel {
     const next = this.placing.then(async () => {
       await this.deps.index.scan(this.source(), this.deps.probe).done;
       const files = this.list()
-        .flatMap((artist) => artist.albums.flatMap((album) => album.songs.map((song) => song.video ?? "")))
+        .flatMap((artist) => artist.albums.flatMap((album) => album.songs.map((song) => ((song.videoVersion ?? 1) >= FILMED ? song.video ?? "" : ""))))
         .filter((file) => file && this.deps.index.itemAt(file)?.state === "ready");
-      if (files.length === 0) return;
       const existing = this.deps.store.byAuto("ai:label:videos");
-      if (existing) {
-        this.deps.store.update(existing.id, {}, files);
+      if (files.length === 0) {
+        // Nothing filmed yet (older slideshow videos are not shown): off the guide until there is.
+        if (existing && existing.listed) this.deps.store.setAccess(existing.id, { visibility: "private", listed: false }, this.deps.owner || "ai-label");
         return;
       }
       const label = this.settings.holder.replace(/,?\s+(inc|llc|ltd|gmbh|co)\.?$/i, "");
-      const made = this.deps.store.create({ name: `${label} AI · Music Videos`, description: `Music videos by ${label}'s AI artists, every genre.`, shuffle: true, repeat: true, video: true }, files, this.deps.owner);
-      this.deps.store.markAuto(made.id, "ai:label:videos");
+      if (existing) {
+        this.deps.store.update(existing.id, {}, files);
+        if (!this.settings.publish || existing.listed) return;
+      }
+      const made = existing ?? this.deps.store.create({ name: `${label} AI · Music Videos`, description: `Music videos by ${label}'s AI artists, every genre.`, shuffle: true, repeat: true, video: true }, files, this.deps.owner);
+      if (!existing) this.deps.store.markAuto(made.id, "ai:label:videos");
       if (this.settings.publish) {
         this.deps.store.setAccess(made.id, {
           visibility: "public",
@@ -1662,7 +1682,7 @@ export class AiLabel {
             .filter((album) => album.songs.some((song) => song.file))
             .map((album) => ({
               key: album.key, title: album.title, year: album.year, concept: album.concept, cover: Boolean(album.cover), complete: album.doneAt > 0,
-              songs: album.songs.filter((song) => song.file).map((song) => ({ n: song.n, title: song.title, seconds: song.seconds, lyrics: song.lyrics, ...(song.video ? { video: true } : {}) })),
+              songs: album.songs.filter((song) => song.file).map((song) => ({ n: song.n, title: song.title, seconds: song.seconds, lyrics: song.lyrics, ...(song.video && (song.videoVersion ?? 1) >= FILMED ? { video: true } : {}) })),
             }))
             .reverse(),
         }))
@@ -1679,7 +1699,7 @@ export class AiLabel {
     const match = /^(\d{1,3})\.(mp3|txt|mp4)$/.exec(what);
     const song = match ? album.songs.find((one) => one.n === Number(match[1]) && one.file) : undefined;
     if (!song) return null;
-    if (match![2] === "mp4") return song.video ? { path: song.video, type: "video/mp4" } : null;
+    if (match![2] === "mp4") return song.video && (song.videoVersion ?? 1) >= FILMED ? { path: song.video, type: "video/mp4" } : null;
     return match![2] === "mp3" ? { path: song.file, type: "audio/mpeg" } : { path: song.lyricsFile, type: "text/plain; charset=utf-8" };
   }
 
@@ -1791,7 +1811,7 @@ export class AiLabel {
         entries.push({ name: `${folder}/${songBase(song)}.mp3`, path: song.file });
         entries.push({ name: `${folder}/${songBase(song)}.lyrics.txt`, bytes: Buffer.from(`${song.lyrics}\n`) });
         if (song.lrc) entries.push({ name: `${folder}/${songBase(song)}.lrc`, path: song.lrc });
-        if (song.video) entries.push({ name: `${folder}/${songBase(song)}.mp4`, path: song.video });
+        if (song.video && (song.videoVersion ?? 1) >= FILMED) entries.push({ name: `${folder}/${songBase(song)}.mp4`, path: song.video });
       }
       if (album.cover) entries.push({ name: `${folder}/cover.jpg`, path: album.cover });
       entries.push({ name: `${folder}/album.json`, bytes: Buffer.from(`${JSON.stringify({
