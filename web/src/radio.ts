@@ -717,6 +717,81 @@ async function makeStation(form: HTMLFormElement): Promise<void> {
   notice(`Station ${made.station.name} made; it is private and stopped. Use "Who can listen" to put it on the air.`, "ok");
 }
 
+/* ---- My music (bought on nixamp.com) -------------------------------------- */
+
+interface Bought {
+  id: string; kind: "song" | "album" | "artist"; title: string; artistName: string; server: string;
+  artist: string; album: string; n: number; paidAt: number; grant?: string; zip?: string; link?: string;
+}
+interface Catalogue { genres: Array<{ artists: Array<{ key: string; name: string; albums: Array<{ key: string; title: string; songs: Array<{ n: number; title: string }> }> }> }> }
+
+/** The songs a purchase covers, in order, as addresses on the server that holds them. */
+async function songsOf(one: Bought): Promise<Array<{ title: string; src: string }>> {
+  const catalogue = await (await fetch(`${one.server}/api/v1/label`)).json() as Catalogue;
+  const artist = catalogue.genres.flatMap((genre) => genre.artists).find((a) => a.key === one.artist);
+  if (!artist) return [];
+  return artist.albums
+    .filter((album) => one.kind === "artist" || album.key === one.album)
+    .flatMap((album) => album.songs
+      .filter((song) => one.kind !== "song" || song.n === one.n)
+      .map((song) => ({ title: `${song.title} · ${artist.name} · ${album.title}`, src: `${one.server}/api/v1/label/${artist.key}/${album.key}/${song.n}.mp3?grant=${encodeURIComponent(one.grant ?? "")}` })));
+}
+
+let musicQueue: Array<{ title: string; src: string }> = [];
+let musicAt = 0;
+
+function playMusic(at: number): void {
+  const track = musicQueue[at];
+  if (!track) return;
+  musicAt = at;
+  const audio = $<HTMLAudioElement>("#music-audio");
+  $("#music-player").hidden = false;
+  $("#music-now").textContent = `${at + 1}/${musicQueue.length} · ${track.title}`;
+  audio.src = track.src;
+  void audio.play().catch(() => undefined);
+  say(`Playing ${track.title}`);
+}
+
+async function loadMusic(): Promise<void> {
+  // Purchases live on nixamp.com, whichever server is picked.
+  if (!onDirectory()) {
+    $("#music-summary").replaceChildren("Your purchases are on ", el("a", { href: "https://nixamp.com/radio#music" }, "nixamp.com/radio"), ".");
+    return;
+  }
+  const response = await fetch("/api/v1/store/purchases", { credentials: "same-origin" });
+  if (response.status === 401) {
+    $("#music-summary").textContent = "Sign in to nixamp.com with the email you bought with, and your music is here.";
+    return;
+  }
+  const body = await response.json() as { email?: string; purchases?: Bought[] };
+  const bought = body.purchases ?? [];
+  $("#music-summary").textContent = bought.length
+    ? `${bought.length} purchase${bought.length === 1 ? "" : "s"} for ${body.email ?? "you"}. Play here or download the zip again.`
+    : "Nothing bought yet. Every AI label song is 10¢, an album $1, an artist's whole catalogue $2: look for Download on a station's now playing.";
+  const list = $("#music-list");
+  list.replaceChildren(...bought.map((one) => {
+    const play = el("button", { type: "button" }, "Play");
+    play.addEventListener("click", () => void act("Play", async () => {
+      musicQueue = await songsOf(one);
+      if (musicQueue.length === 0) throw new Error("its server has no songs for it right now");
+      playMusic(0);
+    }, play));
+    return el("article", { class: "station", "aria-label": one.title },
+      el("div", { class: "station-head" },
+        el("span", { class: "state state-live" }, one.kind === "artist" ? "Artist" : one.kind === "album" ? "Album" : "Song"),
+        el("h3", {}, one.title),
+        el("span", { class: "muted" }, `${one.artistName} · ${new Date(one.paidAt).toLocaleDateString()}`),
+      ),
+      el("div", { class: "actions" }, play, one.zip ? el("a", { href: one.zip, class: "ghost", download: true }, "Download zip") : null, one.link ? el("a", { href: one.link, target: "_blank", rel: "noopener" }, "Receipt") : null),
+    );
+  }));
+}
+
+function wireMusic(): void {
+  $<HTMLAudioElement>("#music-audio").addEventListener("ended", () => playMusic(musicAt + 1));
+  void loadMusic().catch(() => undefined);
+}
+
 /* ---- AI label ------------------------------------------------------------ */
 
 interface LabelAlbumRow { key: string; title: string; year: number; songs: number; composed: number; doneAt: number }
@@ -864,6 +939,7 @@ function wireLabel(): void {
 async function start(): Promise<void> {
   wirePlayer();
   wireLabel();
+  wireMusic();
   $<HTMLFormElement>("#search-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;

@@ -23,6 +23,7 @@
           <a href="#library" data-tab="library">Library</a>
           <a href="#stations" data-tab="stations">Radio</a>
           <a href="#label" data-tab="label">Label</a>
+          <a href="#music" data-tab="music">My music</a>
         </nav>
         <label class="server-pick">Server
           <select id="server"></select>
@@ -86,6 +87,16 @@
           </menu>
         </form>
       </dialog>
+
+      <section id="music" class="panel radio-section" aria-labelledby="music-title">
+        <h2 id="music-title" class="radio-title">My music</h2>
+        <p id="music-summary" class="hint" aria-live="polite">Songs and albums you bought, to play here or download again.</p>
+        <div id="music-list" class="station-list"></div>
+        <div id="music-player" class="resume" hidden>
+          <span id="music-now" class="now"></span>
+          <audio id="music-audio" controls preload="none"></audio>
+        </div>
+      </section>
 
       <section id="label" class="panel radio-section" aria-labelledby="label-title">
         <h2 id="label-title" class="radio-title">AI label</h2>

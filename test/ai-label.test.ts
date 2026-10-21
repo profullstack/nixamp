@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
+import { execFileSync } from "node:child_process";
+import { createServer as createHttpServer } from "node:http";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -180,7 +182,18 @@ test("the label over HTTP: the catalogue is public, running it is the owner's", 
   const calls: Array<{ prompt: string; seconds: number }> = [];
   const { top, store, runner, channels, label } = setup(fakeComposer(calls));
   const engine = { snapshot: () => ({ ...emptySnapshot(), root: top }), command: () => undefined, subscribe: () => () => undefined, trackPath: () => undefined } as unknown as Engine;
+  // A stand-in nixamp.com that vouches for the grants in `vouched`.
+  const vouched = new Map<string, Record<string, unknown>>();
+  const site = createHttpServer((request, response) => {
+    const grant = new URL(request.url ?? "/", "http://x").searchParams.get("g") ?? "";
+    const scope = vouched.get(grant);
+    response.writeHead(scope ? 200 : 403, { "content-type": "application/json" }).end(JSON.stringify(scope ? { ok: true, scope } : { ok: false }));
+  });
+  await new Promise<void>((done) => site.listen(0, "127.0.0.1", done));
+  const before = process.env["NIXAMP_SITE"];
+  process.env["NIXAMP_SITE"] = `http://127.0.0.1:${(site.address() as AddressInfo).port}`;
   const server = createServer(engine, { web: null, media: true, version: "test", key: "ctl", listenKey: "lst", channels, stations: { store, runner, label } });
+  if (before === undefined) delete process.env["NIXAMP_SITE"]; else process.env["NIXAMP_SITE"] = before;
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const send = (key: string, method: string, path: string, body?: unknown) => fetch(`${base}${path}?k=${key}`, { method, headers: { "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -219,11 +232,31 @@ test("the label over HTTP: the catalogue is public, running it is the owner's", 
     // The guide points at the catalogue.
     const guide = await (await fetch(`${base}/guide`)).text();
     assert.match(guide, /href="\/label"/);
+    // Bought: a grant nixamp.com vouches for opens the MP3 and the zip, and only what it covers.
+    assert.equal((await fetch(`${base}/api/v1/label/${lumi.key}/${album.key}/1.mp3?grant=g1.bogus.grant.that.nobody.signed.at.all`)).status, 403);
+    const good = `g1.${"x".repeat(30)}`;
+    vouched.set(good, { server: base, kind: "album", artist: lumi.key, album: album.key, n: 0, exp: Date.now() + 60_000 });
+    const song = await fetch(`${base}/api/v1/label/${lumi.key}/${album.key}/1.mp3?grant=${good}`);
+    assert.equal(song.status, 200);
+    assert.equal(song.headers.get("content-type"), "audio/mpeg");
+    const zip = await fetch(`${base}/api/v1/label/zip?grant=${good}`);
+    assert.equal(zip.status, 200, await zip.clone().text());
+    assert.match(zip.headers.get("content-disposition") ?? "", /Lumi%20Kestrel%20-%20Record%201\.zip/);
+    const bytes = Buffer.from(await zip.arrayBuffer());
+    assert.equal(bytes.length, Number(zip.headers.get("content-length")));
+    const file = join(top, "bought.zip");
+    writeFileSync(file, bytes);
+    const listing = execFileSync("unzip", ["-l", file], { encoding: "utf8" });
+    assert.match(listing, /Lumi Kestrel\/\d{4}-Record 1\/001\. Song 1-1\.mp3/);
+    assert.match(listing, /003\. Song 1-3\.lyrics\.txt/);
+    assert.match(listing, /album\.json/);
+    assert.equal((await fetch(`${base}/api/v1/label/zip?grant=g1.${"y".repeat(30)}`)).status, 403);
   } finally {
     label.stopSchedule();
     const closing = new Promise<void>((done) => server.close(() => done()));
     (server as { closeAllConnections?: () => void }).closeAllConnections?.();
     await closing;
+    await new Promise<void>((done) => site.close(() => done()));
     rmSync(top, { recursive: true, force: true });
   }
 });

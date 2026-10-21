@@ -218,7 +218,7 @@ const PLAN_SYSTEM = [
 const LYRICS_SYSTEM = [
   "You write original English song lyrics for an AI singer. Never quote or imitate an existing song and never name a real artist.",
   "Put each section tag on its own line: [Intro], [Verse 1], [Pre-Chorus], [Chorus], [Verse 2], [Bridge], [Outro].",
-  "Use two verses, a chorus sung two or three times and a bridge; vivid, specific, singable lines that rhyme where it sounds natural.",
+  "Use two verses of four lines, a four-line chorus sung two or three times, a pre-chorus of two lines and a bridge of two to four lines; vivid, specific, singable lines that rhyme where it sounds natural. Never just one line under a section.",
   "Only the words that are sung, no stage directions or notes. Answer as JSON: {\"lyrics\": \"the lyrics, lines separated by \\n\"}.",
 ].join(" ");
 
@@ -808,6 +808,53 @@ export class AiLabel {
     const song = match ? album.songs.find((one) => one.n === Number(match[1]) && one.file) : undefined;
     if (!song) return null;
     return match![2] === "mp3" ? { path: song.file, type: "audio/mpeg" } : { path: song.lyricsFile, type: "text/plain; charset=utf-8" };
+  }
+
+  /** The label song at this path, for the now-playing card's Download buttons. */
+  songAt(file: string): { artist: string; album: string; n: number; title: string; artistName: string; albumTitle: string } | null {
+    for (const artist of this.artists.values()) {
+      for (const album of artist.albums) {
+        const song = album.songs.find((one) => one.file === file);
+        if (song) return { artist: artist.key, album: album.key, n: song.n, title: song.title, artistName: artist.name, albumTitle: album.title };
+      }
+    }
+    return null;
+  }
+
+  /** A released song's MP3, when this grant's scope covers it. */
+  songFile(artistKey: string, albumKey: string, n: number): string {
+    return this.artists.get(artistKey)?.albums.find((one) => one.key === albumKey)?.songs.find((one) => one.n === n && one.file)?.file ?? "";
+  }
+
+  /**
+   * What a purchase's zip holds: every released song in scope with its words,
+   * and each album's cover and album.json, under <artist>/<year>-<album>/.
+   * Null when there is nothing (or no such artist).
+   */
+  zipFor(scope: { kind: "song" | "album" | "artist"; artist: string; album: string; n: number }): { name: string; entries: Array<{ name: string; path?: string; bytes?: Uint8Array }> } | null {
+    const artist = this.artists.get(scope.artist);
+    if (!artist) return null;
+    const albums = artist.albums.filter((one) => scope.kind === "artist" || one.key === scope.album);
+    const entries: Array<{ name: string; path?: string; bytes?: Uint8Array }> = [];
+    const top = fileName(artist.name);
+    for (const album of albums) {
+      const songs = album.songs.filter((one) => one.file && (scope.kind !== "song" || one.n === scope.n));
+      if (songs.length === 0) continue;
+      const folder = `${top}/${album.year}-${fileName(album.title)}`;
+      for (const song of songs) {
+        entries.push({ name: `${folder}/${songBase(song)}.mp3`, path: song.file });
+        entries.push({ name: `${folder}/${songBase(song)}.lyrics.txt`, bytes: Buffer.from(`${song.lyrics}\n`) });
+      }
+      if (album.cover) entries.push({ name: `${folder}/cover.jpg`, path: album.cover });
+      entries.push({ name: `${folder}/album.json`, bytes: Buffer.from(`${JSON.stringify({
+        artist: artist.name, genre: artist.genre, album: album.title, year: album.year, concept: album.concept,
+        label: this.settings.holder, copyright: `℗ ${album.year} ${this.settings.holder}`, madeWithAi: true,
+        songs: songs.map((one) => ({ n: one.n, title: one.title, seconds: one.seconds, file: `${songBase(one)}.mp3`, lyrics: `${songBase(one)}.lyrics.txt` })),
+      }, null, 2)}\n`) });
+    }
+    if (entries.length === 0) return null;
+    const what = scope.kind === "artist" ? "Discography" : scope.kind === "album" ? albums[0]!.title : this.songFile(scope.artist, scope.album, scope.n) ? albums[0]!.songs.find((one) => one.n === scope.n)!.title : "Song";
+    return { name: `${fileName(artist.name)} - ${fileName(what)}.zip`, entries };
   }
 
   private require(key: string): LabelArtist {

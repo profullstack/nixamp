@@ -17,6 +17,7 @@ interface TrackFacts {
   support: { holder: string; url: string; label: string } | null;
   art?: string;
   lyrics?: string;
+  store?: { song: string; album: string; artist: string; artistName: string; albumTitle: string } | null;
 }
 interface Lyrics { title: string; artist: string; text: string; source: string; language: string }
 const BASIS: Record<string, string> = {
@@ -111,6 +112,16 @@ const showFacts = (f: TrackFacts | null | undefined): void => {
   if (!support.hidden) {
     support.href = url;
     support.textContent = `${f.support!.label || "Support"} ${f.support!.holder}`;
+  }
+  // An AI label song is sold as a file on nixamp.com; listening here stays free.
+  const store = f.store && [f.store.song, f.store.album, f.store.artist].every((one) => /^https:\/\//.test(one)) ? f.store : null;
+  $("#buy").hidden = !store;
+  if (store) {
+    $<HTMLAnchorElement>("#buy-song").href = store.song;
+    $<HTMLAnchorElement>("#buy-album").href = store.album;
+    $<HTMLAnchorElement>("#buy-album").textContent = `Album${store.albumTitle ? `, ${store.albumTitle}` : ""} · $1`;
+    $<HTMLAnchorElement>("#buy-artist").href = store.artist;
+    $<HTMLAnchorElement>("#buy-artist").textContent = `Everything by ${store.artistName || "them"} · $2`;
   }
   box.hidden = false;
   void loadLyrics(typeof f.lyrics === "string" && f.lyrics.startsWith("/api/v1/stations/") ? f.lyrics : "");
