@@ -3165,6 +3165,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         },
         trackFor: (file) => trackFor(engine, file),
         ...(options.library ? { isVideo: (file: string) => options.library!.index.itemAt(file)?.video === true } : {}),
+        ...(options.library ? { durationOf: (file: string) => options.library!.index.itemAt(file)?.duration ?? 0 } : {}),
         base: `${scheme}://${request.headers.host ?? "localhost"}`,
         publicBase: options.stations.publicBase?.() ?? "",
         json,

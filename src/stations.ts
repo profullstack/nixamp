@@ -443,6 +443,8 @@ export interface PublicStation {
   /** Radio or TV. */
   kind: "audio" | "video";
   nowPlaying: { title: string; artist: string; album: string } | null;
+  /** Seconds into what is on and how long it is, when both are known. */
+  progress?: { position: number; duration: number } | null;
   format: { codec: string; bitrateKbps: number; sampleRate: number; channels: number } | null;
   listeners: number;
 }
