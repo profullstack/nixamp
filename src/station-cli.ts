@@ -423,7 +423,8 @@ async function labelCommand(argv: string[], call: Call, show: Show): Promise<num
     return [
       `${String(one["name"])}  [${String(one["key"])}]  ${String(one["genre"])}${one["enabled"] ? "" : "  (off)"}`,
       ...albums.map((album) => `  ${String(album["year"])}  ${String(album["title"])}  ${String(album["composed"])}/${String(album["songs"])} songs${album["doneAt"] ? "" : "  (recording)"}`),
-      `  next album ${when(Number(one["nextAlbumAt"] ?? -1))}`,
+      // On the daily schedule an enabled artist has no date of its own: it is in the daily draw.
+      `  next album ${Number(one["nextAlbumAt"] ?? -1) === -1 && one["enabled"] ? "in the daily draw (one album a day across the label)" : when(Number(one["nextAlbumAt"] ?? -1))}`,
       ...(one["lastError"] ? [`  problem    ${String(one["lastError"])}`] : []),
     ].join("\n");
   };
