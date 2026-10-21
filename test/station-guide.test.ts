@@ -137,7 +137,7 @@ test("crawlproof on the guide: tracker + ad only when configured, and the policy
   const ads = { site: "b5f8f7af-32b5-460b-ae7b-9732414fee8a", slot: "ade2345b-7a5e-40e3-ac02-004fb8c880b2" };
   const page = renderGuide([], "", ads);
   assert.match(page, /<script data-site="b5f8f7af-32b5-460b-ae7b-9732414fee8a" src="https:\/\/crawlproof\.com\/stats\.js" async><\/script>\n<\/head>/);
-  assert.match(page, /<iframe src="https:\/\/crawlproof\.com\/api\/ads\/frame\?slot=ade2345b-7a5e-40e3-ac02-004fb8c880b2&amp;format=banner_300x250"[^>]*sandbox=/);
+  assert.match(page, /<iframe src="https:\/\/crawlproof\.com\/api\/ads\/frame\?slot=ade2345b-7a5e-40e3-ac02-004fb8c880b2&amp;format=text_link"[^>]*sandbox=/);
   const csp = guideCsp(ads);
   assert.match(csp, /script-src 'sha256-[^']+' https:\/\/crawlproof\.com;/);
   assert.match(csp, /frame-src https:\/\/crawlproof\.com/);
