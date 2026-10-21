@@ -26,13 +26,18 @@ interface Job {
   progress: Progress;
   finished: Promise<void>;
   error: string;
+  /** The status to answer the error with: 402 when the asker's AI credit ran out. */
+  status?: 402;
 }
+
+/** Runs some translating for an account, paid from its credit (server.ts payForAi). */
+export type PayForTranslation = <T>(by: string, characters: number, work: () => Promise<T>) => Promise<T>;
 
 /** What a request should answer: the status and the body's extra fields. */
 export type Answer =
   | { status: 200; transcript: Transcript }
   | { status: 202; transcript: Transcript | null; translating: Progress }
-  | { status: 404 | 409 | 503; error: string };
+  | { status: 402 | 404 | 409 | 503; error: string };
 
 export class StoredTranslations {
   private readonly jobs = new Map<string, Job>();
@@ -41,6 +46,8 @@ export class StoredTranslations {
     private readonly store: Transcripts,
     private readonly translator: Translator | undefined,
     private readonly onEvent: (message: string) => void = () => {},
+    // Pay as you go: each batch is charged to whoever asked, before it is translated.
+    private readonly pay: PayForTranslation = (_by, _characters, work) => work(),
   ) {}
 
   /** The lines of the original that the translation does not yet have. */
@@ -70,7 +77,7 @@ export class StoredTranslations {
     let job = this.jobs.get(key);
     if (job?.error) {
       this.jobs.delete(key);
-      return { status: 503, error: job.error };
+      return { status: job.status ?? 503, error: job.error };
     }
     if (!job) {
       job = this.start(key, original, translation, missing, language, by);
@@ -79,7 +86,7 @@ export class StoredTranslations {
         await job.finished;
         if (job.error) {
           this.jobs.delete(key);
-          return { status: 503, error: job.error };
+          return { status: job.status ?? 503, error: job.error };
         }
         const made = await this.store.get(id, language);
         if (made) return { status: 200, transcript: made };
@@ -93,6 +100,7 @@ export class StoredTranslations {
     job.finished = this.run(original, translation, missing, language, by, job)
       .catch((error: unknown) => {
         job.error = error instanceof SpeechError ? error.message : `translating failed: ${(error as Error).message}`;
+        if (error instanceof SpeechError && error.status === 402) job.status = 402;
         this.onEvent(`  translating ${original.title || original.media} to ${language}: ${job.error}`);
       })
       .finally(() => {
@@ -111,7 +119,8 @@ export class StoredTranslations {
       const lines: TranscriptLine[] = [];
       for (const source of new Set(batch.map((line) => line.language || original.language))) {
         const group = batch.filter((line) => (line.language || original.language) === source);
-        const done = await translator.translate(group.map((line) => line.text), source, language);
+        const texts = group.map((line) => line.text);
+        const done = await this.pay(by, texts.reduce((sum, one) => sum + one.length, 0), () => translator.translate(texts, source, language));
         model = done.model;
         lines.push(...group.map((line, i) => ({ ...line, language, original: line.text, text: done.texts[i] ?? "" })).filter((line) => line.text !== ""));
       }

@@ -58,13 +58,14 @@ test("PostgreSQL: ten free panel sessions are atomic, shared across upgrades and
   } finally { await db.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); }
 });
 
-test("PostgreSQL: free speech has zero charge, paid fallback stays metered, and direct routes cannot bypass session ownership", { skip: !process.env["NIXAMP_TEST_DATABASE_URL"] }, async () => {
+test("PostgreSQL: AI is pay as you go with no free sessions; only the admin is never charged", { skip: !process.env["NIXAMP_TEST_DATABASE_URL"] }, async () => {
   const connectionString = process.env["NIXAMP_TEST_DATABASE_URL"]!;
-  const admin = new pg.Pool({ connectionString }), schema = `free_meter_${randomUUID().replaceAll("-", "")}`;
+  const admin = new pg.Pool({ connectionString }), schema = `payg_meter_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
   const db = new pg.Pool({ connectionString, options: `-c search_path=${schema}` });
-  let now = Date.parse("2026-09-14T12:00:00Z"), calls = 0;
-  const passes = new TranslationPasses({ db, now: () => now, key: "", site: "https://nixamp.com" });
+  const now = Date.parse("2026-09-14T12:00:00Z");
+  let calls = 0;
+  const passes = new TranslationPasses({ db, now: () => now, key: "", site: "https://nixamp.com", admins: ["owner"] });
   const voice = new LiveVoice({ db, billing: passes, now: () => now, apiKey: "fixture", fetcher: (async url => {
     if (String(url).includes("/voices?")) return Response.json({ voices: [{ voice_id: "one", name: "One" }] });
     calls++;
@@ -72,42 +73,55 @@ test("PostgreSQL: free speech has zero charge, paid fallback stays metered, and 
   }) as typeof fetch });
   let server: ReturnType<typeof createServer> | undefined;
   try {
-    assert.equal((await passes.access("alice")).available, false, "free use works even if checkout is unavailable");
-    await db.query("INSERT INTO translation_wallets VALUES ('alice', 1000000, $1)", [new Date(now + 86_400_000)]);
+    const balance = async (by: string) => (await passes.access(by)).balanceMicros;
+    await passes.access();
+    await db.query("INSERT INTO translation_wallets VALUES ('alice', 10000000, $1)", [new Date(now + 86_400_000)]);
+    // No free sessions, for anybody: the page is never offered one.
+    assert.equal((await passes.access("bob")).free.remaining, 0);
+    await assert.rejects(passes.begin("bob", "feed"), /Buy AI credit/);
+    await assert.rejects(passes.require("bob"), /Buy AI credit/);
     await passes.begin("alice", "feed");
-    await passes.begin("bob", "feed");
-    const ids = await passes.reserveMany(["alice", "bob", "alice", "stranger"], "voice", 500, "feed");
-    assert.deepEqual(ids.map(row => row.by).sort(), ["alice", "bob"]);
-    assert.equal((await passes.access("alice")).balanceMicros, 1_000_000, "free allowance wins over purchased credit");
-    const usage = (await db.query("SELECT charge_micros, cost_micros FROM translation_usage")).rows;
-    assert.ok(usage.every(row => Number(row.charge_micros) === 0 && Number(row.cost_micros) === 25_000));
+    await passes.begin("owner", "feed");
+    assert.equal((await passes.access("owner")).required, false);
+
+    // Everybody but the admin pays, at five times the provider's cost; the admin's use costs nothing and is not recorded.
+    const ids = await passes.reserveMany(["alice", "bob", "owner"], "voice", 500, "feed");
+    assert.deepEqual(ids.map(row => row.by).sort(), ["alice", "owner"]);
+    assert.equal(await balance("alice"), 9_875_000);
+    const usage = (await db.query("SELECT by_account, charge_micros FROM translation_usage")).rows;
+    assert.deepEqual(usage.map(row => [row.by_account, Number(row.charge_micros)]), [["alice", 125_000]]);
     await passes.refundMany(ids.map(row => row.id));
-    assert.equal((await passes.access("alice")).balanceMicros, 1_000_000, "free refunds never mint paid credit");
-    await assert.rejects(passes.require("bob", "other-feed"), /Buy/);
-    assert.deepEqual((await passes.eligible(["alice", "bob", "stranger"], "feed")).sort(), ["alice", "bob"]);
+    assert.equal(await balance("alice"), 10_000_000);
+    assert.deepEqual((await passes.eligible(["alice", "bob", "owner"])).sort(), ["alice", "owner"]);
+
+    // The other AI: charged first, kept when the work is done, given back when it fails.
+    assert.equal(await passes.spend("alice", "video", 8, async () => "clip"), "clip");
+    assert.equal(await balance("alice"), 4_000_000, "8 s of Veo at $0.15/s, times five");
+    await assert.rejects(passes.spend("bob", "translation_local", 1000, async () => "never"), /Buy AI credit/);
+    const before = await balance("alice");
+    await assert.rejects(passes.spend("alice", "translation_local", 1000, async () => { throw new Error("model down"); }), /model down/);
+    assert.equal(await balance("alice"), before, "a failed job is refunded");
+    await passes.spend("alice", "translation_local", 1000, async () => "ok");
+    assert.equal(await balance("alice"), before - 10_000 * 5);
+    assert.equal(await passes.spend("owner", "video", 8, async () => "free for the admin"), "free for the admin");
+    assert.equal(TranslationPasses.price("video", 8).charge, 6_000_000);
+
+    // Routes: nobody unfunded reaches the provider.
     server = createServer(new EmptyEngine(), { web: null, media: false, version: "test", translationPasses: passes, liveVoice: voice,
-      accounts: { whoIs: async (token: string) => ["alice", "bob", "stranger"].includes(token) ? { id: token } : null } as unknown as Accounts });
+      accounts: { whoIs: async (token: string) => ["alice", "bob", "owner"].includes(token) ? { id: token } : null } as unknown as Accounts });
     await new Promise<void>(resolve => server!.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const session = (account: string, resource: string) => fetch(`${base}/api/v1/translation-passes/session`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${account}` }, body: JSON.stringify({ resource, remaining: 999, by: "alice" }) });
-    assert.equal((await session("anonymous", "feed")).status, 401);
-    assert.equal((await session("bob", "feed")).status, 200);
-    assert.equal((await passes.access("bob")).free.remaining, 9);
+    const session = (account: string) => fetch(`${base}/api/v1/translation-passes/session`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${account}` }, body: JSON.stringify({ resource: "feed" }) });
+    assert.equal((await session("anonymous")).status, 401);
+    assert.equal((await session("bob")).status, 402);
+    assert.equal((await session("owner")).status, 200);
     const wav = new Uint8Array(encodeWav(new Float32Array(32000).fill(.1)));
-    const hear = (account: string, resource: string) => fetch(`${base}/api/v1/speech/speakers`, { method: "POST", headers: { authorization: `Bearer ${account}`, "content-type": "audio/wav", "x-nixamp-translation-session": resource }, body: wav });
-    assert.equal((await hear("stranger", "feed")).status, 402);
-    assert.equal((await hear("bob", "feed")).status, 200);
-    assert.equal(calls, 1);
-    const grant = await voice.grant("bob", "feed");
-    const synth = await fetch(`${base}/api/v1/speech/synthesize`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${grant.token}` }, body: JSON.stringify({ text: "Hallo", language: "de", channel: "feed" }) });
-    assert.equal(synth.status, 200); await synth.arrayBuffer();
-    now += 90_001;
-    await assert.rejects(passes.reserve("bob", "voice", 100, "feed"), /free session/);
-    const paid = await passes.reserve("alice", "voice", 100, "feed"); await passes.commit(paid);
-    assert.equal((await passes.access("alice")).balanceMicros, 975000, "an ended session falls back to existing 5x credit rate");
-    for (let i = 0; i < 9; i++) { await passes.begin("bob", `more-${i}`); now += 90_001; }
-    assert.equal((await session("bob", "eleventh")).status, 402);
-    const before = calls; assert.equal((await hear("bob", "feed")).status, 402); assert.equal(calls, before, "no provider call after free allowance is exhausted");
+    const hear = (account: string) => fetch(`${base}/api/v1/speech/speakers`, { method: "POST", headers: { authorization: `Bearer ${account}`, "content-type": "audio/wav", "x-nixamp-translation-session": "feed" }, body: wav });
+    assert.equal((await hear("bob")).status, 402);
+    assert.equal(calls, 0, "no provider call for somebody without credit");
+    assert.equal((await hear("owner")).status, 200);
+    assert.equal((await hear("alice")).status, 200);
+    assert.equal(calls, 2);
   } finally {
     if (server) await new Promise<void>(resolve => server!.close(() => resolve()));
     await db.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end();

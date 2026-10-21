@@ -22,7 +22,7 @@ import { Readable } from "node:stream";
 import { pipeline as pipeStream } from "node:stream/promises";
 import { relative } from "node:path";
 import { SharedTranslations, type SharedEvent } from "./shared-translation.ts";
-import { TranslationPasses, coinpayKeyFrom, readCoinpayWebhook, verifyCoinpaySignature } from "./translation-passes.ts";
+import { TranslationPasses, coinpayKeyFrom, readCoinpayWebhook, verifyCoinpaySignature, type AiKind } from "./translation-passes.ts";
 import { LiveVoice, LIVE_VOICE_LANGUAGES, LIVE_VOICE_MODEL, type VoiceRequest } from "./live-voice.ts";
 import { Connections, type Kind } from "./connections.ts";
 import {
@@ -3928,6 +3928,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
      * OpenProfile. Never awaited by the poster: the phone is a side effect
      * of the chat, and a slow Telnyx must not slow the box.
      */
+    /**
+     * AI work done for a signed-in account, paid as it goes from their credit:
+     * charged first, refunded if the work fails, a 402 with no credit. Only the
+     * admin (the owner) is never charged; with billing off, only the admin may.
+     */
+    const payForAi = <T>(by: string, kind: AiKind, units: number, work: () => Promise<T>): Promise<T> => {
+      if (options.translationPasses) return options.translationPasses.spend(by, kind, units, work);
+      if (by !== "" && by === options.owner?.id) return work();
+      throw new SpeechError("AI on nixamp is pay as you go, and billing is off here.", 402);
+    };
+
     const readOnThePhone = (where: { server: string; channel: string }, authorId: string, handle: string, body: string): void => {
       const partyLine = options.partyLine;
       const listing = (options.directory?.list() ?? []).find((one) => {
@@ -3945,7 +3956,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         const profile = persona.profile && options.profiles ? await options.profiles.voiceOf(persona.profile) : null;
         const pools = options.voices ? await options.voices.pools() : { provider: "kokoro" as const, female: [], male: [] };
         const spoken = spokenVoiceFor({ userId: authorId, voice: persona.voice, profile }, pools);
-        await partyLine.say(code, spokenLine(handle, body), spoken.voice, spoken.settings);
+        const words = spokenLine(handle, body);
+        // Read aloud is AI speech, paid per character from the author's credit (the admin's never is).
+        // No credit: the line stays in the chat and is not read.
+        const say = (): Promise<boolean> => partyLine.say(code, words, spoken.voice, spoken.settings);
+        await payForAi(authorId, "phone_voice", words.length, say);
       })().catch(() => undefined);
     };
 
@@ -4177,13 +4192,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           json(response, 400, { error: "a room is a server address and a channel" });
           return;
         }
-        const heard = await speech.transcribe(bytes, {
+        // Pay as you go per second of sound, from the WAV's own byte rate (the admin is never charged).
+        const byteRate = bytes.length > 44 ? new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(28, true) : 0;
+        const heard = await payForAi(who.id, "transcription_local", byteRate > 0 ? (bytes.length - 44) / byteRate : 1, () => speech.transcribe(bytes, {
           language: languageOf(url.searchParams.get("language")),
           // Pieces with their timing, for a whole file being written down.
           timestamps: url.searchParams.get("timestamps") === "1",
           by: who.id,
           ...(url.searchParams.get("live") === "1" ? { deadline: Date.now() + 10_000 } : {}),
-        });
+        }));
         // The language travels back: as told, or as the ear guessed it, so
         // a captioner can say it next time and a transcript can be kept as it.
         const said = {
@@ -4393,7 +4410,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       try {
-        json(response, 200, await translator.translate(texts, from, to, { by: who.id, ...(url.searchParams.get("live") === "1" ? { deadline: Date.now() + 10_000 } : {}) }));
+        // Pay as you go per character sent (the admin is never charged).
+        const characters = texts.reduce((sum, one) => sum + one.length, 0);
+        json(response, 200, await payForAi(who.id, "translation_local", characters, () => translator.translate(texts, from, to, { by: who.id, ...(url.searchParams.get("live") === "1" ? { deadline: Date.now() + 10_000 } : {}) })));
       } catch (error) {
         if (error instanceof SpeechError) json(response, error.status, { error: error.message });
         else throw error;
@@ -7996,7 +8015,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   // Account servers meter paid providers by default, including when checkout
   // is temporarily unconfigured. Self-hosters can explicitly sponsor usage.
   const translationPasses = accounts && pool && process.env["NIXAMP_TRANSLATION_BILLING"] !== "off"
-    ? new TranslationPasses({ db: pool, key: coinpayKeyFrom(), site: nixampSite }) : undefined;
+    // Every AI use is paid from this credit; only the admin (--owner / NIXAMP_OWNER) is never charged.
+    ? new TranslationPasses({ db: pool, key: coinpayKeyFrom(), site: nixampSite, admins: [options.owner || ""] }) : undefined;
   // Payments to the copyright holders nixamp.com collects for, on its own CoinPay business.
   const supportPayments = accounts ? new Support({ key: coinpayKeyFrom(), site: nixampSite, holders: supportHoldersFrom() }) : undefined;
   // Monthly support: each month a new CoinPay payment and its link by email.
@@ -8074,6 +8094,15 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     const base = peerBase(String(request.headers["x-nixamp-server"] ?? ""));
     if (!(await ownsListed(request, base))) return { status: 403, body: { error: "only the owner of a listed server" } };
     if (request.method === "GET") return { status: 200, body: await veoStudio.status() };
+    // Pay as you go from the caller's AI credit, per second made; the admin is never charged.
+    const payer = accounts ? (await accounts.whoIs(tokenFrom(request.headers)).catch(() => null))?.id ?? "" : "";
+    const paid = <T>(kind: AiKind, seconds: number, work: () => Promise<T>): Promise<T> => {
+      if (translationPasses) return translationPasses.spend(payer, kind, seconds, work);
+      if (payer !== "" && payer === options.owner) return work();
+      throw new SpeechError("AI on nixamp is pay as you go, and billing is off here.", 402);
+    };
+    const unpaid = (error: unknown): { status: number; body: unknown } | null =>
+      error instanceof SpeechError ? { status: error.status, body: { error: error.message, code: "credit" } } : null;
     if (request.method !== "POST") return { status: 405, body: { error: "GET or POST" } };
     let input: { prompt?: unknown; seconds?: unknown; references?: unknown; lipsync?: unknown; video?: unknown; audio?: unknown };
     // A lip sync carries an 8 s 1080p shot and its seconds of the song: up to 48 MB as base64.
@@ -8084,8 +8113,12 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
       const audio = Buffer.from(String(input.audio ?? ""), "base64");
       if (video.length < 10_000 || audio.length < 1_000) return { status: 400, body: { error: "a shot and its audio" } };
       try {
-        return { status: 200, body: null, video: await veoStudio.lipsync({ video, audio, seconds: Number(input.seconds ?? 8) }) };
+        // Charged as veo-studio.ts makes it: 1 to 10 s.
+        const seconds = Math.max(1, Math.min(10, Number(input.seconds ?? 8) || 8));
+        return { status: 200, body: null, video: await paid("lipsync", seconds, () => veoStudio.lipsync({ video, audio, seconds })) };
       } catch (error) {
+        const owed = unpaid(error);
+        if (owed) return owed;
         if (error instanceof VeoBudgetError) return { status: 402, body: { error: error.message, code: "budget", ...(await veoStudio.status()) } };
         return { status: 422, body: { error: (error as Error).message, code: "refused" } };
       }
@@ -8094,8 +8127,12 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     if (prompt.length < 20) return { status: 400, body: { error: "describe the shot" } };
     const references = (Array.isArray(input.references) ? input.references : []).slice(0, 3).map((one) => Buffer.from(String(one), "base64")).filter((one) => one.length > 1000);
     try {
-      return { status: 200, body: null, video: await veoStudio.clip({ prompt, seconds: Number(input.seconds ?? 8), references }) };
+      // Charged as veo-studio.ts makes it: 4, 6 or 8 s.
+      const seconds = [4, 6, 8].includes(Number(input.seconds)) ? Number(input.seconds) : 8;
+      return { status: 200, body: null, video: await paid("video", seconds, () => veoStudio.clip({ prompt, seconds, references })) };
     } catch (error) {
+      const owed = unpaid(error);
+      if (owed) return owed;
       if (error instanceof VeoBudgetError) return { status: 402, body: { error: error.message, code: "budget", ...(await veoStudio.status()) } };
       return { status: 422, body: { error: (error as Error).message, code: "refused" } };
     }
@@ -8152,7 +8189,12 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
   }
   // What was heard, kept: where the accounts are, under the media's identity.
   const transcripts = pool ? new Transcripts(pool, (message) => console.log(message)) : undefined;
-  const translations = transcripts ? new StoredTranslations(transcripts, translator, (message) => console.log(message)) : undefined;
+  // Translating a stored transcript is AI: paid per character by whoever asked; only the admin is never charged.
+  const translations = transcripts ? new StoredTranslations(transcripts, translator, (message) => console.log(message), (by, characters, work) => {
+    if (translationPasses) return translationPasses.spend(by, "translation_local", characters, work);
+    if (by !== "" && by === options.owner) return work();
+    throw new SpeechError("AI on nixamp is pay as you go, and billing is off here.", 402);
+  }) : undefined;
   // The record of every file nixamp has met, by its bytes: nixamp.com/hash/<id>.
   const records = pool ? new Media(pool, (message) => console.log(message)) : undefined;
 

@@ -50,6 +50,11 @@ export class Owner {
     return this.options.ownerId !== "";
   }
 
+  /** The owner's account id, or "" when nobody has claimed this server. */
+  get id(): string {
+    return this.options.ownerId;
+  }
+
   /** The account a token belongs to, or "" for one nixamp.com does not accept. */
   async accountFor(token: string): Promise<string> {
     if (!token) return "";
