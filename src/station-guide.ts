@@ -173,7 +173,7 @@ const GROUPS = ["rooms", "vod", "ai", "shared", "radio", "tv"] as const;
  * gateway that cannot run its script against this server (the Moshpit's
  * /n/<name>), and for a crawler. Everything from a station is escaped.
  */
-export function renderGuide(entries: GuideEntry[], apiBase = "", ads: GuideAds = {}, labelHref = ""): string {
+export function renderGuide(entries: GuideEntry[], apiBase = "", ads: GuideAds = {}, labelHref = "", home = false): string {
   const groupOf = (one: GuideEntry): string => one.group ?? (one.kind === "video" ? "tv" : "radio");
   const cards = (group: string): string => entries
     .filter((one) => groupOf(one) === group && /^https?:\/\//.test(one.page))
@@ -187,7 +187,8 @@ export function renderGuide(entries: GuideEntry[], apiBase = "", ads: GuideAds =
       .replace(`<div id="${group}" class="grid" aria-live="polite"></div>`, `<div id="${group}" class="grid" aria-live="polite">${made}</div>`);
   }
   if (ads.site) page = page.replace("</head>", `<script data-site="${escape(ads.site)}" src="${CRAWLPROOF}/stats.js" async></script>\n</head>`);
-  if (ads.slot) {
+  // A home page carries no ad (live.streaming's / is this guide); nixamp.com/guide is an inner page.
+  if (ads.slot && !home) {
     // One line by default: a 300x250 box above the stations pushed the guide itself off the first screen.
     const format = ads.format ?? "text_link";
     const slot = ads.slot;
@@ -273,6 +274,23 @@ export function guideCsp(ads: GuideAds = {}): string {
 }
 
 export const GUIDE_CSP = guideCsp();
+
+/**
+ * The one ad an inner page carries -- a station, /radio, an artist, an album,
+ * /label, /vod, /watch -- and never a home page: a single text_link line at
+ * the top of its content, sized by attributes so a page whose CSP hashes its
+ * styles needs no new one. The page as it was without a slot.
+ */
+export function withPageAd(html: string, ads: GuideAds): string {
+  if (!ads.slot) return html;
+  const unit = `<div class="ad-unit ad-text_link"><iframe src="${CRAWLPROOF}/api/ads/frame?slot=${encodeURIComponent(ads.slot)}&amp;format=text_link" title="Advertisement" width="100%" height="40" frameborder="0" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>`;
+  return html.replace(/<main\b[^>]*>/, (main) => `${main}\n${unit}`);
+}
+
+/** A page's CSP with room for that ad's frame. */
+export function adCsp(csp: string, ads: GuideAds): string {
+  return ads.slot ? `${csp}; frame-src 'self' ${CRAWLPROOF}` : csp;
+}
 
 
 /** crawlproof analytics and an ad on the guide: a project id (tracker data-site) and an ad slot. */

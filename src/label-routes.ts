@@ -13,6 +13,7 @@ import { ROSTER, type AiLabel, type PublicArtist } from "./ai-label.ts";
 import { covers, PRICES, type GrantVerifier } from "./music-store.ts";
 import { writeZip, zipSize } from "./zip-stream.ts";
 import { StationError } from "./stations.ts";
+import { adCsp, withPageAd, type GuideAds } from "./station-guide.ts";
 
 // Listening is free on the live stations (with their breaks); the songs as
 // files are sold, so only the words and the cover are public here, and an
@@ -38,6 +39,8 @@ export interface LabelRoutesContext {
   /** nixamp.com, where the store is, and this server's public address (for Buy links). */
   site?: string;
   publicBase?: string;
+  /** The one text_link ad /label carries (station-guide.ts withPageAd); none when unset. */
+  ads?: GuideAds;
   json: (response: ServerResponse, status: number, body: unknown) => void;
   readBody: (request: IncomingMessage) => Promise<string>;
 }
@@ -106,8 +109,8 @@ export async function handleLabelRoutes(
       }
       if (path === "/label") {
         const shop = ctx.grants && ctx.site && /^https:\/\//.test(ctx.publicBase ?? "") ? { site: ctx.site, server: ctx.publicBase! } : undefined;
-        const page = renderLabel(label.publicView(), shop);
-        response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": LABEL_CSP, "cache-control": "public, max-age=300" });
+        const page = withPageAd(renderLabel(label.publicView(), shop), ctx.ads ?? {});
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": adCsp(LABEL_CSP, ctx.ads ?? {}), "cache-control": "public, max-age=300" });
         response.end(method === "HEAD" ? undefined : page);
         return true;
       }
