@@ -67,7 +67,7 @@ details.words pre { white-space: pre-wrap; font: inherit; margin: 8px 0 4px 3.2e
 .empty { color: var(--muted); }
 .notice { color: var(--warn); }
 
-.player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: 56px 1fr auto auto; gap: 12px; align-items: center; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); background: #0b120e; border-top: 1px solid var(--edge); box-shadow: 0 -10px 30px rgba(0,0,0,.4); }
+.player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: 56px minmax(120px, 1fr) minmax(200px, 2fr) auto; gap: 12px 16px; align-items: center; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); background: #0b120e; border-top: 1px solid var(--edge); box-shadow: 0 -10px 30px rgba(0,0,0,.4); }
 .player[hidden] { display: none; }
 .player-art { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; background: var(--edge); }
 .player-text { min-width: 0; display: grid; } .player-text strong, .player-text span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .player-text span { color: var(--muted); font-size: .9rem; }
@@ -79,3 +79,35 @@ button.ghost { font: inherit; background: transparent; color: var(--fg); border:
 .lyrics-text p { margin: 0 0 .8em; white-space: pre-wrap; } .lyrics-text .section { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; margin: 1em 0 .2em; }
 .foot { max-width: 1180px; margin: 0 auto; padding: 0 16px 120px; color: var(--muted); font-size: .85rem; }
 @media (prefers-reduced-motion: reduce) { .card { transition: none; } .card:hover { transform: none; } }
+
+/* Player: play/pause and the song's progress in the middle, volume and lyrics at the side. */
+.player-controls { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.player-progress { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.player-progress[hidden] { display: none; }
+.player-progress .time { font-variant-numeric: tabular-nums; font-size: .8rem; color: var(--muted); }
+.player-progress progress { flex: 1; height: 6px; appearance: none; -webkit-appearance: none; border: 0; border-radius: 999px; background: var(--edge); overflow: hidden; min-width: 60px; }
+.player-progress progress::-webkit-progress-bar { background: var(--edge); border-radius: 999px; }
+.player-progress progress::-webkit-progress-value { background: var(--green); border-radius: 999px; }
+.player-progress progress::-moz-progress-bar { background: var(--green); border-radius: 999px; }
+.break { font-size: .85rem; }
+.break[hidden] { display: none; }
+.player-side { display: flex; align-items: center; gap: 8px; }
+button.icon { font: inherit; background: transparent; border: 0; color: var(--fg); cursor: pointer; font-size: 1.1rem; min-width: 32px; min-height: 32px; }
+#player-volume { width: 100px; accent-color: var(--green); }
+@media (max-width: 760px) {
+  .player { grid-template-columns: 48px 1fr auto; }
+  .player-art { width: 48px; height: 48px; }
+  .player-controls { grid-column: 1 / -1; order: 3; }
+  #player-volume { width: 72px; }
+}
+
+/* Karaoke in the lyrics panel: the line being sung lights up, its words fill in as they are sung. */
+.lyrics-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; position: sticky; top: -14px; background: var(--panel); padding: 2px 0 6px; }
+.lyrics-head .follow { font-size: .8rem; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.lyrics-head .follow[hidden] { display: none; }
+.lyrics-text.synced p.line { margin: 0 0 .5em; opacity: .45; transition: opacity .2s; }
+.lyrics-text.synced p.line.past { opacity: .6; }
+.lyrics-text.synced p.line.now { opacity: 1; }
+.lyrics-text.synced p.line.now .word { opacity: .55; transition: opacity .15s, color .15s; }
+.lyrics-text.synced p.line.now .word.sung { opacity: 1; color: var(--green); }
+@media (prefers-reduced-motion: reduce) { .lyrics-text.synced p.line, .lyrics-text.synced .word { transition: none; } }

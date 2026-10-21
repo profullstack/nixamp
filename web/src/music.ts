@@ -234,72 +234,223 @@ function notFound(): HTMLElement[] {
 /* ---- the player ------------------------------------------------------------- */
 
 let playing: Station | null = null;
-let nowTimer: ReturnType<typeof setInterval> | undefined;
+/** This page's stream, named so its server can say what the player is hearing (/clock). */
+let nonce = "";
+/** What the server said the player heard at a currentTime: the song's clock runs on from there. */
+let clockSeen: { nonce: string; ct: number; position: number; duration: number; break: boolean; title: string } | null = null;
+let clockAsked = 0;
+/** The song the now-playing card shows; a different one on the clock refreshes it at once. */
+let shownTitle = "";
+
+interface SyncedLine { start: number; end: number; text: string; words: Array<{ start: number; end: number; text: string }> }
+/** Karaoke in the lyrics panel: the timed lines, their elements, the line being sung, and which song they are. */
+let karaoke: { lines: SyncedLine[]; els: HTMLElement[]; words: HTMLElement[][]; at: number; title: string } | null = null;
+
+const audioEl = (): HTMLAudioElement => $<HTMLAudioElement>("#audio");
+const q = (station: Station): string => `t=${encodeURIComponent(station.token)}`;
+
+/** (Re)join the live stream, under a fresh name for the clock. */
+function join(): void {
+  if (!playing) return;
+  nonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  clockSeen = null;
+  const audio = audioEl();
+  audio.src = `${playing.listen}/stream?${q(playing)}&n=${nonce}`;
+  void audio.play().catch(() => undefined);
+  $("#player-toggle").textContent = "❚❚";
+  $("#player-toggle").setAttribute("aria-label", "Pause");
+}
 
 function play(station: Station): void {
-  const audio = $<HTMLAudioElement>("#audio");
   playing = station;
-  audio.src = `${station.listen}/stream?t=${encodeURIComponent(station.token)}`;
-  void audio.play().catch(() => undefined);
+  shownTitle = "";
+  karaoke = null;
+  join();
   $("#player").hidden = false;
   $("#player-title").textContent = station.nowPlaying?.title || station.name;
   $("#player-by").textContent = station.nowPlaying?.artist || station.name;
-  $("#player-toggle").textContent = "❚❚";
-  $("#player-toggle").setAttribute("aria-label", "Pause");
   say(`Playing ${station.name}`);
-  clearInterval(nowTimer);
   void refreshNow();
-  nowTimer = setInterval(() => void refreshNow(), 10_000);
+}
+
+/** Which second of which song the player is on, by its own currentTime: exact, whatever it has buffered. */
+async function askClock(): Promise<void> {
+  const audio = audioEl();
+  const station = playing;
+  const name = nonce;
+  if (!station || !name || audio.paused || audio.readyState < 2) return;
+  clockAsked = Date.now();
+  const ct = audio.currentTime;
+  try {
+    const r = await fetch(`${station.listen}/clock?${q(station)}&n=${encodeURIComponent(name)}&ct=${ct.toFixed(3)}`, { cache: "no-store" });
+    if (name !== nonce) return;
+    if (!r.ok) { clockSeen = null; return; }
+    const body = await r.json() as { position: number; duration: number; break: boolean; nowPlaying: { title: string } | null };
+    clockSeen = { nonce: name, ct, position: body.position, duration: body.duration, break: body.break, title: body.nowPlaying?.title ?? "" };
+    // A new song: its title, artist, cover and words now, not on the next round.
+    if (clockSeen.title && clockSeen.title !== shownTitle) void refreshNow();
+  } catch {
+    // The estimate carries on until the next answer.
+  }
+}
+
+const clockText = (seconds: number): string => {
+  const whole = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+};
+
+/** Ten times a second: the progress bar and the words, from the last clock and the player's own time since. */
+function tick(): void {
+  const audio = audioEl();
+  const clock = clockSeen && clockSeen.nonce === nonce && !audio.paused ? clockSeen : null;
+  const progress = $("#player-progress");
+  if (!clock) { progress.hidden = true; $("#player-break").hidden = true; return; }
+  const heard = clock.position + (audio.currentTime - clock.ct);
+  // Past the song's end the player is on the next one: ask again (not more than once a second).
+  if (clock.duration > 0 && heard > clock.duration && Date.now() - clockAsked > 1000) void askClock();
+  $("#player-break").hidden = !clock.break;
+  if (clock.break || clock.duration <= 0) { progress.hidden = true; return; }
+  const at = Math.min(clock.duration, Math.max(0, heard));
+  const bar = $<HTMLProgressElement>("#player-bar");
+  bar.max = clock.duration;
+  bar.value = at;
+  bar.setAttribute("aria-valuetext", `${clockText(at)} of ${clockText(clock.duration)}`);
+  $("#player-at").textContent = clockText(at);
+  $("#player-length").textContent = clockText(clock.duration);
+  progress.hidden = false;
+  // The words light only for the song being heard: they may arrive a moment before it does.
+  if (karaoke && (!karaoke.title || !clock.title || karaoke.title.trim().toLowerCase() === clock.title.trim().toLowerCase())) highlight(heard);
+}
+
+/** The line being sung, and its words as they are sung; Follow along keeps it in view inside the panel only. */
+function highlight(heard: number): void {
+  if (!karaoke) return;
+  const { lines, els, words } = karaoke;
+  let at = -1;
+  for (let i = 0; i < lines.length; i++) if (lines[i]!.start <= heard + 0.1) at = i;
+  if (at >= 0 && at < karaoke.at && heard > lines[karaoke.at]!.start - 1) at = karaoke.at;
+  if (at !== karaoke.at) {
+    els.forEach((one, i) => { one.classList.toggle("now", i === at); one.classList.toggle("past", i < at); });
+    karaoke.at = at;
+    const panel = $("#lyrics-panel");
+    if (at >= 0 && !panel.hidden && $<HTMLInputElement>("#lyrics-follow").checked) {
+      const line = els[at]!;
+      const top = line.offsetTop - panel.scrollTop;
+      if (top < panel.clientHeight * 0.2 || top + line.clientHeight > panel.clientHeight * 0.6) panel.scrollTo({ top: Math.max(0, line.offsetTop - panel.clientHeight / 3), behavior: "smooth" });
+    }
+  }
+  if (at >= 0) words[at]!.forEach((span, i) => span.classList.toggle("sung", lines[at]!.words[i]!.start <= heard));
 }
 
 interface Facts { title?: string; artist?: string; album?: string; art?: string; lyrics?: string }
 
-/** What is on the station now: title, artist, cover; the words when the panel is open. */
+/** What is on the station now: title, artist, cover, and the words (timed when the song has them). */
 async function refreshNow(): Promise<void> {
-  if (!playing) return;
-  const base = new URL(playing.listen).origin;
-  const answer = await fetch(`${playing.listen}/now?t=${encodeURIComponent(playing.token)}`).then((r) => r.json()).catch(() => null) as { facts?: Facts | null } | null;
+  const station = playing;
+  if (!station) return;
+  const base = new URL(station.listen).origin;
+  const answer = await fetch(`${station.listen}/now?${q(station)}`, { cache: "no-store" }).then((r) => r.json()).catch(() => null) as { facts?: Facts | null } | null;
   const facts = answer?.facts;
-  if (!facts) return;
-  $("#player-title").textContent = facts.title || playing.name;
+  if (!facts || station !== playing) return;
+  shownTitle = clockSeen?.title || facts.title || "";
+  $("#player-title").textContent = facts.title || station.name;
   $("#player-by").textContent = [facts.artist, facts.album].filter(Boolean).join(" · ");
   const art = $<HTMLImageElement>("#player-art");
   if (facts.art && art.dataset["src"] !== facts.art) { art.dataset["src"] = facts.art; art.src = base + facts.art; }
   const panel = $("#lyrics-panel");
-  if (!panel.hidden && facts.lyrics && panel.dataset["src"] !== facts.lyrics) {
+  if (facts.lyrics && panel.dataset["src"] !== facts.lyrics) {
     panel.dataset["src"] = facts.lyrics;
-    const words = await fetch(base + facts.lyrics).then((r) => r.json()).catch(() => null) as { lyrics?: { title: string; text: string } } | null;
-    $("#lyrics-title").textContent = words?.lyrics?.title ? `Lyrics · ${words.lyrics.title}` : "Lyrics";
-    $("#lyrics-text").replaceChildren(...(words?.lyrics?.text ?? "No lyrics for this one.").split(/\n{2,}/).map((stanza) =>
-      /^\[[^\]]+\]$/.test(stanza.trim()) ? el("p", { class: "section" }, stanza.trim().slice(1, -1)) : el("p", {}, stanza.replace(/^\[[^\]]+\]\n/, ""))));
+    const words = await fetch(base + facts.lyrics).then((r) => r.json()).catch(() => null) as { lyrics?: { title: string; text: string; synced?: SyncedLine[] } } | null;
+    drawLyrics(words?.lyrics ?? null);
+  } else if (!facts.lyrics) {
+    delete panel.dataset["src"];
+    drawLyrics(null);
   }
 }
 
+function drawLyrics(words: { title: string; text: string; synced?: SyncedLine[] } | null): void {
+  $("#lyrics-title").textContent = words?.title ? `Lyrics · ${words.title}` : "Lyrics";
+  const box = $("#lyrics-text");
+  if (words?.synced?.length) {
+    const els: HTMLElement[] = [];
+    const spans: HTMLElement[][] = [];
+    for (const line of words.synced) {
+      const parts = line.words.map((word, i) => el("span", { class: "word" }, (i ? " " : "") + word.text));
+      els.push(parts.length ? el("p", { class: "line" }, ...parts) : el("p", { class: "line" }, line.text));
+      spans.push(parts);
+    }
+    box.replaceChildren(...els);
+    box.classList.add("synced");
+    karaoke = { lines: words.synced, els, words: spans, at: -1, title: words.title };
+    $("#lyrics-follow-box").hidden = false;
+    return;
+  }
+  karaoke = null;
+  box.classList.remove("synced");
+  $("#lyrics-follow-box").hidden = true;
+  box.replaceChildren(...(words?.text ?? "No lyrics for this one.").split(/\n{2,}/).map((stanza) =>
+    /^\[[^\]]+\]$/.test(stanza.trim()) ? el("p", { class: "section" }, stanza.trim().slice(1, -1)) : el("p", {}, stanza.replace(/^\[[^\]]+\]\n/, ""))));
+}
+
+const remember = (name: string, value: string): void => { try { localStorage.setItem(`nixamp.music.${name}`, value); } catch { /* fine */ } };
+const recall = (name: string): string | null => { try { return localStorage.getItem(`nixamp.music.${name}`); } catch { return null; } };
+
 function wirePlayer(): void {
-  const audio = $<HTMLAudioElement>("#audio");
+  const audio = audioEl();
   $("#player-toggle").addEventListener("click", () => {
     if (!playing) return;
-    if (audio.paused) {
-      // Live: rejoin where the station is now, not where it was paused.
-      audio.src = `${playing.listen}/stream?t=${encodeURIComponent(playing.token)}`;
-      void audio.play().catch(() => undefined);
-      $("#player-toggle").textContent = "❚❚";
-      $("#player-toggle").setAttribute("aria-label", "Pause");
-    } else {
+    if (audio.paused) join();
+    else {
+      // Live: paused is gone, and play rejoins where the station is now.
       audio.pause();
       audio.removeAttribute("src");
       audio.load();
+      clockSeen = null;
       $("#player-toggle").textContent = "▶";
       $("#player-toggle").setAttribute("aria-label", "Play");
     }
+  });
+  // Volume and mute, kept for next time.
+  const volume = $<HTMLInputElement>("#player-volume");
+  const mute = $<HTMLButtonElement>("#player-mute");
+  const showMute = (): void => {
+    mute.textContent = audio.muted || audio.volume === 0 ? "🔇" : audio.volume < 0.5 ? "🔉" : "🔊";
+    mute.setAttribute("aria-pressed", String(audio.muted));
+    mute.setAttribute("aria-label", audio.muted ? "Unmute" : "Mute");
+  };
+  const saved = Number(recall("volume") ?? "1");
+  audio.volume = Number.isFinite(saved) ? Math.min(1, Math.max(0, saved)) : 1;
+  volume.value = String(audio.volume);
+  audio.muted = recall("muted") === "1";
+  showMute();
+  volume.addEventListener("input", () => {
+    audio.volume = Number(volume.value);
+    if (audio.volume > 0 && audio.muted) audio.muted = false;
+    remember("volume", volume.value);
+    remember("muted", audio.muted ? "1" : "0");
+    showMute();
+  });
+  mute.addEventListener("click", () => {
+    audio.muted = !audio.muted;
+    remember("muted", audio.muted ? "1" : "0");
+    showMute();
   });
   $("#player-lyrics").addEventListener("click", () => {
     const panel = $("#lyrics-panel");
     panel.hidden = !panel.hidden;
     $("#player-lyrics").setAttribute("aria-expanded", String(!panel.hidden));
-    delete panel.dataset["src"];
-    if (!panel.hidden) void refreshNow();
+    if (karaoke) karaoke.at = -1;
   });
+  // Follow along is the listener's: scrolling the words yourself turns it off.
+  const follow = $<HTMLInputElement>("#lyrics-follow");
+  follow.checked = recall("follow") !== "0";
+  follow.addEventListener("change", () => remember("follow", follow.checked ? "1" : "0"));
+  for (const kind of ["wheel", "touchmove"]) $("#lyrics-panel").addEventListener(kind, () => { if (follow.checked) { follow.checked = false; remember("follow", "0"); } }, { passive: true });
+  audio.addEventListener("playing", () => void askClock());
+  setInterval(() => void askClock(), 2000);
+  setInterval(tick, 100);
+  // A server without /clock (older) still gets its now-playing card refreshed.
+  setInterval(() => { if (playing && !audio.paused && !clockSeen) void refreshNow(); }, 15_000);
 }
 
 /* ---- routing --------------------------------------------------------------- */
