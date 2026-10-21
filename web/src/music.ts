@@ -44,6 +44,10 @@ const memberHref = (artist: Artist, member: Member): string => `/music/member/${
 const buyHref = (artist: Artist, kind: "song" | "album" | "artist", album = "", n = 0): string =>
   `/buy?${new URLSearchParams({ server: artist.server, kind, artist: artist.key, ...(kind !== "artist" ? { album } : {}), ...(kind === "song" ? { n: String(n) } : {}) })}`;
 
+/** Where a licence is bought (license-routes.ts): to put the music in a game, app or video, not just listen. */
+const licenseHref = (artist: Artist, kind: "song" | "album", album: string, n = 0): string =>
+  `/license?${new URLSearchParams({ server: artist.server, kind, artist: artist.key, album, ...(kind === "song" ? { n: String(n) } : {}) })}`;
+
 /** An artist's picture: the newest album's cover, else the first member's portrait. */
 function artOf(artist: Artist): string {
   const album = [...artist.albums].find((one) => one.cover);
@@ -105,6 +109,7 @@ function home(data: Catalogue): HTMLElement[] {
     out.push(el("h2", {}, el("a", { href: `/music/genre/${slug(genre.genre)}` }, genre.genre)), el("div", { class: "row" }, ...genre.artists.map(artistCard)));
   }
   if (!data.genres.length) out.push(el("p", { class: "empty" }, "The first albums are being recorded. Check back soon."));
+  else out.push(el("p", { class: "lead" }, "Making a game, an app or a video? ", el("a", { href: "/license?kind=catalog" }, "License the whole catalogue for $29 a year"), ", or any song from $5. ", el("a", { href: "/license/terms" }, "The terms"), "."));
   return out;
 }
 
@@ -267,7 +272,8 @@ function albumView(data: Catalogue, server: string, key: string, albumKey: strin
         el("h1", {}, album.title),
         el("p", { class: "lead" }, el("a", { href: artistHref(artist) }, artist.name), ` · ${album.year} · ${album.songs.length} songs, ${clock(length)}${album.complete ? "" : " · still recording"}`),
         album.concept ? el("p", { class: "lead" }, album.concept) : null,
-        el("div", { class: "actions" }, listenLive(data, artist), el("a", { class: "btn ghost", href: buyHref(artist, "album", album.key) }, "Download the album · $1")),
+        el("div", { class: "actions" }, listenLive(data, artist), el("a", { class: "btn ghost", href: buyHref(artist, "album", album.key) }, "Download the album · $1"),
+          el("a", { class: "btn ghost", href: licenseHref(artist, "album", album.key), title: "Use this album in your game, app or video" }, "License for your project · $100")),
       ),
     ),
     el("ol", { class: "tracks" }, ...album.songs.map((song) => el("li", {},
@@ -275,12 +281,13 @@ function albumView(data: Catalogue, server: string, key: string, albumKey: strin
         el("span", { class: "n" }, String(song.n)),
         el("span", {}, song.title),
         el("span", { class: "t" }, clock(song.seconds)),
-        el("a", { class: "buy", href: buyHref(artist, "song", album.key, song.n) }, "10¢"),
+        el("a", { class: "buy", href: buyHref(artist, "song", album.key, song.n), title: "Download the MP3" }, "10¢"),
+        el("a", { class: "buy", href: licenseHref(artist, "song", album.key, song.n), title: "License this song for your game, app or video, from $5" }, "License"),
       ),
       song.video ? el("details", { class: "words" }, el("summary", {}, "Watch the video"), videoOf(artist, album, song)) : null,
       song.lyrics ? el("details", { class: "words" }, el("summary", {}, "Lyrics"), el("pre", {}, song.lyrics)) : null,
     ))),
-    el("p", { class: "muted" }, "Every song plays free on the live station. A download is the MP3s with the cover art and lyrics, yours to keep."),
+    el("p", { class: "muted" }, "Every song plays free on the live station. A download is the MP3s with the cover art and lyrics, yours to keep and listen to. To use a song in your own game, app or video, ", el("a", { href: licenseHref(artist, "album", album.key) }, "license it"), " (from $5 a song), or get the ", el("a", { href: "/license?kind=catalog" }, "Catalog pass"), " for every artist, $29 a year."),
   ];
 }
 
