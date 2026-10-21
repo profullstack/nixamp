@@ -95,7 +95,7 @@ import { handleVods, VodProbe, vodEntries, VodStore, vodView } from "./guide-vod
 import { withPitFooter } from "./pit-footer.ts";
 import { handleFollowPage } from "./follow-page.ts";
 import {
-  asRadioPage, buildCatalogue, isRadioPath, NAV_STYLE, RADIO_ALBUM, RADIO_ARTIST, RADIO_CSP, RADIO_STATION, RADIO_SUB, radioNav, radioPeers, radioRewriter,
+  asRadioPage, buildCatalogue, isRadioPath, NAV_STYLE, RADIO_ALBUM, RADIO_ARTIST, RADIO_CSP, RADIO_STATION, RADIO_SUB, RADIO_BUY, radioBuyLink, radioBuyQuery, radioNav, radioPeers, radioRewriter,
   radioStations, renderAlbum, renderArtist, renderDirectory, renderMissing, rewriteResponse, type PeerRadio, type RadioCatalogue,
 } from "./radio-pages.ts";
 import { adCsp, guideAds, guideCsp, withPageAd, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
@@ -2139,7 +2139,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         query.delete("t");
         query.set("t", station!.listenToken);
         request.url = `/api/v1/stations/${station!.id}/${sub[2]}?${query.toString()}`;
-        rewriteResponse(response, radioRewriter(station!, sub[1]!));
+        const here = options.stations.publicBase?.() ?? "";
+        rewriteResponse(response, radioRewriter(station!, sub[1]!, /^https:\/\//.test(here) ? `${storeSite}/buy?server=${encodeURIComponent(here)}&` : ""));
         return handle(request, response);
       }
     }
@@ -3140,10 +3141,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         response.end(request.method === "HEAD" ? undefined : page);
       };
       const shop = stations.label && /^https:\/\//.test(publicBase)
-        ? { site: storeSite, buy: (kind: "song" | "album" | "artist", artist: string, album = "", n = 0) => buyLink(storeSite, publicBase, kind, artist, album, n), prices: PRICES }
+        ? { site: storeSite, buy: radioBuyLink, prices: PRICES }
         : null;
       const peers = stations.peers ? radioPeers(named.keys(), await stations.peers.entries()) : new Map<string, PeerRadio>();
       const stationNames = new Map([...named].map(([slug, one]) => [slug, one.name]));
+      if (path === RADIO_BUY) {
+        const item = radioBuyQuery(url.searchParams);
+        if (!item || !shop) return send(404, renderMissing("thing for sale", base, nav));
+        response.writeHead(302, { location: buyLink(storeSite, publicBase, item.kind, item.artist, item.album, item.n), "cache-control": "no-store", "referrer-policy": "no-referrer" });
+        response.end();
+        return;
+      }
       if (path === "/radio" || path === "/radio/") {
         const encrypted = (request.socket as { encrypted?: boolean }).encrypted === true;
         const entries = guideEntries({

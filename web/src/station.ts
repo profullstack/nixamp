@@ -137,7 +137,7 @@ const showFacts = (f: TrackFacts | null | undefined): void => {
     support.textContent = `${f.support!.label || "Support"} ${f.support!.holder}`;
   }
   // An AI label song is sold as a file on nixamp.com; listening here stays free.
-  const store = f.store && [f.store.song, f.store.album, f.store.artist].every((one) => /^https:\/\//.test(one)) ? f.store : null;
+  const store = f.store && [f.store.song, f.store.album, f.store.artist].every((one) => /^https:\/\//.test(one) || one.startsWith("/radio/buy?")) ? f.store : null;
   $("#buy").hidden = !store;
   if (store) {
     $<HTMLAnchorElement>("#buy-song").href = store.song;

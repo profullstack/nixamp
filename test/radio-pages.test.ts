@@ -12,7 +12,7 @@ import { StationRunner } from "../src/station-runner.ts";
 import { StationStore, type Station } from "../src/stations.ts";
 import { PeerGuides } from "../src/station-guide.ts";
 import { albumSlug, artistSlug, slugify, stationSlug } from "../src/radio-slug.ts";
-import { buildCatalogue, radioPeers, radioRewriter, radioStations, renderAlbum, renderArtist } from "../src/radio-pages.ts";
+import { buildCatalogue, radioBuyQuery, radioPeers, radioRewriter, radioStations, renderAlbum, renderArtist } from "../src/radio-pages.ts";
 import { followTarget } from "../src/follow-page.ts";
 
 const memory = () => ({ read: () => null, write: () => undefined });
@@ -68,6 +68,14 @@ test("the rewriter takes the station's address and token out", () => {
   assert.doesNotMatch(out, /s3cr-t_tok|api\/v1\/stations/);
   assert.match(out, /"\/radio\/ai-metal\/art\?f=12"/);
   assert.match(out, /"\/radio\/ai-metal\/lyrics"/);
+  // The store's links go through /radio/buy, which knows the server.
+  const buyFrom = `https://nixamp.com/buy?server=${encodeURIComponent("https://server1.example:4321")}&`;
+  const store = radioRewriter({ id: "abcdefghij", listenToken: "x" }, "ai-metal", buyFrom)(JSON.stringify({ song: `${buyFrom}kind=song&artist=69bc7211de&album=06d4eb22&n=4` }));
+  assert.match(store, /"\/radio\/buy\?kind=song&artist=69bc7211de&album=06d4eb22&n=4"/);
+  assert.doesNotMatch(store, /server1/);
+  assert.deepEqual(radioBuyQuery(new URLSearchParams("kind=song&artist=69bc7211de&album=06d4eb22&n=4")), { kind: "song", artist: "69bc7211de", album: "06d4eb22", n: 4 });
+  assert.equal(radioBuyQuery(new URLSearchParams("kind=song&artist=69bc7211de&album=06d4eb22")), null);
+  assert.equal(radioBuyQuery(new URLSearchParams("kind=artist&artist=https://evil")), null);
 });
 
 test("peers' stations get names after ours, and only their own links", () => {
