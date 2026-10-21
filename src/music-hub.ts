@@ -13,6 +13,7 @@
  */
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { musicPage, renderMusicPage } from "./music-seo.ts";
 
 /** A server's opaque id: the first 10 hex of the SHA-256 of its https origin. Both sides can work it out. */
 export function serverId(base: string): string {
@@ -158,6 +159,8 @@ export interface MusicRoutesContext {
   readBody: (request: IncomingMessage) => Promise<string>;
   /** The page shell (web/music.html), or null when the web build is absent. */
   page: () => string | null;
+  /** This site's public origin, for canonical and og: addresses (https://nixamp.com). */
+  site?: string;
   /** A server says something of its label landed; null when nobody may say so. */
   released?: (request: IncomingMessage, body: Record<string, unknown>) => Promise<{ status: number; body: unknown }>;
   /** Veo shots for a label server's videos: the month's spend (GET), a clip (POST); answers bytes or JSON. */
@@ -215,10 +218,19 @@ export async function handleMusicRoutes(request: IncomingMessage, response: Serv
     }
     return true;
   }
-  // /music and everything under it is the app; it reads /api/v1/music.
-  const page = ctx.page();
-  if (!page) { ctx.json(response, 404, { error: "the music app is not built here" }); return true; }
-  response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
-  response.end(method === "HEAD" ? undefined : page);
+  // /music and everything under it is the app; it reads /api/v1/music. Its head and a
+  // plain summary are written here, per page (music-seo.ts), for crawlers and link
+  // previews; a catalogue that is slow or gone leaves the shell as it is.
+  const shell = ctx.page();
+  if (!shell) { ctx.json(response, 404, { error: "the music app is not built here" }); return true; }
+  const site = (ctx.site ?? "https://nixamp.com").replace(/\/+$/, "");
+  const catalogue = await Promise.race([
+    ctx.hub.catalogue().catch(() => null),
+    new Promise<null>((done) => setTimeout(() => done(null), 2_000).unref?.()),
+  ]);
+  const view = catalogue ? musicPage(path, catalogue, site) : null;
+  const html = view ? renderMusicPage(shell, view, `${site}${path.replace(/\/+$/, "") || "/music"}`) : shell;
+  response.writeHead(view?.status ?? 200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
+  response.end(method === "HEAD" ? undefined : html);
   return true;
 }
