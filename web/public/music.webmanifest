@@ -1,0 +1,57 @@
+{
+  "name": "nixamp music — AI music, live and on demand",
+  "short_name": "nixamp music",
+  "description": "Original bands and artists, written and sung by AI: live genre stations, albums with lyrics, follow and buy. Listening is free.",
+  "id": "/music",
+  "start_url": "/music",
+  "scope": "/music",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "launch_handler": { "client_mode": "navigate-existing" },
+  "orientation": "any",
+  "theme_color": "#080c09",
+  "background_color": "#080c09",
+  "categories": ["music", "entertainment"],
+  "lang": "en",
+  "dir": "ltr",
+  "icons": [
+    {
+      "src": "/icons/music/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/music/icon-384.png",
+      "sizes": "384x384",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/music/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-192-maskable.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "My music",
+      "short_name": "Mine",
+      "url": "/music/me",
+      "icons": [{ "src": "/icons/music/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

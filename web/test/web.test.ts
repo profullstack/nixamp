@@ -223,6 +223,33 @@ test("every icon the manifest names exists, and is the PNG it claims to be", () 
   );
 });
 
+test("/music installs as its own app: a manifest with its own id, icons that exist, linked from the page", () => {
+  const manifest = JSON.parse(
+    readFileSync(join(webDir, "public/music.webmanifest"), "utf8"),
+  ) as Record<string, unknown> & { icons: { src: string; sizes: string; purpose: string }[] };
+
+  // Its own id, or a store sees the same app as nixamp.com (id "/").
+  assert.equal(manifest.id, "/music");
+  assert.equal(manifest.start_url, "/music");
+  assert.equal(manifest.scope, "/music");
+  assert.equal(manifest.display, "standalone");
+  assert.ok(manifest.name && manifest.short_name && manifest.description);
+
+  const any = manifest.icons.filter((i) => i.purpose === "any").map((i) => i.sizes);
+  assert.ok(any.includes("192x192") && any.includes("512x512"));
+  assert.deepEqual(manifest.icons.filter((i) => i.purpose === "maskable").map((i) => i.sizes).sort(), ["192x192", "512x512"]);
+  for (const icon of [...manifest.icons, { src: "/icons/music/apple-touch-icon.png", sizes: "180x180" }]) {
+    const bytes = readFileSync(join(webDir, "public", icon.src.replace(/^\//, "")));
+    assert.equal(bytes.readUInt32BE(0), 0x89504e47, `${icon.src} is not a PNG`);
+    assert.equal(`${bytes.readUInt32BE(16)}x${bytes.readUInt32BE(20)}`, icon.sizes, `${icon.src} is not ${icon.sizes}`);
+  }
+
+  const html = readFileSync(join(webDir, "music.html"), "utf8");
+  assert.match(html, /<link rel="manifest" href="\/music\.webmanifest"/);
+  assert.match(html, /<link rel="apple-touch-icon" href="\/icons\/music\/apple-touch-icon\.png"/);
+  assert.match(readFileSync(join(webDir, "src/music.ts"), "utf8"), /serviceWorker\.register\("\/sw\.js"\)/);
+});
+
 test("icons are drawn, and the PNG encoder produces what it says", () => {
   const bitmap = drawIcon(64, true);
   assert.equal(bitmap.width, 64);
@@ -251,6 +278,8 @@ test("the service worker precaches the shell and never caches the control API", 
   assert.match(source, /clients\.claim/);
   // A navigation offline has to answer with the shell, or "installable" is a lie.
   assert.match(source, /caches\.match\("\/index\.html"\)/);
+  // /music keeps its own offline shell rather than overwriting the player's.
+  assert.match(source, /music \? "\/music" : "\/index\.html"/);
   assert.deepEqual(NEVER_CACHE, ["/api/"]);
   assert.match(source, /NEVER_CACHE\.some/);
 

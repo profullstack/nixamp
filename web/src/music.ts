@@ -655,3 +655,10 @@ wireLinks();
 wirePlayer();
 void who();
 void render();
+
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  globalThis.addEventListener("load", () => {
+    // Installable on its own (music.webmanifest); a failed registration never stops the music.
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}

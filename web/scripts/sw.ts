@@ -90,14 +90,19 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate") {
     // Network first, so a deploy lands; the shell answers when there is no network.
+    // /music is its own installed app with its own shell, so it never overwrites the player's.
+    const music = url.pathname === "/music" || url.pathname.startsWith("/music/");
+    const shell = music ? "/music" : "/index.html";
     event.respondWith((async () => {
       try {
         const fresh = await fetch(request);
-        const cache = await caches.open(CACHE);
-        cache.put("/index.html", fresh.clone());
+        if (fresh.ok) {
+          const cache = await caches.open(CACHE);
+          cache.put(shell, fresh.clone());
+        }
         return fresh;
       } catch {
-        return (await caches.match("/index.html")) ?? (await caches.match("/")) ?? Response.error();
+        return (await caches.match(shell)) ?? (await caches.match("/index.html")) ?? (await caches.match("/")) ?? Response.error();
       }
     })());
     return;
