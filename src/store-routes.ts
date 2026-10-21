@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PRICES, type MusicStore } from "./music-store.ts";
+import { serverId } from "./music-hub.ts";
 import { SupportError } from "./support.ts";
 
 const PURCHASE = /^\/purchases\/([0-9a-f-]{36})$/;
@@ -119,7 +120,7 @@ export async function handleStoreRoutes(request: IncomingMessage, response: Serv
       }
       const me = await ctx.account().catch(() => null);
       const what = item.kind === "song" ? "One song" : item.kind === "album" ? `The album, ${item.songs} songs` : `Everything by ${escape(item.artistName)}, ${item.songs} songs so far`;
-      const cover = item.kind === "artist" ? "" : `<img src="${escape(`${item.server}/api/v1/label/${item.artist}/${item.album}/cover.jpg`)}" alt="" width="160" height="160" style="border-radius:10px;float:right;margin:0 0 8px 12px;max-width:40%;height:auto">`;
+      const cover = item.kind === "artist" ? "" : `<img src="${escape(`/api/v1/music/file/${serverId(item.server)}/${item.artist}/${item.album}/cover.jpg`)}" alt="" width="160" height="160" style="border-radius:10px;float:right;margin:0 0 8px 12px;max-width:40%;height:auto">`;
       html(response, 200, page(`Download ${item.title}`, `<div class="card">${cover}
 <h1>${escape(item.title)}</h1><p class="by">${escape(item.artistName)}</p>
 <div class="price">${price(item.amountCents)}</div>
@@ -132,8 +133,8 @@ export async function handleStoreRoutes(request: IncomingMessage, response: Serv
 <button id="pay" type="submit">Pay ${price(item.amountCents)} with crypto</button>
 </form>
 <p id="status" role="status" aria-live="polite"></p>
-<small>Payments go through <a href="https://coinpayportal.com">CoinPay</a> to nixamp.com. For small amounts pick a coin with low fees (USDC on Polygon or Solana, SOL, LTC). Listening on the live stations is always free.${me ? "" : ` <a href="/radio#music">Sign in</a> with the same email to keep everything under My music.`}</small>
-</div>`, JSON.stringify({ server: item.server, kind: item.kind, artist: item.artist, album: item.album, n: item.n })), method);
+<small>Payments go through <a href="https://coinpayportal.com">CoinPay</a> to nixamp.com. For small amounts pick a coin with low fees (USDC on Polygon or Solana, SOL, LTC). Listening on the live stations is always free.${me ? "" : ` <a href="/?redirect=${encodeURIComponent("/music/me")}#account-panel">Sign in</a> with the same email to keep everything under My music.`}</small>
+</div>`, JSON.stringify({ server: serverId(item.server), kind: item.kind, artist: item.artist, album: item.album, n: item.n })), method);
       return true;
     }
     const receipt = PURCHASE.exec(path);
@@ -146,7 +147,7 @@ export async function handleStoreRoutes(request: IncomingMessage, response: Serv
       const body = purchase.status === "paid"
         ? `<div class="card"><h1>${escape(purchase.title)}</h1><p class="by">${escape(purchase.artistName)} · paid ${price(purchase.amountCents)}</p>
 <a class="go" href="${escape(store.zipUrl(purchase))}" download>Download the zip</a>
-<small>MP3s with the cover art and lyrics, plus each song's .lyrics.txt, cover.jpg and album.json. Keep this page's address (it is in your email too) to download again. Signed in to nixamp.com as ${escape(purchase.email)}, everything you bought is under <a href="/radio#music">My music</a>, to play or download.</small></div>`
+<small>MP3s with the cover art and lyrics, plus each song's .lyrics.txt, cover.jpg and album.json. Keep this page's address (it is in your email too) to download again. Signed in to nixamp.com as ${escape(purchase.email)}, everything you bought is under <a href="/music/me">My music</a>, to play or download.</small></div>`
         : `<div class="card"><h1>${escape(purchase.title)}</h1><p class="by">${escape(purchase.artistName)} · ${price(purchase.amountCents)} in ${escape(purchase.coin)}</p>
 <p>Waiting for your payment. Once CoinPay confirms it, your download is here and in your email (${escape(purchase.email)}). This page checks again when you reload it.</p>
 <a class="go" href="https://coinpayportal.com/pay/${escape(purchase.paymentId)}">Open the payment</a></div>`;

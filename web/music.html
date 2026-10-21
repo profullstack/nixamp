@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Music · nixamp</title>
+    <meta name="description" content="AI music on nixamp: live genre stations, artists and their bands, albums with lyrics, follow and buy. Listening is free." />
+    <meta name="theme-color" content="#080c09" />
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64" />
+  </head>
+  <body>
+    <a class="skip" href="#view">Skip to the music</a>
+    <div id="sr-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+    <header class="top">
+      <a class="brand" href="/music"><img src="/logo.png" alt="" width="20" height="20" decoding="async" />nixamp <span>music</span></a>
+      <nav aria-label="Music">
+        <a href="/music" data-nav="home">Home</a>
+        <a href="/music/me" data-nav="me">My music</a>
+        <a href="/radio" class="muted">Manage</a>
+      </nav>
+      <span id="who" class="who"></span>
+    </header>
+    <main id="view" class="view" tabindex="-1" aria-live="polite"></main>
+    <footer class="foot">Listening is free, with a short break every 10 minutes. Songs 10¢, albums $1, an artist's catalogue $2, paid with crypto through CoinPay. ℗ Profullstack, Inc. Music and words made with AI.</footer>
+    <section id="player" class="player" aria-label="Player" hidden>
+      <img id="player-art" class="player-art" alt="" width="56" height="56" />
+      <div class="player-text">
+        <strong id="player-title"></strong>
+        <span id="player-by"></span>
+      </div>
+      <button id="player-toggle" type="button" class="round" aria-label="Pause">❚❚</button>
+      <button id="player-lyrics" type="button" class="ghost" aria-expanded="false" aria-controls="lyrics-panel">Lyrics</button>
+      <audio id="audio" preload="none"></audio>
+    </section>
+    <aside id="lyrics-panel" class="lyrics-panel" aria-label="Lyrics" hidden>
+      <h2 id="lyrics-title">Lyrics</h2>
+      <div id="lyrics-text" class="lyrics-text"></div>
+    </aside>
+    <script type="module" src="/src/music.ts"></script>
+  </body>
+</html>

@@ -786,7 +786,7 @@ function playMusic(at: number): void {
 async function loadMusic(): Promise<void> {
   // Purchases live on nixamp.com, whichever server is picked.
   if (!onDirectory()) {
-    $("#music-summary").replaceChildren("Your purchases are on ", el("a", { href: "https://nixamp.com/radio#music", target: "_blank", rel: "noopener" }, "nixamp.com/radio"), ".");
+    $("#music-summary").replaceChildren("Your purchases are on ", el("a", { href: "https://nixamp.com/music/me", target: "_blank", rel: "noopener" }, "nixamp.com/music"), ".");
     return;
   }
   const response = await fetch("/api/v1/store/purchases", { credentials: "same-origin" });
@@ -1069,7 +1069,7 @@ async function signInChoices(): Promise<HTMLElement | null> {
   }
   const back = encodeURIComponent(location.pathname + location.hash);
   return el("p", { class: "actions sign-in", id: "sign-in" },
-    el("a", { class: "button", href: `/?signin=1&redirect=${back}` }, "Sign in with nixamp"),
+    el("a", { class: "button", href: `/?redirect=${back}#account-panel` }, "Sign in with nixamp"),
     ...offered.map((provider) => el("a", { class: "button ghost", href: `/api/v1/${encodeURIComponent(provider.id)}/oauth/start?redirect=${back}` }, `Sign in with ${provider.name}`)),
   );
 }

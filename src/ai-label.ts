@@ -738,6 +738,8 @@ export interface AiLabelDeps {
   storyVideo?: (input: { audio: string; images: string[]; seconds: number; artist: string; title: string; out: string }) => Promise<void>;
   /** A scene's picture for this prompt, or null when nothing can draw one; Workers AI by default. */
   image?: (prompt: string) => Promise<Buffer | null>;
+  /** Tells the world an album landed (nixamp.com tells the artist's followers); never awaited. */
+  announce?: (release: { artist: string; title: string; kind: "album" | "song" }) => void;
   /** The day's pick (artist, genre, new or not); Math.random by default. */
   random?: () => number;
   now?: () => number;
@@ -1383,6 +1385,7 @@ export class AiLabel {
       if (album.songs.every((one) => one.file)) {
         album.doneAt = this.now();
         this.log(`${artist.name} released "${album.title}"`);
+        this.deps.announce?.({ artist: artist.key, title: album.title, kind: "album" });
         void this.ensureProfile(artist).catch(() => undefined);
       }
       this.save();
