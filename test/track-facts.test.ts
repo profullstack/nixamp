@@ -93,16 +93,16 @@ test("monthly support: month one at once, a link a month while paid, lapsed when
   // A table of rows and just the statements SupportSubscriptions sends.
   const rows: Array<Record<string, unknown>> = [];
   const db = { query: async (text: string, params: unknown[] = []) => {
-    if (/^CREATE/.test(text.trim())) return { rows: [] };
+    if (/^(CREATE|ALTER)/.test(text.trim())) return { rows: [] };
     if (text.includes("count(*)")) return { rows: [{ n: rows.filter((r) => r["email"] === params[0] && r["status"] === "active").length }] };
     if (text.startsWith("INSERT")) {
       const [id, token, holder, email, amount_cents, coin, last_payment_id, next_due, station, created_at] = params;
-      rows.push({ id, token, holder, email, amount_cents, coin, status: "active", cycles: 1, last_payment_id, next_due, station, created_at });
+      rows.push({ id, token, holder, email, amount_cents, coin, status: "active", cycles: 1, last_payment_id, next_due, station, created_at, cycle_payment_ids: last_payment_id });
       return { rows: [] };
     }
     if (text.includes("WHERE status = 'active' AND next_due <=")) return { rows: rows.filter((r) => r["status"] === "active" && (r["next_due"] as Date).getTime() <= (params[0] as Date).getTime()) };
     if (text.includes("SET status = 'lapsed'")) { rows.filter((r) => r["id"] === params[0]).forEach((r) => { r["status"] = "lapsed"; }); return { rows: [] }; }
-    if (text.includes("SET cycles")) { rows.filter((r) => r["id"] === params[0]).forEach((r) => { r["cycles"] = params[1]; r["last_payment_id"] = params[2]; r["next_due"] = params[3]; }); return { rows: [] }; }
+    if (text.includes("SET cycles")) { rows.filter((r) => r["id"] === params[0] && r["cycles"] === params[3]).forEach((r) => { r["cycles"] = params[1]; r["last_payment_id"] = null; r["cycle_payment_ids"] = ""; r["next_due"] = params[2]; }); return { rows: [] }; }
     if (text.includes("SET status = 'canceled'")) {
       const hit = rows.filter((r) => r["id"] === params[0] && r["token"] === params[1] && r["status"] !== "canceled");
       hit.forEach((r) => { r["status"] = "canceled"; });
@@ -128,13 +128,15 @@ test("monthly support: month one at once, a link a month while paid, lapsed when
   const started = await monthly.start({ holder: "profullstack", amountUsd: 5, coin: "SOL", email: "Fan@Example.com" });
   assert.equal(started.url, "https://coinpayportal.com/checkout/cs_month1xxxxxxxxxxxxxxx");
   assert.equal(rows[0]!["email"], "fan@example.com");
-  assert.match(mails[0]!.text, /cs_month1x/);
+  const link = monthly.payLink(started.id, String(rows[0]!["token"]));
+  assert.ok(mails[0]!.text.includes(link), "the stable pay link, not the session (which expires in an hour)");
   assert.match(mails[0]!.text, /support\/cancel\?s=/);
   assert.deepEqual(await monthly.renew(), { renewed: 0, lapsed: 0 }, "not due yet");
   now = Date.UTC(2026, 10, 18);
   status["cs_month1xxxxxxxxxxxxxxx"] = "paid";
   assert.deepEqual(await monthly.renew(), { renewed: 1, lapsed: 0 }, "month one paid: month two's link");
-  assert.match(mails.at(-1)!.text, /cs_month2x/);
+  assert.ok(mails.at(-1)!.text.includes(link), "month two: the same stable link");
+  assert.equal(made, 1, "renewal opens no session until the link is followed");
   now = Date.UTC(2026, 11, 19);
   assert.deepEqual(await monthly.renew(), { renewed: 0, lapsed: 1 }, "month two unpaid: it stops");
   assert.match(mails.at(-1)!.subject, /has stopped/);

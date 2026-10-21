@@ -192,6 +192,32 @@ export class Support {
     }
   }
 
+  /**
+   * A hosted session's state: "paid", "open" (with when it expires) or
+   * anything else CoinPay says (expired, canceled); null when it did not
+   * answer. An older one-coin payment is "paid" or "gone": its page cannot be
+   * reopened, so it is never handed out again.
+   */
+  async sessionState(ref: string): Promise<{ status: string; expiresAt: number } | null> {
+    if (!isSessionRef(ref)) {
+      const paid = await this.isPaid(ref);
+      return paid === null ? null : { status: paid ? "paid" : "gone", expiresAt: 0 };
+    }
+    try {
+      const response = await (this.options.fetcher ?? fetch)(`${COINPAY}/api/checkout/sessions/${encodeURIComponent(ref)}`, {
+        signal: AbortSignal.timeout(15_000),
+        headers: { authorization: `Bearer ${this.options.key}` },
+      });
+      if (!response.ok) return null;
+      const body = (await response.json()) as { session?: { id?: string; status?: string; expires_at?: string } };
+      if (body.session?.id !== ref) return null;
+      const expiresAt = Date.parse(String(body.session.expires_at ?? "")) || 0;
+      return { status: String(body.session.status ?? ""), expiresAt };
+    } catch {
+      return null;
+    }
+  }
+
   /** A CoinPay checkout for this much, to this holder; the address to send the payer to. */
   async checkout(input: { holder?: unknown; amountUsd?: unknown; coin?: unknown; station?: unknown; track?: unknown; metadata?: Record<string, unknown> } & Payer): Promise<{ url: string; paymentId: string }> {
     const holder = typeof input.holder === "string" ? this.holder(input.holder) : undefined;
@@ -336,9 +362,10 @@ export function nextMonth(at: number): number {
  * Monthly support, run here rather than by CoinPay: CoinPay's only merchant
  * subscriptions are Stripe's, and its recurring invoices refuse a scoped key.
  * A subscription is an email, an amount, a coin and a holder. Month one is
- * paid at once on CoinPay's checkout; each month after, a new payment is made
- * and its link emailed, with a one-click cancel. A month left unpaid ends it
- * (lapsed) rather than emailing forever.
+ * paid at once on CoinPay's checkout; each month after, the subscription's
+ * stable pay link is emailed (it opens a fresh CoinPay session whenever it is
+ * followed, since a session expires within two hours), with a one-click
+ * cancel. A month left unpaid ends it (lapsed) rather than emailing forever.
  */
 export class SupportSubscriptions {
   private schema: Promise<void> | null = null;
@@ -367,6 +394,9 @@ export class SupportSubscriptions {
         cycles INTEGER NOT NULL DEFAULT 0, last_payment_id TEXT, next_due TIMESTAMPTZ NOT NULL,
         station TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL, canceled_at TIMESTAMPTZ)`);
       await this.options.db.query("CREATE INDEX IF NOT EXISTS support_subscriptions_due ON support_subscriptions (status, next_due)");
+      // Every checkout opened for the current month, space separated: a payer
+      // may open several from the pay link, and any one of them paid counts.
+      await this.options.db.query("ALTER TABLE support_subscriptions ADD COLUMN IF NOT EXISTS cycle_payment_ids TEXT NOT NULL DEFAULT ''");
     })().catch((error: unknown) => { this.schema = null; throw error; });
     return this.schema;
   }
@@ -387,13 +417,13 @@ export class SupportSubscriptions {
     const coin = (typeof input.coin === "string" && input.coin.trim() ? input.coin : "ANY").toUpperCase();
     const paidWith = coin === "ANY" ? "" : ` in ${coin}`;
     const now = this.now();
-    await this.options.db.query(`INSERT INTO support_subscriptions (id, token, holder, email, amount_cents, coin, cycles, last_payment_id, next_due, station, created_at)
-      VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10)`,
+    await this.options.db.query(`INSERT INTO support_subscriptions (id, token, holder, email, amount_cents, coin, cycles, last_payment_id, next_due, station, created_at, cycle_payment_ids)
+      VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10,$7)`,
     [id, token, holder.id, email, Math.round(Number(input.amountUsd) * 100), coin, checkout.paymentId, new Date(nextMonth(now)), typeof input.station === "string" ? input.station.slice(0, 20) : "", new Date(now)]);
     await this.mail(email, `Your monthly support for ${holder.name}`, [
       `Thank you for supporting ${holder.name} on nixamp, $${Number(input.amountUsd).toFixed(2)} a month${paidWith}.`,
-      `This month: ${checkout.url}`,
-      `Each month we email you a new payment link like this one. Nothing is taken without you paying it.`,
+      `Pay this month: ${this.payLink(id, token)}`,
+      `That link works all month: each time you open it, it starts a fresh checkout (or shows that this month is paid). Each month we email you the same link. Nothing is taken without you paying it.`,
       `Stop at any time: ${this.cancelLink(id, token)}`,
     ]);
     return { url: checkout.url, id };
@@ -401,6 +431,71 @@ export class SupportSubscriptions {
 
   cancelLink(id: string, token: string): string {
     return `${this.options.site}/support/cancel?s=${encodeURIComponent(id)}&t=${encodeURIComponent(token)}`;
+  }
+
+  /**
+   * The subscription's stable "pay this month" link. A CoinPay session lives
+   * at most two hours, so an emailed session link was dead by the time most
+   * people read it; this one opens a fresh session whenever it is followed.
+   * The token is the subscription's own secret (the cancel link's).
+   */
+  payLink(id: string, token: string): string {
+    return `${this.options.site}/support/pay/${encodeURIComponent(id)}/${encodeURIComponent(token)}`;
+  }
+
+  /** The checkouts opened for the subscription's current month, newest last. */
+  private static cycleIds(row: Record<string, unknown>): string[] {
+    const listed = String(row["cycle_payment_ids"] ?? "").split(/\s+/).filter(Boolean);
+    const last = String(row["last_payment_id"] ?? "");
+    if (last && !listed.includes(last)) listed.push(last);
+    return listed;
+  }
+
+  /** Whether any of this month's checkouts is paid; null when CoinPay could not say and none is known paid. */
+  private async cyclePaid(row: Record<string, unknown>): Promise<boolean | null> {
+    let unknown = false;
+    for (const ref of SupportSubscriptions.cycleIds(row)) {
+      const paid = await this.paid(ref);
+      if (paid === true) return true;
+      if (paid === null) unknown = true;
+    }
+    return unknown ? null : false;
+  }
+
+  /**
+   * Following the pay link: this month's checkout to send the payer to.
+   * "paid" when a checkout this month is already paid; "redirect" to a
+   * session still open for at least 15 minutes, else to a new one.
+   */
+  async open(id: string, token: string): Promise<{ state: "redirect"; url: string } | { state: "paid" | "canceled" | "lapsed"; holder: string }> {
+    if (!/^[0-9a-f-]{36}$/.test(id) || !/^[0-9a-f]{32}$/.test(token)) throw new SupportError("That payment link is not one of ours.", 404, "not_found");
+    await this.ready();
+    const found = await this.options.db.query("SELECT * FROM support_subscriptions WHERE id = $1 AND token = $2", [id, token]);
+    const row = found.rows[0];
+    if (!row) throw new SupportError("That payment link is not one of ours.", 404, "not_found");
+    const holderId = String(row["holder"]);
+    const status = String(row["status"]);
+    if (status === "canceled" || status === "lapsed") return { state: status, holder: holderId };
+    const holder = this.options.support.holder(holderId);
+    if (!holder) throw new SupportError("Nobody by that name is supported here any more.", 404, "not_found");
+    const ids = SupportSubscriptions.cycleIds(row);
+    const newest = ids.at(-1);
+    let unknown = false;
+    for (const ref of ids) {
+      const state = await this.options.support.sessionState(ref);
+      if (state === null) { unknown = true; continue; }
+      if (state.status === "paid") return { state: "paid", holder: holderId };
+      if (ref === newest && state.status === "open" && state.expiresAt - this.now() >= 15 * 60_000) return { state: "redirect", url: payUrl(ref) };
+    }
+    // A checkout CoinPay could not report on may be paid: do not stack new ones on it.
+    if (unknown) throw new SupportError("The payment service did not answer; nothing was charged. Try the link again in a minute.", 502, "provider");
+    if (ids.length >= 20) throw new SupportError("This month's link has opened too many checkouts; reply to the email and we will sort it out.", 429, "too_many");
+    const checkout = await this.options.support.checkout({ holder: holder.id, amountUsd: Number(row["amount_cents"]) / 100, email: String(row["email"]),
+      station: String(row["station"] ?? ""), metadata: { subscription: id, cycle: Number(row["cycles"]) } } as Parameters<Support["checkout"]>[0]);
+    // Appended under the row's own month, so a renewal racing this click is not overwritten.
+    await this.options.db.query(`UPDATE support_subscriptions SET last_payment_id = $3,
+      cycle_payment_ids = trim(both ' ' from cycle_payment_ids || ' ' || $3) WHERE id = $1 AND cycles = $2`, [id, Number(row["cycles"]), checkout.paymentId]);
+    return { state: "redirect", url: checkout.url };
   }
 
   async cancel(id: string, token: string): Promise<{ canceled: boolean; holder: string }> {
@@ -428,8 +523,7 @@ export class SupportSubscriptions {
     let lapsed = 0;
     for (const row of due.rows) {
       const id = String(row["id"]);
-      const last = String(row["last_payment_id"] ?? "");
-      const paid = last ? await this.paid(last) : false;
+      const paid = await this.cyclePaid(row);
       if (paid === null) continue; // CoinPay did not answer: ask again next time.
       const holder = this.options.support.holder(String(row["holder"]));
       if (!paid || !holder) {
@@ -443,17 +537,14 @@ export class SupportSubscriptions {
       }
       const amountUsd = Number(row["amount_cents"]) / 100;
       const cycle = Number(row["cycles"]) + 1;
-      let checkout: { url: string; paymentId: string };
-      try {
-        checkout = await this.options.support.checkout({ holder: holder.id, amountUsd, email: String(row["email"]), station: String(row["station"] ?? ""), metadata: { subscription: id, cycle } } as Parameters<Support["checkout"]>[0]);
-      } catch (error) {
-        this.options.log?.(`  support: renewal ${id} could not start a payment: ${(error as Error).message}`);
-        continue;
-      }
-      await this.options.db.query("UPDATE support_subscriptions SET cycles = $2, last_payment_id = $3, next_due = $4 WHERE id = $1", [id, cycle, checkout.paymentId, new Date(nextMonth(new Date(String(row["next_due"])).getTime()))]);
+      // No checkout is opened here: the email carries the stable pay link,
+      // which opens one when the payer follows it, however late in the month.
+      await this.options.db.query("UPDATE support_subscriptions SET cycles = $2, last_payment_id = NULL, cycle_payment_ids = '', next_due = $3 WHERE id = $1 AND cycles = $4",
+        [id, cycle, new Date(nextMonth(new Date(String(row["next_due"])).getTime())), Number(row["cycles"])]);
       await this.mail(String(row["email"]), `This month's support for ${holder.name}`, [
         `Your monthly support for ${holder.name}: $${amountUsd.toFixed(2)}, in any coin or PayPal.`,
-        `Pay this month: ${checkout.url}`,
+        `Pay this month: ${this.payLink(id, String(row["token"]))}`,
+        `The link works all month; each time you open it, it starts a fresh checkout.`,
         `Stop at any time: ${this.cancelLink(id, String(row["token"]))}`,
       ]);
       renewed += 1;
