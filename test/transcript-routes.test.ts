@@ -7,6 +7,7 @@ import { Transcripts, transcriptIdOf, type TranscriptLine } from "../src/transcr
 import { Translator } from "../src/translate.ts";
 import { StoredTranslations } from "../src/translate-jobs.ts";
 import { Media } from "../src/media.ts";
+import { Owner } from "../src/owner.ts";
 
 /** The media table, in memory, behaving as the SQL in media.ts does. */
 function memoryMediaDb(): Queryable {
@@ -113,6 +114,11 @@ async function withSite(body: (base: string, rows: Map<string, Record<string, un
     records: new Media(memoryMediaDb()),
     site: "https://nixamp.test",
     authServer: {} as never,
+    // acct-1 is the admin: with billing off, the only account AI is not refused to.
+    owner: new Owner({ ownerId: "acct-1", site: "https://nixamp.test", fetcher: (async (_url: string | URL, init?: RequestInit) => {
+      const mineAsked = ((init?.headers ?? {}) as Record<string, string>)["authorization"] === "Bearer mine";
+      return { ok: mineAsked, json: async () => (mineAsked ? { account: { id: "acct-1" } } : {}) } as unknown as Response;
+    }) as unknown as typeof fetch }),
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const { port } = server.address() as AddressInfo;
@@ -220,6 +226,11 @@ test("translation over the API: which languages, and texts in another one; signe
       method: "POST", headers: { ...mine, "content-type": "application/json" }, body: JSON.stringify({ texts: ["hi"], to: "de" }),
     });
     assert.equal(bad.status, 400);
+    // Pay as you go: with no credit (billing off here), anybody but the admin is refused.
+    const owed = await fetch(`${base}/api/v1/translate`, {
+      method: "POST", headers: { authorization: "Bearer theirs", "content-type": "application/json" }, body: JSON.stringify({ texts: ["Hej."], from: "sv", to: "de" }),
+    });
+    assert.equal(owed.status, 402);
     const done = await fetch(`${base}/api/v1/translate`, {
       method: "POST", headers: { ...mine, "content-type": "application/json" }, body: JSON.stringify({ texts: ["Hej.", ""], from: "sv", to: "de" }),
     });
