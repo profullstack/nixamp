@@ -17,6 +17,8 @@ export interface AskOptions {
   prompt: string;
   /** Milliseconds before giving up (default 30 s). */
   timeoutMs?: number;
+  /** The longest answer, in tokens (default 1024): a song's words need more than a title does. */
+  maxTokens?: number;
   fetcher?: typeof fetch;
   env?: Record<string, string | undefined>;
 }
@@ -75,7 +77,7 @@ export async function askJson(options: AskOptions): Promise<Answer> {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: options.system }] },
         contents: [{ role: "user", parts: [{ text: options.prompt }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0.9 },
+        generationConfig: { responseMimeType: "application/json", temperature: 0.9, maxOutputTokens: options.maxTokens ?? 1024 },
       }),
     });
     if (!response.ok) {
@@ -98,6 +100,8 @@ export async function askJson(options: AskOptions): Promise<Answer> {
       headers: { "content-type": "application/json", authorization: `Bearer ${openai}` },
       body: JSON.stringify({
         model,
+        // Workers AI stops at 256 tokens unless it is told more.
+        max_tokens: options.maxTokens ?? 1024,
         // Not every compatible server knows json_object; the answer is read for its JSON either way.
         ...(official ? { response_format: { type: "json_object" } } : {}),
         messages: [{ role: "system", content: options.system }, { role: "user", content: options.prompt }],
@@ -115,7 +119,7 @@ export async function askJson(options: AskOptions): Promise<Answer> {
       headers: { "content-type": "application/json", "x-api-key": anthropic, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model,
-        max_tokens: 1024,
+        max_tokens: options.maxTokens ?? 1024,
         system: `${options.system}\nAnswer with one JSON object and nothing else.`,
         messages: [{ role: "user", content: options.prompt }],
       }),

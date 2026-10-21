@@ -91,22 +91,29 @@ const BACKOFF_MS = [5 * 60_000, 10 * 60_000, 20 * 60_000, 40 * 60_000, 80 * 60_0
 export interface Composer {
   /** e.g. "elevenlabs/music_v1". */
   name: string;
-  /** Writes an MP3 to `out`. Throws OutOfCredit when the account cannot pay. */
-  compose(input: { prompt: string; seconds: number; vocals: boolean; out: string }): Promise<void>;
+  /** Writes an MP3 to `out`. Throws OutOfCredit when the account cannot pay. `lyrics` are the words to sing, when there are any. */
+  compose(input: { prompt: string; seconds: number; vocals: boolean; out: string; lyrics?: string }): Promise<void>;
 }
 
 export class OutOfCredit extends Error {}
 
-/** ElevenLabs Music: a paid plan's music may be broadcast. */
-export function elevenLabsComposer(key: string, fetcher: typeof fetch = fetch): Composer {
+/** ElevenLabs' music models; NIXAMP_MUSIC_MODEL picks one, the newest by default. */
+export const MUSIC_MODELS = ["music_v1", "music_v2", "music_v2_5"] as const;
+
+/** ElevenLabs Music: a paid plan's music may be broadcast. Given lyrics, it sings those words. */
+export function elevenLabsComposer(key: string, fetcher: typeof fetch = fetch, model = "music_v2_5"): Composer {
   return {
-    name: "elevenlabs/music_v1",
-    async compose({ prompt, seconds, vocals, out }) {
+    name: `elevenlabs/${model}`,
+    async compose({ prompt, seconds, vocals, out, lyrics }) {
+      const words = vocals && lyrics?.trim() ? lyrics.trim() : "";
       const ask = async (text: string): Promise<Response> => fetcher("https://api.elevenlabs.io/v1/music?output_format=mp3_44100_192", {
         method: "POST",
         signal: AbortSignal.timeout(10 * 60_000),
         headers: { "content-type": "application/json", "xi-api-key": key },
-        body: JSON.stringify({ prompt: text, music_length_ms: Math.round(seconds * 1000), model_id: "music_v1", force_instrumental: !vocals }),
+        body: JSON.stringify({
+          prompt: text, music_length_ms: Math.round(seconds * 1000), model_id: model,
+          ...(words ? { lyrics_text: words } : { force_instrumental: !vocals }),
+        }),
       });
       let response = await ask(prompt);
       if (response.status === 400) {
@@ -132,16 +139,20 @@ export function elevenLabsComposer(key: string, fetcher: typeof fetch = fetch): 
 
 /**
  * A model of the owner's own (MusicGen, ACE-Step...): NIXAMP_AI_MUSIC_COMMAND
- * is run with {prompt}, {seconds}, {vocals} and {out} replaced, each as one
- * argument, and must leave an MP3 at {out}.
+ * is run with {prompt}, {seconds}, {vocals}, {lyrics} (a file of the words to
+ * sing, "" when there are none) and {out} replaced, each as one argument, and
+ * must leave an MP3 at {out}.
  */
 export function commandComposer(template: string): Composer {
   const words = template.trim().split(/\s+/);
   return {
     name: `command/${words[0]?.split("/").pop() ?? "music"}`,
-    compose: ({ prompt, seconds, vocals, out }) => new Promise((resolve, reject) => {
-      const argv = words.map((one) => one.replace("{prompt}", prompt).replace("{seconds}", String(seconds)).replace("{vocals}", vocals ? "1" : "0").replace("{out}", out));
+    compose: ({ prompt, seconds, vocals, out, lyrics }) => new Promise((resolve, reject) => {
+      const lyricsFile = lyrics?.trim() ? `${out}.lyrics.txt` : "";
+      if (lyricsFile) writeFileSync(lyricsFile, `${lyrics!.trim()}\n`);
+      const argv = words.map((one) => one.replace("{prompt}", prompt).replace("{seconds}", String(seconds)).replace("{vocals}", vocals ? "1" : "0").replace("{lyrics}", lyricsFile).replace("{out}", out));
       execFile(argv[0]!, argv.slice(1), { timeout: 30 * 60_000, maxBuffer: 4 * 1024 * 1024 }, (error) => {
+        if (lyricsFile) rmSync(lyricsFile, { force: true });
         if (error) return reject(new Error(`the music command failed: ${error.message}`));
         try {
           if (statSync(out).size < 1024) return reject(new Error("the music command left no music"));
@@ -159,7 +170,8 @@ export function composerFromEnv(env: Record<string, string | undefined> = proces
   const command = (env["NIXAMP_AI_MUSIC_COMMAND"] ?? "").trim();
   if (command) return commandComposer(command);
   const key = aiKey("ELEVENLABS_API_KEY", env);
-  return key ? elevenLabsComposer(key) : null;
+  const model = aiKey("NIXAMP_MUSIC_MODEL", env);
+  return key ? elevenLabsComposer(key, fetch, (MUSIC_MODELS as readonly string[]).includes(model) ? model : "music_v2_5") : null;
 }
 
 const MOODS = ["dreamy", "driving", "melancholy", "bright", "hazy", "tense", "playful", "warm", "nocturnal", "triumphant"];
@@ -217,6 +229,8 @@ export interface AiRadioDeps {
   /** The folder the music goes in: a managed library source. */
   root: string;
   owner: string;
+  /** Who holds the rights in what is made ("Profullstack, Inc."), written as publisher and copyright; "" for none. */
+  holder?: () => string;
   /** Whether another station may be started now (the server's running limit). */
   mayStart: () => boolean;
   composer?: () => Composer | null;
@@ -480,13 +494,16 @@ export class AiRadio {
       const month = monthOf(this.now());
       this.usage[month] = (this.usage[month] ?? 0) + station.trackSeconds;
       const file = join(folder, `${String(station.tracks.length + 1).padStart(4, "0")} ${slug(brief.title)}.mp3`);
+      const year = new Date(this.now()).getUTCFullYear().toString();
+      const holder = this.deps.holder?.() ?? "";
       await (this.deps.tag ?? ((from, to, tags) => tag(this.deps.ffmpeg, from, to, tags)))(raw, file, {
         title: brief.title,
         artist: `${station.name} (AI)`,
         album: station.name,
         genre: "AI",
         comment: `Composed by ${composer.name} from a brief by ${brief.model}`,
-        date: new Date(this.now()).getUTCFullYear().toString(),
+        date: year,
+        ...(holder ? { publisher: holder, copyright: `℗ ${year} ${holder}` } : {}),
       });
       const track: AiTrack = { file, title: brief.title, prompt: brief.prompt, seconds: station.trackSeconds, made: `${brief.model} + ${composer.name}`, createdAt: this.now() };
       station.tracks.push(track);

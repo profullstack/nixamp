@@ -22,6 +22,7 @@
           <a href="/">Player</a>
           <a href="#library" data-tab="library">Library</a>
           <a href="#stations" data-tab="stations">Radio</a>
+          <a href="#label" data-tab="label">Label</a>
         </nav>
         <label class="server-pick">Server
           <select id="server"></select>
@@ -85,6 +86,37 @@
           </menu>
         </form>
       </dialog>
+
+      <section id="label" class="panel radio-section" aria-labelledby="label-title">
+        <h2 id="label-title" class="radio-title">AI label</h2>
+        <p class="hint">AI artists who release albums on their own: a language model writes each album and its English lyrics, ElevenLabs sings them, and every genre gets a public station. Files go in the library under <code>ai/&lt;genre&gt;/&lt;artist&gt;/&lt;year&gt;-&lt;album&gt;/</code>, each song with its <code>.lyrics.txt</code>.</p>
+        <p id="label-summary" class="hint" aria-live="polite"></p>
+        <div id="label-artists" class="station-list"></div>
+        <details class="radio-form">
+          <summary>Sign an artist</summary>
+          <form id="label-sign">
+            <label>From the roster
+              <select name="preset" id="label-preset"></select>
+            </label>
+            <label>or a name <input name="name" maxlength="80" autocomplete="off" /></label>
+            <label>Genre <input name="genre" maxlength="40" autocomplete="off" placeholder="Rock" /></label>
+            <label>Sound <input name="sound" maxlength="600" autocomplete="off" placeholder="instruments, tempo, mood" /></label>
+            <label>Voice <input name="voice" maxlength="300" autocomplete="off" placeholder="raspy female alto" /></label>
+            <button type="submit">Sign</button>
+          </form>
+        </details>
+        <details class="radio-form">
+          <summary>Label settings</summary>
+          <form id="label-config">
+            <label>Rights holder <input name="holder" maxlength="120" autocomplete="off" /></label>
+            <label>Seconds a month (0: no cap) <input name="monthlySeconds" type="number" min="0" step="60" /></label>
+            <label>Days between albums <input name="everyDays" type="number" min="1" max="365" /></label>
+            <label>Songs an album <input name="songsPerAlbum" type="number" min="3" max="20" /></label>
+            <label>Seconds a song <input name="songSeconds" type="number" min="30" max="300" /></label>
+            <button type="submit">Save</button>
+          </form>
+        </details>
+      </section>
 
       <section id="library" class="panel radio-section" aria-labelledby="library-title">
         <h2 id="library-title" class="radio-title">Library</h2>

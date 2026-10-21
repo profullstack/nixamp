@@ -717,10 +717,153 @@ async function makeStation(form: HTMLFormElement): Promise<void> {
   notice(`Station ${made.station.name} made; it is private and stopped. Use "Who can listen" to put it on the air.`, "ok");
 }
 
+/* ---- AI label ------------------------------------------------------------ */
+
+interface LabelAlbumRow { key: string; title: string; year: number; songs: number; composed: number; doneAt: number }
+interface LabelArtistRow { key: string; name: string; genre: string; enabled: boolean; lastError: string; nextAlbumAt: number; albums: LabelAlbumRow[] }
+interface LabelStatus {
+  root: string;
+  composer: string | null;
+  writer: string | null;
+  busy: string;
+  secondsThisMonth: number;
+  waiting: string;
+  settings: { holder: string; enabled: boolean; monthlySeconds: number; everyDays: number; songsPerAlbum: number; songSeconds: number; pausedReason: string };
+  roster: Array<{ key: string; name: string; genre: string; signed: boolean }>;
+  artists: LabelArtistRow[];
+}
+
+/** The settings form is filled once per server, so a refresh never overwrites what is being typed. */
+let labelFilled = "";
+
+async function loadLabel(): Promise<void> {
+  const mine = generation;
+  let status: LabelStatus;
+  try {
+    status = await api<LabelStatus>("GET", "/api/v1/stations/label");
+  } catch (error) {
+    if (mine !== generation) return;
+    $("#label-artists").replaceChildren();
+    $("#label-summary").textContent = error instanceof ApiError && error.status === 404
+      ? "This server has no AI label yet: it needs nixamp 0.49 or later (nixamp update on that machine)."
+      : `The label could not be read: ${error instanceof Error ? error.message : String(error)}`;
+    return;
+  }
+  if (mine !== generation) return;
+  const { settings } = status;
+  const cap = settings.monthlySeconds === 0 ? "no cap" : `${Math.round(status.secondsThisMonth / 60)} of ${Math.round(settings.monthlySeconds / 60)} min this month`;
+  // Public: no key or session rides on it.
+  const catalogue = `${target.base}/label`;
+  $("#label-summary").replaceChildren(
+    `${settings.holder} · ${status.composer ?? "no composer"} · ${cap} · an album every ${settings.everyDays} days`,
+    status.busy ? ` · recording ${status.busy}` : "",
+    status.waiting ? ` · waiting: ${status.waiting}` : "",
+    " · ",
+    el("a", { href: catalogue, target: "_blank", rel: "noopener" }, "Public catalogue"),
+  );
+  const preset = $<HTMLSelectElement>("#label-preset");
+  const picked = preset.value;
+  preset.replaceChildren(el("option", { value: "" }, "Choose…"), ...status.roster.filter((one) => !one.signed).map((one) => el("option", { value: one.key }, `${one.name} (${one.genre})`)));
+  preset.value = status.roster.some((one) => one.key === picked && !one.signed) ? picked : "";
+  if (labelFilled !== target.id) {
+    labelFilled = target.id;
+    const form = $<HTMLFormElement>("#label-config");
+    for (const name of ["holder", "monthlySeconds", "everyDays", "songsPerAlbum", "songSeconds"] as const) {
+      (form.elements.namedItem(name) as HTMLInputElement).value = String(settings[name]);
+    }
+  }
+  const list = $("#label-artists");
+  list.replaceChildren();
+  if (settings.pausedReason) {
+    const resume = el("button", { type: "button" }, "Resume");
+    resume.addEventListener("click", () => void act("Resume", async () => {
+      await api("POST", "/api/v1/stations/label", { resume: true });
+      await loadLabel();
+    }, resume));
+    list.append(el("p", { class: "warn", role: "status" }, `Paused: ${settings.pausedReason} `, resume));
+  }
+  if (status.artists.length === 0) {
+    const all = el("button", { type: "button" }, "Sign the whole roster");
+    all.addEventListener("click", () => void act("Sign", async () => {
+      await api("POST", "/api/v1/stations/label/artists", { roster: true });
+      say("Roster signed");
+      await loadLabel();
+    }, all));
+    list.append(el("p", { class: "hint" }, "Nobody signed yet. ", all));
+    return;
+  }
+  for (const artist of status.artists) {
+    const next = artist.nextAlbumAt === -1 ? "off" : artist.nextAlbumAt === 0 ? "due now" : `next album ${new Date(artist.nextAlbumAt).toLocaleDateString()}`;
+    const recording = artist.albums.some((one) => !one.doneAt);
+    const album = el("button", { type: "button", disabled: recording, title: recording ? "An album is still being recorded" : "Plan and record the next album now" }, "New album now");
+    album.addEventListener("click", () => void act("New album", async () => {
+      await api("POST", `/api/v1/stations/label/artists/${artist.key}/album`, {});
+      say(`${artist.name}: album planned`);
+      await loadLabel();
+    }, album));
+    const toggle = el("button", { type: "button", class: "ghost" }, artist.enabled ? "Pause" : "Resume");
+    toggle.addEventListener("click", () => void act(artist.enabled ? "Pause" : "Resume", async () => {
+      await api("PATCH", `/api/v1/stations/label/artists/${artist.key}`, { enabled: !artist.enabled });
+      await loadLabel();
+    }, toggle));
+    const drop = el("button", { type: "button", class: "ghost danger" }, "Drop");
+    drop.addEventListener("click", () => void act("Drop", async () => {
+      if (!confirm(`Drop ${artist.name} from the label? Their albums stay on the air; nothing new is recorded.`)) return;
+      await api("DELETE", `/api/v1/stations/label/artists/${artist.key}`);
+      await loadLabel();
+    }, drop));
+    list.append(el("article", { class: "station", "aria-label": artist.name },
+      el("div", { class: "station-head" },
+        el("span", { class: `state ${artist.enabled ? "state-live" : "state-stopped"}` }, artist.genre),
+        el("h3", {}, artist.name),
+        el("span", { class: "muted" }, next),
+      ),
+      artist.albums.length
+        ? el("ul", { class: "playlist-items" }, ...artist.albums.map((one) => el("li", {}, `${one.year} · ${one.title} · ${one.composed}/${one.songs} songs${one.doneAt ? "" : " (recording)"}`)))
+        : el("p", { class: "muted" }, "No albums yet."),
+      artist.lastError ? el("p", { class: "warn" }, artist.lastError) : null,
+      el("div", { class: "actions" }, album, toggle, drop),
+    ));
+  }
+}
+
+function wireLabel(): void {
+  $<HTMLFormElement>("#label-sign").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const value = (name: string): string => (form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement).value.trim();
+    const body = value("preset") ? { preset: value("preset") } : { name: value("name"), genre: value("genre"), sound: value("sound"), ...(value("voice") ? { voice: value("voice") } : {}) };
+    void act("Sign", async () => {
+      const answer = await api<{ artist: { name: string } }>("POST", "/api/v1/stations/label/artists", body);
+      form.reset();
+      notice(`${answer.artist.name} signed. Their first albums are being written now.`, "ok");
+      await loadLabel();
+    }, form.querySelector<HTMLButtonElement>("button[type=submit]") ?? undefined);
+  });
+  $<HTMLFormElement>("#label-config").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const value = (name: string): string => (form.elements.namedItem(name) as HTMLInputElement).value.trim();
+    void act("Save label settings", async () => {
+      await api("POST", "/api/v1/stations/label", {
+        holder: value("holder"),
+        monthlySeconds: Number(value("monthlySeconds")),
+        everyDays: Number(value("everyDays")),
+        songsPerAlbum: Number(value("songsPerAlbum")),
+        songSeconds: Number(value("songSeconds")),
+      });
+      notice("Label settings saved.", "ok");
+      await loadLabel();
+    }, form.querySelector<HTMLButtonElement>("button[type=submit]") ?? undefined);
+  });
+  setInterval(() => void loadLabel().catch(() => undefined), 15_000);
+}
+
 /* ---- start --------------------------------------------------------------- */
 
 async function start(): Promise<void> {
   wirePlayer();
+  wireLabel();
   $<HTMLFormElement>("#search-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
@@ -879,6 +1022,8 @@ async function use(next: Target): Promise<void> {
     }
     return;
   }
+  // Its own call: an older server without a label still has its stations and library.
+  await loadLabel();
   await offerResume();
 }
 

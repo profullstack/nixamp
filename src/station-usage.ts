@@ -33,7 +33,21 @@ export const USAGE = `nixamp station — make a collection into a station
   nixamp station ai budget SECONDS           seconds of music a month across AI stations (0: no cap)
   nixamp station ai resume                   after the provider ran out of credit
   nixamp station ai key NAME                 ELEVENLABS_API_KEY | GEMINI_API_KEY | OPENAI_API_KEY | ANTHROPIC_API_KEY,
-                                             NIXAMP_OPENAI_URL | NIXAMP_OPENAI_MODEL (an OpenAI-compatible stand-in), from stdin
+                                             NIXAMP_OPENAI_URL | NIXAMP_OPENAI_MODEL (an OpenAI-compatible stand-in),
+                                             NIXAMP_MUSIC_MODEL (music_v1|music_v2|music_v2_5), from stdin
+
+  AI label (AI artists who release albums on their own; a station per genre; the catalogue at /label):
+  nixamp station label                       artists, albums, this month's seconds, what it is waiting for
+  nixamp station label sign --roster         the first roster: velvet-ruckus, juno-kincaid, chrome-orchard, delta-wren,
+                                             ashen-cartography, lumi-kestrel
+  nixamp station label sign (--preset KEY | --name NAME --genre GENRE --sound TEXT [--voice TEXT] [--bio TEXT] [--themes TEXT])
+  nixamp station label album KEY             plan the artist's next album now and record it
+  nixamp station label set KEY [--sound TEXT] [--voice TEXT] [--bio TEXT] [--themes TEXT] [--off|--on]
+  nixamp station label drop KEY [--files]
+  nixamp station label config [--holder "Profullstack, Inc."] [--budget SECONDS] [--every-days 30] [--seed-albums 2]
+                              [--songs 8] [--seconds 150] [--on|--off] [--public|--unlisted]
+  nixamp station label run                   record whatever is due now
+  nixamp station label resume                after the provider ran out of credit
 
   Listener shares (anybody shares an MP3 link or file from the guide; AI files and checks it):
   nixamp station shares                      the setting and what is waiting

@@ -28,9 +28,11 @@ metering. It is made with its first track; each new one joins on the next track.
   about 27,000 credits. A provider that says the key or the plan is out of credit pauses
   everything until `nixamp station ai resume`.
 - **Composers.** ElevenLabs Music (`ELEVENLABS_API_KEY`; a paid plan's music may be used
-  commercially), or a model of your own: `NIXAMP_AI_MUSIC_COMMAND` is run with `{prompt}`,
-  `{seconds}`, `{vocals}` and `{out}` replaced (each one argument) and must leave an MP3 at `{out}`,
-  e.g. a MusicGen or ACE-Step script on a GPU box.
+  commercially; `music_v2_5` unless `NIXAMP_MUSIC_MODEL` says `music_v1` or `music_v2`), or a
+  model of your own: `NIXAMP_AI_MUSIC_COMMAND` is run with `{prompt}`, `{seconds}`, `{vocals}`,
+  `{lyrics}` (a file of words to sing, or empty) and `{out}` replaced (each one argument) and must
+  leave an MP3 at `{out}`, e.g. a MusicGen or ACE-Step script on a GPU box. Artists with albums
+  and lyrics are the [AI label](ai-label.md).
 - **Briefs.** Gemini (`GEMINI_API_KEY`, `NIXAMP_GEMINI_MODEL`, default gemini-flash-latest), else
   OpenAI (`OPENAI_API_KEY`, `NIXAMP_OPENAI_MODEL`, gpt-4.1-mini), else Anthropic; each one with a
   key is tried in turn, so a model that refuses this server (Gemini's "User location is not
