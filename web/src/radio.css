@@ -90,3 +90,8 @@
 .on-air-card a:hover, .on-air-card a:focus-visible { border-color: var(--green); }
 .on-air-card .state { justify-self: start; }
 .on-air-card .muted { font-size: 12px; overflow-wrap: anywhere; }
+
+/* Signed out: the ways in, back to /radio afterwards. */
+.sign-in { margin: 0; }
+.radio-app a.button { display: inline-block; font: inherit; color: var(--bg); background: var(--green); border: 1px solid var(--green); border-radius: 4px; padding: 4px 12px; text-decoration: none; min-height: 32px; line-height: 22px; box-sizing: border-box; }
+.radio-app a.button.ghost { color: var(--fg); background: transparent; border-color: var(--edge); }

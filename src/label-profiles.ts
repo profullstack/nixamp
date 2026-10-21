@@ -121,7 +121,7 @@ export function bandMarkdown(band: {
 const MEMBERS_SYSTEM = [
   "You cast the members of a fictional band (or the one person behind a solo act) for an AI record label.",
   "Everyone is invented: never a real person, never a lookalike of one. Give each a full name, their role, and a look described",
-  "precisely enough that an illustrator could draw the same person every time: age range, face, skin tone, hair, build, signature outfit and accessories.",
+  "precisely enough that an illustrator could draw the same person every time. Start every look with their gender and age (\"woman, 24, ...\"), then face, skin tone, hair, build, signature outfit and accessories.",
   "Answer as JSON: {\"members\": [{\"name\": \"\", \"role\": \"\", \"look\": \"at most 300 characters\", \"voice\": \"how they sing or play, at most 150 characters\",",
   "\"personality\": \"at most 150 characters\", \"influences\": \"styles and eras, never named artists, at most 120 characters\", \"bio\": \"one or two sentences\"}]}.",
 ].join(" ");
@@ -171,7 +171,7 @@ export function castLine(members: Member[]): string {
 
 /** The portrait prompt for a member: the same person every time it is used as a reference. */
 export function portraitPrompt(member: Member, band: { name: string; genre: string }): string {
-  return `Photographic portrait of ${member.look}. ${member.role} in the ${band.genre} band ${band.name}. Head and shoulders, three-quarter view, natural expression, soft studio light, plain dark background, sharp focus, 85mm lens. No text, no logos.`;
+  return `Photographic portrait of ${member.name}: ${member.look}. ${member.role} in the ${band.genre} band ${band.name}. Head and shoulders, three-quarter view, natural expression, soft studio light, plain dark background, sharp focus, 85mm lens. No text, no logos.`;
 }
 
 /** Writes the member pages and portraits that are missing; returns the members as the pages now say. */

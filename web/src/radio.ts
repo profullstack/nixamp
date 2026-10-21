@@ -1046,11 +1046,32 @@ async function start(): Promise<void> {
     for (const id of ["#stations", "#label", "#library", "#music"]) $(id).hidden = true;
     for (const tab of document.querySelectorAll<HTMLElement>(".radio-nav [data-tab], .server-pick")) tab.hidden = true;
     $("#on-air").before(el("p", { class: "hint", id: "signed-out" }, hint));
+    if (onDirectory()) void signInChoices().then((links) => { if (links) $("#signed-out").after(links); });
     return;
   }
   picker.value = first.id;
   await use(first);
   if (location.hash === "#stations") document.querySelector("#stations")?.scrollIntoView();
+}
+
+/**
+ * Ways in, back to this page afterwards: nixamp's own (email) and each
+ * provider nixamp.com offers (CoinPay, GitHub, Google), OAuth 2.1 where the
+ * provider does it.
+ */
+async function signInChoices(): Promise<HTMLElement | null> {
+  let offered: Array<{ id: string; name: string }> = [];
+  try {
+    const answer = await fetch("/api/v1/auth/providers");
+    if (answer.ok) offered = ((await answer.json()) as { providers?: Array<{ id: string; name: string }> }).providers ?? [];
+  } catch {
+    return null;
+  }
+  const back = encodeURIComponent(location.pathname + location.hash);
+  return el("p", { class: "actions sign-in", id: "sign-in" },
+    el("a", { class: "button", href: `/?signin=1&redirect=${back}` }, "Sign in with nixamp"),
+    ...offered.map((provider) => el("a", { class: "button ghost", href: `/api/v1/${encodeURIComponent(provider.id)}/oauth/start?redirect=${back}` }, `Sign in with ${provider.name}`)),
+  );
 }
 
 const PICKED = "nixamp.radio.server";

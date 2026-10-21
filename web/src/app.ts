@@ -6084,7 +6084,8 @@ export function start(): void {
     for (const provider of offered) {
       const link = document.createElement("a");
       link.className = "button";
-      link.href = `/api/v1/${encodeURIComponent(provider.id)}/oauth/start`;
+      // Back to this page once signed in.
+      link.href = `/api/v1/${encodeURIComponent(provider.id)}/oauth/start?redirect=${encodeURIComponent(location.pathname + location.search)}`;
       link.textContent = `Continue with ${provider.name}`;
       dom.accountProviders.append(link);
     }
@@ -6264,6 +6265,9 @@ export function start(): void {
         void checkAdmin();
         // And it is what an invited link was waiting for.
         openInvitedStream();
+        // Sent here to sign in (/radio, /buy, /follow): back where the visit was going, on this site only.
+        const back = new URLSearchParams(location.search).get("redirect") ?? "";
+        if (back.startsWith("/") && !back.startsWith("//") && !back.startsWith("/\\")) location.assign(back);
       } catch {
         dom.accountNote.textContent = "could not reach nixamp.com";
       } finally {

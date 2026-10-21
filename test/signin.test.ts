@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -8,6 +9,7 @@ import { Accounts, type AuthLike } from "../src/accounts.ts";
 import { DeviceGrants, makeUserCode, normalizeUserCode, POLL_INTERVAL_SECONDS } from "../src/device.ts";
 import {
   authorizeUrl,
+  coinpayProvider,
   devicePage,
   exchangeCode,
   githubProvider,
@@ -15,6 +17,8 @@ import {
   Identities,
   providersFrom,
   redirectUri,
+  safeRedirect,
+  signInReturnHosts,
   SignIn,
   STATE_TTL_MS,
 } from "../src/oauth.ts";
@@ -422,6 +426,58 @@ test("an identity finds the account that already has the address, then itself", 
   assert.equal(made.length, 1);
 });
 
+test("CoinPay is OAuth 2.1: PKCE S256 on the way out, the verifier on the exchange, matched by subject", async () => {
+  const provider = coinpayProvider("cp_client", "secret");
+  assert.deepEqual(providersFrom({ COINPAY_OAUTH_CLIENT_ID: "cp_client", COINPAY_OAUTH_CLIENT_SECRET: "s" }).map((one) => one.id), ["coinpay"]);
+  const signIn = new SignIn([provider], new DeviceGrants(), "https://nixamp.com");
+  const out = new URL(signIn.begin(provider, "", "/radio#music"));
+  assert.equal(out.origin + out.pathname, "https://coinpayportal.com/api/oauth/authorize");
+  assert.equal(out.searchParams.get("code_challenge_method"), "S256");
+  assert.equal(out.searchParams.get("redirect_uri"), "https://nixamp.com/api/v1/coinpay/oauth/callback");
+  assert.equal(out.searchParams.get("scope"), "openid profile email");
+  const pending = signIn.claim(out.searchParams.get("state"))!;
+  assert.equal(pending.redirect, "/radio#music");
+  assert.equal(createHash("sha256").update(pending.verifier!).digest("base64url"), out.searchParams.get("code_challenge"), "the challenge is the verifier's S256");
+  // The exchange carries the verifier; userinfo gives the subject.
+  const sent: string[] = [];
+  const send = (async (url: string, init?: RequestInit) => {
+    sent.push(`${url} ${String(init?.body ?? "")}`);
+    if (url.endsWith("/token")) return new Response(JSON.stringify({ access_token: "at" }), { status: 200 });
+    return new Response(JSON.stringify({ sub: "cp-user-1", email: "Fan@Example.com", email_verified: false }), { status: 200 });
+  }) as typeof fetch;
+  assert.equal(await exchangeCode(provider, "code", "https://nixamp.com", send, pending.verifier!), "at");
+  assert.match(sent[0]!, new RegExp(`code_verifier=${pending.verifier}`));
+  assert.deepEqual(await provider.identify("at", send), { provider: "coinpay", subject: "cp-user-1", email: "fan@example.com", verified: false });
+});
+
+test("an unverified address (CoinPay's) never reaches the account that owns it, and is never the new account's", async () => {
+  const db = fakeDb();
+  const made: Record<string, unknown>[] = [];
+  const users = {
+    async getUserByEmail(email: string) {
+      return email === "known@b.com" ? { id: "existing", email } : made.find((one) => one["email"] === email) ? { id: "new-1", email } : null;
+    },
+    async createUser(user: Record<string, unknown>) {
+      made.push(user);
+      return { id: `new-${made.length}`, email: String(user["email"]) };
+    },
+  };
+  const identities = new Identities(db, users as never);
+  const first = await identities.resolve({ provider: "coinpay", subject: "cp-9", email: "known@b.com", verified: false });
+  assert.deepEqual(first, { id: "new-1", email: "coinpay-cp-9@coinpay.invalid" }, "not the account that has known@b.com");
+  assert.equal(made[0]?.["emailVerified"], false);
+  assert.deepEqual(made[0]?.["profile"], { signedUpWith: "coinpay", providerEmail: "known@b.com" });
+  assert.deepEqual(await identities.resolve({ provider: "coinpay", subject: "cp-9", email: "other@b.com", verified: false }), first, "the same CoinPay user comes back to the same account");
+  assert.equal(made.length, 1);
+});
+
+test("a sign-in returns to a path here or an allowed site, never anywhere else", () => {
+  const hosts = signInReturnHosts({});
+  assert.equal(safeRedirect("/radio#music", hosts), "/radio#music");
+  assert.equal(safeRedirect("https://live.streaming.pit.world/radio/artist/x", hosts), "https://live.streaming.pit.world/radio/artist/x");
+  for (const bad of ["//evil.example/x", "/\\evil.example", "https://evil.example/", "http://live.streaming/", "javascript:alert(1)", 42]) assert.equal(safeRedirect(bad, hosts), "/");
+});
+
 // --- states -----------------------------------------------------------------
 
 test("a state is good once, and not for long", () => {
@@ -431,7 +487,7 @@ test("a state is good once, and not for long", () => {
 
   const state = new URL(signIn.begin(provider, "WXYZ-4RTB")).searchParams.get("state") ?? "";
   assert.notEqual(state, "");
-  assert.deepEqual(signIn.claim(state), { provider: "github", userCode: "WXYZ-4RTB", createdAt: 0 });
+  assert.deepEqual(signIn.claim(state), { provider: "github", userCode: "WXYZ-4RTB", createdAt: 0, redirect: "/" });
   assert.equal(signIn.claim(state), null, "a replayed callback finds nothing");
   assert.equal(signIn.claim(""), null);
 
