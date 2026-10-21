@@ -5,7 +5,7 @@ and a voice. A language model plans each album (title, concept, running order, a
 and writes every song's words in English; ElevenLabs Music (`music_v2_5` by default) sings them.
 Every genre is a public station, and the whole catalogue has a page anybody can play.
 
-    nixamp station label sign --roster        # the first six artists, one genre each
+    nixamp station label sign --roster        # the roster: three artists in each of six genres
     nixamp station label                      # who is signed, their albums, this month's seconds
     nixamp station label album KEY            # an artist's next album, now
     nixamp station label config --budget 7200 --every-days 30 --songs 8 --seconds 150
@@ -28,7 +28,7 @@ published to nichedb.dev by `lyrics-publish.ts` like any owned station's.
 
 ## Schedule and budget
 
-- A newly signed artist gets `seedAlbums` (2) at once, one after the other; after that, an album
+- A newly signed artist gets `seedAlbums` (1) at once; after that, an album
   every `everyDays` (30), staggered so the roster does not all release on the same day.
 - One album is recorded at a time across the label, a song at a time, checked every 5 minutes.
   The plan and each song's words are saved before the song is composed, so a restart, a failure

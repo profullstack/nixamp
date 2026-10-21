@@ -74,6 +74,20 @@ test("names make safe folders and file names", () => {
   assert.equal(cleanLyrics("```\n[Verse]\nline one\n\n\n\nline two\n```"), "[Verse]\nline one\n\nline two");
 });
 
+test("the roster has three artists in every genre, each name once", () => {
+  const byGenre = new Map<string, number>();
+  for (const one of Object.values(ROSTER)) byGenre.set(one.genre, (byGenre.get(one.genre) ?? 0) + 1);
+  assert.deepEqual([...byGenre.values()], [...byGenre.values()].map(() => 3));
+  assert.equal(byGenre.size, 6);
+  assert.equal(new Set(Object.values(ROSTER).map((one) => one.name.toLowerCase())).size, Object.keys(ROSTER).length);
+});
+
+test("a ℗ copyright tag reads as its holder, with no doubled mark", async () => {
+  const { factsFor } = await import("../src/track-facts.ts");
+  const facts = factsFor({ station: { id: "abcdefghij", auto: "", rights: null } as never, file: "/x.mp3", tags: { copyright: "℗ 2026 Profullstack, Inc." }, holders: [] });
+  assert.equal(facts.rights.holder, "2026 Profullstack, Inc.");
+});
+
 test("an artist's albums are planned, written, sung and filed as genre/artist/year-album/001. title", async () => {
   const calls: Array<{ prompt: string; seconds: number; lyrics?: string }> = [];
   const { top, store, label, tagged } = setup(fakeComposer(calls));

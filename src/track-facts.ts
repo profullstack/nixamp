@@ -174,7 +174,7 @@ export function factsFor(input: FactSources): TrackFacts {
   const copyright = tags["copyright"] || tags["tcop"] || "";
   let rights: TrackFacts["rights"];
   if (copyright) {
-    rights = { holder: copyright.replace(/^(\(c\)|©|copyright)\s*/i, "").slice(0, 200), basis: "", note: "", license: holder?.license ?? "", source: "tag" };
+    rights = { holder: copyright.replace(/^((\(c\)|\(p\)|©|℗|copyright)\s*)+/i, "").slice(0, 200), basis: "", note: "", license: holder?.license ?? "", source: "tag" };
   } else if (holder) {
     rights = { holder: holder.name, basis: station.rights?.basis ?? "", note: "", license: holder.license, source: "holder" };
   } else if (input.share) {
