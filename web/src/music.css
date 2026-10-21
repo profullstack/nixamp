@@ -116,3 +116,18 @@ button.icon { font: inherit; background: transparent; border: 0; color: var(--fg
 .lyrics-text.synced p.line.now .word { opacity: .55; transition: opacity .15s, color .15s; }
 .lyrics-text.synced p.line.now .word.sung { opacity: 1; color: var(--green); }
 @media (prefers-reduced-motion: reduce) { .lyrics-text.synced p.line, .lyrics-text.synced .word { transition: none; } }
+
+/* Music videos: 16:9, never wider than the column. */
+.videos { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+.videos figure { margin: 0; }
+.videos figcaption { margin-top: 6px; font-size: .9rem; color: var(--muted); }
+.videos figcaption strong { color: var(--fg); }
+.videos video, details.words video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; }
+details.words video { max-width: 640px; margin: 8px 0 4px 3.2em; width: calc(100% - 3.2em); }
+
+/* How a follower is told: three switches and a number. */
+fieldset.alerts { border: 1px solid var(--edge); border-radius: 8px; padding: 12px 16px; margin: 16px 0; max-width: 520px; }
+fieldset.alerts legend { padding: 0 6px; font-weight: 600; }
+fieldset.alerts label { display: flex; gap: 8px; align-items: center; margin: 6px 0; cursor: pointer; }
+fieldset.alerts .phone { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+fieldset.alerts .phone input { flex: 1 1 180px; min-width: 0; padding: 8px; border-radius: 6px; border: 1px solid var(--edge); background: var(--bg); color: var(--fg); font: inherit; }

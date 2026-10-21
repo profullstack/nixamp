@@ -7,9 +7,10 @@
  * a station while you browse; listening is free, files are bought on /buy.
  */
 import "./music.css";
+import { pushSupport, subscribe as subscribePush, unsubscribe as unsubscribePush } from "@profullstack/notifications/client";
 
 interface Member { slug: string; name: string; role: string; bio: string }
-interface Song { n: number; title: string; seconds: number; lyrics?: string }
+interface Song { n: number; title: string; seconds: number; lyrics?: string; video?: boolean }
 interface Album { key: string; title: string; year: number; concept: string; cover: boolean; complete: boolean; songs: Song[] }
 interface Artist { server: string; key: string; name: string; genre: string; bio: string; follow: string; members?: Member[]; albums: Album[] }
 interface Station { server: string; id: string; name: string; state: string; listen: string; token: string; nowPlaying: { title: string; artist: string } | null }
@@ -49,6 +50,18 @@ function artOf(artist: Artist): string {
   if (album) return coverOf(artist, album);
   const member = artist.members?.[0];
   return member ? portraitOf(artist, member) : "";
+}
+
+/** A song's music video: native controls, nothing fetched until it is played, the live station paused while it plays. */
+function videoOf(artist: Artist, album: Album, song: Song): HTMLVideoElement {
+  const video = el("video", { controls: true, preload: "none", playsinline: true, src: file(artist.server, `${artist.key}/${album.key}/${song.n}.mp4`), "aria-label": `${song.title} by ${artist.name}, music video`, width: "640", height: "360" });
+  const poster = coverOf(artist, album);
+  if (poster) video.poster = poster;
+  video.addEventListener("play", () => {
+    for (const other of document.querySelectorAll("video")) if (other !== video) other.pause();
+    if (playing && !audioEl().paused) $("#player-toggle").click();
+  });
+  return video;
 }
 
 function picture(src: string, alt = ""): HTMLElement {
@@ -108,6 +121,66 @@ function genreView(data: Catalogue, name: string): HTMLElement[] {
   ];
 }
 
+interface Prefs { phone: string; wantsEmail: boolean; wantsSms: boolean; wantsWeb: boolean }
+
+/**
+ * How a follower is told of a release: this browser, email, a text. The same
+ * preferences as the account panel (/api/v1/notify/prefs); the browser one also
+ * needs this device subscribed, which the browser only allows from a click.
+ */
+function alertsPanel(): HTMLElement {
+  const note = el("p", { class: "muted", role: "status" });
+  const web = el("input", { type: "checkbox" });
+  const email = el("input", { type: "checkbox" });
+  const sms = el("input", { type: "checkbox" });
+  const phone = el("input", { type: "tel", autocomplete: "tel", placeholder: "+1 555 123 4567", "aria-label": "Phone number for texts" });
+  const savePhone = el("button", { type: "button", class: "btn ghost" }, "Save number");
+  const panel = el("fieldset", { class: "alerts" },
+    el("legend", {}, "Tell me when they release something"),
+    el("label", {}, web, " Browser notification on this device"),
+    el("label", {}, email, " Email"),
+    el("label", {}, sms, " Text message"),
+    el("div", { class: "phone" }, phone, savePhone),
+    note);
+  const save = async (change: Partial<Prefs>): Promise<boolean> => {
+    const r = await fetch("/api/v1/notify/prefs", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(change) }).catch(() => null);
+    if (!r?.ok) { note.textContent = r?.status === 422 ? "That does not look like a phone number." : "Could not save that."; return false; }
+    note.textContent = "Saved.";
+    return true;
+  };
+  void fetch("/api/v1/notify/prefs").then((r) => (r.ok ? r.json() as Promise<Prefs> : null)).then((prefs) => {
+    if (!prefs) { panel.hidden = true; return; }
+    email.checked = prefs.wantsEmail;
+    sms.checked = prefs.wantsSms;
+    phone.value = prefs.phone;
+    // On only when this browser is really subscribed, whatever the stored preference.
+    web.checked = prefs.wantsWeb && "Notification" in window && Notification.permission === "granted";
+  }).catch(() => { panel.hidden = true; });
+  web.addEventListener("change", () => void (async () => {
+    if (web.checked) {
+      const support = pushSupport();
+      if (!support.supported) { note.textContent = support.message; web.checked = false; return; }
+      try {
+        await subscribePush({ vapidKeyUrl: "/api/v1/notify/key", serviceWorkerUrl: "/sw.js", saveUrl: "/api/v1/notify/subscribe" });
+        await save({ wantsWeb: true });
+      } catch (error) {
+        web.checked = false;
+        note.textContent = error instanceof Error ? error.message : "Could not set this device up.";
+      }
+    } else {
+      await unsubscribePush({ removeUrl: "/api/v1/notify/subscribe" }).catch(() => undefined);
+      note.textContent = "This device will not be told.";
+    }
+  })());
+  email.addEventListener("change", () => void save({ wantsEmail: email.checked }));
+  sms.addEventListener("change", () => {
+    if (sms.checked && !phone.value.trim()) { note.textContent = "Add your number, then Save number."; sms.checked = false; return; }
+    void save({ wantsSms: sms.checked });
+  });
+  savePhone.addEventListener("click", () => void save({ phone: phone.value.trim(), ...(phone.value.trim() ? { wantsSms: true } : { wantsSms: false }) }).then((ok) => { if (ok) sms.checked = Boolean(phone.value.trim()); }));
+  return panel;
+}
+
 /** Follow / Following, from the signed-in account; signed out, a way in that comes back here. */
 function followButton(artist: Artist): HTMLElement {
   const button = el("button", { type: "button", class: "btn ghost", "aria-pressed": "false" }, "Follow");
@@ -125,6 +198,9 @@ function followButton(artist: Artist): HTMLElement {
       if (!r.ok) return;
       button.setAttribute("aria-pressed", String(on));
       button.textContent = on ? "Following" : "Follow";
+      // Just followed: ask how to tell them, once, right under the button.
+      const actions = button.closest(".actions");
+      if (on && actions && !actions.parentElement?.querySelector(".alerts")) actions.after(alertsPanel());
       say(on ? `Following ${artist.name}. You will hear when they release something.` : `No longer following ${artist.name}.`);
     }).finally(() => { button.disabled = false; });
   });
@@ -161,6 +237,15 @@ function artistView(data: Catalogue, server: string, key: string): HTMLElement[]
         el("div", {}, el("a", { href: memberHref(artist, member) }, el("strong", {}, member.name)), el("span", {}, member.role)),
       ))),
     ] : []),
+    ...(() => {
+      // The newest videos first, the album's single (its first song) leading each album.
+      const videos = albums.flatMap((album) => album.songs.filter((song) => song.video).map((song) => ({ album, song }))).slice(0, 6);
+      return videos.length ? [
+        el("h2", {}, "Videos"),
+        el("div", { class: "videos" }, ...videos.map(({ album, song }) => el("figure", {}, videoOf(artist, album, song),
+          el("figcaption", {}, el("strong", {}, song.title), " · ", el("a", { href: albumHref(artist, album) }, album.title))))),
+      ] : [];
+    })(),
     el("h2", {}, "Discography"),
     albums.length
       ? el("div", { class: "grid" }, ...albums.map((album) => el("a", { class: "card", href: albumHref(artist, album) }, picture(coverOf(artist, album)), el("strong", {}, album.title), el("small", {}, `${album.year} · ${album.songs.length} songs${album.complete ? "" : " · recording"}`))))
@@ -192,6 +277,7 @@ function albumView(data: Catalogue, server: string, key: string, albumKey: strin
         el("span", { class: "t" }, clock(song.seconds)),
         el("a", { class: "buy", href: buyHref(artist, "song", album.key, song.n) }, "10¢"),
       ),
+      song.video ? el("details", { class: "words" }, el("summary", {}, "Watch the video"), videoOf(artist, album, song)) : null,
       song.lyrics ? el("details", { class: "words" }, el("summary", {}, "Lyrics"), el("pre", {}, song.lyrics)) : null,
     ))),
     el("p", { class: "muted" }, "Every song plays free on the live station. A download is the MP3s with the cover art and lyrics, yours to keep."),
@@ -218,12 +304,14 @@ async function meView(): Promise<HTMLElement[]> {
       one.zip ? el("a", { class: "btn", href: one.zip }, "Download") : null,
       one.link ? el("a", { class: "btn ghost", href: one.link }, "Receipt") : null)))
     : el("p", { class: "empty" }, "Nothing yet: every album page has a Download button."));
-  const follows = await fetch("/api/v1/follows").then((r) => (r.ok ? r.json() : {})).catch(() => ({})) as { following?: string[] };
+  // Each follow is { id, name, live } (older servers: the bare id).
+  const follows = await fetch("/api/v1/follows").then((r) => (r.ok ? r.json() : {})).catch(() => ({})) as { following?: Array<string | { id: string }> };
   const data = await load().catch(() => null);
-  const followed = (follows.following ?? []).filter((one) => one.startsWith("artist:"));
+  const followed = (follows.following ?? []).map((one) => (typeof one === "string" ? one : one.id)).filter((one) => one.startsWith("artist:"));
   out.push(el("h2", {}, "Following"));
   const artists = data ? allArtists(data).filter((one) => followed.includes(one.follow)) : [];
   out.push(artists.length ? el("div", { class: "grid" }, ...artists.map(artistCard)) : el("p", { class: "empty" }, "Follow an artist to hear when they release something."));
+  out.push(alertsPanel());
   return out;
 }
 
