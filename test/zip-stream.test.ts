@@ -32,7 +32,8 @@ test("a streamed zip opens with unzip, names in folders, sizes known up front", 
       throw error;
     }
     assert.match(listing, /No errors detected/);
-    assert.match(listing, /001\. Song – one\.mp3/);
+    // unzip prints names in the machine's locale, so match around the dash.
+    assert.match(listing, /Velvet Ruckus\/2026-Record 1\/001\. Song .+ one\.mp3/);
   } finally {
     rmSync(top, { recursive: true, force: true });
   }

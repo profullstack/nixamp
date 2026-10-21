@@ -191,7 +191,10 @@ export class MusicStore {
   /** What is for sale at this address, with its name and price; refused when there is no such thing. */
   async describe(input: Record<string, unknown>): Promise<Scope & { title: string; artistName: string; amountCents: number; songs: number }> {
     const server = serverBase(input["server"]);
-    if (!server || !this.options.servers().includes(server)) throw new SupportError("That server does not sell music here.", 404, "not_found");
+    // A server in the directory or the guide's peers, or one named under nixamp.com (whose names
+    // and certificates nixamp.com issues): the directory empties on every restart of nixamp.com.
+    const named = server ? new URL(server).hostname.endsWith(".nixamp.com") : false;
+    if (!server || !(named || this.options.servers().includes(server))) throw new SupportError("That server does not sell music here.", 404, "not_found");
     const kind = String(input["kind"] ?? "") as Kind;
     if (!(kind in PRICES)) throw new SupportError("Buy a song, an album or an artist.", 400, "invalid_kind");
     const artistKey = String(input["artist"] ?? "");
