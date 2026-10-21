@@ -170,7 +170,12 @@ function alertsPanel(): HTMLElement {
         await save({ wantsWeb: true });
       } catch (error) {
         web.checked = false;
-        note.textContent = error instanceof Error ? error.message : "Could not set this device up.";
+        const message = error instanceof Error ? error.message : "";
+        // De-Googled Chromium (TronBrowser's engine, ungoogled-chromium) has no push service of its own:
+        // TronBrowser supplies one, but only in its normal windows, not private or app windows.
+        note.textContent = /push service/i.test(message)
+          ? "This browser has no push service of its own. In TronBrowser, turn this on from a normal window (not a private or app window), on TronBrowser 3.16 or newer (tron upgrade). Email and text work anywhere."
+          : message || "Could not set this device up.";
       }
     } else {
       await unsubscribePush({ removeUrl: "/api/v1/notify/subscribe" }).catch(() => undefined);
