@@ -87,6 +87,8 @@ import { handleMusicRoutes, isMusicPath, MusicHub, musicPageFor, serverId } from
 import { fileLedger, pgLedger, VeoBudgetError, VeoStudio } from "./veo-studio.ts";
 import { KnownServers } from "./known-servers.ts";
 import { handleStoreRoutes, isStorePath } from "./store-routes.ts";
+import { MusicLicenses } from "./music-license.ts";
+import { handleLicenseRoutes, isLicensePath } from "./license-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
 import { HolderStore, TagReader, factsFor } from "./track-facts.ts";
@@ -1964,6 +1966,8 @@ export interface HandlerOptions {
   coinpayWebhookSecret?: string;
   /** The AI label's songs for sale, nixamp.com only (music-store.ts). */
   musicStore?: MusicStore;
+  /** Licences to use that music in games, apps and videos, nixamp.com only (music-license.ts). */
+  musicLicenses?: MusicLicenses;
   /** nixamp.com/music: every server's label in one app (music-hub.ts). */
   music?: { hub: MusicHub; released: (request: IncomingMessage, body: Record<string, unknown>) => Promise<{ status: number; body: unknown }>; veo?: (request: IncomingMessage) => Promise<{ status: number; body: unknown; video?: Buffer }> };
   sharedTranslations?: SharedTranslations;
@@ -2717,6 +2721,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       if (options.musicStore) {
         try {
           if (await options.musicStore.owns(event.paymentId)) { json(response, 200, await options.musicStore.settle(event.paymentId)); return; }
+          if (options.musicLicenses && await options.musicLicenses.owns(event.paymentId)) { json(response, 200, await options.musicLicenses.settle(event.paymentId)); return; }
         } catch (error) {
           console.error(`nixamp: CoinPay webhook for ${event.paymentId} (music) could not settle: ${error instanceof Error ? error.message : String(error)}`);
           json(response, 500, { error: "could not settle; retry" });
@@ -2862,6 +2867,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !(isPublicLabelPath(path) && Boolean(options.stations?.label)) &&
       // The music store: its pages, checkout, receipts and grants (nixamp.com).
       !(isStorePath(path) && Boolean(options.musicStore)) &&
+      !(isLicensePath(path) && Boolean(options.musicLicenses)) &&
       // nixamp.com/music: the app and its catalogue, for anybody.
       !(isMusicPath(path) && Boolean(options.music)) &&
       !(/^\/radio\/(artist|album)\//.test(path) && Boolean(options.music)) &&
@@ -3435,6 +3441,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         account: async () => (accounts ? await accounts.whoIs(tokenFrom(request.headers)) : null),
         json,
         readBody,
+      })) return;
+    }
+
+    if (options.musicLicenses && isLicensePath(path)) {
+      const accounts = options.accounts;
+      if (await handleLicenseRoutes(request, response, path, url, {
+        licenses: options.musicLicenses,
+        account: async () => (accounts ? await accounts.whoIs(tokenFrom(request.headers)) : null),
+        json,
+        readBody,
+        serverId,
+        site: (process.env["NIXAMP_SITE"] || "https://nixamp.com").replace(/\/+$/, ""),
       })) return;
     }
 
@@ -7989,6 +8007,16 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(musicHub ? { resolveServer: (id: string) => musicHub.resolve(id) } : {}),
     log: (line) => console.log(line),
   }) : undefined;
+  // Licences to use that music in games, apps and videos (music-license.ts), paid the same way.
+  const musicLicenses = musicStore && supportPayments && pool ? new MusicLicenses({
+    db: pool as unknown as import("./support.ts").Db,
+    support: supportPayments,
+    store: musicStore,
+    mail: process.env["RESEND_API_KEY"] ? { apiKey: process.env["RESEND_API_KEY"], from: process.env["NIXAMP_MAIL_FROM"] ?? "nixamp <notifications@nixamp.com>" } : null,
+    site: nixampSite,
+    serverId,
+    log: (line) => console.log(line),
+  }) : undefined;
   /**
    * A server says an album (or song) of its label landed: its artist's
    * followers are told. Only the account that owns a listed server may say
@@ -8612,6 +8640,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(supportPayments ? { support: supportPayments } : {}),
     ...(supportMonthly ? { supportSubscriptions: supportMonthly } : {}),
     ...(musicStore ? { musicStore } : {}),
+    ...(musicLicenses ? { musicLicenses } : {}),
     ...(musicHub ? { music: { hub: musicHub, released: musicReleased, veo: musicVeo } } : {}),
     ...(process.env["COINPAY_WEBHOOK_SECRET"] ? { coinpayWebhookSecret: process.env["COINPAY_WEBHOOK_SECRET"] } : {}),
     ...(sharedTranslations ? { sharedTranslations } : {}),
