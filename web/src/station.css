@@ -36,3 +36,13 @@
 .station-small{margin-top:16px;font-size:.85rem;opacity:.75}.station-small a{color:inherit}
 @media (prefers-reduced-motion:no-preference){.station-chip.live::before{animation:station-pulse 2s ease-in-out infinite}}
 @keyframes station-pulse{50%{opacity:.35}}
+/* On demand (vod.html): the link to share, and the list of published files. */
+.station-chip.vod{color:#6aa7ff}
+.vod-share{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.vod-share input{flex:1 1 220px;min-width:0;padding:9px 10px;border:1px solid var(--line,#1f2a22);border-radius:8px;background:transparent;color:inherit;font:inherit}
+.vod-share button{padding:9px 16px;border-radius:8px;border:1px solid var(--line,#1f2a22);background:#3ddc84;color:#06120a;font:inherit;font-weight:700;cursor:pointer}
+.vod-share button#share{background:transparent;color:inherit}
+.vod-list{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.vod-list a{display:block;padding:16px;border:1px solid var(--line,#1f2a22);border-radius:14px;color:inherit;text-decoration:none;background:var(--panel,#0e1410)}
+.vod-list a:hover,.vod-list a:focus-visible{border-color:#3ddc84}
+.vod-list .vod-name{font-weight:700;overflow-wrap:anywhere}.vod-list .vod-meta{opacity:.7;font-size:.9rem;margin-top:4px}

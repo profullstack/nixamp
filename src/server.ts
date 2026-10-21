@@ -87,6 +87,7 @@ import { LyricsPublisher } from "./lyrics-publish.ts";
 import { aiKey } from "./ai-keys.ts";
 import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML, WATCH_APP_CSP } from "./station-page.ts";
 import { handleRooms, RoomProbe, roomEntries, RoomStore, watchBase } from "./guide-rooms.ts";
+import { handleVods, VodProbe, vodEntries, VodStore, vodView } from "./guide-vods.ts";
 import { withPitFooter } from "./pit-footer.ts";
 import { guideAds, guideCsp, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
@@ -1763,6 +1764,8 @@ export interface HandlerOptions {
     peers?: PeerGuides;
     /** Live rooms members published to this guide, and how to ask a room's server what is on it. */
     rooms?: { store: RoomStore; probe: RoomProbe };
+    /** Files members published to this guide to play on demand, and how to ask a file's server about it. */
+    vods?: { store: VodStore; probe: VodProbe };
   };
   web: string | null;
   /** Branded clients on this same backend, keyed by an explicitly configured host. */
@@ -2729,6 +2732,8 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       !(path === "/watch" && Boolean(options.stations?.rooms)) &&
       // Live rooms on the guide: listed for anybody, published by a member (guide-rooms.ts).
       !((path === "/api/v1/guide/rooms" || path.startsWith("/api/v1/guide/rooms/")) && Boolean(options.stations?.rooms)) &&
+      // On demand: a file's page and the guide's list of them (guide-vods.ts); the file's own key travels in its play address.
+      !((path === "/vod" || /^\/vod\/[A-Za-z0-9_-]{1,32}$/.test(path) || path === "/api/v1/guide/vods" || path.startsWith("/api/v1/guide/vods/")) && Boolean(options.stations?.vods)) &&
       !STATION_PAGE.test(path) &&
       !isPublicAsset &&
       !isGuidePage &&
@@ -2934,6 +2939,62 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    // A file on demand: /vod (all of them) and /vod/<id> (one), the page a VOD link opens.
+    const vodPath = /^\/vod(?:\/([A-Za-z0-9_-]{1,32}))?$/.exec(path);
+    if (options.stations?.vods && vodPath && (request.method === "GET" || request.method === "HEAD")) {
+      const built = web !== null && isFile(join(web, "vod.html")) ? readFileSync(join(web, "vod.html"), "utf8") : null;
+      if (!built) {
+        json(response, 404, { error: "this server was started without its web pages" });
+        return;
+      }
+      const vods = options.stations.vods;
+      const one = vodPath[1] ? vods.store.get(vodPath[1]) : undefined;
+      const base = watchBase(options.stations.publicBase?.() || `https://${request.headers.host ?? "localhost"}`);
+      const view = one ? vodView(one, base, null) : null;
+      // A link preview reads the page, not its script: the file's name goes in the head.
+      const escape = (text: string): string => text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+      const head = view
+        ? `<title>${escape(String(view.name))} · on demand</title>\n    <meta property="og:title" content="${escape(String(view.name))}" />\n    <meta property="og:type" content="${view.kind === "video" ? "video.other" : "music.song"}" />\n    <meta property="og:url" content="${escape(String(view.page))}" />\n    <meta property="og:description" content="On demand: play it from the start, seek anywhere." />`
+        : "<title>On demand · nixamp</title>";
+      response.writeHead(vodPath[1] && !one ? 404 : 200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-cache",
+        "content-security-policy": WATCH_APP_CSP,
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(request.method === "HEAD" ? undefined : built.replace(/<title>[^<]*<\/title>/, head));
+      return;
+    }
+
+    if (options.stations?.vods && (path === "/api/v1/guide/vods" || path.startsWith("/api/v1/guide/vods/"))) {
+      const control = await controlOf();
+      const session = tokenFrom(request.headers) || url.searchParams.get("session") || "";
+      const vods = options.stations.vods;
+      const publicBase = (options.stations.publicBase?.() ?? "").replace(/\/+$/, "");
+      await handleVods(request, response, path, {
+        store: vods.store,
+        probe: vods.probe,
+        base: watchBase(publicBase || `https://${request.headers.host ?? "localhost"}`),
+        canControl: control.allowed,
+        member: async () => (session && options.owner ? (await options.owner.accountFor(session)) || "" : ""),
+        ownPlay: (item) => (publicBase && listenKey && options.library?.index.item(item) ? `${publicBase}/api/v1/library/items/${item}/play?k=${listenKey}` : ""),
+        ownState: (id) => {
+          const item = options.library?.index.item(id);
+          if (!item || item.state !== "ready") return null;
+          const title = item.override.title || item.title || item.rel.split("/").pop()?.replace(/\.[^.]+$/, "") || id;
+          return { name: title.slice(0, 160), kind: item.video ? "video" : "audio", duration: item.duration, artist: (item.override.artist || item.artist).slice(0, 160) };
+        },
+        json,
+        readBody,
+        throttle: () => {
+          const verdict = guard.check(`vods:${callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, STATION_CONTROL_LIMIT);
+          return verdict.ok ? null : { retryAfter: verdict.retryAfter };
+        },
+      });
+      return;
+    }
+
     if (options.stations?.rooms && (path === "/api/v1/guide/rooms" || path.startsWith("/api/v1/guide/rooms/"))) {
       const control = await controlOf();
       const session = tokenFrom(request.headers) || url.searchParams.get("session") || "";
@@ -2987,6 +3048,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         probe: options.library.probe,
         retag: options.library.retag,
         sendFile,
+        play: (req, res, file) => playFile(req, res, file, url, options),
         json,
         readBody,
       });
@@ -3072,8 +3134,16 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         ...(options.stations.lyricsPublisher ? { lyricsPublisher: options.stations.lyricsPublisher } : {}),
         passes: listenPasses,
         ...(options.stations.peers ? { peers: () => options.stations!.peers!.entries() } : {}),
-        ...(options.stations.rooms ? {
-          rooms: () => roomEntries(options.stations!.rooms!.store, options.stations!.rooms!.probe, watchBase(options.stations!.publicBase?.() || `${scheme}://${request.headers.host ?? "localhost"}`)),
+        ...(options.stations.rooms || options.stations.vods ? {
+          rooms: async () => {
+            const base = watchBase(options.stations!.publicBase?.() || `${scheme}://${request.headers.host ?? "localhost"}`);
+            const { rooms, vods } = options.stations!;
+            const [live, onDemand] = await Promise.all([
+              rooms ? roomEntries(rooms.store, rooms.probe, base) : [],
+              vods ? vodEntries(vods.store, vods.probe, base) : [],
+            ]);
+            return [...live, ...onDemand];
+          },
         } : {}),
         throttle: () => {
           const verdict = guard.check(`stations:${control.account || callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, STATION_CONTROL_LIMIT);
@@ -6362,6 +6432,19 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    // Which library item a playlist track is, for publishing it on demand (guide-vods.ts).
+    const mediaItem = /^\/api\/media\/(\d+)\/item$/.exec(path);
+    if (mediaItem) {
+      const file = engine.trackPath(Number(mediaItem[1]));
+      const item = file === undefined ? undefined : options.library?.index.itemAt(file);
+      if (!item) {
+        json(response, 404, { error: "that track is not in this server's library", code: "not_in_library" });
+        return;
+      }
+      json(response, 200, { id: item.id, video: item.video, title: item.override.title || item.title, duration: item.duration });
+      return;
+    }
+
     if (path.startsWith("/api/media/")) {
       if (!options.media) {
         json(response, 403, { error: "media streaming is off" });
@@ -6374,47 +6457,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         return;
       }
       watch(request, response, "media", engine.snapshot().tracks?.[index]?.title ?? file);
-      // A browser asks for every track here, and a matroska or an avi handed
-      // to it raw is bytes it cannot play. Seeking is what this route is for
-      // and transcoding gives it up, but an unseekable film beats a silent
-      // one -- and the seekable formats are untouched.
-      // A ceiling the caller asked for, because only the caller knows what its
-      // link can carry. Capped at both ends: nothing below 200k is watchable,
-      // and above 20 megabits the original was always the better answer.
-      const asked = Number(url.searchParams.get("kbps") ?? "");
-      const capKbps = Number.isFinite(asked) && asked > 0 ? Math.min(20_000, Math.max(200, asked)) : 0;
-      // Whether this browser decodes H.265, which only it can know: Safari and
-      // televisions do, Chrome on a desktop does not and says nothing when
-      // handed it. Copying a 4K HEVC film is free; re-encoding one does not
-      // keep up with playing it, so the answer is worth carrying in the URL.
-      const allowHevc = url.searchParams.get("hevc") === "1";
-
-      if (playsInBrowser(file) && capKbps === 0) {
-        sendFile(request, response, file);
-        return;
-      }
-      // A film, or something whose name refuses to say. A live channel at
-      // .../301 used to fall through to the audio branch and arrive as MP3
-      // with `-vn` -- a match you could only listen to.
-      if (hasPicture(file) || nameSaysNothing(file)) {
-        // What ffprobe finds inside decides how little work it takes to keep
-        // the picture, and whether there is a picture to keep at all.
-        const codecs = await codecsOf({ ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, file);
-        if (codecs.video !== "") {
-          // Told back to the playlist, so an entry that was added before this
-          // could be asked stops claiming to be a song. Without it a track
-          // added by an older nixamp goes to an audio element for ever, and
-          // the only cure is noticing and adding it again.
-          engine.sawPicture(index);
-          pipeFfmpeg(
-            request, response, file, options.ffmpeg ?? ["ffmpeg"],
-            videoArgs(codecs, capKbps, { allowHevc }), "video/mp4",
-            transportInputArgs(file, codecs.container),
-          );
-          return;
-        }
-      }
-      transcode(request, response, file, options.ffmpeg ?? ["ffmpeg"]);
+      await playFile(request, response, file, url, options, () => engine.sawPicture(index));
       return;
     }
 
@@ -6759,6 +6802,58 @@ async function liveAudio(
  * for everything else.
  */
 /** Audio, from whatever this is: the shape every non-browser source took. */
+/**
+ * A file as a browser plays it: the bytes themselves, seekable, when the
+ * browser can; otherwise an MP4 or MP3 made on the way. `onPicture` hears
+ * that ffprobe found a picture in it.
+ */
+async function playFile(
+  request: IncomingMessage, response: ServerResponse, file: string, url: URL,
+  options: Pick<HandlerOptions, "ffmpeg" | "ffprobe">, onPicture: () => void = () => undefined,
+): Promise<void> {
+  // A browser asks for every track here, and a matroska or an avi handed
+  // to it raw is bytes it cannot play. Seeking is what this route is for
+  // and transcoding gives it up, but an unseekable film beats a silent
+  // one -- and the seekable formats are untouched.
+  // A ceiling the caller asked for, because only the caller knows what its
+  // link can carry. Capped at both ends: nothing below 200k is watchable,
+  // and above 20 megabits the original was always the better answer.
+  const asked = Number(url.searchParams.get("kbps") ?? "");
+  const capKbps = Number.isFinite(asked) && asked > 0 ? Math.min(20_000, Math.max(200, asked)) : 0;
+  // Whether this browser decodes H.265, which only it can know: Safari and
+  // televisions do, Chrome on a desktop does not and says nothing when
+  // handed it. Copying a 4K HEVC film is free; re-encoding one does not
+  // keep up with playing it, so the answer is worth carrying in the URL.
+  const allowHevc = url.searchParams.get("hevc") === "1";
+
+  if (playsInBrowser(file) && capKbps === 0) {
+    sendFile(request, response, file);
+    return;
+  }
+  // A film, or something whose name refuses to say. A live channel at
+  // .../301 used to fall through to the audio branch and arrive as MP3
+  // with `-vn` -- a match you could only listen to.
+  if (hasPicture(file) || nameSaysNothing(file)) {
+    // What ffprobe finds inside decides how little work it takes to keep
+    // the picture, and whether there is a picture to keep at all.
+    const codecs = await codecsOf({ ffmpeg: [], ffprobe: options.ffprobe ?? ["ffprobe"], play: null }, file);
+    if (codecs.video !== "") {
+      // Told back to the playlist, so an entry that was added before this
+      // could be asked stops claiming to be a song. Without it a track
+      // added by an older nixamp goes to an audio element for ever, and
+      // the only cure is noticing and adding it again.
+      onPicture();
+      pipeFfmpeg(
+        request, response, file, options.ffmpeg ?? ["ffmpeg"],
+        videoArgs(codecs, capKbps, { allowHevc }), "video/mp4",
+        transportInputArgs(file, codecs.container),
+      );
+      return;
+    }
+  }
+  transcode(request, response, file, options.ffmpeg ?? ["ffmpeg"]);
+}
+
 function transcode(
   request: IncomingMessage,
   response: ServerResponse,
@@ -7160,6 +7255,8 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     }),
     // Live rooms published to this guide; the probe never reaches this machine's own network.
     rooms: { store: new RoomStore(RoomStore.fileFor(stateDir(), options.port)), probe: new RoomProbe(fetch, (link) => refusedDestination(link)) },
+    // Files published to play on demand; the same guard on whose network the probe reaches.
+    vods: { store: new VodStore(VodStore.fileFor(stateDir(), options.port)), probe: new VodProbe(fetch, (link) => refusedDestination(link)) },
   };
   // Music handed over from BitTorrented, copied into a folder of our own.
   const importer = new Importer(join(stateDir(), `handoffs-${options.port}.json`), {

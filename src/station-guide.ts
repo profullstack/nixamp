@@ -67,7 +67,7 @@ const SCRIPT = `
     } catch { button.textContent = "Could not report; try again"; button.disabled = false; }
   };
   const draw = (stations) => {
-    for (const group of ["rooms", "ai", "shared", "radio", "tv"]) {
+    for (const group of ["rooms", "vod", "ai", "shared", "radio", "tv"]) {
       const grid = document.querySelector("#" + group);
       grid.replaceChildren();
       const list = stations.filter((s) => (s.group || (s.kind === "video" ? "tv" : "radio")) === group);
@@ -76,7 +76,7 @@ const SCRIPT = `
         const card = el("div", "card");
         const a = el("a", "station");
         a.href = s.page;
-        a.append(el("div", "live", s.state === "live" ? "● LIVE" : "off the air"), el("div", "name", s.name),
+        a.append(el("div", "live", s.state === "live" ? "● LIVE" : s.state === "vod" ? "▶ ON DEMAND" : "off the air"), el("div", "name", s.name),
           el("div", "now", nowLine(s.nowPlaying)));
         card.append(a);
         if (group === "shared") {
@@ -154,8 +154,8 @@ export interface GuideEntry {
   id?: string;
   name: string;
   kind: "audio" | "video";
-  /** rooms (live rooms, src/guide-rooms.ts), ai, shared, radio or tv; from kind when absent. */
-  group?: "rooms" | "ai" | "shared" | "radio" | "tv";
+  /** rooms (live rooms, src/guide-rooms.ts), vod (on demand, src/guide-vods.ts), ai, shared, radio or tv; from kind when absent. */
+  group?: "rooms" | "vod" | "ai" | "shared" | "radio" | "tv";
   state: string;
   page: string;
   nowPlaying: { title: string; artist: string } | null;
@@ -163,7 +163,7 @@ export interface GuideEntry {
   peer?: boolean;
 }
 
-const GROUPS = ["rooms", "ai", "shared", "radio", "tv"] as const;
+const GROUPS = ["rooms", "vod", "ai", "shared", "radio", "tv"] as const;
 
 /**
  * The guide with its stations already in it, so it reads the same through a
@@ -174,7 +174,7 @@ export function renderGuide(entries: GuideEntry[], apiBase = "", ads: GuideAds =
   const groupOf = (one: GuideEntry): string => one.group ?? (one.kind === "video" ? "tv" : "radio");
   const cards = (group: string): string => entries
     .filter((one) => groupOf(one) === group && /^https?:\/\//.test(one.page))
-    .map((one) => `<div class="card"><a class="station" href="${escape(one.page)}"><div class="live">${one.state === "live" ? "● LIVE" : "off the air"}</div><div class="name">${escape(one.name)}</div><div class="now">${escape(nowLine(one.nowPlaying))}</div></a></div>`)
+    .map((one) => `<div class="card"><a class="station" href="${escape(one.page)}"><div class="live">${one.state === "live" ? "● LIVE" : one.state === "vod" ? "▶ ON DEMAND" : "off the air"}</div><div class="name">${escape(one.name)}</div><div class="now">${escape(nowLine(one.nowPlaying))}</div></a></div>`)
     .join("");
   let page = GUIDE_HTML;
   for (const group of GROUPS) {
@@ -210,6 +210,8 @@ export const GUIDE_HTML = `<!doctype html>
   <p class="lead">Radio and TV, on the air now. Pick one and press play.</p>
   <h2 id="rooms-title" hidden>Live rooms</h2>
   <div id="rooms" class="grid" aria-live="polite"></div>
+  <h2 id="vod-title" hidden>On demand</h2>
+  <div id="vod" class="grid" aria-live="polite"></div>
   <h2 id="ai-title" hidden>AI Radio</h2>
   <div id="ai" class="grid" aria-live="polite"></div>
   <h2 id="shared-title" hidden>Shared by listeners</h2>
