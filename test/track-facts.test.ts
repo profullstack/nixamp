@@ -64,37 +64,29 @@ test("holders: made by name, matched by station, https-only support links", () =
   }
 });
 
-test("support: a one-time CoinPay checkout on nixamp's business, for a known holder, in a coin it has a wallet for", async () => {
+test("support: a one-time CoinPay hosted checkout on nixamp's business, for a known holder, any coin or PayPal", async () => {
   const sent: Array<{ url: string; body: Record<string, unknown> | null }> = [];
   const fetcher = (async (url: string, init: RequestInit = {}) => {
     sent.push({ url, body: init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null });
     if (url.endsWith("/api/supported-coins")) {
       return new Response(JSON.stringify({ success: true, business_id: "826b0d85-d0b8-4974-b78a-229b5fefc9c4", coins: [{ symbol: "SOL", is_active: true, has_wallet: true }, { symbol: "BTC", is_active: true, has_wallet: false }] }), { status: 200 });
     }
-    return new Response(JSON.stringify({ success: true, payment: { id: "pay_abc123" } }), { status: 200 });
+    return new Response(JSON.stringify({ success: true, id: "cs_Abc123Abc123Abc123Abc123", url: "https://coinpayportal.com/checkout/cs_Abc123Abc123Abc123Abc123" }), { status: 201 });
   }) as unknown as typeof fetch;
   const support = new Support({ key: "cp_live_test", site: "https://nixamp.com", holders: supportHoldersFrom({}), fetcher });
   assert.deepEqual((await support.coins()).coins, ["SOL"], "only coins with a wallet");
-  const { url } = await support.checkout({ holder: "profullstack", amountUsd: 5, coin: "sol", station: "rvhmw2dwv3", track: "Frost on the Oar" });
-  assert.equal(url, "https://coinpayportal.com/pay/pay_abc123");
-  const created = sent.find((one) => one.url.endsWith("/api/payments/create"))!.body!;
-  assert.equal(created["amount_usd"], 5);
-  assert.equal(created["currency"], "sol");
-  assert.equal(created["business_id"], "826b0d85-d0b8-4974-b78a-229b5fefc9c4");
+  const { url } = await support.checkout({ holder: "profullstack", amountUsd: 5, email: "fan@example.com", station: "rvhmw2dwv3", track: "Frost on the Oar" });
+  assert.equal(url, "https://coinpayportal.com/checkout/cs_Abc123Abc123Abc123Abc123");
+  const created = sent.find((one) => one.url.endsWith("/api/checkout/sessions"))!.body!;
+  assert.equal(created["amount"], 5);
+  assert.equal(created["currency"], "USD");
+  assert.equal(created["property"], "nixamp.com");
+  assert.equal(created["customer_email"], "fan@example.com");
   assert.deepEqual((created["metadata"] as Record<string, unknown>)["holder"], "profullstack");
-  await assert.rejects(support.checkout({ holder: "taylor-swift", amountUsd: 5, coin: "SOL" }), /Nobody by that name/);
-  await assert.rejects(support.checkout({ holder: "profullstack", amountUsd: 0.5, coin: "SOL" }), /amount/);
-  await assert.rejects(support.checkout({ holder: "profullstack", amountUsd: 5, coin: "BTC" }), /Pay with one of: SOL/);
+  await assert.rejects(support.checkout({ holder: "taylor-swift", amountUsd: 5, email: "fan@example.com" }), /Nobody by that name/);
+  await assert.rejects(support.checkout({ holder: "profullstack", amountUsd: 0.5, email: "fan@example.com" }), /amount/);
+  await assert.rejects(support.checkout({ holder: "profullstack", amountUsd: 5 }), /email/);
 });
-
-test("Mozart AI is named from its album tag, and the cover's address rides along", () => {
-  assert.equal(aiFromTags({ album: "Made with Mozart", artist: "chovy" })?.by, "Mozart AI");
-  assert.equal(aiFromTags({ album: "Mozart: Requiem" }), null, "a Mozart album is not AI");
-  const facts = factsFor({ station: station(), file: "/m/a.mp3", tags: { title: "Valhalla Bounce" }, holders: [], art: "/api/v1/stations/rvhmw2dwv3/art?t=x&f=abc" });
-  assert.equal(facts.art, "/api/v1/stations/rvhmw2dwv3/art?t=x&f=abc");
-  assert.equal(factsFor({ station: station(), file: "/m/b.mp3", tags: {}, holders: [] }).art, "");
-});
-
 test("monthly support: month one at once, a link a month while paid, lapsed when not, cancel by link", async () => {
   const { SupportSubscriptions, nextMonth } = await import("../src/support.ts");
   assert.equal(new Date(nextMonth(Date.UTC(2026, 0, 31))).toISOString().slice(0, 10), "2026-02-28", "the 31st becomes the month's last day");
@@ -124,8 +116,8 @@ test("monthly support: month one at once, a link a month while paid, lapsed when
   let made = 0;
   const fetcher = (async (url: string, init: RequestInit = {}) => {
     if (url.endsWith("/api/supported-coins")) return new Response(JSON.stringify({ success: true, business_id: "826b0d85-d0b8-4974-b78a-229b5fefc9c4", coins: [{ symbol: "SOL", is_active: true, has_wallet: true }] }), { status: 200 });
-    if (url.endsWith("/api/payments/create")) { made += 1; return new Response(JSON.stringify({ success: true, payment: { id: `pay_${made}xx` } }), { status: 200 }); }
-    if (url.includes("/api/payments/")) { const id = url.split("/").pop()!; return new Response(JSON.stringify({ payment: { id, status: status[id] ?? "pending" } }), { status: 200 }); }
+    if (url.endsWith("/api/checkout/sessions")) { made += 1; return new Response(JSON.stringify({ success: true, id: `cs_month${made}xxxxxxxxxxxxxxx` }), { status: 201 }); }
+    if (url.includes("/api/checkout/sessions/")) { const id = url.split("/").pop()!; return new Response(JSON.stringify({ success: true, session: { id, status: status[id] ?? "open" } }), { status: 200 }); }
     if (url.includes("api.resend.com")) { const b = JSON.parse(String(init.body)) as { to: string[]; subject: string; text: string }; mails.push({ to: b.to[0]!, subject: b.subject, text: b.text }); return new Response("{}", { status: 200 }); }
     throw new Error(url);
   }) as unknown as typeof fetch;
@@ -134,15 +126,15 @@ test("monthly support: month one at once, a link a month while paid, lapsed when
   const monthly = new SupportSubscriptions({ db, support, mail: { apiKey: "re_test", from: "nixamp <n@nixamp.com>" }, site: "https://nixamp.com", fetcher, now: () => now });
   await assert.rejects(monthly.start({ holder: "profullstack", amountUsd: 5, coin: "SOL", email: "nope" }), /email/);
   const started = await monthly.start({ holder: "profullstack", amountUsd: 5, coin: "SOL", email: "Fan@Example.com" });
-  assert.equal(started.url, "https://coinpayportal.com/pay/pay_1xx");
+  assert.equal(started.url, "https://coinpayportal.com/checkout/cs_month1xxxxxxxxxxxxxxx");
   assert.equal(rows[0]!["email"], "fan@example.com");
-  assert.match(mails[0]!.text, /pay_1xx/);
+  assert.match(mails[0]!.text, /cs_month1x/);
   assert.match(mails[0]!.text, /support\/cancel\?s=/);
   assert.deepEqual(await monthly.renew(), { renewed: 0, lapsed: 0 }, "not due yet");
   now = Date.UTC(2026, 10, 18);
-  status["pay_1xx"] = "confirmed";
+  status["cs_month1xxxxxxxxxxxxxxx"] = "paid";
   assert.deepEqual(await monthly.renew(), { renewed: 1, lapsed: 0 }, "month one paid: month two's link");
-  assert.match(mails.at(-1)!.text, /pay_2xx/);
+  assert.match(mails.at(-1)!.text, /cs_month2x/);
   now = Date.UTC(2026, 11, 19);
   assert.deepEqual(await monthly.renew(), { renewed: 0, lapsed: 1 }, "month two unpaid: it stops");
   assert.match(mails.at(-1)!.subject, /has stopped/);

@@ -17,7 +17,6 @@ export class TranslationPurchase {
   private checking = false;
   private readonly dialog = element<HTMLDialogElement>("translation-purchase");
   private readonly plan = element<HTMLSelectElement>("translation-plan");
-  private readonly coin = element<HTMLSelectElement>("translation-coin");
   private readonly buy = element<HTMLButtonElement>("translation-checkout");
   private readonly note = element<HTMLParagraphElement>("translation-purchase-note");
   private readonly checkoutLink = element<HTMLAnchorElement>("translation-checkout-link");
@@ -67,8 +66,6 @@ export class TranslationPurchase {
       const body = await response.json(); if (this.account !== account || this.options.account() !== account) return;
       if (!response.ok) throw new Error(body.error || "Purchases are unavailable.");
       this.access = body as TranslationAccess;
-      const coins = this.access.coins ?? [];
-      if ([...this.coin.options].map(option => option.value).join() !== coins.join() && document.activeElement !== this.coin) this.coin.replaceChildren(...coins.map(coin => new Option(coin.replaceAll("_", " · "), coin)));
       const plans = this.access.plans ?? [];
       if (!this.plan.options.length) this.plan.replaceChildren(...plans.map(plan => {
         const option = new Option("", plan.id);
@@ -103,17 +100,18 @@ export class TranslationPurchase {
     element("translation-plan-description").textContent = `${money(plan.priceCents * 10000)} credit. Expires ${plan.days === 1 ? "24 hours" : `${plan.days} days`} after payment. About ${minutes} minutes at 1,000 spoken characters/minute; usage varies. No automatic renewal.`;
   }
   private link(url: string): void {
-    if (!/^https:\/\/coinpayportal\.com\/pay\/[a-f0-9-]{36}$/i.test(url)) throw new Error("Invalid checkout address.");
+    // A hosted checkout session (any coin or PayPal), or an older one-coin invoice still pending.
+    if (!/^https:\/\/coinpayportal\.com\/(?:checkout\/cs_[A-Za-z0-9]{16,64}|pay\/[a-f0-9-]{36})$/i.test(url)) throw new Error("Invalid checkout address.");
     this.checkoutLink.href = url; this.checkoutLink.hidden = false; element("translation-check-payment").hidden = false;
   }
   private async purchase(): Promise<void> {
     if (this.loading || !this.account) return;
     const account = this.account;
-    const selected = `${this.plan.value}|${this.coin.value}`;
+    const selected = this.plan.value;
     if (!this.requestKey || this.selected !== selected) { this.requestKey = crypto.randomUUID(); this.selected = selected; }
     this.loading = true; this.buy.disabled = true; this.status("Preparing secure checkout…");
     try {
-      const response = await fetch("/api/v1/translation-passes/checkout", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ plan: this.plan.value, coin: this.coin.value, requestKey: this.requestKey }), signal: AbortSignal.timeout(20_000) });
+      const response = await fetch("/api/v1/translation-passes/checkout", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ plan: this.plan.value, requestKey: this.requestKey }), signal: AbortSignal.timeout(20_000) });
       const body = await response.json();
       if (this.options.account() !== account) return;
       if (!response.ok) throw new Error(body.error || "Checkout could not be opened.");

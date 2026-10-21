@@ -15,8 +15,8 @@ importers:
         specifier: ^0.5.0
         version: 0.5.1
       '@profullstack/live-translate':
-        specifier: ^0.1.0
-        version: 0.1.0
+        specifier: ^0.3.0
+        version: 0.3.0
       '@profullstack/notifications':
         specifier: ^0.1.0
         version: 0.1.4
@@ -306,8 +306,8 @@ packages:
     resolution: {integrity: sha512-Vys47LvS5ivhdZu4SYOxh9Le3DEmWhjP0+CtrU45RhXAbY0ZFG/2Dk9V1bIIUGDp8UWMJqctvUD21JrNjfh04w==}
     engines: {node: '>=20.11'}
 
-  '@profullstack/live-translate@0.1.0':
-    resolution: {integrity: sha512-YtVpidlulBUKnTprLDeW6A0a0fLzgw6ADnDEPpfjje+twGVs6eqJj9TcVS9zbf08MufmA4k7cwMevAL7Zvck3A==}
+  '@profullstack/live-translate@0.3.0':
+    resolution: {integrity: sha512-oHMTin4LOOfmSpj+5gjRAMU6wK3j4kY8fOu9rDEowZxD6L4/7AqWRrns/pGySzjXDZfGF+nIFSRuItkZHvehrg==}
     engines: {node: '>=22.18'}
 
   '@profullstack/notifications@0.1.4':
@@ -1065,7 +1065,7 @@ snapshots:
 
   '@profullstack/keys@0.1.0': {}
 
-  '@profullstack/live-translate@0.1.0': {}
+  '@profullstack/live-translate@0.3.0': {}
 
   '@profullstack/notifications@0.1.4': {}
 
