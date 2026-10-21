@@ -6,7 +6,7 @@ import { createServer as createHttpServer } from "node:http";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { AiLabel, cleanLyrics, fileName, genreSlug, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines } from "../src/ai-label.ts";
+import { AiLabel, cleanLyrics, fileName, genreSlug, nextReset, periodOf, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines } from "../src/ai-label.ts";
 import { elevenLabsComposer, OutOfCredit, type Composer } from "../src/ai-radio.ts";
 import type { askJson } from "../src/ai-text.ts";
 import { Channels } from "../src/channels.ts";
@@ -215,6 +215,49 @@ test("a band is cast once and its people are in every album, lyric and storyboar
     assert.deepEqual(label.publicView().genres[0]!.artists[0]!.members.map((one) => one.name), ["Mara Quill"]);
     assert.equal(label.profileFile(artist.key, "members/mara-quill.jpg")?.type, "image/jpeg");
     assert.equal(label.profileFile(artist.key, "members/nobody.jpg"), null);
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("the budget month follows the provider's billing day, and a pause for credit lifts when it renews", async () => {
+  // Months run from the 21st: the 20th of November is still October's.
+  assert.equal(periodOf(Date.UTC(2026, 10, 20), 21), "2026-10");
+  assert.equal(periodOf(Date.UTC(2026, 10, 21), 21), "2026-11");
+  assert.equal(periodOf(Date.UTC(2027, 0, 5), 21), "2026-12", "across the new year");
+  assert.equal(periodOf(Date.UTC(2026, 10, 1)), "2026-11", "the calendar month by default");
+  assert.equal(nextReset(Date.UTC(2026, 9, 21, 9), 21), Date.UTC(2026, 10, 21));
+  assert.equal(nextReset(Date.UTC(2026, 10, 3), 21), Date.UTC(2026, 10, 21));
+  let clock = Date.UTC(2026, 9, 25);
+  let broke = true;
+  const calls: Array<{ prompt: string; seconds: number }> = [];
+  const composer: Composer = {
+    name: "fake/music",
+    async compose(input) {
+      if (broke) throw new OutOfCredit("elevenlabs answered HTTP 401");
+      calls.push({ prompt: input.prompt, seconds: input.seconds });
+      writeFileSync(input.out, Buffer.alloc(4096, 1));
+    },
+  };
+  const { top, label } = setup(composer, fakeWriter(), { now: () => clock });
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, resetDay: 21, enabled: false });
+    label.sign({ preset: "no-refunds" });
+    label.configure({ enabled: true });
+    await idle(label, () => Boolean((label.status() as { settings: { pausedReason: string } }).settings.pausedReason));
+    assert.match((label.status() as { settings: { pausedReason: string } }).settings.pausedReason, /renews \(day 21\)/);
+    // Nov 1 is still the same budget month: it stays paused.
+    broke = false;
+    clock = Date.UTC(2026, 10, 1);
+    await label.tick();
+    assert.equal(calls.length, 0);
+    // Nov 21 the plan renews: composing again, without anybody saying resume.
+    clock = Date.UTC(2026, 10, 21, 1);
+    await label.tick();
+    await idle(label, () => calls.length >= 3);
+    assert.equal((label.status() as { settings: { pausedReason: string } }).settings.pausedReason, "");
+    assert.ok(calls.length >= 3);
   } finally {
     label.stopSchedule();
     rmSync(top, { recursive: true, force: true });

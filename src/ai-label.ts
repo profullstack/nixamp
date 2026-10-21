@@ -131,7 +131,11 @@ export interface LabelSettings {
   parallel: number;
   /** Genres whose artists get their albums first, in this order. */
   genreOrder: string[];
-  /** Set by a provider that is out of credit; cleared by `resume`. */
+  /** The day of the month the budget renews (the provider's billing day), 1-28. */
+  resetDay: number;
+  /** The budget month a pause for lack of credit began in: a new month lifts it. */
+  pausedPeriod?: string;
+  /** Set by a provider that is out of credit; cleared by `resume`, or by the next budget month. */
   pausedReason: string;
 }
 
@@ -365,6 +369,7 @@ export const DEFAULTS: Omit<LabelSettings, "pausedReason"> = {
   holder: "Profullstack, Inc.",
   enabled: true,
   monthlySeconds: 3600,
+  resetDay: 1,
   everyDays: 30,
   albumsPerDay: 1,
   newArtistChance: 0.25,
@@ -710,8 +715,27 @@ function tagFile(ffmpeg: string[], from: string, to: string, tags: Record<string
   });
 }
 
-function monthOf(at: number): string {
-  return new Date(at).toISOString().slice(0, 7);
+/**
+ * The budget month `at` falls in, as "YYYY-MM" of the month it started in:
+ * months run from `resetDay` (the provider's billing day, so the cap and the
+ * credits renew together) to the same day of the next month.
+ */
+export function periodOf(at: number, resetDay = 1): string {
+  const date = new Date(at);
+  let year = date.getUTCFullYear();
+  let month = date.getUTCMonth();
+  if (date.getUTCDate() < resetDay) {
+    month -= 1;
+    if (month < 0) { month = 11; year -= 1; }
+  }
+  return `${year}-${String(month + 1).padStart(2, "0")}`;
+}
+
+/** When the budget month after `at` begins. */
+export function nextReset(at: number, resetDay = 1): number {
+  const date = new Date(at);
+  const thisMonth = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), resetDay);
+  return date.getUTCDate() < resetDay ? thisMonth : Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, resetDay);
 }
 
 export interface AiLabelDeps {
@@ -835,9 +859,14 @@ export class AiLabel {
     return this.settings.holder;
   }
 
+  /** The budget month now, renewing on resetDay. */
+  private period(): string {
+    return periodOf(this.now(), this.settings.resetDay ?? 1);
+  }
+
   private budgetLeft(): number {
     if (this.settings.monthlySeconds === 0) return Number.POSITIVE_INFINITY;
-    return this.settings.monthlySeconds - (this.usage[monthOf(this.now())] ?? 0);
+    return this.settings.monthlySeconds - (this.usage[this.period()] ?? 0);
   }
 
   /** When this artist's next album is due: its first ones at once, then every `everyDays`, staggered by artist. */
@@ -856,7 +885,7 @@ export class AiLabel {
   }
 
   status(): Record<string, unknown> {
-    const month = monthOf(this.now());
+    const month = this.period();
     const composer = this.composer();
     const why = !this.settings.enabled ? "the label is switched off"
       : this.settings.pausedReason
@@ -871,6 +900,7 @@ export class AiLabel {
       recording: [...this.claims.values()].map((one) => one.label),
       month,
       secondsThisMonth: this.usage[month] ?? 0,
+      resetsAt: nextReset(this.now(), this.settings.resetDay ?? 1),
       settings: this.settings,
       waiting: why,
       roster: Object.entries(ROSTER).map(([key, one]) => ({ key, name: one.name, genre: one.genre, signed: this.list().some((artist) => artist.name === one.name) })),
@@ -920,6 +950,8 @@ export class AiLabel {
       const list = Array.isArray(input["genreOrder"]) ? input["genreOrder"] : String(input["genreOrder"]).split(",");
       this.settings.genreOrder = list.map((one) => clean(one, 40)).filter(Boolean).slice(0, 30);
     }
+    const resetDay = whole("resetDay", 1, 28);
+    if (resetDay !== undefined) this.settings.resetDay = resetDay;
     if (input["resume"] === true) this.settings.pausedReason = "";
     this.save();
     if (this.settings.enabled) void this.tick();
@@ -1209,6 +1241,13 @@ export class AiLabel {
    * so two never make the same one.
    */
   async tick(limit = 200): Promise<void> {
+    // Out of credit last budget month: a new one has its credit again.
+    if (this.settings.pausedReason && this.settings.pausedPeriod && this.settings.pausedPeriod !== this.period()) {
+      this.log(`a new budget month (${this.period()}): composing again`);
+      this.settings.pausedReason = "";
+      delete this.settings.pausedPeriod;
+      this.save();
+    }
     if (this.running || !this.settings.enabled || this.settings.pausedReason) return;
     this.running = true;
     let steps = 0;
@@ -1333,7 +1372,10 @@ export class AiLabel {
     artist.lastAttemptAt = this.now();
     artist.failures += 1;
     artist.lastError = (error as Error).message;
-    if (error instanceof OutOfCredit) this.settings.pausedReason = `${artist.lastError}; resume with \`nixamp station label resume\` once there is credit`;
+    if (error instanceof OutOfCredit) {
+      this.settings.pausedReason = `${artist.lastError}; resumes by itself when the budget month renews (day ${this.settings.resetDay}), or \`nixamp station label resume\``;
+      this.settings.pausedPeriod = this.period();
+    }
     this.save();
     this.log(`${artist.name}: ${artist.lastError}`);
   }
@@ -1355,7 +1397,7 @@ export class AiLabel {
       this.log(`composing "${song.title}" (${artist.name}, ${album.title}, ${song.seconds} s, ${composer.name})`);
       const prompt = `${artist.sound}. ${song.style}. Lead vocal: ${artist.voice}. Sung in English.`.slice(0, 1500);
       await composer.compose({ prompt, seconds: song.seconds, vocals: true, out: raw, lyrics: song.lyrics });
-      const month = monthOf(this.now());
+      const month = this.period();
       this.usage[month] = (this.usage[month] ?? 0) + song.seconds;
       const base = songBase(song);
       const file = join(album.folder, `${base}.mp3`);
