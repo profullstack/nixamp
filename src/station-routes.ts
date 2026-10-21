@@ -21,6 +21,8 @@ import type { Lyrics } from "./lyrics.ts";
 import type { PublishReport } from "./lyrics-publish.ts";
 import { quietDuringBreaks } from "./break-silence.ts";
 import { PASS_PARAM } from "./listen-pass.ts";
+import { watchBase } from "./guide-rooms.ts";
+import { radioPeers, radioStations } from "./radio-pages.ts";
 import {
   StationError, channelOf, tokensMatch, type OwnerStation, type PublicStation, type Station, type StationStore,
 } from "./stations.ts";
@@ -151,11 +153,12 @@ export function guideGroup(station: Station): GuideGroup {
 }
 
 /** What the public guide shows: public, listed stations, linked at this server's public address. */
-export function guideEntries(ctx: StationContext): Array<PublicStation & { page: string; m3u: string; group: GuideGroup }> {
+export function guideEntries(ctx: StationContext): Array<PublicStation & { page: string; m3u: string; group: GuideGroup; radio: string }> {
   const base = ctx.publicBase || ctx.base;
-  return ctx.store.list()
-    .filter((one) => one.visibility === "public" && one.listed)
-    .map((one) => ({ ...publicView(ctx, one), page: links(ctx, one, base).page, m3u: links(ctx, one, base).m3u, group: guideGroup(one) }));
+  // Its shareable page too: /radio/<name> on the guide's public address (radio-pages.ts).
+  const radioBase = watchBase(base);
+  const names = radioStations(ctx.store.list());
+  return [...names].map(([slug, one]) => ({ ...publicView(ctx, one), page: links(ctx, one, base).page, m3u: links(ctx, one, base).m3u, group: guideGroup(one), radio: `${radioBase}/radio/${slug}` }));
 }
 
 export function ownerView(ctx: StationContext, station: Station): OwnerStation & { links: ReturnType<typeof links>; nowPlaying: string } {
@@ -196,6 +199,27 @@ export async function handleStations(
       .filter((one) => !shown.has((one as { page: string }).page));
     // Rooms are this guide's own; a peer asking for its stations does not list them twice.
     const rooms = url.searchParams.has("local") || !ctx.rooms ? [] : await ctx.rooms();
+    if (url.searchParams.has("radio")) {
+      // The public guide's own list: every station by its /radio name, no
+      // server address or token in it (radio-pages.ts). Peers ask without it.
+      const radioBase = watchBase(ctx.publicBase || ctx.base);
+      const peerNames = radioPeers(radioStations(ctx.store.list()).keys(), others as Parameters<typeof radioPeers>[1]);
+      const peerPage = new Map([...peerNames].map(([slug, one]) => [`${one.origin}/${one.id}`, `${radioBase}/radio/${slug}`]));
+      const pageOf = (page: string): string => {
+        try {
+          const at = new URL(page);
+          return peerPage.get(`${at.origin}/${at.pathname.split("/")[2] ?? ""}`) ?? "";
+        } catch {
+          return "";
+        }
+      };
+      ctx.json(response, 200, { stations: [
+        ...rooms,
+        ...own.map(({ m3u: _m3u, page: _page, ...one }) => ({ ...one, page: one.radio })),
+        ...others.map((one) => ({ ...(one as Record<string, unknown>), page: pageOf((one as { page: string }).page) })).filter((one) => one.page),
+      ] });
+      return true;
+    }
     ctx.json(response, 200, { stations: [...rooms, ...own, ...others] });
     return true;
   }

@@ -80,7 +80,7 @@ import { handleHandoffs } from "./handoff-routes.ts";
 import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
 import { AiLabel } from "./ai-label.ts";
 import { buyLink, handleLabelRoutes, isPublicLabelPath } from "./label-routes.ts";
-import { GrantVerifier, MusicStore } from "./music-store.ts";
+import { GrantVerifier, MusicStore, PRICES } from "./music-store.ts";
 import { handleStoreRoutes, isStorePath } from "./store-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
@@ -93,6 +93,11 @@ import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML, WAT
 import { handleRooms, RoomProbe, roomEntries, RoomStore, watchBase } from "./guide-rooms.ts";
 import { handleVods, VodProbe, vodEntries, VodStore, vodView } from "./guide-vods.ts";
 import { withPitFooter } from "./pit-footer.ts";
+import { handleFollowPage } from "./follow-page.ts";
+import {
+  asRadioPage, buildCatalogue, isRadioPath, NAV_STYLE, RADIO_ALBUM, RADIO_ARTIST, RADIO_CSP, RADIO_STATION, RADIO_SUB, radioNav, radioPeers, radioRewriter,
+  radioStations, renderAlbum, renderArtist, renderDirectory, renderMissing, rewriteResponse, type PeerRadio, type RadioCatalogue,
+} from "./radio-pages.ts";
 import { guideAds, guideCsp, guideHosts, guidePeers, peerBase, PeerGuides, renderGuide, type GuideEntry } from "./station-guide.ts";
 import { StationRunner } from "./station-runner.ts";
 import { StationError, StationStore, channelOf, stationOfChannel, type Station } from "./stations.ts";
@@ -2047,8 +2052,97 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
   // The music store lives on nixamp.com; a server holding the label's music asks it about grants.
   const storeSite = (process.env["NIXAMP_SITE"] || "https://nixamp.com").replace(/\/+$/, "");
   const storeGrants = new GrantVerifier({ site: storeSite });
+  // /radio's artists and albums, from the public stations' files and the label (radio-pages.ts), a minute at a time.
+  let radioCache: { at: number; value: RadioCatalogue } | null = null;
+  const radioCatalogue = (): RadioCatalogue => {
+    if (radioCache && Date.now() - radioCache.at < 60_000) return radioCache.value;
+    const label = options.stations?.label;
+    const index = options.library?.index;
+    const value = buildCatalogue({
+      stations: radioStations(options.stations?.store.list() ?? []),
+      ...(label ? { label: label.publicView(), songAt: (file: string) => label.songAt(file), audioFor: (file: string) => label.audioFor(file) } : {}),
+      tags: (file) => {
+        const item = index?.itemAt(file);
+        if (!item) return null;
+        const tags = { ...item, ...item.override };
+        return { title: tags.title, artist: tags.artist || tags.albumArtist, album: tags.album, year: tags.year, track: tags.track, duration: item.duration, hasArt: item.hasArt };
+      },
+    });
+    radioCache = { at: Date.now(), value };
+    return value;
+  };
 
   return async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    // A station's own paths under its /radio name (radio-pages.ts): asked of
+    // the station's routes with its token, which never leaves this server,
+    // and answered with the /radio addresses in place of the station's.
+    if (options.stations && (request.url ?? "").startsWith("/radio/")) {
+      const asked = new URL(request.url ?? "/", "http://localhost");
+      const sub = RADIO_SUB.exec(asked.pathname);
+      if (sub) {
+        const own = radioStations(options.stations.store.list());
+        const station = own.get(sub[1]!);
+        const peer = station || !options.stations.peers ? undefined : radioPeers(own.keys(), await options.stations.peers.entries()).get(sub[1]!);
+        if (!station && !peer) {
+          json(response, 404, { error: "no station by that name", code: "not_found" });
+          return;
+        }
+        if (sub[2] === "listen.m3u") {
+          const name = (station ?? peer)!.name;
+          const base = radioBaseFor(request, options.stations.publicBase?.() ?? "");
+          response.writeHead(200, { ...CORS, "content-type": "audio/x-mpegurl; charset=utf-8", "content-disposition": `inline; filename="${sub[1]}.m3u"`, "cache-control": "no-store" });
+          response.end(request.method === "HEAD" ? undefined : `#EXTM3U\n#EXTINF:-1,${name.replace(/[\r\n]/g, " ")}\n${base}/radio/${sub[1]}/stream\n`);
+          return;
+        }
+        if (peer) {
+          // A peer's station: asked of the peer with its token, passed on as it comes.
+          if (request.method !== "GET" && request.method !== "HEAD") {
+            json(response, 405, { error: "a station's link can listen, not drive", code: "method_not_allowed" });
+            return;
+          }
+          const query = new URLSearchParams(asked.search);
+          query.delete("t");
+          query.set("t", peer.token);
+          const stop = new AbortController();
+          response.on("close", () => stop.abort());
+          const answer = await fetch(`${peer.origin}/api/v1/stations/${peer.id}/${sub[2]}?${query.toString()}`, {
+            method: request.method, signal: stop.signal,
+            headers: { ...(request.headers.range ? { range: String(request.headers.range) } : {}), accept: String(request.headers.accept ?? "*/*") },
+          }).catch(() => null);
+          if (!answer) {
+            json(response, 502, { error: "that station's server did not answer", code: "upstream" });
+            return;
+          }
+          rewriteResponse(response, radioRewriter({ id: peer.id, listenToken: peer.token }, sub[1]!));
+          const headers: Record<string, string> = { ...CORS };
+          for (const name of ["content-type", "cache-control", "content-length", "content-range", "accept-ranges", "x-accel-buffering", "retry-after"]) {
+            const value = answer.headers.get(name);
+            if (value) headers[name] = value;
+          }
+          response.writeHead(answer.status, headers);
+          if (!answer.body || request.method === "HEAD") {
+            response.end();
+            return;
+          }
+          try {
+            for await (const chunk of answer.body as unknown as AsyncIterable<Uint8Array>) {
+              if (response.destroyed) break;
+              if (!response.write(chunk)) await new Promise((done) => { response.once("drain", done); response.once("close", done); });
+            }
+          } catch {
+            // The listener left, or the peer did.
+          }
+          response.end();
+          return;
+        }
+        const query = new URLSearchParams(asked.search);
+        query.delete("t");
+        query.set("t", station!.listenToken);
+        request.url = `/api/v1/stations/${station!.id}/${sub[2]}?${query.toString()}`;
+        rewriteResponse(response, radioRewriter(station!, sub[1]!));
+        return handle(request, response);
+      }
+    }
     const url = new URL(request.url ?? "/", "http://localhost");
     const path = url.pathname;
     const webSite = options.webSites?.get((request.headers.host ?? "").toLowerCase());
@@ -2438,6 +2532,16 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       return;
     }
 
+    // Following an artist from a /radio page, where the nixamp.com session is first-party (follow-page.ts).
+    if (path === "/follow" && options.follows && options.accounts) {
+      const accounts = options.accounts;
+      if (await handleFollowPage(request, response, path, url, {
+        account: () => accounts.whoIs(tokenFrom(request.headers)),
+        follows: options.follows,
+        readBody: (body) => readBody(body, 8 * 1024),
+      })) return;
+    }
+
     if (path.startsWith("/api/v1/follows") && options.follows && options.accounts) {
       const me = await options.accounts.whoIs(tokenFrom(request.headers));
       if (me === null) {
@@ -2759,6 +2863,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       // On demand: a file's page and the guide's list of them (guide-vods.ts); the file's own key travels in its play address.
       !((path === "/vod" || /^\/vod\/[A-Za-z0-9_-]{1,32}$/.test(path) || path === "/api/v1/guide/vods" || path.startsWith("/api/v1/guide/vods/")) && Boolean(options.stations?.vods)) &&
       !STATION_PAGE.test(path) &&
+      // Public, listed stations under readable names, and their artists and albums (radio-pages.ts).
+      !(isRadioPath(path) && Boolean(options.stations)) &&
+      // Following an artist from those pages, signed in at nixamp.com.
+      !(path === "/follow" && Boolean(options.follows && options.accounts)) &&
       !isPublicAsset &&
       !isGuidePage &&
       !eventChannelRequest
@@ -2902,7 +3010,14 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         json(response, 404, { error: "no public station with that id", code: "not_found" });
         return;
       }
-      response.writeHead(302, { location: found.page, "cache-control": "no-store", "referrer-policy": "no-referrer" });
+      // Its /radio name, ours or a peer's (radio-pages.ts): no server address or token in the link it lands on.
+      let location = "radio" in found && typeof found.radio === "string" && /^https?:\/\//.test(found.radio) ? found.radio : "";
+      if (!location && options.stations.peers) {
+        const named = radioPeers(radioStations(options.stations.store.list()).keys(), await options.stations.peers.entries());
+        const slug = [...named].find(([, one]) => one.id === stationShortLink[1])?.[0];
+        if (slug) location = `${watchBase(options.stations.publicBase?.() || `https://${request.headers.host ?? "localhost"}`)}/radio/${slug}`;
+      }
+      response.writeHead(302, { location: location || found.page, "cache-control": "no-store", "referrer-policy": "no-referrer" });
       response.end();
       return;
     }
@@ -2930,7 +3045,18 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         : [];
       const ads = guideAds();
       const label = options.stations!.label;
-      const page = renderGuide([...rooms, ...entries, ...others] as GuideEntry[], options.stations!.publicBase?.() ?? "", ads, label && label.publicView().genres.length > 0 ? "/label" : "");
+      // A peer's station by its /radio name here too, asked of the peer by this server (radio-pages.ts).
+      const radioBase = watchBase(options.stations!.publicBase?.() || `https://${request.headers.host ?? "localhost"}`);
+      const peerNames = radioPeers(radioStations(options.stations!.store.list()).keys(), others);
+      const peerRadio = new Map([...peerNames].map(([slug, one]) => [`${one.origin}/station/${one.id}`, `${radioBase}/radio/${slug}`]));
+      const named = others.map((one) => {
+        const at = (() => { try { const u = new URL(one.page); return `${u.origin}${u.pathname.replace(/\/+$/, "")}`; } catch { return ""; } })();
+        const radio = peerRadio.get(at);
+        return radio ? { ...one, radio } : one;
+      });
+      // Behind a guide name (live.streaming) the page asks its own origin, so no server address shows in it.
+      const apiBase = guideHosts().has(requestHost) ? "" : options.stations!.publicBase?.() ?? "";
+      const page = renderGuide([...rooms, ...entries, ...named] as GuideEntry[], apiBase, ads, label && label.publicView().genres.length > 0 ? "/label" : "");
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-cache",
@@ -2990,6 +3116,100 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       });
       response.end(request.method === "HEAD" ? undefined : built.replace(/<title>[^<]*<\/title>/, head));
       return;
+    }
+
+    // /radio: public, listed stations under readable names, and the artists and
+    // albums they play (radio-pages.ts). A station's own paths under its name
+    // were answered at the top of this handler.
+    if (options.stations && isRadioPath(path) && (request.method === "GET" || request.method === "HEAD")) {
+      const stations = options.stations;
+      const named = radioStations(stations.store.list());
+      const publicBase = stations.publicBase?.() ?? "";
+      const base = radioBaseFor(request, publicBase);
+      const nav = radioNav(guideHosts().has(requestHost) ? "/" : "/guide");
+      const send = (status: number, page: string, csp = RADIO_CSP): void => {
+        response.writeHead(status, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": status === 200 ? "public, max-age=60" : "no-cache",
+          "content-security-policy": csp,
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "x-content-type-options": "nosniff",
+        });
+        response.end(request.method === "HEAD" ? undefined : page);
+      };
+      const shop = stations.label && /^https:\/\//.test(publicBase)
+        ? { site: storeSite, buy: (kind: "song" | "album" | "artist", artist: string, album = "", n = 0) => buyLink(storeSite, publicBase, kind, artist, album, n), prices: PRICES }
+        : null;
+      const peers = stations.peers ? radioPeers(named.keys(), await stations.peers.entries()) : new Map<string, PeerRadio>();
+      const stationNames = new Map([...named].map(([slug, one]) => [slug, one.name]));
+      if (path === "/radio" || path === "/radio/") {
+        const encrypted = (request.socket as { encrypted?: boolean }).encrypted === true;
+        const entries = guideEntries({
+          store: stations.store, runner: stations.runner, channels: options.channels!, canControl: false, account: "",
+          select: () => null, trackFor: (file) => trackFor(engine, file),
+          base: `${encrypted ? "https" : "http"}://${request.headers.host ?? "localhost"}`,
+          publicBase, json, readBody, headers: CORS,
+        });
+        send(200, renderDirectory([
+          ...entries.map((one) => ({
+            slug: one.radio.split("/radio/").pop() ?? "", name: one.name, description: one.description, state: one.state, kind: one.kind, group: one.group,
+            nowPlaying: one.nowPlaying,
+          })),
+          ...[...peers].map(([slug, one]) => ({ slug, name: one.name, description: "", state: one.state, kind: one.kind, group: one.group, nowPlaying: one.nowPlaying })),
+        ], base, nav));
+        return;
+      }
+      const artistPath = RADIO_ARTIST.exec(path);
+      if (artistPath) {
+        const catalogue = radioCatalogue();
+        const artist = catalogue.artists.get(artistPath[1]!);
+        if (!artist) return send(404, renderMissing("artist", base, nav));
+        return send(200, renderArtist(catalogue, artist, { base, nav, shop, site: storeSite, stationNames }));
+      }
+      const albumPath = RADIO_ALBUM.exec(path);
+      if (albumPath) {
+        const catalogue = radioCatalogue();
+        const album = catalogue.albums.get(albumPath[1]!);
+        if (albumPath[2]) {
+          const picture = album?.coverFile && stations.cover ? await stations.cover(album.coverFile).catch(() => null) : null;
+          if (!picture) {
+            json(response, 404, { error: "no cover for that album", code: "not_found" });
+            return;
+          }
+          response.writeHead(200, { "content-type": picture.type, "content-length": picture.bytes.length, "cache-control": "public, max-age=86400", "x-content-type-options": "nosniff" });
+          response.end(request.method === "HEAD" ? undefined : picture.bytes);
+          return;
+        }
+        if (!album) return send(404, renderMissing("album", base, nav));
+        return send(200, renderAlbum(catalogue, album, { base, nav, shop, site: storeSite, stationNames }));
+      }
+      const stationPath = RADIO_STATION.exec(path);
+      if (stationPath) {
+        const slug = stationPath[1]!;
+        const station = named.get(slug) ?? (peers.has(slug) ? { name: peers.get(slug)!.name, description: "", video: peers.get(slug)!.kind === "video" } : undefined);
+        if (!station) {
+          // A station's id finds its name: /radio/5ccqcjn5hg goes to /radio/ai-metal.
+          const byId = [...named].find(([, one]) => one.id === slug);
+          if (byId) {
+            response.writeHead(301, { location: `/radio/${byId[0]}`, "cache-control": "public, max-age=300" });
+            response.end();
+            return;
+          }
+          return send(404, renderMissing("station", base, nav));
+        }
+        const built = web !== null && isFile(join(web, "station.html")) ? readFileSync(join(web, "station.html"), "utf8") : null;
+        const page = asRadioPage(built ?? STATION_PAGE_HTML, station, slug, base, nav);
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-cache",
+          // The inline page names its styles by hash; the header's is one more.
+          "content-security-policy": built ? STATION_APP_CSP : STATION_PAGE_CSP.replace("style-src ", `style-src 'sha256-${sha("sha256").update(NAV_STYLE).digest("base64")}' `),
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "x-content-type-options": "nosniff",
+        });
+        response.end(request.method === "HEAD" ? undefined : page);
+        return;
+      }
     }
 
     if (options.stations?.vods && (path === "/api/v1/guide/vods" || path.startsWith("/api/v1/guide/vods/"))) {
@@ -6637,6 +6857,15 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
 }
 
 /** Read a file, or null. The firewall probe asks about files it may not have. */
+/**
+ * The public address /radio links are written for: the guide's (watchBase,
+ * https://live.streaming.pit.world on server1), else this server's own.
+ */
+function radioBaseFor(request: IncomingMessage, publicBase: string): string {
+  const host = String(request.headers["x-forwarded-host"] ?? request.headers.host ?? "localhost").split(",")[0]!.trim();
+  return watchBase(publicBase || `https://${host}`);
+}
+
 function readIfPossible(path: string): string | null {
   try {
     return readFileSync(path, "utf8");

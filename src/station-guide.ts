@@ -31,6 +31,7 @@ button.report:hover{color:var(--warn)}
 #share button[type=submit]{margin-top:14px;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:10px 16px;font:inherit;font-weight:600;cursor:pointer}
 #share .or{color:var(--muted);font-size:.85rem;margin:8px 0 0}
 #status{margin-top:10px;font-size:.9rem;min-height:1.4em}
+nav.top{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}nav.top a{border:1px solid var(--line);border-radius:999px;padding:4px 12px;text-decoration:none;color:var(--fg);background:var(--card);font-weight:600;font-size:.9rem}nav.top a:hover{border-color:var(--accent)}
 footer{margin-top:40px;color:var(--muted);font-size:.85rem}footer a{color:inherit}
 .ad-unit{margin:0 auto 16px;display:flex;justify-content:center}.ad-unit iframe{border:0;display:block;background:transparent}
 .ad-banner_300x250 iframe{width:300px;height:250px;max-width:100%}.ad-text_link iframe{width:100%;height:40px}
@@ -75,7 +76,7 @@ const SCRIPT = `
       for (const s of list) {
         const card = el("div", "card");
         const a = el("a", "station");
-        a.href = s.page;
+        a.href = s.radio || s.page;
         a.append(el("div", "live", s.state === "live" ? "● LIVE" : s.state === "vod" ? "▶ ON DEMAND" : "off the air"), el("div", "name", s.name),
           el("div", "now", nowLine(s.nowPlaying)));
         card.append(a);
@@ -92,7 +93,7 @@ const SCRIPT = `
   };
   const load = async () => {
     try {
-      const r = await fetch(API + "/api/v1/stations/guide", { cache: "no-store" });
+      const r = await fetch(API + "/api/v1/stations/guide?radio=1", { cache: "no-store" });
       if (r.ok && (r.headers.get("content-type") || "").includes("json")) draw((await r.json()).stations);
     } catch {}
   };
@@ -159,6 +160,8 @@ export interface GuideEntry {
   state: string;
   page: string;
   nowPlaying: { title: string; artist: string } | null;
+  /** Its shareable page, /radio/<name> on the guide's address (radio-pages.ts); own stations only. */
+  radio?: string;
   /** Listed by another server (a guide peer); its own page, its own reports. */
   peer?: boolean;
 }
@@ -174,7 +177,7 @@ export function renderGuide(entries: GuideEntry[], apiBase = "", ads: GuideAds =
   const groupOf = (one: GuideEntry): string => one.group ?? (one.kind === "video" ? "tv" : "radio");
   const cards = (group: string): string => entries
     .filter((one) => groupOf(one) === group && /^https?:\/\//.test(one.page))
-    .map((one) => `<div class="card"><a class="station" href="${escape(one.page)}"><div class="live">${one.state === "live" ? "● LIVE" : one.state === "vod" ? "▶ ON DEMAND" : "off the air"}</div><div class="name">${escape(one.name)}</div><div class="now">${escape(nowLine(one.nowPlaying))}</div></a></div>`)
+    .map((one) => `<div class="card"><a class="station" href="${escape(one.radio && /^https?:\/\//.test(one.radio) ? one.radio : one.page)}"><div class="live">${one.state === "live" ? "● LIVE" : one.state === "vod" ? "▶ ON DEMAND" : "off the air"}</div><div class="name">${escape(one.name)}</div><div class="now">${escape(nowLine(one.nowPlaying))}</div></a></div>`)
     .join("");
   let page = GUIDE_HTML;
   for (const group of GROUPS) {
@@ -211,6 +214,7 @@ export const GUIDE_HTML = `<!doctype html>
 </head>
 <body>
 <main>
+  <nav class="top" aria-label="live.streaming"><a href="/radio">Radio: every station by name</a><a href="/label">AI label</a><a href="/vod">On demand</a></nav>
   <h1>Live</h1>
   <p class="lead">Radio and TV, on the air now. Pick one and press play.</p>
   <h2 id="rooms-title" hidden>Live rooms</h2>
