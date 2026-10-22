@@ -103,3 +103,44 @@ test("buy: 10 cents a song, $1 an album, $2 an artist; paid once, mailed once, t
   assert.equal(db.rows.find((one) => one["id"] === artist.id)!["user_id"], "user-1");
   assert.deepEqual(await store.settle("pay_unknown"), { settled: false });
 });
+
+test("a video on demand sells at the price its guide set, and its grant opens only its download", async () => {
+  const db = fakeDb();
+  const paid = new Set<string>();
+  const payments: Array<Record<string, unknown>> = [];
+  const support = {
+    async pay(input: Record<string, unknown>) {
+      payments.push(input);
+      return { url: "https://coinpayportal.com/pay/pay_v1", paymentId: "pay_v1" };
+    },
+    async isPaid(id: string) { return paid.has(id); },
+  } as unknown as Support;
+  const vods: Record<string, unknown> = {
+    hnhX1chd: { name: "House on Haunted Hill (1959)", artist: "William Castle", priceCents: 150 },
+    free1234: { name: "Free one", artist: "" },
+  };
+  const fetcher = (async (url: string) => {
+    const one = /^https:\/\/live\.streaming\.pit\.world\/api\/v1\/guide\/vods\/(.+)$/.exec(url);
+    if (one && vods[one[1]!]) return new Response(JSON.stringify({ vod: vods[one[1]!] }), { status: 200 });
+    if (url.includes("resend")) return new Response("{}", { status: 200 });
+    return new Response("{}", { status: 404 });
+  }) as typeof fetch;
+  const store = new MusicStore({ db, support, mail: null, site: "https://nixamp.com", secret: "s3cret", servers: () => [], fetcher });
+  const item = await store.describe({ server: "https://live.streaming.pit.world", kind: "vod", vod: "hnhX1chd" });
+  assert.deepEqual([item.kind, item.artist, item.title, item.artistName, item.amountCents], ["vod", "hnhX1chd", "House on Haunted Hill (1959)", "William Castle", 150]);
+  await assert.rejects(store.describe({ server: "https://live.streaming.pit.world", kind: "vod", vod: "free1234" }), /not sold/);
+  await assert.rejects(store.describe({ server: "https://evil.example", kind: "vod", vod: "hnhX1chd" }), /does not sell/);
+  await assert.rejects(store.describe({ server: "https://live.streaming.pit.world", kind: "vod", vod: "nope9999" }), /No such video/);
+
+  const made = await store.checkout({ server: "https://live.streaming.pit.world", kind: "vod", vod: "hnhX1chd", email: "a@b.co" }, null);
+  assert.equal(payments[0]!["amountUsd"], 1.5);
+  paid.add("pay_v1");
+  const purchase = (await store.get(made.id, made.token))!;
+  assert.equal(purchase.status, "paid");
+  const zip = store.zipUrl(purchase);
+  assert.match(zip, /^https:\/\/live\.streaming\.pit\.world\/api\/v1\/guide\/vods\/hnhX1chd\/download\?grant=g1\./);
+  const scope = readGrant("s3cret", decodeURIComponent(zip.split("grant=")[1]!))!;
+  assert.deepEqual([scope.kind, scope.artist, scope.server], ["vod", "hnhX1chd", "https://live.streaming.pit.world"]);
+  // A video's grant never opens the label's music.
+  assert.equal(covers(scope, "hnhX1chd", ""), false);
+});

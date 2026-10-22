@@ -11,8 +11,11 @@ import "./station.css";
 
 interface Vod {
   id: string; name: string; kind: "audio" | "video"; duration: number; artist: string;
-  note: string; available: boolean; play: string; page: string;
+  note: string; available: boolean; play: string; page: string; priceCents?: number;
 }
+
+/** "$1", "$2.50", "50¢": as nixamp.com's store writes a price. */
+const price = (cents: number): string => (cents < 100 ? `${cents}¢` : `$${(cents / 100).toFixed(cents % 100 ? 2 : 0)}`);
 interface Card { id?: string; name: string; kind: string; state: string; page: string; nowPlaying: { title: string; artist: string } | null }
 
 const $ = <T extends HTMLElement = HTMLElement>(selector: string): T => document.querySelector<T>(selector)!;
@@ -42,6 +45,13 @@ async function one(): Promise<void> {
   $("#by").textContent = vod.artist;
   $("#length").textContent = vod.duration > 0 ? formatTime(vod.duration) : "";
   if (vod.note) { $("#note").textContent = vod.note; $("#note").hidden = false; }
+  // Sold as a download on nixamp.com, as the label's music is; watching stays free.
+  if (vod.priceCents && vod.priceCents > 0) {
+    const buy = $<HTMLAnchorElement>("#buy-link");
+    buy.href = `https://nixamp.com/buy?${new URLSearchParams({ server: new URL(vod.page).origin, kind: "vod", vod: vod.id })}`;
+    buy.textContent = `Download · ${price(vod.priceCents)}`;
+    $("#buy").hidden = false;
+  }
   // The short link, not the file's address: it outlives a change of server key.
   const link = $<HTMLInputElement>("#link");
   link.value = vod.page;

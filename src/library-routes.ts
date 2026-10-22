@@ -31,7 +31,7 @@ export interface LibraryContext {
   retag: (tracks: Track[]) => void;
   sendFile: (request: IncomingMessage, response: ServerResponse, file: string, cache: string) => void;
   /** The file as a browser plays it (server.ts playFile): the bytes when it can, MP4 or MP3 when not. */
-  play?: (request: IncomingMessage, response: ServerResponse, file: string) => Promise<void>;
+  play?: (request: IncomingMessage, response: ServerResponse, file: string, download?: string) => Promise<void>;
   /** The item's public play address with the listen key, what a guide publishes on demand; "" when this server has none. */
   playAddress?: (id: string) => string;
   json: (response: ServerResponse, status: number, body: unknown) => void;
@@ -261,7 +261,11 @@ export async function handleLibrary(
         if (!source?.enabled) return fail(409, "source_disabled", "that item's source is turned off");
         // On demand: what a VOD link plays, from the start and seekable when the browser takes the file as it is.
         if (itemMatch[2] === "play" && ctx.play) {
-          await ctx.play(request, response, item.path);
+          // `download=1`: the same file as an attachment, named for what it is (a bought VOD download).
+          const named = url.searchParams.get("download") === "1"
+            ? (item.override.title || item.title || item.path.split("/").pop()!.replace(/\.[^.]+$/, "")).replace(/[\\/:*?"<>|\x00-\x1f]/g, "").slice(0, 160) || item.id
+            : "";
+          await ctx.play(request, response, item.path, named || undefined);
           return true;
         }
         // Private: a browser may keep it, a shared cache may not.

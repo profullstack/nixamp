@@ -751,7 +751,7 @@ async function loadOnAir(): Promise<void> {
 /* ---- My music (bought on nixamp.com) -------------------------------------- */
 
 interface Bought {
-  id: string; kind: "song" | "album" | "artist"; title: string; artistName: string; server: string;
+  id: string; kind: "song" | "album" | "artist" | "vod"; title: string; artistName: string; server: string;
   artist: string; album: string; n: number; paidAt: number; grant?: string; zip?: string; link?: string;
 }
 interface Catalogue { genres: Array<{ artists: Array<{ key: string; name: string; albums: Array<{ key: string; title: string; songs: Array<{ n: number; title: string }> }> }> }> }
@@ -801,6 +801,17 @@ async function loadMusic(): Promise<void> {
     : "Nothing bought yet. Every AI label song is 10¢, an album $1, an artist's whole catalogue $2: look for Download on a station's now playing.";
   const list = $("#music-list");
   list.replaceChildren(...bought.map((one) => {
+    // A bought video plays on its own page; the download is the file itself, not a zip.
+    if (one.kind === "vod") {
+      return el("article", { class: "station", "aria-label": one.title },
+        el("div", { class: "station-head" },
+          el("span", { class: "state state-live" }, "Video"),
+          el("h3", {}, one.title),
+          el("span", { class: "muted" }, `${one.artistName} · ${new Date(one.paidAt).toLocaleDateString()}`),
+        ),
+        el("div", { class: "actions" }, el("a", { href: `${one.server}/vod/${one.artist}`, target: "_blank", rel: "noopener" }, "Watch"), one.zip ? el("a", { href: one.zip, class: "ghost" }, "Download") : null, one.link ? el("a", { href: one.link, target: "_blank", rel: "noopener" }, "Receipt") : null),
+      );
+    }
     const play = el("button", { type: "button" }, "Play");
     play.addEventListener("click", () => void act("Play", async () => {
       musicQueue = await songsOf(one);

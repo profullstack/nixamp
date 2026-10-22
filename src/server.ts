@@ -3407,6 +3407,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         },
         json,
         readBody,
+        grants: storeGrants,
         throttle: () => {
           const verdict = guard.check(`vods:${callerOf(request.headers, request.socket.remoteAddress, behindProxy)}`, STATION_CONTROL_LIMIT);
           return verdict.ok ? null : { retryAfter: verdict.retryAfter };
@@ -3469,7 +3470,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         probe: options.library.probe,
         retag: options.library.retag,
         sendFile,
-        play: (req, res, file) => playFile(req, res, file, url, options),
+        play: (req, res, file, download) => playFile(req, res, file, url, options, undefined, download),
         playAddress: (id) => {
           const publicBase = (options.stations?.publicBase?.() ?? "").replace(/\/+$/, "");
           return publicBase && listenKey ? `${publicBase}/api/v1/library/items/${id}/play?k=${listenKey}` : "";
@@ -7332,7 +7333,12 @@ async function liveAudio(
 async function playFile(
   request: IncomingMessage, response: ServerResponse, file: string, url: URL,
   options: Pick<HandlerOptions, "ffmpeg" | "ffprobe">, onPicture: () => void = () => undefined,
+  /** Sent as an attachment under this name (no extension: it depends on what is sent), for a bought download. */
+  download = "",
 ): Promise<void> {
+  const attach = (ext: string): void => {
+    if (download) response.setHeader("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(`${download}${ext}`)}`);
+  };
   // A browser asks for every track here, and a matroska or an avi handed
   // to it raw is bytes it cannot play. Seeking is what this route is for
   // and transcoding gives it up, but an unseekable film beats a silent
@@ -7349,6 +7355,7 @@ async function playFile(
   const allowHevc = url.searchParams.get("hevc") === "1";
 
   if (playsInBrowser(file) && capKbps === 0) {
+    attach(extname(file));
     sendFile(request, response, file);
     return;
   }
@@ -7365,6 +7372,7 @@ async function playFile(
       // added by an older nixamp goes to an audio element for ever, and
       // the only cure is noticing and adding it again.
       onPicture();
+      attach(".mp4");
       pipeFfmpeg(
         request, response, file, options.ffmpeg ?? ["ffmpeg"],
         videoArgs(codecs, capKbps, { allowHevc }), "video/mp4",
@@ -7373,6 +7381,7 @@ async function playFile(
       return;
     }
   }
+  attach(".mp3");
   transcode(request, response, file, options.ffmpeg ?? ["ffmpeg"]);
 }
 
