@@ -16,8 +16,9 @@ export const LIBRARY_USAGE = `nixamp library — what this server has, indexed
   nixamp library playlist new NAME [ITEM...]
   nixamp library playlist show|delete PLAYLIST
   nixamp library playlist add PLAYLIST ITEM...
-  nixamp library publish ITEM --basis B [--title T] [--note N]
-                                      on demand on live.streaming: a link that plays it from the start
+  nixamp library publish ITEM... | FOLDER | WORDS --basis B [--title T] [--note N] [--dry-run]
+                                      on demand on live.streaming: a link that plays each from the start,
+                                      from any of your servers (needs nixamp login); --here for this server's own guide
                                       (B: owned, permission, licensed, creative-commons, public-domain)
   nixamp library vods                 what is published on demand, with each link
   nixamp library unpublish VOD        take one off

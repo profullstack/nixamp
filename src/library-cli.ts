@@ -10,8 +10,43 @@ import { resolveTarget } from "./admin.ts";
 import { KEY_HEADER } from "./share.ts";
 
 import { LIBRARY_COMMANDS, LIBRARY_USAGE } from "./library-usage.ts";
+import { readSession } from "./session.ts";
 
 export { LIBRARY_COMMANDS, LIBRARY_USAGE };
+
+/** The public guide a published file goes on, unless --guide or --here says otherwise. */
+export const STREAMING_GUIDE = "https://live.streaming.pit.world";
+
+type Call = (method: string, path: string, body?: unknown) => Promise<{ status: number; body: Record<string, unknown> }>;
+
+/**
+ * The ready files `publish` means: item ids as they are, a folder on this
+ * machine as everything under it, anything else as search words. A message
+ * when nothing matches.
+ */
+export async function publishPicks(targets: string[], call: Call): Promise<Record<string, unknown>[] | string> {
+  const ready = (items: Record<string, unknown>[]): Record<string, unknown>[] => items.filter((one) => one["state"] === "ready");
+  if (targets.every((one) => /^[0-9a-f]{16}$/.test(one))) {
+    const items = await Promise.all(targets.map(async (id) => (await call("GET", `/api/v1/library/items/${id}`)).body["item"] as Record<string, unknown> | undefined));
+    const found = ready(items.filter((one): one is Record<string, unknown> => Boolean(one)));
+    return found.length === targets.length ? found : "not every item is in the library and ready (nixamp library show ITEM)";
+  }
+  const { existsSync, statSync } = await import("node:fs");
+  const { resolve, relative, isAbsolute } = await import("node:path");
+  const { homedir } = await import("node:os");
+  const path = resolve(targets.join(" ").replace(/^~(?=$|\/)/, homedir()));
+  const query = new URLSearchParams({ limit: "500", sort: "path" });
+  if (existsSync(path) && statSync(path).isDirectory()) {
+    const sources = ((await call("GET", "/api/v1/library/sources")).body["sources"] as Record<string, unknown>[] | undefined) ?? [];
+    const source = sources.find((one) => { const rel = relative(String(one["root"] ?? ""), path); return !rel.startsWith("..") && !isAbsolute(rel); });
+    if (!source) return `${path} is not inside the library (nixamp library sources)`;
+    query.set("source", String(source["id"]));
+    const folder = relative(String(source["root"]), path);
+    if (folder) query.set("folder", folder);
+  } else query.set("q", targets.join(" "));
+  const found = ready(((await call("GET", `/api/v1/library/items?${query}`)).body["items"] as Record<string, unknown>[] | undefined) ?? []);
+  return found.length ? found : "nothing ready in the library matches that (nixamp library search WORDS)";
+}
 
 function flag(argv: string[], name: string): string | undefined {
   const at = argv.indexOf(name);
@@ -24,7 +59,7 @@ function words(argv: string[]): string[] {
   for (let at = 0; at < argv.length; at++) {
     const one = argv[at]!;
     if (one.startsWith("--")) {
-      if (!["--json", "--force", "--wait"].includes(one)) at += 1;
+      if (!["--json", "--force", "--wait", "--dry-run", "--here"].includes(one)) at += 1;
       continue;
     }
     out.push(one);
@@ -162,13 +197,54 @@ export async function libraryTool(argv: string[]): Promise<number> {
         return 2;
       }
       case "publish": {
-        // On demand on this server's guide (guide-vods.ts): the server builds the
-        // file's public address from its own public URL and listen key.
-        const [item] = rest;
+        // On demand on live.streaming (guide-vods.ts). ITEM, a folder or search
+        // words pick the files; each goes to the guide as its public play
+        // address, under this machine's nixamp.com session, so a file on any
+        // server lands on the one guide. --here publishes on this server's own.
         const basis = flag(argv, "--basis");
-        if (!item || !basis) { console.error("nixamp library publish needs an item id and --basis owned|permission|licensed|creative-commons|public-domain"); return 2; }
-        return out(await call("POST", "/api/v1/guide/vods", { item, basis, agree: true, title: flag(argv, "--title") ?? "", note: flag(argv, "--note") ?? "" }),
-          (body) => `on demand: ${String(body["page"])}`);
+        if (!rest.length || !basis) { console.error("nixamp library publish needs ITEM, a folder or search words, and --basis owned|permission|licensed|creative-commons|public-domain"); return 2; }
+        const items = await publishPicks(rest, call);
+        if (typeof items === "string") { console.error(`nixamp: ${items}`); return 1; }
+        const title = items.length === 1 ? flag(argv, "--title") ?? "" : "";
+        const note = flag(argv, "--note") ?? "";
+        if (argv.includes("--dry-run")) {
+          console.log(`${items.map(itemLine).join("\n")}\n${items.length} to publish (--dry-run: nothing sent)`);
+          return 0;
+        }
+        const here = argv.includes("--here");
+        const guide = (flag(argv, "--guide") ?? STREAMING_GUIDE).replace(/\/+$/, "");
+        const session = here ? null : readSession();
+        if (!here && !session?.token) { console.error("nixamp: publishing on live.streaming needs a nixamp.com account on this machine: run nixamp login (or pass --here)"); return 1; }
+        let failed = 0;
+        const done: Record<string, unknown>[] = [];
+        for (const item of items) {
+          const id = String(item["id"]);
+          let answer: { status: number; body: Record<string, unknown> };
+          if (here) answer = await call("POST", "/api/v1/guide/vods", { item: id, basis, agree: true, title, note });
+          else {
+            const play = String((((await call("GET", `/api/v1/library/items/${id}`)).body["item"] ?? {}) as Record<string, unknown>)["playAddress"] ?? "");
+            if (!play) answer = { status: 409, body: { error: "this server has no public address and listen key to play it from (set one with --public-url)", code: "no_address" } };
+            else {
+              try {
+                const response = await fetch(`${guide}/api/v1/guide/vods`, {
+                  method: "POST",
+                  headers: { "content-type": "application/json", authorization: `Bearer ${session!.token}` },
+                  body: JSON.stringify({ play, basis, agree: true, title, note }),
+                });
+                answer = { status: response.status, body: (await response.json().catch(() => ({}))) as Record<string, unknown> };
+              } catch (error) {
+                answer = { status: 503, body: { error: `could not reach ${guide}: ${(error as Error).message}`, code: "unreachable" } };
+              }
+            }
+          }
+          done.push({ item: id, status: answer.status, ...answer.body });
+          if (answer.status >= 400) {
+            failed += 1;
+            if (!json) console.error(`nixamp: ${itemLine(item)}: ${String(answer.body["error"] ?? "refused")} (${String(answer.body["code"] ?? answer.status)})`);
+          } else if (!json) console.log(`on demand: ${String(answer.body["page"])}  ${String(item["title"] || item["rel"] || id)}`);
+        }
+        if (json) console.log(JSON.stringify({ published: done }, null, 2));
+        return failed ? 1 : 0;
       }
       case "vods":
         return out(await call("GET", "/api/v1/guide/vods"), (body) => {

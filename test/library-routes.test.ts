@@ -58,6 +58,10 @@ test("library over HTTP: the owner manages, the listen link reads without paths"
     assert.equal(found.items[0]!["rel"], "Band/LP/01 Song.mp3");
     assert.equal(JSON.stringify(found).includes(top), false);
     assert.equal(found.items[0]!["override"], undefined);
+    // Where it plays publicly is the owner's, and only with a public address to build it on.
+    const anItem = String(found.items[0]!["id"]);
+    assert.equal(((await (await listener(`/api/v1/library/items/${anItem}`)).json()) as { item: Record<string, unknown> }).item["playAddress"], undefined);
+    assert.equal(((await (await owner(`/api/v1/library/items/${anItem}`)).json()) as { item: Record<string, unknown> }).item["playAddress"], undefined);
     const mine = await (await owner("/api/v1/library/items?q=song")).json() as { items: Array<{ path: string; id: string }> };
     assert.equal(mine.items[0]!.path, join(root, "Band", "LP", "01 Song.mp3"));
     const albums = await (await listener("/api/v1/library/browse/albums")).json() as { groups: unknown[] };

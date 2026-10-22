@@ -32,6 +32,8 @@ export interface LibraryContext {
   sendFile: (request: IncomingMessage, response: ServerResponse, file: string, cache: string) => void;
   /** The file as a browser plays it (server.ts playFile): the bytes when it can, MP4 or MP3 when not. */
   play?: (request: IncomingMessage, response: ServerResponse, file: string) => Promise<void>;
+  /** The item's public play address with the listen key, what a guide publishes on demand; "" when this server has none. */
+  playAddress?: (id: string) => string;
   json: (response: ServerResponse, status: number, body: unknown) => void;
   readBody: (request: IncomingMessage) => Promise<string>;
 }
@@ -267,7 +269,9 @@ export async function handleLibrary(
         return true;
       }
       if (method === "GET") {
-        ctx.json(response, 200, { item: itemView(item, ctx.canWrite) });
+        // The owner also gets where it plays publicly, for publishing it on another server's guide.
+        const play = ctx.canWrite && ctx.playAddress ? ctx.playAddress(item.id) : "";
+        ctx.json(response, 200, { item: { ...itemView(item, ctx.canWrite), ...(play ? { playAddress: play } : {}) } });
         return true;
       }
       if (method === "PATCH") {
