@@ -20,6 +20,8 @@ export const LIBRARY_USAGE = `nixamp library — what this server has, indexed
                                       on demand on live.streaming: a link that plays each from the start,
                                       from any of your servers (needs nixamp login); --here for this server's own guide
                                       (B: owned, permission, licensed, creative-commons, public-domain)
+                                      --price USD: sell it as a download on nixamp.com (guide owner, owned or
+                                      public-domain only; publish again with --price 0 to stop)
   nixamp library vods                 what is published on demand, with each link
   nixamp library unpublish VOD        take one off
 

@@ -19,7 +19,7 @@ export interface CatalogueArtist { key: string; name: string; genre: string; bio
 export interface Catalogue { holder: string; server?: string; genres: Array<{ genre: string; station: string; artists: CatalogueArtist[] }> }
 
 export interface Bought {
-  id: string; kind: "song" | "album" | "artist"; title: string; artistName: string; server: string;
+  id: string; kind: "song" | "album" | "artist" | "vod"; title: string; artistName: string; server: string;
   status: string; paidAt: number; amountUsd: number; zip?: string; link?: string;
 }
 

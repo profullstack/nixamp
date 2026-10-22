@@ -128,11 +128,11 @@ export async function handleLabelRoutes(
       const grant = url.searchParams.get("grant") ?? "";
       if (path === "/api/v1/label/zip") {
         const scope = ctx.grants ? await ctx.grants.check(grant) : null;
-        if (!scope) {
+        if (!scope || scope.kind === "vod") {
           ctx.json(response, 403, { error: "that download link has expired or is not one of ours: open your purchase again for a fresh one", code: "bad_grant" });
           return true;
         }
-        const zip = label.zipFor(scope);
+        const zip = label.zipFor({ ...scope, kind: scope.kind as Exclude<typeof scope.kind, "vod"> });
         if (!zip) {
           ctx.json(response, 404, { error: "nothing to download yet", code: "not_found" });
           return true;

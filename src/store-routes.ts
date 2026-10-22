@@ -2,6 +2,7 @@
  * The music store's pages and API on nixamp.com (music-store.ts).
  *
  *   GET  /buy?server=&kind=&artist=&album=&n=     what it is, the price, email + coin, Pay
+ *   GET  /buy?server=<guide>&kind=vod&vod=<id>     the same for a video on demand of a station guide
  *   GET  /purchases/:id?t=                        the receipt: waiting, or Download the zip
  *   GET  /api/v1/store/coins                      the coins nixamp's CoinPay business takes
  *   POST /api/v1/store/checkout                   {server, kind, artist, album?, n?, email, coin} -> {url}
@@ -113,6 +114,21 @@ export async function handleStoreRoutes(request: IncomingMessage, response: Serv
         return true;
       }
       const me = await ctx.account().catch(() => null);
+      if (item.kind === "vod") {
+        html(response, 200, page(`Download ${item.title}`, `<div class="card">
+<h1>${escape(item.title)}</h1><p class="by">${escape(item.artistName)}</p>
+<div class="price">${price(item.amountCents)}</div>
+<ul><li>The whole file, to keep and play offline</li><li>Download again any time from your receipt or My music</li></ul>
+<form id="buy">
+<label for="email">Email (your download link goes here)</label>
+<input id="email" name="email" type="email" required autocomplete="email" value="${escape(me?.email ?? "")}">
+<button id="pay" type="submit">Pay ${price(item.amountCents)}</button>
+</form>
+<p id="status" role="status" aria-live="polite"></p>
+<small>Payments go through <a href="https://coinpayportal.com">CoinPay</a> to nixamp.com: pick any coin, or PayPal, on CoinPay's page. Watching it on demand stays free: <a href="${escape(`${item.server}/vod/${item.artist}`)}">back to the video</a>.${me ? "" : ` <a href="/?redirect=${encodeURIComponent("/music/me")}#account-panel">Sign in</a> with the same email to keep everything under My music.`}</small>
+</div>`, JSON.stringify({ server: item.server, kind: "vod", vod: item.artist })), method);
+        return true;
+      }
       const what = item.kind === "song" ? "One song" : item.kind === "album" ? `The album, ${item.songs} songs` : `Everything by ${escape(item.artistName)}, ${item.songs} songs so far`;
       const cover = item.kind === "artist" ? "" : `<img src="${escape(`/api/v1/music/file/${serverId(item.server)}/${item.artist}/${item.album}/cover.jpg`)}" alt="" width="160" height="160" style="border-radius:10px;float:right;margin:0 0 8px 12px;max-width:40%;height:auto">`;
       html(response, 200, page(`Download ${item.title}`, `<div class="card">${cover}
@@ -136,7 +152,11 @@ export async function handleStoreRoutes(request: IncomingMessage, response: Serv
         html(response, 404, page("No such purchase", `<div class="card"><h1>No such purchase</h1><p class="by">That link is not one of ours.</p></div>`), method);
         return true;
       }
-      const body = purchase.status === "paid"
+      const body = purchase.status === "paid" && purchase.kind === "vod"
+        ? `<div class="card"><h1>${escape(purchase.title)}</h1><p class="by">${escape(purchase.artistName)} · paid ${price(purchase.amountCents)}</p>
+<a class="go" href="${escape(store.zipUrl(purchase))}" download>Download the video</a>
+<small>Keep this page's address (it is in your email too) to download again. Signed in to nixamp.com as ${escape(purchase.email)}, everything you bought is under <a href="/music/me">My music</a>.</small></div>`
+        : purchase.status === "paid"
         ? `<div class="card"><h1>${escape(purchase.title)}</h1><p class="by">${escape(purchase.artistName)} · paid ${price(purchase.amountCents)}</p>
 <a class="go" href="${escape(store.zipUrl(purchase))}" download>Download the zip</a>
 <small>MP3s with the cover art and lyrics, plus each song's .lyrics.txt, cover.jpg and album.json. Keep this page's address (it is in your email too) to download again. Signed in to nixamp.com as ${escape(purchase.email)}, everything you bought is under <a href="/music/me">My music</a>, to play or download.</small></div>`

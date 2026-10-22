@@ -207,6 +207,10 @@ export async function libraryTool(argv: string[]): Promise<number> {
         if (typeof items === "string") { console.error(`nixamp: ${items}`); return 1; }
         const title = items.length === 1 ? flag(argv, "--title") ?? "" : "";
         const note = flag(argv, "--note") ?? "";
+        // Sold as a download on nixamp.com (the guide's owner only, owned or public domain); 0 stops selling it.
+        const priceFlag = flag(argv, "--price");
+        const price = priceFlag === undefined ? {} : { price: Number(priceFlag.replace(/^\$/, "")) };
+        if ("price" in price && !Number.isFinite(price.price)) { console.error("nixamp: --price is in dollars, like 1 or 2.50"); return 2; }
         if (argv.includes("--dry-run")) {
           console.log(`${items.map(itemLine).join("\n")}\n${items.length} to publish (--dry-run: nothing sent)`);
           return 0;
@@ -220,7 +224,7 @@ export async function libraryTool(argv: string[]): Promise<number> {
         for (const item of items) {
           const id = String(item["id"]);
           let answer: { status: number; body: Record<string, unknown> };
-          if (here) answer = await call("POST", "/api/v1/guide/vods", { item: id, basis, agree: true, title, note });
+          if (here) answer = await call("POST", "/api/v1/guide/vods", { item: id, basis, agree: true, title, note, ...price });
           else {
             const play = String((((await call("GET", `/api/v1/library/items/${id}`)).body["item"] ?? {}) as Record<string, unknown>)["playAddress"] ?? "");
             if (!play) answer = { status: 409, body: { error: "this server has no public address and listen key to play it from (set one with --public-url)", code: "no_address" } };
@@ -229,7 +233,7 @@ export async function libraryTool(argv: string[]): Promise<number> {
                 const response = await fetch(`${guide}/api/v1/guide/vods`, {
                   method: "POST",
                   headers: { "content-type": "application/json", authorization: `Bearer ${session!.token}` },
-                  body: JSON.stringify({ play, basis, agree: true, title, note }),
+                  body: JSON.stringify({ play, basis, agree: true, title, note, ...price }),
                 });
                 answer = { status: response.status, body: (await response.json().catch(() => ({}))) as Record<string, unknown> };
               } catch (error) {

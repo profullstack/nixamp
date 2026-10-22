@@ -11,6 +11,12 @@
  *
  * Nothing here plays anything: the file's own server does, and this only asks
  * it, now and then, whether the file is still there and what it is.
+ *
+ * The guide's owner may put a price on one of its own (owned or public
+ * domain): watching stays free, and the page offers the file as a download,
+ * bought on nixamp.com (music-store.ts, kind "vod"). The grant nixamp.com
+ * signs opens /api/v1/guide/vods/<id>/download, which sends the buyer on to
+ * the file's server with `download=1`.
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -32,7 +38,14 @@ export interface GuideVod {
   /** The nixamp.com account that published it ("" for this server's owner). */
   by: string;
   publishedAt: number;
+  /** What its download costs on nixamp.com, in cents; absent or 0 when it is not sold. */
+  priceCents?: number;
 }
+
+/** The bases a price may be put on: what the owner may sell, not just share. */
+export const SELLABLE_BASES: readonly RoomBasis[] = ["owned", "public-domain"];
+/** $100: a price above that is a typo. */
+export const VOD_PRICE_MAX_CENTS = 10_000;
 
 /** Files one member may have on the guide at once, and files on it in all. */
 export const VODS_PER_MEMBER = 25;
@@ -191,6 +204,7 @@ export function vodView(vod: GuideVod, base: string, state: VodState | null): Re
     note: vod.note,
     basis: vod.basis,
     publishedAt: vod.publishedAt,
+    ...(vod.priceCents ? { priceCents: vod.priceCents } : {}),
     available: state !== null,
     play: vod.play,
     page: vodPage(base, vod.id),
@@ -215,6 +229,8 @@ export interface VodContext {
   readBody: (request: IncomingMessage) => Promise<unknown>;
   /** Refused by the caller's rate limit, or null. */
   throttle?: () => { retryAfter: number } | null;
+  /** nixamp.com's store grants (music-store.ts GrantVerifier), for a bought download. */
+  grants?: { check: (grant: string) => Promise<{ kind: string; artist: string; server: string } | null> };
 }
 
 /** Answers /api/v1/guide/vods; false when the path is not one. */
@@ -222,6 +238,24 @@ export async function handleVods(request: IncomingMessage, response: ServerRespo
   if (path !== "/api/v1/guide/vods" && !path.startsWith("/api/v1/guide/vods/")) return false;
   const method = request.method ?? "GET";
   const one = /^\/api\/v1\/guide\/vods\/([A-Za-z0-9_-]{1,32})$/.exec(path);
+  const download = /^\/api\/v1\/guide\/vods\/([A-Za-z0-9_-]{1,32})\/download$/.exec(path);
+  if (download && (method === "GET" || method === "HEAD")) {
+    const grant = new URL(request.url ?? "/", "http://x").searchParams.get("grant") ?? "";
+    const scope = ctx.grants ? await ctx.grants.check(grant) : null;
+    const vod = ctx.store.get(download[1]!);
+    if (!scope || scope.kind !== "vod" || scope.artist !== download[1] || scope.server !== new URL(ctx.base).origin) {
+      ctx.json(response, 403, { error: "that download link has expired or is not one of ours: open your purchase again for a fresh one", code: "bad_grant" });
+      return true;
+    }
+    if (!vod) {
+      ctx.json(response, 404, { error: "that video has been taken off this guide", code: "not_found" });
+      return true;
+    }
+    // The file's own server sends it, as an attachment.
+    response.writeHead(302, { location: `${vod.play}&download=1`, "cache-control": "private, no-store", "referrer-policy": "no-referrer" });
+    response.end();
+    return true;
+  }
   if (method === "GET" || method === "HEAD") {
     if (path === "/api/v1/guide/vods") {
       ctx.json(response, 200, { vods: await vodEntries(ctx.store, ctx.probe, ctx.base) });
@@ -249,7 +283,7 @@ export async function handleVods(request: IncomingMessage, response: ServerRespo
   if (path === "/api/v1/guide/vods" && method === "POST") {
     const raw = await ctx.readBody(request).catch(() => null);
     const body = (typeof raw === "string" ? (() => { try { return JSON.parse(raw) as unknown; } catch { return null; } })() : raw) as
-      { play?: unknown; item?: unknown; basis?: unknown; note?: unknown; title?: unknown; agree?: unknown } | null;
+      { play?: unknown; item?: unknown; basis?: unknown; note?: unknown; title?: unknown; agree?: unknown; price?: unknown } | null;
     // The owner may name one of this server's own items; everybody else hands over the address.
     const own = ctx.canControl && typeof body?.item === "string" && /^[0-9a-f]{16}$/.test(body.item) && ctx.ownPlay ? ctx.ownPlay(body.item) : "";
     const address = vodAddress(own || (typeof body?.play === "string" ? body.play : ""));
@@ -283,7 +317,28 @@ export async function handleVods(request: IncomingMessage, response: ServerRespo
     }
     const title = typeof body?.title === "string" ? body.title.trim().slice(0, 160) : "";
     const note = typeof body?.note === "string" ? body.note.trim().slice(0, 300) : "";
-    const vod = ctx.store.put({ play: address.play, name: title || state.name, kind: state.kind, duration: state.duration, basis, note, by: taken?.by ?? by });
+    const owner = taken?.by ?? by;
+    // A price, in dollars: only the owner, only on its own, only what it may sell. Left out, the old one stays.
+    let priceCents = taken?.priceCents ?? 0;
+    if (body?.price !== undefined && body.price !== null) {
+      const cents = Math.round(Number(body.price) * 100);
+      if (!ctx.canControl || owner !== "") {
+        ctx.json(response, 403, { error: "only the guide's owner sells downloads, of what it published itself", code: "not_owner" });
+        return true;
+      }
+      if (!Number.isFinite(cents) || cents < 0 || cents > VOD_PRICE_MAX_CENTS) {
+        ctx.json(response, 400, { error: `price is in dollars, 0 (not sold) to ${VOD_PRICE_MAX_CENTS / 100}`, code: "bad_price" });
+        return true;
+      }
+      if (cents > 0 && !SELLABLE_BASES.includes(basis)) {
+        ctx.json(response, 400, { error: `a download may be sold only of what you own or what is in the public domain, not ${basis}`, code: "not_sellable" });
+        return true;
+      }
+      priceCents = cents;
+    }
+    if (priceCents > 0 && !SELLABLE_BASES.includes(basis)) priceCents = 0;
+    // Published again without a title or a note keeps the ones it had (a price added later changes nothing else).
+    const vod = ctx.store.put({ play: address.play, name: title || taken?.name || state.name, kind: state.kind, duration: state.duration, basis, note: note || taken?.note || "", by: owner, ...(priceCents > 0 ? { priceCents } : {}) });
     ctx.json(response, 200, { vod: vodView(vod, ctx.base, state), page: vodPage(ctx.base, vod.id) });
     return true;
   }

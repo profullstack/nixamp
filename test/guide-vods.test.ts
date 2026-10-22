@@ -137,3 +137,40 @@ test("nobody signed in publishes nothing; the owner may name an item of its own;
     member.close();
   }
 });
+
+test("the owner prices its own sellable file; a bought grant redirects to the file as a download", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vods-"));
+  const store = new VodStore(join(dir, "vods.json"));
+  const probe = new VodProbe(fakeServer(ITEM));
+  const good = { kind: "vod", artist: "", server: "https://live.streaming.pit.world" };
+  const grants = { check: async (g: string) => (g === "good" ? good : g === "other" ? { ...good, artist: "zzzzzzzz" } : null) };
+  let control = true;
+  let member = "";
+  const { base, close } = await serve({ store, probe, base: "https://live.streaming.pit.world", get canControl() { return control; }, member: async () => member, grants });
+  try {
+    const post = (body: unknown) => fetch(`${base}/api/v1/guide/vods`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    assert.equal((await post({ play: PLAY, basis: "licensed", agree: true, price: 2 })).status, 400, "licensed is shareable, not sellable");
+    assert.equal((await post({ play: PLAY, basis: "public-domain", agree: true, price: 500 })).status, 400, "a typo of a price");
+    const made = await post({ play: PLAY, basis: "public-domain", agree: true, note: "PD", price: 1.5 });
+    assert.equal(made.status, 200);
+    const vod = ((await made.json()) as { vod: { id: string; priceCents: number } }).vod;
+    assert.equal(vod.priceCents, 150);
+    // Published again with nothing new keeps its price, title and note.
+    const again = ((await (await post({ play: PLAY, basis: "public-domain", agree: true })).json()) as { vod: { id: string; priceCents: number; note: string } }).vod;
+    assert.deepEqual([again.id, again.priceCents, again.note], [vod.id, 150, "PD"]);
+    good.artist = vod.id;
+    const download = (g: string) => fetch(`${base}/api/v1/guide/vods/${vod.id}/download?grant=${g}`, { redirect: "manual" });
+    const ok = await download("good");
+    assert.equal(ok.status, 302);
+    assert.equal(ok.headers.get("location"), `${PLAY}&download=1`);
+    assert.equal((await download("other")).status, 403, "a grant for another video");
+    assert.equal((await download("bad")).status, 403);
+    // A member may not put a price on anything.
+    control = false;
+    member = "acct-1";
+    assert.equal((await post({ play: PLAY.replace("0123456789abcdef", "0123456789abcdef"), basis: "owned", agree: true, price: 1 })).status, 409, "the owner's file is not the member's to touch");
+  } finally {
+    close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

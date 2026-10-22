@@ -14,15 +14,27 @@
  * nixamp.com never holds the music. It signs a grant -- what was bought, from
  * which server, until when -- and the server asks nixamp.com whether a grant
  * is good before it plays or zips anything (/api/v1/store/grant).
+ *
+ * The same checkout sells a film or a recording on demand (kind "vod"): one
+ * published file of a station guide, at the price the guide's owner set on
+ * it. Its grant names the guide and the video's short id, and the guide's
+ * /api/v1/guide/vods/<id>/download hands over the file once it checks it.
  */
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Db, Support } from "./support.ts";
 import { SupportError, coinOf } from "./support.ts";
 
-export type Kind = "song" | "album" | "artist";
+export type Kind = "song" | "album" | "artist" | "vod";
 
-/** In cents. */
-export const PRICES: Record<Kind, number> = { song: 10, album: 100, artist: 200 };
+/** In cents. A video on demand carries its own price, set where it is published. */
+export const PRICES: Record<Exclude<Kind, "vod">, number> = { song: 10, album: 100, artist: 200 };
+
+const VOD_ID = /^[A-Za-z0-9_-]{1,32}$/;
+
+/** The guides whose videos may be sold here besides the known servers: live.streaming and NIXAMP_VOD_GUIDES. */
+export function vodGuides(env: Record<string, string | undefined> = process.env): string[] {
+  return ["https://live.streaming.pit.world", ...(env["NIXAMP_VOD_GUIDES"] ?? "").split(",")].map(serverBase).filter(Boolean);
+}
 
 const EMAIL = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[a-z]{2,24}$/i;
 const KEY = /^[a-f0-9]{10}$/;
@@ -90,13 +102,13 @@ export function readGrant(secret: string, grant: string, now = Date.now()): (Sco
   const exp = Number(parts[1]);
   if (!Number.isFinite(exp) || exp < now) return null;
   const kind = parts[2] as Kind;
-  if (!(kind in PRICES)) return null;
+  if (!(kind in PRICES) && kind !== "vod") return null;
   return { kind, artist: parts[3]!, album: parts[4] === "-" ? "" : parts[4]!, n: Number(parts[5]), server: Buffer.from(parts[6]!, "base64url").toString("utf8"), exp };
 }
 
 /** Whether a grant for `scope` covers this file of the catalogue. */
 export function covers(scope: Pick<Scope, "kind" | "artist" | "album" | "n">, artist: string, album: string, n?: number): boolean {
-  if (scope.artist !== artist) return false;
+  if (scope.kind === "vod" || scope.artist !== artist) return false;
   if (scope.kind === "artist") return true;
   if (scope.album !== album) return false;
   if (scope.kind === "album") return true;
@@ -190,8 +202,25 @@ export class MusicStore {
     return await response.json() as LabelView;
   }
 
+  /** A video on demand of a guide, at the price its owner set; refused when it is not for sale. */
+  private async describeVod(input: Record<string, unknown>): Promise<Scope & { title: string; artistName: string; amountCents: number; songs: number }> {
+    const server = serverBase(input["server"]);
+    const known = server !== "" && (new URL(server).hostname.endsWith(".nixamp.com") || vodGuides().includes(server) || this.options.servers().includes(server));
+    if (!known) throw new SupportError("That guide does not sell videos here.", 404, "not_found");
+    const id = String(input["vod"] ?? input["artist"] ?? "");
+    if (!VOD_ID.test(id)) throw new SupportError("No such video.", 404, "not_found");
+    const response = await (this.options.fetcher ?? fetch)(`${server}/api/v1/guide/vods/${id}`, { signal: AbortSignal.timeout(10_000), headers: { accept: "application/json" } });
+    if (response.status === 404) throw new SupportError("No such video.", 404, "not_found");
+    if (!response.ok) throw new SupportError("That guide could not be read. Try again.", 502, "catalogue");
+    const vod = ((await response.json()) as { vod?: { name?: string; artist?: string; priceCents?: number } }).vod;
+    const cents = Number(vod?.priceCents ?? 0);
+    if (!vod || !Number.isInteger(cents) || cents <= 0) throw new SupportError("That video is free to watch and not sold as a download.", 404, "not_for_sale");
+    return { server, kind: "vod", artist: id, album: "", n: 0, title: String(vod.name ?? id).slice(0, 160), artistName: String(vod.artist || "On demand").slice(0, 160), amountCents: cents, songs: 1 };
+  }
+
   /** What is for sale at this address, with its name and price; refused when there is no such thing. */
   async describe(input: Record<string, unknown>): Promise<Scope & { title: string; artistName: string; amountCents: number; songs: number }> {
+    if (input["kind"] === "vod") return this.describeVod(input);
     // An opaque server id (music-hub.ts), or an https origin.
     const asked = String(input["server"] ?? "");
     const server = /^[a-f0-9]{10}$/.test(asked) ? (this.options.resolveServer?.(asked) ?? "") : serverBase(asked);
@@ -199,7 +228,7 @@ export class MusicStore {
     // and certificates nixamp.com issues): the directory empties on every restart of nixamp.com.
     const named = server ? new URL(server).hostname.endsWith(".nixamp.com") : false;
     if (!server || !(named || this.options.servers().includes(server))) throw new SupportError("That server does not sell music here.", 404, "not_found");
-    const kind = String(input["kind"] ?? "") as Kind;
+    const kind = String(input["kind"] ?? "") as Exclude<Kind, "vod">;
     if (!(kind in PRICES)) throw new SupportError("Buy a song, an album or an artist.", 400, "invalid_kind");
     const artistKey = String(input["artist"] ?? "");
     const albumKey = kind === "artist" ? "" : String(input["album"] ?? "");
@@ -228,7 +257,7 @@ export class MusicStore {
       email,
       accountId: account?.id || email,
       order: `music-${id}`,
-      description: `${item.title} by ${item.artistName} (${item.kind === "song" ? "song" : item.kind === "album" ? "album" : "every album"}, MP3)`,
+      description: item.kind === "vod" ? `${item.title} (download)` : `${item.title} by ${item.artistName} (${item.kind === "song" ? "song" : item.kind === "album" ? "album" : "every album"}, MP3)`,
       metadata: { product: "music", purchase: id, kind: item.kind },
       redirect: this.link(id, token),
     });
@@ -278,6 +307,14 @@ export class MusicStore {
       return again ? row(again) : null;
     }
     const purchase = row(updated);
+    if (purchase.kind === "vod") {
+      await this.mail(purchase.email, `Your download: ${purchase.title}`, [
+        `Thank you. "${purchase.title}" is yours to download and keep.`,
+        `Download it, now or any time: ${this.link(purchase.id, purchase.token)}`,
+        `Sign in to nixamp.com with ${purchase.email} and everything you have bought is under My music on ${this.options.site}/music/me.`,
+      ]);
+      return purchase;
+    }
     await this.mail(purchase.email, `Your music: ${purchase.title}`, [
       `Thank you. "${purchase.title}" by ${purchase.artistName} is yours: MP3s with the cover art and the lyrics, in one zip.`,
       `Download it, now or any time: ${this.link(purchase.id, purchase.token)}`,
@@ -304,8 +341,9 @@ export class MusicStore {
     return readGrant(this.options.secret, grant, this.now());
   }
 
-  /** Where the zip of a purchase is made: on the server that holds the music. */
+  /** Where the zip of a purchase is made: on the server that holds the music (a video: its guide hands over the file). */
   zipUrl(purchase: Purchase): string {
+    if (purchase.kind === "vod") return `${purchase.server}/api/v1/guide/vods/${purchase.artist}/download?grant=${encodeURIComponent(this.grant(purchase))}`;
     return `${purchase.server}/api/v1/label/zip?grant=${encodeURIComponent(this.grant(purchase))}`;
   }
 
