@@ -46,6 +46,7 @@
 .vod-list a{display:block;padding:16px;border:1px solid var(--line,#1f2a22);border-radius:14px;color:inherit;text-decoration:none;background:var(--panel,#0e1410)}
 .vod-list a:hover,.vod-list a:focus-visible{border-color:#3ddc84}
 .vod-list .vod-name{font-weight:700;overflow-wrap:anywhere}.vod-list .vod-meta{opacity:.7;font-size:.9rem;margin-top:4px}
+.vod-how{margin-top:20px;padding:12px 16px;border:1px solid var(--line,#1f2a22);border-radius:14px}.vod-how summary{cursor:pointer;font-weight:700}.vod-how ol{padding-left:1.2em}.vod-how li{margin:8px 0}.vod-how code{overflow-wrap:anywhere;font-size:.9em}
 .station-buy{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 0}
 .station-buy[hidden]{display:none}
 .station-buy a{display:inline-block;padding:8px 14px;border-radius:999px;border:1px solid #3ddc84;color:#3ddc84;font-weight:700;text-decoration:none}

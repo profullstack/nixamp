@@ -27,6 +27,14 @@
         <p class="station-about">Published files: play from the start, seek anywhere, share the link.</p>
         <ul id="list" class="vod-list"></ul>
         <p id="none" class="station-small" hidden>Nothing has been published here yet.</p>
+        <details class="vod-how">
+          <summary>Publish yours</summary>
+          <p class="station-about">Anything on your nixamp server that you may share (your own work, with permission, licensed, Creative Commons or public domain) can go here, with a link of its own.</p>
+          <ol class="station-about">
+            <li>In the browser: open your server in <a href="https://nixamp.com">nixamp.com</a> signed in, play the file, then <strong>Publish on live.streaming</strong>.</li>
+            <li>From the server, a whole folder at once:<br /><code>nixamp library publish ~/Videos/my-films --basis owned</code><br /><span class="station-small">One file: its id from <code>nixamp library search WORDS</code>. Add <code>--dry-run</code> to see what it picks first; <code>nixamp library vods</code> lists the links.</span></li>
+          </ol>
+        </details>
       </section>
       <p class="station-small"><a href="/vod">All videos</a> · <a href="/">On the air now</a> · Played by <a href="https://nixamp.com">nixamp</a>.</p>
       <div id="announce" class="sr-only" aria-live="assertive"></div>

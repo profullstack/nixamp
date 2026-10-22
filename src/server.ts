@@ -3470,6 +3470,10 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         retag: options.library.retag,
         sendFile,
         play: (req, res, file) => playFile(req, res, file, url, options),
+        playAddress: (id) => {
+          const publicBase = (options.stations?.publicBase?.() ?? "").replace(/\/+$/, "");
+          return publicBase && listenKey ? `${publicBase}/api/v1/library/items/${id}/play?k=${listenKey}` : "";
+        },
         json,
         readBody,
       });
