@@ -162,7 +162,7 @@ test("the owner prices its own sellable file; a bought grant redirects to the fi
     const download = (g: string) => fetch(`${base}/api/v1/guide/vods/${vod.id}/download?grant=${g}`, { redirect: "manual" });
     const ok = await download("good");
     assert.equal(ok.status, 302);
-    assert.equal(ok.headers.get("location"), `${PLAY}&download=1`);
+    assert.equal(ok.headers.get("location"), `${PLAY}&download=1&name=Nosferatu`);
     assert.equal((await download("other")).status, 403, "a grant for another video");
     assert.equal((await download("bad")).status, 403);
     // A member may not put a price on anything.

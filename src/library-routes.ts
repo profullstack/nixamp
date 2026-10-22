@@ -263,7 +263,7 @@ export async function handleLibrary(
         if (itemMatch[2] === "play" && ctx.play) {
           // `download=1`: the same file as an attachment, named for what it is (a bought VOD download).
           const named = url.searchParams.get("download") === "1"
-            ? (item.override.title || item.title || item.path.split("/").pop()!.replace(/\.[^.]+$/, "")).replace(/[\\/:*?"<>|\x00-\x1f]/g, "").slice(0, 160) || item.id
+            ? (url.searchParams.get("name") || item.override.title || item.title || item.path.split("/").pop()!.replace(/\.[^.]+$/, "")).replace(/[\\/:*?"<>|\x00-\x1f]/g, "").slice(0, 160) || item.id
             : "";
           await ctx.play(request, response, item.path, named || undefined);
           return true;

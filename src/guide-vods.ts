@@ -252,7 +252,7 @@ export async function handleVods(request: IncomingMessage, response: ServerRespo
       return true;
     }
     // The file's own server sends it, as an attachment.
-    response.writeHead(302, { location: `${vod.play}&download=1`, "cache-control": "private, no-store", "referrer-policy": "no-referrer" });
+    response.writeHead(302, { location: `${vod.play}&download=1&name=${encodeURIComponent(vod.name)}`, "cache-control": "private, no-store", "referrer-policy": "no-referrer" });
     response.end();
     return true;
   }
