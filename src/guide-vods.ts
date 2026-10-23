@@ -44,6 +44,8 @@ export interface GuideVod {
 
 /** The bases a price may be put on: what the owner may sell, not just share. */
 export const SELLABLE_BASES: readonly RoomBasis[] = ["owned", "public-domain"];
+/** What a new video of the owner's costs to download unless it says otherwise (Anthony: "$1 per video"). */
+export const VOD_DEFAULT_PRICE_CENTS = 100;
 /** $100: a price above that is a typo. */
 export const VOD_PRICE_MAX_CENTS = 10_000;
 
@@ -318,8 +320,9 @@ export async function handleVods(request: IncomingMessage, response: ServerRespo
     const title = typeof body?.title === "string" ? body.title.trim().slice(0, 160) : "";
     const note = typeof body?.note === "string" ? body.note.trim().slice(0, 300) : "";
     const owner = taken?.by ?? by;
-    // A price, in dollars: only the owner, only on its own, only what it may sell. Left out, the old one stays.
-    let priceCents = taken?.priceCents ?? 0;
+    // A price, in dollars: only the owner, only on its own, only what it may sell. Left out, the old one stays,
+    // and a new one of the owner's that it may sell costs the default.
+    let priceCents = taken ? (taken.priceCents ?? 0) : owner === "" && ctx.canControl && SELLABLE_BASES.includes(basis) ? VOD_DEFAULT_PRICE_CENTS : 0;
     if (body?.price !== undefined && body.price !== null) {
       const cents = Math.round(Number(body.price) * 100);
       if (!ctx.canControl || owner !== "") {
