@@ -174,3 +174,25 @@ test("the owner prices its own sellable file; a bought grant redirects to the fi
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a new sellable video of the owner's costs $1 unless it says otherwise; a member's is never sold", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vods-"));
+  const store = new VodStore(join(dir, "vods.json"));
+  const probe = new VodProbe(fakeServer(ITEM));
+  let control = true;
+  const { base, close } = await serve({ store, probe, base: "https://live.streaming.pit.world", get canControl() { return control; }, member: async () => (control ? "" : "acct-1") });
+  try {
+    const post = async (body: unknown) => ((await (await fetch(`${base}/api/v1/guide/vods`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json()) as { vod: { id: string; priceCents?: number } }).vod;
+    assert.equal((await post({ play: PLAY, basis: "public-domain", agree: true })).priceCents, 100);
+    assert.equal((await post({ play: PLAY, basis: "public-domain", agree: true, price: 0 })).priceCents, undefined, "--price 0 makes it free");
+    assert.equal((await post({ play: PLAY, basis: "public-domain", agree: true })).priceCents, undefined, "and it stays free when published again");
+    store.remove((await post({ play: PLAY, basis: "public-domain", agree: true })).id);
+    control = false;
+    const members = await post({ play: PLAY, basis: "owned", agree: true });
+    assert.ok(members.id);
+    assert.equal(members.priceCents, undefined, "a member's video");
+  } finally {
+    close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
