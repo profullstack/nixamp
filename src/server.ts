@@ -7929,7 +7929,11 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     log: (line) => console.log(line),
   });
   aiRadio.startSchedule();
-  aiLabel.startSchedule();
+  // The directory (nixamp.com) keeps its ElevenLabs key for translated voices,
+  // but records no label of its own: its state is lost on every deploy, so it
+  // signed a fresh invented artist each time and paid for songs thrown away.
+  // The label lives on the servers whose owners run it.
+  if (!options.directory) aiLabel.startSchedule();
   stations.label = aiLabel;
   // Tracks anybody shares from the guide, checked by AI before they air.
   const listenerShares = new ListenerShares(ListenerShares.fileFor(stateDir(), options.port), {
