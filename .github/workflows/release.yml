@@ -39,18 +39,23 @@ jobs:
       - run: bun run build
       - run: bun run web:build
       - run: bun run backtoschool:build
-      # apt on the runner has hung for 20+ minutes (a held dpkg lock or a slow
-      # mirror): each try is time-boxed and tried again, the step itself capped.
+      # The runner's Ubuntu mirror has crawled at ~40 KB/s (apt took 20+ min and
+      # held three releases): a static ffmpeg from GitHub's own release storage
+      # first, apt only if that fails.
       - name: Install media test tools
         timeout-minutes: 12
         run: |
-          for try in 1 2 3; do
-            sudo timeout 180 apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60 update \
-              && sudo timeout 300 apt-get -o DPkg::Lock::Timeout=60 install -y --no-install-recommends ffmpeg \
-              && break
-            echo "apt try $try did not finish; trying again"; sleep 10
-          done
-          ffmpeg -version | head -1
+          set -e
+          url=https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-linux64-gpl-9.0.tar.xz
+          if curl -fsSL --retry 3 --max-time 180 "$url" -o "$RUNNER_TEMP/ffmpeg.tar.xz"; then
+            mkdir -p "$RUNNER_TEMP/ffmpeg" && tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP/ffmpeg" --strip-components=1
+            echo "$RUNNER_TEMP/ffmpeg/bin" >> "$GITHUB_PATH"
+            "$RUNNER_TEMP/ffmpeg/bin/ffmpeg" -version | head -1
+          else
+            sudo timeout 600 apt-get -o DPkg::Lock::Timeout=60 update
+            sudo timeout 600 apt-get -o DPkg::Lock::Timeout=60 install -y --no-install-recommends ffmpeg
+            ffmpeg -version | head -1
+          fi
       - run: bun test test web/test
       # Prove the OpenStream envelope on the build we are about to ship, and
       # gate the release on it: the command exits non-zero if any codec that
