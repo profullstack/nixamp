@@ -953,6 +953,35 @@ test("a rapper's brief says rapped, a singer's says sung, and the genre's no-gos
   assert.match(composePrompt(ROSTER["lumi-kestrel"]!, { style: "120 BPM" }), /Sung in English/);
   assert.equal(composePrompt({ genre: "Polka", sound: "oompah band", voice: "tenor" }, { style: "fast" }), "oompah band. fast. Lead vocal: tenor. Sung in English.");
   assert.equal(craftFor("Hip-Hop")?.delivery, "rapped");
+  const classical = composePrompt(ROSTER["ondine-halloway"]!, { style: "Nocturne in C-sharp minor, Andante" });
+  assert.match(classical, /Purely instrumental/);
+  assert.doesNotMatch(classical, /Lead vocal|Sung in English/);
+  assert.match(classical, /Avoid: vocals/);
+});
+
+test("a classical album is composed instrumental: no words asked for, written, tagged or served", async () => {
+  const systems: string[] = [];
+  const writer = fakeWriter();
+  const calls: Array<{ prompt: string; seconds: number; lyrics?: string }> = [];
+  const { top, label, tagged } = setup(fakeComposer(calls), (async (options) => { systems.push(options.system); return writer(options); }) as typeof askJson);
+  try {
+    label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, enabled: false });
+    const artist = label.sign({ preset: "aldermoor-symphony" });
+    label.configure({ enabled: true });
+    await idle(label, () => Boolean(label.get(artist.key)!.albums[0]?.doneAt));
+    assert.equal(systems.filter((one) => one.includes("Plan one album")).length, 1);
+    assert.equal(systems.filter((one) => one.includes("writing original English lyrics")).length, 0, "no lyrics written");
+    assert.equal(calls.length, 3);
+    assert.ok(calls.every((one) => one.lyrics === undefined && /Purely instrumental/.test(one.prompt)));
+    assert.ok(tagged.every((one) => !("lyrics-eng" in one.tags)));
+    const album = label.get(artist.key)!.albums[0]!;
+    assert.ok(album.songs.every((song) => song.file && !song.lyricsFile && !existsSync(song.file.replace(/\.mp3$/, ".lyrics.txt"))));
+    assert.equal(label.publicFile(artist.key, album.key, "1.txt"), null);
+    assert.ok(label.publicFile(artist.key, album.key, "1.mp3"));
+  } finally {
+    label.stopSchedule();
+    rmSync(top, { recursive: true, force: true });
+  }
 });
 
 test("the lyric writer is told the genre's craft and given more room for rap", async () => {
