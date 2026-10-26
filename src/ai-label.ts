@@ -405,6 +405,27 @@ export const ROSTER: Record<string, ArtistPreset> = {
     bio: "Runs her verses like a ledger: every name, every debt, every date.",
     themes: "the come-up as a business, informants, crooked lawyers, fur and funerals, trust as currency, the cost of the crown",
   },
+  "ondine-halloway": {
+    name: "Ondine Halloway", genre: "Classical",
+    sound: "solo concert grand piano and piano concertos with full orchestra, Romantic and Impressionist, singing melodies over rippling arpeggios, virtuosic cadenzas, rubato, 50-140 BPM",
+    voice: "instrumental: a Steinway concert grand in a warm hall",
+    bio: "A pianist who plays like the room is empty and the night is long.",
+    themes: "nocturnes, études, ballades, preludes and piano concertos; rain on windows, insomnia, letters never sent, the sea",
+  },
+  "aldermoor-symphony": {
+    name: "Aldermoor Symphony Orchestra", genre: "Classical",
+    sound: "full late-Romantic symphony orchestra, sweeping strings, French horns, brass chorales, woodwind solos, harp, timpani rolls, symphonies and tone poems, 40-160 BPM",
+    voice: "instrumental: eighty players in a large concert hall",
+    bio: "An orchestra from a northern town that does not exist, playing symphonies nobody wrote until now.",
+    themes: "symphonies in four movements, tone poems and overtures; storms, mountains, harvests, wars remembered, homecomings",
+  },
+  "ashgrove-ensemble": {
+    name: "The Ashgrove Ensemble", genre: "Classical",
+    sound: "chamber music for strings and woodwinds: string quartet, oboe, clarinet, flute and bassoon in quartets, quintets and serenades, Classical-era clarity to modern lyricism, 60-150 BPM",
+    voice: "instrumental: strings and woodwinds in an intimate wooden hall",
+    bio: "Seven players who trade melodies like old friends finishing each other's sentences.",
+    themes: "string quartets, clarinet quintets, wind serenades, divertimenti; gardens, conversations, country walks, dances",
+  },
 };
 
 /**
@@ -413,8 +434,8 @@ export const ROSTER: Record<string, ArtistPreset> = {
  * write a ballad. A genre without one gets the general rules only.
  */
 export interface GenreCraft {
-  /** Rapped verses (hooks may be chanted or sung) or sung throughout. */
-  delivery: "rapped" | "sung";
+  /** Rapped verses (hooks may be chanted or sung), sung throughout, or no voice at all (no words are written). */
+  delivery: "rapped" | "sung" | "instrumental";
   /** How the words are built: form, rhyme, point of view, what makes it the genre. */
   lyrics: string;
   /** What the record sounds like beyond the artist's own sound. */
@@ -503,6 +524,12 @@ const CRAFT: Record<string, GenreCraft> = {
     production: "Retro analog synths, gated reverb drums, wide stereo.",
     avoid: "acoustic instruments, trap hi-hats, modern pop vocal effects",
   },
+  classical: {
+    delivery: "instrumental",
+    lyrics: "Classical, no words: each track is a complete concert piece or movement with a real form (sonata-allegro, rondo, theme and variations, nocturne, etude, scherzo, adagio, fugue, tone poem). Titles read like a concert programme: the form, a key, and an evocative subtitle, e.g. 'Nocturne in C-sharp minor, \"Harbor Fog\"' or 'Symphony No. 1: II. Adagio'. An album is a recital or a full multi-movement work. Each style names the form, key, tempo marking (Allegro, Andante, Largo...), the instruments that lead and the emotional arc (a quiet opening, the climax, how it resolves).",
+    production: "Recorded live in a concert hall, natural acoustic reverb, wide dynamic range from pianissimo to fortissimo, real acoustic instruments only.",
+    avoid: "vocals, singing, choir words, drums, drum kit, beats, bass guitar, synthesizers, electronic sounds, pop song structure, modern cinematic trailer hits",
+  },
   "yacht-rock": {
     delivery: "sung",
     lyrics: "Yacht rock: smooth, wry adult romance, marinas and late lunches, sophisticated chords mean sophisticated words, a falsetto-ready chorus.",
@@ -537,11 +564,11 @@ export function composePrompt(artist: Pick<LabelArtist, "genre" | "sound" | "voi
   const craft = craftFor(artist.genre);
   const delivery = craft?.delivery === "rapped"
     ? "Lead vocal raps the verses in English: rhythmic, percussive flow locked to the beat, not sung; the hook is chanted or half-sung."
-    : "Sung in English.";
+    : craft?.delivery === "instrumental" ? "Purely instrumental, no voice of any kind." : "Sung in English.";
   return [
     `${artist.sound}.`,
     `${song.style}.`,
-    `Lead vocal: ${artist.voice}.`,
+    craft?.delivery === "instrumental" ? "" : `Lead vocal: ${artist.voice}.`,
     delivery,
     craft?.production ?? "",
     craft?.avoid ? `Avoid: ${craft.avoid}.` : "",
@@ -1607,7 +1634,8 @@ export class AiLabel {
     // Only a single is filmed, and only with Veo footage: a song with an older (slideshow) video is filmed when its turn comes.
     // A filmed video whose singer was never filmed (a quota or a refusal took the close-ups) is filmed again while it stays up.
     const singerless = (song: LabelSong): boolean => Boolean(this.deps.lipsync) && this.settings.lipsyncShots > 0 && (song.videoVersion ?? 1) >= FILMED && !song.singer;
-    const missing = songs.filter(({ song }) => this.wantsVeo(song) && ((song.videoVersion ?? 1) < FILMED || singerless(song)) && this.now() - (this.filmTriedAt.get(song.file) ?? 0) > 60 * 60_000);
+    // Instrumentals have no singer and no band to cast the way Veo films them: no video.
+    const missing = songs.filter(({ artist, song }) => craftFor(artist.genre)?.delivery !== "instrumental" && this.wantsVeo(song) && ((song.videoVersion ?? 1) < FILMED || singerless(song)) && this.now() - (this.filmTriedAt.get(song.file) ?? 0) > 60 * 60_000);
     // A single already on /music is filmed again before new ones: the month's budget finishes one video, not starts several.
     missing.sort((a, b) => Number((b.song.videoVersion ?? 1) >= SHOWN && Boolean(b.song.video)) - Number((a.song.videoVersion ?? 1) >= SHOWN && Boolean(a.song.video)));
     const untagged = songs.filter(({ song }) => song.video && !song.videoTagged && (song.videoVersion ?? 1) >= SHOWN);
@@ -2046,7 +2074,8 @@ export class AiLabel {
     const raw = join(album.folder, `.${randomBytes(4).toString("hex")}.raw.mp3`);
     try {
       let writer = song.made || album.writer;
-      if (!song.lyrics) {
+      const instrumental = craftFor(artist.genre)?.delivery === "instrumental";
+      if (!song.lyrics && !instrumental) {
         const written = await writeLyrics({ ...artist, cast: this.castOf(artist) }, album, song, this.deps.ask ?? askJson);
         song.lyrics = written.lyrics;
         writer = written.model;
@@ -2056,13 +2085,14 @@ export class AiLabel {
       await this.ensureCover(artist, album);
       this.log(`composing "${song.title}" (${artist.name}, ${album.title}, ${song.seconds} s, ${composer.name})`);
       const prompt = composePrompt(artist, song);
-      await composer.compose({ prompt, seconds: song.seconds, vocals: true, out: raw, lyrics: song.lyrics });
+      await composer.compose({ prompt, seconds: song.seconds, vocals: !instrumental, out: raw, ...(instrumental ? {} : { lyrics: song.lyrics }) });
       const month = this.period();
       this.usage[month] = (this.usage[month] ?? 0) + song.seconds;
       const base = songBase(song);
       const file = join(album.folder, `${base}.mp3`);
-      const lyricsFile = join(album.folder, `${base}.lyrics.txt`);
-      writeFileSync(lyricsFile, `${song.lyrics}\n`);
+      // An instrumental has no words, so no words file.
+      const lyricsFile = instrumental ? "" : join(album.folder, `${base}.lyrics.txt`);
+      if (lyricsFile) writeFileSync(lyricsFile, `${song.lyrics}\n`);
       const holder = this.settings.holder;
       const tags: Record<string, string> = {
         title: song.title,
@@ -2074,8 +2104,8 @@ export class AiLabel {
         date: String(album.year),
         publisher: holder,
         copyright: `℗ ${album.year} ${holder}`,
-        comment: `Made with AI for ${holder}: music by ${composer.name}, words by ${writer}`,
-        "lyrics-eng": song.lyrics,
+        comment: instrumental ? `Made with AI for ${holder}: music by ${composer.name}, planned by ${writer}` : `Made with AI for ${holder}: music by ${composer.name}, words by ${writer}`,
+        ...(instrumental ? {} : { "lyrics-eng": song.lyrics }),
       };
       await (this.deps.tag ?? ((from, to, values, cover) => tagFile(this.deps.ffmpeg, from, to, values, cover)))(raw, file, tags, album.cover);
       song.file = file;
@@ -2224,7 +2254,8 @@ export class AiLabel {
     const song = match ? album.songs.find((one) => one.n === Number(match[1]) && one.file) : undefined;
     if (!song) return null;
     if (match![2] === "mp4") return song.video && (song.videoVersion ?? 1) >= SHOWN ? { path: song.video, type: "video/mp4" } : null;
-    return match![2] === "mp3" ? { path: song.file, type: "audio/mpeg" } : { path: song.lyricsFile, type: "text/plain; charset=utf-8" };
+    if (match![2] === "mp3") return { path: song.file, type: "audio/mpeg" };
+    return song.lyricsFile ? { path: song.lyricsFile, type: "text/plain; charset=utf-8" } : null;
   }
 
   /** The label song at this path, for the now-playing card's Download buttons. */
