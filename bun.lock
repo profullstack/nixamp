@@ -55,7 +55,7 @@
       "name": "@nixamp/web",
       "version": "0.21.4",
       "dependencies": {
-        "@profullstack/footer": "latest",
+        "@profullstack/footer": "0.4.0",
         "@profullstack/long-string-scroller": "workspace:*",
         "@profullstack/notifications": "^0.1.4",
         "@profullstack/player": "0.16.0",
@@ -205,7 +205,7 @@
 
     "@profullstack/auth-system": ["@profullstack/auth-system@0.8.3", "", { "dependencies": { "bcryptjs": "^2.4.3", "jsonwebtoken": "^9.0.2", "uuid": "^11.1.0" }, "peerDependencies": { "@supabase/supabase-js": "^2.49.4", "mongodb": "^6.5.0", "mysql2": "^3.9.2", "pg": "^8.11.3", "pocketbase": "^0.21.1" }, "optionalPeers": ["@supabase/supabase-js", "mongodb", "mysql2", "pg", "pocketbase"] }, "sha512-goafDEaq8XDDCChfAfi8wvUxn1xMeGWXpr7XEH9czFU/eIq9PkehGRTy3d/YP2BGzO1iIxrTAb2m2eOMTMdYUA=="],
 
-    "@profullstack/footer": ["@profullstack/footer@0.3.0", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-T95BxnTLRWj0OdEZQwGQkHJCPSBs8VpDATyAIPUqomnC9IRMMvgLEFeION1HSqIvwgHgiC0vbs15ydZyFq99ew=="],
+    "@profullstack/footer": ["@profullstack/footer@0.4.0", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-EJZnMUQmWDi9Gzx6BAjogloeaPFFSSCHtHJuC9dsXiOz8M87hfn6Z+Zx9AMYWk8s6xemPrPlkXKGB3PZugkcEA=="],
 
     "@profullstack/group-call": ["@profullstack/group-call@0.1.0", "", {}, "sha512-RSXWWqP98SoTSIeiCZ1uuWlax4bZC1vBz7L2YmUHDSJ3xd+vNyvm+I7xCefQD9zhP86HrgifIJeR4f7oQ0fdAA=="],
 
