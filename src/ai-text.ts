@@ -19,6 +19,8 @@ export interface AskOptions {
   timeoutMs?: number;
   /** The longest answer, in tokens (default 1024): a song's words need more than a title does. */
   maxTokens?: number;
+  /** The OpenAI-compatible model to ask instead of NIXAMP_OPENAI_MODEL (a slower, better writer for song words). */
+  model?: string;
   fetcher?: typeof fetch;
   env?: Record<string, string | undefined>;
 }
@@ -118,7 +120,7 @@ export async function askJson(options: AskOptions): Promise<Answer> {
     // Workers AI's /ai/v1, Ollama's /v1): NIXAMP_OPENAI_URL is that base.
     const baseUrl = (aiKey("NIXAMP_OPENAI_URL", env) || "https://api.openai.com/v1").replace(/\/+$/, "");
     const official = new URL(baseUrl).host === "api.openai.com";
-    const model = aiKey("NIXAMP_OPENAI_MODEL", env) || "gpt-4.1-mini";
+    const model = options.model || aiKey("NIXAMP_OPENAI_MODEL", env) || "gpt-4.1-mini";
     const response = await send(`${baseUrl}/chat/completions`, {
       method: "POST",
       signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),

@@ -6,7 +6,7 @@ import { createServer as createHttpServer } from "node:http";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { AiLabel, cleanLyrics, closeUpTimes, writeVeoStory, fileName, planUsd, shotPlan, genreSlug, nextReset, periodOf, renderFilmedVideo, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines, VeoUnavailable } from "../src/ai-label.ts";
+import { AiLabel, cleanLyrics, closeUpTimes, composePrompt, craftFor, writeLyrics, writeVeoStory, fileName, planUsd, shotPlan, genreSlug, nextReset, periodOf, renderFilmedVideo, renderStoryVideo, renderVideo, retagVideo, ROSTER, songBase, syncLines, VeoUnavailable } from "../src/ai-label.ts";
 import { elevenLabsComposer, OutOfCredit, type Composer } from "../src/ai-radio.ts";
 import type { askJson } from "../src/ai-text.ts";
 import { Channels } from "../src/channels.ts";
@@ -940,4 +940,29 @@ test("the label over HTTP: the catalogue is public, running it is the owner's", 
     await new Promise<void>((done) => site.close(() => done()));
     rmSync(top, { recursive: true, force: true });
   }
+});
+
+test("a rapper's brief says rapped, a singer's says sung, and the genre's no-gos ride along", () => {
+  const duchess = ROSTER["duchess-ransom"]!;
+  assert.equal(duchess.genre, "Gangsta Rap");
+  assert.equal(genreSlug(duchess.genre), "gangsta-rap");
+  const rap = composePrompt(duchess, { style: "88 BPM, minor key" });
+  assert.match(rap, /raps the verses/);
+  assert.match(rap, /Avoid: singing in the verses/);
+  assert.doesNotMatch(rap, /Sung in English/);
+  assert.match(composePrompt(ROSTER["lumi-kestrel"]!, { style: "120 BPM" }), /Sung in English/);
+  assert.equal(composePrompt({ genre: "Polka", sound: "oompah band", voice: "tenor" }, { style: "fast" }), "oompah band. fast. Lead vocal: tenor. Sung in English.");
+  assert.equal(craftFor("Hip-Hop")?.delivery, "rapped");
+});
+
+test("the lyric writer is told the genre's craft and given more room for rap", async () => {
+  const asked: string[] = [];
+  const ask = (async (options: { system: string; prompt: string }) => {
+    asked.push(`${options.system}\n${options.prompt}`);
+    return { model: "fake", value: { lyrics: "[Verse 1]\nMidnight on Fifth, rain slick on the pavement\nI pull up low and patient" } };
+  }) as unknown as typeof askJson;
+  await writeLyrics(ROSTER["cutlass-deacon"]!, { title: "A", concept: "" }, { title: "B", style: "70 BPM", seconds: 120 }, ask);
+  assert.match(asked[0]!, /Genre craft \(follow it\): Rap structure/);
+  assert.match(asked[0]!, /under 1920 characters/);
+  assert.match(asked[0]!, /Never use these stock words/);
 });
