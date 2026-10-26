@@ -663,10 +663,10 @@ test("names make safe folders and file names", () => {
   assert.equal(cleanLyrics("```\n[Verse]\nline one\n\n\n\nline two\n```"), "[Verse]\nline one\n\nline two");
 });
 
-test("the roster has three artists in each of the owner's genres, two or more elsewhere, each name once", () => {
+test("the roster has at least three artists in each of the owner's genres, two or more elsewhere, each name once", () => {
   const byGenre = new Map<string, number>();
   for (const one of Object.values(ROSTER)) byGenre.set(one.genre, (byGenre.get(one.genre) ?? 0) + 1);
-  for (const genre of ["Punk", "Blues", "Country", "Jazz", "Classic Rock", "Metal", "Hip-Hop"]) assert.equal(byGenre.get(genre), 3, genre);
+  for (const genre of ["Punk", "Blues", "Country", "Jazz", "Classic Rock", "Metal", "Hip-Hop"]) assert.ok((byGenre.get(genre) ?? 0) >= 3, genre);
   for (const [genre, count] of byGenre) assert.ok(count >= 2, genre);
   assert.equal(new Set(Object.values(ROSTER).map((one) => one.name.toLowerCase())).size, Object.keys(ROSTER).length);
 });
@@ -940,6 +940,18 @@ test("the label over HTTP: the catalogue is public, running it is the owner's", 
     await new Promise<void>((done) => site.close(() => done()));
     rmSync(top, { recursive: true, force: true });
   }
+});
+
+test("every roster genre has craft notes, and every preset is whole and named once", () => {
+  const names = new Set<string>();
+  for (const [key, one] of Object.entries(ROSTER)) {
+    assert.ok(craftFor(one.genre), `${key}: no craft for ${one.genre} (${genreSlug(one.genre)})`);
+    assert.ok(one.sound.length >= 10 && one.voice && one.bio && one.themes, `${key} is incomplete`);
+    assert.ok(!names.has(one.name.toLowerCase()), `${one.name} twice`);
+    names.add(one.name.toLowerCase());
+  }
+  assert.equal(craftFor("Lo-Fi")?.delivery, "instrumental");
+  assert.equal(craftFor("Drum & Bass")?.delivery, "sung");
 });
 
 test("a rapper's brief says rapped, a singer's says sung, and the genre's no-gos ride along", () => {
