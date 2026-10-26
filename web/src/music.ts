@@ -396,9 +396,26 @@ let karaoke: { lines: SyncedLine[]; els: HTMLElement[]; words: HTMLElement[][]; 
 const audioEl = (): HTMLAudioElement => $<HTMLAudioElement>("#audio");
 const q = (station: Station): string => `t=${encodeURIComponent(station.token)}`;
 
+/** Whether the listener wants sound: a dropped stream is rejoined only then, never after Pause. */
+let wanted = false;
+/** Rejoins in a row without sound in between: the wait doubles, at most 15 s. */
+let retry = 0;
+let retryTimer = 0;
+let joinedAt = 0;
+
+/** The stream ended or broke under a listener: join it again, a little later each time. */
+function again(): void {
+  if (!wanted || !playing) return;
+  retry += 1;
+  clearTimeout(retryTimer);
+  retryTimer = window.setTimeout(() => { if (wanted) join(); }, Math.min(15_000, 1000 * 2 ** Math.min(retry, 4)));
+}
+
 /** (Re)join the live stream, under a fresh name for the clock. */
 function join(): void {
   if (!playing) return;
+  wanted = true;
+  joinedAt = Date.now();
   nonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   clockSeen = null;
   const audio = audioEl();
@@ -551,6 +568,8 @@ function wirePlayer(): void {
   const audio = audioEl();
   const stop = (): void => {
     // Live: paused is gone, and play rejoins where the station is now.
+    wanted = false;
+    clearTimeout(retryTimer);
     audio.pause();
     audio.removeAttribute("src");
     audio.load();
@@ -607,7 +626,17 @@ function wirePlayer(): void {
   follow.checked = recall("follow") !== "0";
   follow.addEventListener("change", () => remember("follow", follow.checked ? "1" : "0"));
   for (const kind of ["wheel", "touchmove"]) $("#lyrics-panel").addEventListener(kind, () => { if (follow.checked) { follow.checked = false; remember("follow", "0"); } }, { passive: true });
-  audio.addEventListener("playing", () => void askClock());
+  audio.addEventListener("playing", () => {
+    if (retry) say("Back on");
+    retry = 0;
+    void askClock();
+  });
+  // A live stream that ends or breaks (the server restarted, the phone changed
+  // networks) is joined again, unless the listener pressed Pause.
+  audio.addEventListener("error", () => { if (audio.getAttribute("src")) again(); });
+  audio.addEventListener("ended", () => again());
+  // A sleeping station takes a few seconds to wake and send its first bytes; that is not a stall.
+  audio.addEventListener("stalled", () => { if (!audio.paused && audio.readyState < 3 && Date.now() - joinedAt > 12_000) again(); });
   setInterval(() => void askClock(), 2000);
   setInterval(tick, 100);
   // A server without /clock (older) still gets its now-playing card refreshed.
