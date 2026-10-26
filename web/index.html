@@ -330,6 +330,9 @@
                    placeholder="you@example.com" aria-label="Email" data-i18n-aria-label="Email" />
             <input id="account-password" type="password" autocomplete="current-password"
                    placeholder="password" data-i18n-placeholder="password" aria-label="Password" data-i18n-aria-label="Password" />
+            <!-- Name, company, title and LinkedIn (@profullstack/profile), only
+                 while creating an account. Drawn by app.ts. -->
+            <div id="account-profile" class="account-profile" hidden></div>
             <button type="submit" class="button" id="account-submit" data-i18n="Sign in">Sign in</button>
             <button id="account-toggle" type="button" class="ghost" data-i18n="Create one">Create one</button>
             <!-- The recovery page nixamp.com already serves; a password that
@@ -355,6 +358,13 @@
             <button type="submit" class="button" data-i18n="Save">Save</button>
           </form>
           <p class="hint" id="persona-note" hidden></p>
+          <!-- The same fields as sign-up, for whatever was skipped there.
+               Private to the account, unlike the handle above. -->
+          <form id="contact-form" class="picker" hidden>
+            <div id="contact-fields" class="account-profile"></div>
+            <button type="submit" class="button" data-i18n="Save">Save</button>
+          </form>
+          <p class="hint" id="contact-note" hidden></p>
           <!-- The sites that hold a token for this account. Nothing is shown
                until there is something connected, so an account with none
                never sees an empty list asking to be understood. -->

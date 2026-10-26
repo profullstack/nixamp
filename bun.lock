@@ -9,6 +9,7 @@
         "@profullstack/hqtui": "^0.5.0",
         "@profullstack/live-translate": "^0.3.0",
         "@profullstack/notifications": "^0.1.0",
+        "@profullstack/profile": "0.1.3",
         "@profullstack/synconfig": "^0.1.2",
         "@profullstack/throttle": "^0.3.3",
         "@profullstack/x402-gateway": "^0.11.0",
@@ -57,6 +58,7 @@
         "@profullstack/long-string-scroller": "workspace:*",
         "@profullstack/notifications": "^0.1.0",
         "@profullstack/player": "0.15.0",
+        "@profullstack/profile": "0.1.3",
         "fastenhancer-web": "^0.1.1",
         "fft.js": "4.0.4",
       },
@@ -211,6 +213,8 @@
     "@profullstack/notifications": ["@profullstack/notifications@0.1.0", "", {}, "sha512-17jiBCRiZVDcIyWnWKYr5E2eVog/1iHgXaruGbmlw7j7Ob4zd6oOqGjh8BP8wm13iFwikczYObQwSrGadBdnGw=="],
 
     "@profullstack/player": ["@profullstack/player@0.15.0", "", { "dependencies": { "hls.js": "^1.7.1", "mpegts.js": "^1.8.2" }, "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-vcOuLZ59jpHzTKAGbd1hjdhjYaNxKoAq5D8RCQszVYRYZEwobJCn/LJy1CeZzaBDfVBCRziWR2lwkWlYHVVFCg=="],
+
+    "@profullstack/profile": ["@profullstack/profile@0.1.3", "", { "peerDependencies": { "@libsql/client": ">=0.6.0", "postgres": "^3.4.0", "react": ">=18" }, "optionalPeers": ["@libsql/client", "postgres", "react"], "bin": { "profile": "src/cli.js" } }, "sha512-P+VdOqCnNGWa5W8EGLU/ls3hwovRcY8bOBOhWZp3h23sW2LDMFyeWF/pUfO+iiYH3E2Tie2/9xyUnpO4ctwSHw=="],
 
     "@profullstack/synconfig": ["@profullstack/synconfig@0.1.2", "", {}, "sha512-t1Pdms+k/+A7tgFCAcNx8Dry0kwboPEue9Pw2pbn/chXSMfp1dxrcFz672zWkDgvcB7YBmYpIjnvW4NkNkE4Rg=="],
 

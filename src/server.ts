@@ -47,6 +47,8 @@ import { anonymousHandle, Handles } from "./handles.ts";
 import { OpenDirs } from "./opendirs.ts";
 import { Servers } from "./servers.ts";
 import { AccountProfiles, hostCard, PHOTO_LIMIT } from "./profiles.ts";
+import { createProfileHandlers, type ProfileStore, saveSignupProfile, validateProfile } from "@profullstack/profile";
+import { SIGNUP_PROFILE_FIELDS, signupProfiles } from "./signup-profiles.ts";
 import { NixampLinks, nixampExchange } from "./nixamp-link.ts";
 import { handleNixampLinkApi, nixampLinkPath } from "./nixamp-link-api.ts";
 import { DeviceGrants } from "./device.ts";
@@ -1916,6 +1918,8 @@ export interface HandlerOptions {
   handles?: Handles;
   /** The account's card: a name, a homepage, a photo, a line. One table, read by every site here. */
   accountProfiles?: AccountProfiles;
+  /** Name, company, title and LinkedIn from the sign-up form (@profullstack/profile). */
+  signupProfiles?: ProfileStore;
   /** nixamp accounts connected to accounts here, where this site is a client of nixamp.com. */
   links?: NixampLinks;
   /** Open directories people have found, which anyone may read. */
@@ -3945,9 +3949,29 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         }
       }
 
+      // The web form sends the profile fields, and then first and last name are
+      // required; a terminal or an older app that sends none is not asked.
+      const asked = signingUp && options.signupProfiles
+        && SIGNUP_PROFILE_FIELDS.some((field) => field in (body as Record<string, unknown>));
+      const profile = asked ? validateProfile(body as Record<string, unknown>) : null;
+      if (profile && !profile.ok) {
+        json(response, 400, { error: Object.values(profile.errors)[0] ?? "some fields need fixing", errors: profile.errors });
+        return;
+      }
+
       const result = signingUp
         ? await accounts.signUp(body.email, body.password)
         : await accounts.signIn(body.email, body.password);
+
+      // Kept once the account exists. A profile that does not save is filled
+      // in later from the Account panel, never a sign-up that failed.
+      if (profile && result.ok && result.account && options.signupProfiles) {
+        try {
+          await saveSignupProfile(options.signupProfiles, result.account.id, profile.profile, { email: result.account.email });
+        } catch (error) {
+          console.error("nixamp: sign-up profile not saved:", (error as Error).message);
+        }
+      }
 
       // A handle asked for at sign-up, or one nobody has to think about. Never
       // derived from the address: turning anthony@… into "anthony" is the leak
@@ -4855,6 +4879,37 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     //
     // A name, a homepage, a photo and a line, said once. A class is made from
     // it, a settings page edits it, and an OpenProfile.md fills it in one move.
+    // The account's own profile fields (name, company, title, LinkedIn), from
+    // the shared @profullstack/profile handlers. Under the host card's path
+    // because /api/v1/me/profile is already that card, which strangers see.
+    if (path === "/api/v1/me/profile/fields" && options.signupProfiles && options.accounts) {
+      const accounts = options.accounts;
+      const handlers = createProfileHandlers({
+        store: options.signupProfiles,
+        getUser: () => accounts.whoIs(tokenFrom(request.headers)),
+      });
+      const method = request.method ?? "GET";
+      const handle = method === "GET" ? handlers.GET : method === "PUT" ? handlers.PUT : method === "PATCH" ? handlers.PATCH : null;
+      if (handle === null) {
+        json(response, 405, { error: "GET, PUT or PATCH" });
+        return;
+      }
+      const bare = requestFor(request);
+      bare.headers.delete("content-length");
+      bare.headers.delete("transfer-encoding");
+      let body: string | undefined;
+      if (method !== "GET") {
+        try {
+          body = await readBody(request);
+        } catch {
+          json(response, 413, { error: "too large" });
+          return;
+        }
+      }
+      await answerWith(response, await handle(new Request(bare.url, { method, headers: bare.headers, body })));
+      return;
+    }
+
     if ((path === "/api/v1/me/profile" || path.startsWith("/api/v1/me/profile/")) && options.accountProfiles && options.accounts) {
       const profiles = options.accountProfiles;
       const who = await options.accounts.whoIs(tokenFrom(request.headers));
@@ -8897,6 +8952,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
                 handles: new Handles(pool),
                 openDirs: new OpenDirs(pool),
                 accountProfiles: new AccountProfiles(pool),
+                signupProfiles: signupProfiles(pool),
                 // The school's side of "Connect nixamp": tokens from nixamp.com,
                 // kept against the school account. The issuer is this same
                 // program in production, reached over HTTP like any client.

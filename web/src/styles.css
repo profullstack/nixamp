@@ -1003,6 +1003,16 @@ button.golive:disabled { opacity: 0.5; cursor: progress; }
 
 .picker { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
+/* The sign-up profile fields (@profullstack/profile): a full-width block of
+   labelled boxes inside the account pickers. */
+.account-profile { flex-basis: 100%; }
+.account-profile[hidden] { display: none; }
+.pfs-profile { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 8px; }
+.pfs-profile__row label { display: block; color: var(--muted); margin-bottom: 4px; }
+.pfs-profile__row input { width: 100%; box-sizing: border-box; }
+.pfs-profile__optional { opacity: 0.7; }
+.pfs-profile__error { color: var(--muted); margin: 4px 0 0; }
+
 #party-form label { flex-basis: 100%; color: var(--muted); }
 #party-code { flex: 1 1 12ch; min-width: 0; }
 
