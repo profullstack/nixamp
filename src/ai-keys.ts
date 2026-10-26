@@ -14,6 +14,8 @@ export const AI_KEY_NAMES = [
   "ELEVENLABS_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
   // Any OpenAI-compatible endpoint in OpenAI's place (Cloudflare Workers AI, Ollama, ...) and its model.
   "NIXAMP_OPENAI_URL", "NIXAMP_OPENAI_MODEL",
+  // The label's songwriter on that endpoint (album plans, lyrics, new artists), e.g. @cf/openai/gpt-oss-120b; NIXAMP_OPENAI_MODEL when unset.
+  "NIXAMP_LABEL_MODEL",
   // Which ElevenLabs music model composes: music_v1, music_v2 or music_v2_5 (the default).
   "NIXAMP_MUSIC_MODEL",
   // nichedb.dev's key for publishing our own songs' words (lyrics-publish.ts).

@@ -384,7 +384,169 @@ export const ROSTER: Record<string, ArtistPreset> = {
     bio: "Glitter on the outside, journal entries on the inside.",
     themes: "first nights out, confidence, crushes, friendship, dancing it off",
   },
+  "lowrider-gospel": {
+    name: "Lowrider Gospel", genre: "Gangsta Rap",
+    sound: "West Coast G-funk, whining portamento synth lead, rubbery Moog bassline, talkbox hook, laid-back swung drums with fat claps, sun-bleached Rhodes, 90-96 BPM",
+    voice: "unhurried male baritone with a slow West Coast drawl, rapping a hair behind the beat, cool even when the story turns violent",
+    bio: "Raps like he is giving you directions to a block you should not visit after dark.",
+    themes: "cruising on Sundays, set loyalty, cousins doing time, the cop car in the mirror, money that came too fast, mothers who pray",
+  },
+  "cutlass-deacon": {
+    name: "Cutlass Deacon", genre: "Gangsta Rap",
+    sound: "dark Southern street rap, Memphis horror-movie piano loop, cowbell, rattling TR-808 hats in triplets, distorted sub bass, chanted hooks, 68-75 BPM half-time",
+    voice: "menacing low male voice, hushed and close to the mic, rapid triplet flow that snaps into chanted call-and-response hooks",
+    bio: "Grew up between a church pew and a trap house and still quotes both.",
+    themes: "paranoia, debts collected, a city that eats its young, faith and guilt, the price of loyalty, never sleeping",
+  },
+  "duchess-ransom": {
+    name: "Duchess Ransom", genre: "Gangsta Rap",
+    sound: "East Coast mafioso rap, cinematic orchestral sample with strings and brass stabs, hard dusty boom-bap drums, crackling vinyl, sparse menacing piano, 86-90 BPM",
+    voice: "cold, precise female MC in a low register, dense multisyllabic rhymes delivered conversationally, never raises her voice",
+    bio: "Runs her verses like a ledger: every name, every debt, every date.",
+    themes: "the come-up as a business, informants, crooked lawyers, fur and funerals, trust as currency, the cost of the crown",
+  },
 };
+
+/**
+ * How a genre is written and performed: the album plan, the words and the
+ * music model's brief all read it, so a rapper raps and a punk band does not
+ * write a ballad. A genre without one gets the general rules only.
+ */
+export interface GenreCraft {
+  /** Rapped verses (hooks may be chanted or sung) or sung throughout. */
+  delivery: "rapped" | "sung";
+  /** How the words are built: form, rhyme, point of view, what makes it the genre. */
+  lyrics: string;
+  /** What the record sounds like beyond the artist's own sound. */
+  production: string;
+  /** What the music model is told to leave out. */
+  avoid: string;
+}
+
+const RAP_FORM = [
+  "Rap structure: [Intro] of 1-2 ad-lib lines, [Verse 1] of 12-16 bars (one bar per line), [Hook] of 4 lines, [Verse 2] of 12-16 bars, [Hook] again, optional [Verse 3] or [Outro].",
+  "No pre-chorus, no bridge. Every verse line is a full bar of 9-15 syllables with internal and multisyllabic rhymes (slant rhymes welcome) chained across lines, not just end rhymes on simple words.",
+  "Verses tell a story in first person with specific detail: a street, a car model year, a sum of money, a time of night, what someone said. Punchlines and wordplay land at the end of every 4 bars.",
+  "The hook is short, chantable and rhythmic, repeated phrases, not a sung pop melody.",
+].join(" ");
+
+const CRAFT: Record<string, GenreCraft> = {
+  "gangsta-rap": {
+    delivery: "rapped",
+    lyrics: `${RAP_FORM} Gangsta rap is street reportage: hard, cinematic first-person crime stories with consequences (arrests, funerals, betrayal, paranoia), bravado earned by detail, slang that fits the region, dark humour. Mild profanity is fine; no slurs, no real names of people, gangs or places' crews. Never preachy, never a happy ending tied in a bow.`,
+    production: "Hard-hitting mix, loud punchy drums and heavy bass up front, the rap vocal dry and on top of the beat, ad-libs and hype doubles at line ends.",
+    avoid: "singing in the verses, autotune pop melodies, acoustic guitar, EDM drops, uplifting choirs, cheerful major-key pop",
+  },
+  "hip-hop": {
+    delivery: "rapped",
+    lyrics: `${RAP_FORM} Hip-hop with real bars: confident, witty, specific, a clear point of view, no motivational-poster lines.`,
+    production: "Punchy drums and bass up front, the rap vocal dry and clear on top, ad-libs at line ends.",
+    avoid: "singing in the verses, cheesy pop melodies, acoustic strumming, EDM drops",
+  },
+  punk: {
+    delivery: "sung",
+    lyrics: "Punk: short, fast, angry and funny. Two-line or four-line verses that spit a specific grievance (a landlord, a boss, a bus that never comes), a shout-along chorus of 2-4 words repeated, no bridge or a 2-line breakdown. Blunt plain words, no poetry-class metaphors.",
+    production: "Raw live-room energy, loud distorted guitars, shouted gang vocals on the chorus.",
+    avoid: "polished pop vocals, synths, slow ballad sections, autotune",
+  },
+  blues: {
+    delivery: "sung",
+    lyrics: "Blues: AAB verses (a line, the same line again with a small twist, then a line that answers it), 3-5 verses, call-and-response with the guitar, earthy concrete detail (rent, rain, the 5:15 train, a woman or man who left), wry humour inside the hurt.",
+    production: "Live band in a small room, expressive guitar fills between the vocal lines.",
+    avoid: "pop chorus hooks, synths, autotune, polished modern production",
+  },
+  country: {
+    delivery: "sung",
+    lyrics: "Country: a story song with a twist in the last chorus, names, places and objects (a pawned guitar, a county road number, a diner waitress), a turn of phrase in the hook that means two things. Plain-spoken, conversational lines.",
+    production: "Warm organic band, upfront vocal with natural twang.",
+    avoid: "EDM drums, trap hi-hats, autotune, generic stadium pop",
+  },
+  jazz: {
+    delivery: "sung",
+    lyrics: "Jazz standard form: AABA, 32 bars, sophisticated adult wit, internal rhymes, a clever title phrase turned three ways, late-night city detail.",
+    production: "Acoustic small group, natural room sound, solos between choruses.",
+    avoid: "pop drums, synths, autotune, rap",
+  },
+  metal: {
+    delivery: "sung",
+    lyrics: "Metal: dark, mythic or apocalyptic imagery made concrete, short punchy lines that fit riffs, a chanted chorus, a breakdown section of 2-4 lines. No self-help language.",
+    production: "Crushing tight guitars, powerful drums, huge low end.",
+    avoid: "pop vocals, acoustic softness, synth-pop, rap",
+  },
+  "classic-rock": {
+    delivery: "sung",
+    lyrics: "Classic rock: swaggering, sensual or road-worn stories, a riff-shaped chorus with a memorable title phrase, characters and places, a little danger.",
+    production: "Analog 1970s band sound, warm tube amps, live drums.",
+    avoid: "modern pop gloss, trap drums, autotune, synths",
+  },
+  rock: {
+    delivery: "sung",
+    lyrics: "Rock: concrete images and a story, a chorus built on a strong title phrase, verses that move the story on.",
+    production: "Big live band, guitars and drums up front.",
+    avoid: "autotune, trap drums, EDM drops",
+  },
+  pop: {
+    delivery: "sung",
+    lyrics: "Pop: a single sharp title idea, conversational verses with specific moments (a text message, a dress, a parking lot at 2 a.m.), a chorus that is instantly singable and repeats the title.",
+    production: "Polished modern mix, vocals bright and forward.",
+    avoid: "muddy lo-fi, out-of-tune vocals, rap verses",
+  },
+  rnb: {
+    delivery: "sung",
+    lyrics: "R&B: intimate, sensual, adult, specific (a hotel key, a voicemail, a late shift), melismatic hook phrases, a pre-chorus that builds tension.",
+    production: "Smooth warm low end, lush stacked harmonies, ad-libs.",
+    avoid: "rock guitars, EDM drops, stiff robotic vocals",
+  },
+  synthwave: {
+    delivery: "sung",
+    lyrics: "Synthwave: cinematic, nocturnal, a movie told in images, short evocative lines.",
+    production: "Retro analog synths, gated reverb drums, wide stereo.",
+    avoid: "acoustic instruments, trap hi-hats, modern pop vocal effects",
+  },
+  "yacht-rock": {
+    delivery: "sung",
+    lyrics: "Yacht rock: smooth, wry adult romance, marinas and late lunches, sophisticated chords mean sophisticated words, a falsetto-ready chorus.",
+    production: "Glossy late-1970s West Coast studio sound, Rhodes, clean guitar, tight session drums.",
+    avoid: "distortion, rap, EDM, trap drums",
+  },
+};
+
+/** The genre's craft notes, or none for a genre the label has no notes on. */
+export function craftFor(genre: string): GenreCraft | undefined {
+  return CRAFT[genreSlug(genre)];
+}
+
+/**
+ * How the label's songwriter is asked: NIXAMP_LABEL_MODEL when set (a reasoning
+ * model like gpt-oss-120b writes far better words than the quick default, but
+ * thinks first, so it gets room and time).
+ */
+function writer(): { model?: string; maxTokens: number; timeoutMs: number } {
+  const model = aiKey("NIXAMP_LABEL_MODEL");
+  return { ...(model ? { model } : {}), maxTokens: 9000, timeoutMs: 240_000 };
+}
+
+/** What every lyric avoids: the stock lines models reach for first. */
+const CLICHES = "neon, fire inside, rise above, shine so bright, heart of gold, chains, echoes, shadows, the night is young, we'll never back down, stand tall, break free, feel alive, against all odds, journey, destiny, soul on fire, light the way, never give up";
+
+/**
+ * The music model's brief for one song: the sound, the song's own style, the
+ * voice, how it is delivered and what to leave out.
+ */
+export function composePrompt(artist: Pick<LabelArtist, "genre" | "sound" | "voice">, song: Pick<LabelSong, "style">): string {
+  const craft = craftFor(artist.genre);
+  const delivery = craft?.delivery === "rapped"
+    ? "Lead vocal raps the verses in English: rhythmic, percussive flow locked to the beat, not sung; the hook is chanted or half-sung."
+    : "Sung in English.";
+  return [
+    `${artist.sound}.`,
+    `${song.style}.`,
+    `Lead vocal: ${artist.voice}.`,
+    delivery,
+    craft?.production ?? "",
+    craft?.avoid ? `Avoid: ${craft.avoid}.` : "",
+  ].filter(Boolean).join(" ").slice(0, 1500);
+}
 
 export const DEFAULTS: Omit<LabelSettings, "pausedReason"> = {
   holder: "Profullstack, Inc.",
@@ -451,13 +613,17 @@ const PLAN_SYSTEM = [
   "Plan one album. Answer as JSON: {\"title\": \"1-6 words\", \"concept\": \"what the album is about, at most 300 characters\",",
   "\"songs\": [{\"title\": \"1-6 words\", \"style\": \"the production brief for this song, at most 300 characters: tempo in BPM, mood, key or mode, featured instruments, arrangement\"}]}.",
   "Vary tempo, mood and arrangement across the running order, within the artist's sound; open strong, end memorable.",
+  "Titles are specific and surprising (an object, a place, a phrase someone says), never motivational slogans or abstract words like Rise, Empowered, Shine, Journey.",
+  "Each song's style names its own story in a few words (who, where, what happens) so no two songs are about the same thing.",
 ].join(" ");
 
 const LYRICS_SYSTEM = [
-  "You write original English song lyrics for an AI singer. Never quote or imitate an existing song and never name a real artist.",
-  "Put each section tag on its own line: [Intro], [Verse 1], [Pre-Chorus], [Chorus], [Verse 2], [Bridge], [Outro].",
-  "Use two verses of four lines, a four-line chorus sung two or three times, a pre-chorus of two lines and a bridge of two to four lines; vivid, specific, singable lines that rhyme where it sounds natural. Never just one line under a section.",
-  "Only the words that are sung, no stage directions or notes. Answer as JSON: {\"lyrics\": \"the lyrics, lines separated by \\n\"}.",
+  "You are a professional songwriter writing original English lyrics for an AI performer. Never quote or imitate an existing song and never name a real artist.",
+  "Write like a working pro, not a greeting card: concrete nouns, sensory detail, a point of view, a story that moves, lines a real artist would be proud of. Show, never tell how anyone feels.",
+  `Never use these stock words or phrases: ${CLICHES}. No rhyming a word with itself, no filler like "oh yeah" to finish a line.`,
+  "Put each section tag on its own line, e.g. [Intro], [Verse 1], [Pre-Chorus], [Chorus], [Hook], [Verse 2], [Bridge], [Outro]. Never just one line under a section.",
+  "Follow the genre's craft notes when given; without them: two verses of four to eight lines, a pre-chorus of two lines, a four-line chorus sung two or three times, a bridge of two to four lines.",
+  "Only the words that are performed, no stage directions or notes. Answer as JSON: {\"lyrics\": \"the lyrics, lines separated by \\n\"}.",
 ].join(" ");
 
 export async function planAlbum(
@@ -476,11 +642,11 @@ export async function planAlbum(
       artist.bio ? `Who they are: ${artist.bio}` : "",
       artist.themes ? `What they sing about: ${artist.themes}` : "",
       artist.cast ? `The band, as they are (write for these people): ${artist.cast}` : "",
+      craftFor(artist.genre) ? `Genre craft: ${craftFor(artist.genre)!.lyrics}` : "",
       before.length ? `Albums already out (do not reuse their titles or song titles; take the story somewhere new): ${before.join(" | ")}` : "This is the artist's debut album.",
       `The album has exactly ${songs} songs.`,
     ].filter(Boolean).join("\n"),
-    maxTokens: 2048,
-    timeoutMs: 90_000,
+    ...writer(),
   });
   const title = clean(answer.value["title"], 80).replace(/"/g, "");
   const concept = clean(answer.value["concept"], 400);
@@ -506,8 +672,7 @@ export async function inventArtist(genre: string, taken: string[], ask: typeof a
   const answer = await ask({
     system: ARTIST_SYSTEM,
     prompt: `Genre: ${genre}\nAlready on the label (do not reuse or echo these names or sounds): ${taken.slice(-40).join(", ") || "nobody yet"}`,
-    maxTokens: 600,
-    timeoutMs: 60_000,
+    ...writer(),
   });
   const name = clean(answer.value["name"], 60).replace(/"/g, "");
   const sound = clean(answer.value["sound"], 400);
@@ -522,6 +687,7 @@ export async function writeLyrics(
   song: Pick<LabelSong, "title" | "style" | "seconds">,
   ask: typeof askJson = askJson,
 ): Promise<{ lyrics: string; model: string }> {
+  const craft = craftFor(artist.genre);
   const answer = await ask({
     system: LYRICS_SYSTEM,
     prompt: [
@@ -530,10 +696,10 @@ export async function writeLyrics(
       artist.cast ? `Who sings and plays it (their voice and personality shape the words): ${artist.cast}` : "",
       `Album: "${album.title}"${album.concept ? `: ${album.concept}` : ""}`,
       `Song: "${song.title}": ${song.style}`,
-      `The song lasts about ${song.seconds} seconds: keep the words under ${Math.max(600, Math.round(song.seconds * 10))} characters.`,
+      craft ? `Genre craft (follow it): ${craft.lyrics}` : "",
+      `The song lasts about ${song.seconds} seconds: keep the words under ${Math.max(600, Math.round(song.seconds * (craft?.delivery === "rapped" ? 16 : 10)))} characters.`,
     ].filter(Boolean).join("\n"),
-    maxTokens: 1500,
-    timeoutMs: 90_000,
+    ...writer(),
   });
   const lyrics = cleanLyrics(String(answer.value["lyrics"] ?? ""));
   if (lyrics.replace(/\[[^\]]*\]/g, "").trim().length < 40) throw new Error("the model wrote no lyrics");
@@ -1889,7 +2055,7 @@ export class AiLabel {
       }
       await this.ensureCover(artist, album);
       this.log(`composing "${song.title}" (${artist.name}, ${album.title}, ${song.seconds} s, ${composer.name})`);
-      const prompt = `${artist.sound}. ${song.style}. Lead vocal: ${artist.voice}. Sung in English.`.slice(0, 1500);
+      const prompt = composePrompt(artist, song);
       await composer.compose({ prompt, seconds: song.seconds, vocals: true, out: raw, lyrics: song.lyrics });
       const month = this.period();
       this.usage[month] = (this.usage[month] ?? 0) + song.seconds;
