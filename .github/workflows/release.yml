@@ -39,8 +39,18 @@ jobs:
       - run: bun run build
       - run: bun run web:build
       - run: bun run backtoschool:build
+      # apt on the runner has hung for 20+ minutes (a held dpkg lock or a slow
+      # mirror): each try is time-boxed and tried again, the step itself capped.
       - name: Install media test tools
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        timeout-minutes: 12
+        run: |
+          for try in 1 2 3; do
+            sudo timeout 180 apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60 update \
+              && sudo timeout 300 apt-get -o DPkg::Lock::Timeout=60 install -y --no-install-recommends ffmpeg \
+              && break
+            echo "apt try $try did not finish; trying again"; sleep 10
+          done
+          ffmpeg -version | head -1
       - run: bun test test web/test
       # Prove the OpenStream envelope on the build we are about to ship, and
       # gate the release on it: the command exits non-zero if any codec that

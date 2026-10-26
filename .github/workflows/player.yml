@@ -35,8 +35,18 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      # apt on the runner has hung for 20+ minutes (a held dpkg lock or a slow
+      # mirror): each try is time-boxed and tried again, the step itself capped.
       - name: Install media test tools
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        timeout-minutes: 12
+        run: |
+          for try in 1 2 3; do
+            sudo timeout 180 apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60 update \
+              && sudo timeout 300 apt-get -o DPkg::Lock::Timeout=60 install -y --no-install-recommends ffmpeg \
+              && break
+            echo "apt try $try did not finish; trying again"; sleep 10
+          done
+          ffmpeg -version | head -1
       - run: bun test test/playlist-stream.test.ts
       - run: bun test test/i18n.test.ts web/test/player.test.ts web/test/web.test.ts web/test/accessibility.test.ts
       - run: bun run web:build
