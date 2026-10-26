@@ -50,6 +50,7 @@ import { isMatchupName } from "../../src/matchup.ts";
 
 declare const __NIXAMP_VERSION__: string;
 import { attachSource } from "@profullstack/player";
+import { renderProfileFields } from "@profullstack/profile";
 import { attachLongStringScroller } from "../../packages/long-string-scroller/src/index.ts";
 
 export const BAND_COUNT = 24;
@@ -88,6 +89,17 @@ const DIRECTORY_EVERY_MS = 10_000;
 let jingled = false;
 
 type Mode = "local" | "remote";
+
+/** The sign-up profile fields (@profullstack/profile); the form has its own email box. */
+const PROFILE_FIELDS = ["first_name", "last_name", "company_domain", "job_title", "linkedin_url"] as const;
+function profileValues(form: HTMLFormElement): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const name of PROFILE_FIELDS) {
+    const input = form.elements.namedItem(name);
+    if (input instanceof HTMLInputElement) values[name] = input.value.trim();
+  }
+  return values;
+}
 
 function need<T extends Element>(id: string): T {
   const element = document.getElementById(id);
@@ -217,6 +229,10 @@ export function start(): void {
     personaVoice: need<HTMLSelectElement>("persona-voice"),
     personaProfile: need<HTMLInputElement>("persona-profile"),
     personaNote: need<HTMLParagraphElement>("persona-note"),
+    accountProfile: need<HTMLDivElement>("account-profile"),
+    contactForm: need<HTMLFormElement>("contact-form"),
+    contactFields: need<HTMLDivElement>("contact-fields"),
+    contactNote: need<HTMLParagraphElement>("contact-note"),
     adminPanel: need<HTMLElement>("admin-panel"),
     adminNote: need<HTMLParagraphElement>("admin-note"),
     adminSaid: need<HTMLParagraphElement>("admin-said"),
@@ -327,6 +343,8 @@ export function start(): void {
     appVersion: need<HTMLSpanElement>("app-version"),
   };
   dom.appVersion.textContent = `nixamp ${__NIXAMP_VERSION__}`;
+  dom.accountProfile.innerHTML = renderProfileFields({ fields: [...PROFILE_FIELDS], idPrefix: "account-" });
+  dom.contactFields.innerHTML = renderProfileFields({ fields: [...PROFILE_FIELDS], idPrefix: "contact-" });
   /**
    * The icons, as inline SVG rather than glyphs. A link or copy character
    * is an empty box in most monospace faces, which is what the icons were
@@ -4538,6 +4556,43 @@ export function start(): void {
   // The handle on every line, the voice a line is read in when somebody is
   // on the phone in the room, and the OpenProfile that voice may be read
   // from (its Voice, Gender or Pronouns). Kept at nixamp.com on the account.
+  async function loadContact(): Promise<void> {
+    try {
+      const answer = await fetch(`${trollboxSite}/api/v1/me/profile/fields`);
+      const body = (await answer.json().catch(() => ({}))) as { profile?: Record<string, string | null>; error?: string };
+      if (!answer.ok) {
+        dom.contactNote.textContent = body.error ?? "Could not read your details.";
+        return;
+      }
+      for (const name of PROFILE_FIELDS) {
+        const input = dom.contactForm.elements.namedItem(name);
+        if (input instanceof HTMLInputElement) input.value = body.profile?.[name] ?? "";
+      }
+      dom.contactNote.textContent = "Your name and work details. Only you see these.";
+    } catch {
+      dom.contactNote.textContent = "Could not reach nixamp.com for your details.";
+    }
+  }
+  dom.contactForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    dom.contactNote.textContent = "Saving…";
+    void (async () => {
+      try {
+        const answer = await fetch(`${trollboxSite}/api/v1/me/profile/fields`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(profileValues(dom.contactForm)),
+        });
+        const body = (await answer.json().catch(() => ({}))) as { errors?: Record<string, string>; error?: string };
+        dom.contactNote.textContent = answer.ok
+          ? "Saved."
+          : Object.values(body.errors ?? {})[0] ?? body.error ?? "that did not save";
+      } catch {
+        dom.contactNote.textContent = "Could not reach nixamp.com.";
+      }
+    })();
+  });
+
   async function loadPersona(): Promise<void> {
     try {
       const answer = await fetch(`${trollboxSite}/api/v1/me/handle`);
@@ -6038,6 +6093,14 @@ export function start(): void {
     dom.personaForm.hidden = !signedIn;
     dom.personaNote.hidden = !signedIn;
     if (signedIn) void loadPersona();
+    // Asked for only while creating; disabled otherwise so its required boxes
+    // never stand in the way of signing in.
+    dom.accountProfile.hidden = signedIn || !creating;
+    const signupFields = dom.accountProfile.querySelector("fieldset");
+    if (signupFields) signupFields.disabled = signedIn || !creating;
+    dom.contactForm.hidden = !signedIn;
+    dom.contactNote.hidden = !signedIn;
+    if (signedIn) void loadContact();
     dom.accountNote.textContent = signedIn
       ? `Signed in as ${email}.`
       : creating
@@ -6248,7 +6311,7 @@ export function start(): void {
         const answer = await fetch(`/api/v1/auth/${creating ? "signup" : "login"}`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email, password }),
+          body: JSON.stringify({ email, password, ...(creating ? profileValues(dom.accountForm) : {}) }),
         });
         const body = (await answer.json()) as {
           account?: { email?: string; id?: string };
