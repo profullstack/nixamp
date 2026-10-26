@@ -2199,6 +2199,7 @@ export class AiLabel {
   private planning = new Set<string>();
   private covering = new Map<string, Promise<void>>();
   private filming: Promise<number> | null = null;
+  private timing: Promise<void> | null = null;
   /** Songs whose video failed since this server started. */
   private videoFailed = new Set<string>();
   /** Songs whose words were already sent to the aligner since this server started. */
@@ -2476,11 +2477,26 @@ export class AiLabel {
 
   startSchedule(everyMs = 5 * 60_000): void {
     if (this.timer) return;
-    this.timer = setInterval(() => { void this.tick(); void this.videos(); }, everyMs);
+    this.timer = setInterval(() => { void this.tick(); void this.videos(); void this.timeWords(); }, everyMs);
     this.timer.unref?.();
     void this.tick();
-    // Profiles first (quick), so videos made after cast the right people.
-    void this.profiles().finally(() => void this.videos());
+    // Side by side: a single about to be filmed makes its own artist's profile first (filmPass),
+    // so a roster of new artists being profiled does not hold every video up.
+    void this.profiles();
+    void this.videos();
+    void this.timeWords();
+  }
+
+  /** Every released song's words timed for the karaoke, one at a time, apart from filming. */
+  timeWords(): Promise<void> {
+    this.timing ??= (async () => {
+      for (const artist of this.list()) {
+        for (const album of artist.albums) {
+          for (const song of album.songs) await this.sync(artist, album, song);
+        }
+      }
+    })().finally(() => { this.timing = null; });
+    return this.timing;
   }
 
   /**
@@ -2537,12 +2553,7 @@ export class AiLabel {
   }
 
   private async filmPass(): Promise<number> {
-    // Words timed first: quick, and what the station page's karaoke needs.
-    for (const artist of this.list()) {
-      for (const album of artist.albums) {
-        for (const song of album.songs) await this.sync(artist, album, song);
-      }
-    }
+    // The rest of the karaoke timing runs on its own (timeWords); a single's words are timed just before it is filmed.
     const songs = this.list().flatMap((artist) => artist.albums
       .filter((album) => album.cover || album.coverTried)
       .flatMap((album) => album.songs.filter((song) => song.file && !this.videoFailed.has(song.file)).map((song) => ({ artist, album, song }))));
@@ -2583,6 +2594,9 @@ export class AiLabel {
       const partial = join(album.folder, `.${randomBytes(4).toString("hex")}.video.mp4`);
       const scenes = join(album.folder, `.scenes-${song.n}-${randomBytes(3).toString("hex")}`);
       try {
+        // Its words timed (where the singer's close-ups go) and its people known (who is cast), now, not after everybody else's.
+        await this.sync(artist, album, song);
+        if (!(artist.members ?? []).length) await this.ensureProfile(artist).catch((error: unknown) => this.log(`no profile for ${artist.name}: ${(error as Error).message}`));
         const filmed = await this.filmSong(artist, album, song, scenes, partial, upgrade);
         song.videoVersion = filmed.version;
         if (filmed.singer) song.singer = filmed.singer;
