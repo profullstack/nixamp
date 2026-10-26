@@ -22,12 +22,46 @@ function veoFake(outcome: "ok" | "filtered" | "refused", seen: Array<Record<stri
   }) as typeof fetch;
 }
 
+test("an Omni shot is one POST to /interactions with the portraits inline, and the ledger settles at what its tokens cost", async () => {
+  const top = mkdtempSync(join(tmpdir(), "nixamp-omni-"));
+  try {
+    const seen: Array<{ url: string; body: Record<string, unknown> }> = [];
+    let outcome: "ok" | "refused" = "ok";
+    const fetcher = (async (url: string, init?: RequestInit) => {
+      seen.push({ url, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      if (outcome === "refused") return Response.json({ error: { message: "nope" } }, { status: 400 });
+      return Response.json({
+        status: "completed",
+        steps: [{ type: "thought" }, { type: "model_output", content: [{ type: "video", mime_type: "video/mp4", data: Buffer.alloc(20_000, 5).toString("base64") }] }],
+        // 1080p, 10 s: 86,880 video tokens = $1.5204.
+        usage: { total_input_tokens: 0, total_output_tokens: 86_880, total_thought_tokens: 0 },
+      });
+    }) as typeof fetch;
+    const ledger = fileLedger(join(top, "omni.json"));
+    const studio = new VeoStudio({ key: "k", ledger, monthlyUsd: 5, usdPerSecond: 0.15, fetcher, now: () => Date.UTC(2026, 9, 26) });
+    const bytes = await studio.clip({ prompt: "a bassist under a zinc roof", seconds: 4, references: [Buffer.alloc(100, 1)] });
+    assert.equal(bytes.length, 20_000);
+    assert.match(seen[0]!.url, /\/v1beta\/interactions$/);
+    assert.equal(seen[0]!.body["model"], "gemini-omni-1.1-flash");
+    assert.deepEqual(seen[0]!.body["response_format"], { type: "video", aspect_ratio: "16:9", resolution: "1080p" });
+    const input = seen[0]!.body["input"] as Array<{ type: string }>;
+    assert.deepEqual(input.map((one) => one.type), ["image", "text"]);
+    // Reserved at 10 s x $0.15 = $1.50, settled up to the $1.52 it cost.
+    assert.ok(Math.abs((await ledger.spent("2026-10")) - 1.5204) < 0.001);
+    outcome = "refused";
+    await assert.rejects(studio.clip({ prompt: "x", seconds: 4, references: [] }), VeoRefused);
+    assert.ok(Math.abs((await ledger.spent("2026-10")) - 1.5204) < 0.001, "a refusal costs nothing");
+  } finally {
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
 test("Veo shots are paid for under the month's cap, reserved first and given back when nothing is made", async () => {
   const top = mkdtempSync(join(tmpdir(), "nixamp-veo-"));
   try {
     const seen: Array<Record<string, unknown>> = [];
     let now = Date.UTC(2026, 9, 21);
-    const make = (outcome: "ok" | "filtered" | "refused") => new VeoStudio({ key: "k", ledger: fileLedger(join(top, "veo.json")), monthlyUsd: 3, usdPerSecond: 0.15, fetcher: veoFake(outcome, seen), sleep: async () => undefined, now: () => now });
+    const make = (outcome: "ok" | "filtered" | "refused") => new VeoStudio({ key: "k", model: "veo-3.1-fast-generate-preview", ledger: fileLedger(join(top, "veo.json")), monthlyUsd: 3, usdPerSecond: 0.15, fetcher: veoFake(outcome, seen), sleep: async () => undefined, now: () => now });
     const studio = make("ok");
     const clip = await studio.clip({ prompt: "a band on a stage, wide shot", seconds: 8, references: [Buffer.alloc(2000, 1)] });
     assert.equal(clip.length, 20_000);
@@ -144,7 +178,7 @@ test("when Google is out of quota or credit the same shot is made by Veo on fal.
       if (url === "https://cdn.example/veo.mp4") return new Response(Buffer.alloc(40_000, 3));
       return new Response("no", { status: 404 });
     }) as typeof fetch;
-    const studio = new VeoStudio({ key: "k", falKey: "f", ledger: fileLedger(join(top, "veo.json")), monthlyUsd: 10, fetcher, sleep: async () => undefined, now: () => Date.UTC(2026, 9, 21) });
+    const studio = new VeoStudio({ key: "k", model: "veo-3.1-fast-generate-preview", falKey: "f", ledger: fileLedger(join(top, "veo.json")), monthlyUsd: 10, fetcher, sleep: async () => undefined, now: () => Date.UTC(2026, 9, 21) });
     const clip = await studio.clip({ prompt: "a band on a stage, wide shot", seconds: 8, references: [Buffer.alloc(2000, 1)] });
     assert.equal(clip.length, 40_000);
     assert.deepEqual(models, ["fal-ai/veo3.1/fast/reference-to-video"]);

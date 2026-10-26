@@ -90,13 +90,29 @@ export interface VeoStudioOptions {
   falKey?: string;
   /** What a second of lip sync is counted at under the same monthly cap; deliberately high ($0.10). */
   lipsyncUsdPerSecond?: number;
+  /** gemini-omni-1.1-flash by default; a "veo-..." model is asked the old Veo way. */
   model?: string;
+  /** Omni's resolution: 360p, 720p, 1080p (the default) or 4k. */
+  resolution?: string;
   fetcher?: typeof fetch;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
 
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
+export const OMNI_MODEL = "gemini-omni-1.1-flash";
+/** Seconds Omni makes for a shot: it takes no length, so a shot is reserved at this. */
+const OMNI_SECONDS = 10;
+
+/**
+ * What an Omni shot cost, from its token counts at Google's rates: $17.50 per
+ * million video tokens out, $9 per million thinking, $1.50 per million in.
+ * (1080p is about 8,700 video tokens a second, so a 10 s shot is about $1.52.)
+ */
+export function omniUsd(usage: { total_input_tokens?: number; total_output_tokens?: number; total_thought_tokens?: number } | undefined): number {
+  if (!usage) return 0;
+  return ((usage.total_output_tokens ?? 0) * 17.5 + (usage.total_thought_tokens ?? 0) * 9 + (usage.total_input_tokens ?? 0) * 1.5) / 1e6;
+}
 
 export class VeoStudio {
   constructor(private readonly options: VeoStudioOptions) {}
@@ -121,13 +137,22 @@ export class VeoStudio {
   /** One shot: 4, 6 or 8 seconds, 16:9 1080p, with up to three reference images (JPEG). */
   async clip(input: { prompt: string; seconds: number; references: Buffer[] }): Promise<Buffer> {
     const seconds = [4, 6, 8].includes(input.seconds) ? input.seconds : 8;
-    const cost = seconds * this.rate;
+    // Omni makes about 10 s whatever is asked, so that is what is paid for.
+    const omni = !(this.options.model ?? OMNI_MODEL).startsWith("veo-");
+    const cost = (omni ? OMNI_SECONDS : seconds) * this.rate;
     const month = this.month();
     // Reserved first, in one step that will not go over: two at once cannot both squeeze under the cap.
     if (!(await this.options.ledger.reserve(month, cost, this.cap))) throw new VeoBudgetError(`this month's $${this.cap} of Veo is spent`);
     try {
       try {
-        return await this.make(input.prompt, seconds, input.references.slice(0, 3));
+        const made = await this.make(input.prompt, seconds, input.references.slice(0, 3));
+        // Settled at what Google says it cost, when it says.
+        if (made.usd && made.usd > 0) {
+          const off = cost - made.usd;
+          if (off > 0) await this.options.ledger.refund(month, off).catch(() => undefined);
+          else if (off < 0) await this.options.ledger.reserve(month, -off, Number.POSITIVE_INFINITY).catch(() => undefined);
+        }
+        return made.bytes;
       } catch (error) {
         // Google out of quota for the day, or its prepaid credit spent: the same Veo on fal.ai.
         if (!this.options.falKey || !(error instanceof VeoRefused) || !GOOGLE_OUT.test(error.message)) throw error;
@@ -215,10 +240,49 @@ export class VeoStudio {
     return await this.falJob(key, "fal-ai/sync-lipsync/v2/pro", { video_url: videoUrl, audio_url: audioUrl }, "the lip sync");
   }
 
-  private async make(prompt: string, seconds: number, references: Buffer[]): Promise<Buffer> {
+  private async make(prompt: string, seconds: number, references: Buffer[]): Promise<{ bytes: Buffer; usd?: number }> {
+    const model = this.options.model ?? OMNI_MODEL;
+    if (!model.startsWith("veo-")) return await this.omni(model, prompt, seconds, references);
+    return { bytes: await this.veo(model, prompt, seconds, references) };
+  }
+
+  /**
+   * Gemini Omni Flash, Google's replacement for Veo (Veo 3.1 preview was shut
+   * down 2026-10-22): one POST to /interactions answers with the clip inline.
+   * It has no length setting and makes about 10 s; the label's cutter takes
+   * the seconds it asked for. What it cost comes back as tokens.
+   */
+  private async omni(model: string, prompt: string, seconds: number, references: Buffer[]): Promise<{ bytes: Buffer; usd: number }> {
+    const send = this.options.fetcher ?? fetch;
+    const text = `${prompt.slice(0, 1800)} A ${seconds}-second shot.`;
+    const answer = await send(`${BASE}/interactions`, {
+      method: "POST",
+      headers: { "x-goog-api-key": this.options.key, "content-type": "application/json" },
+      signal: AbortSignal.timeout(10 * 60_000),
+      body: JSON.stringify({
+        model,
+        input: references.length
+          ? [...references.map((bytes) => ({ type: "image", data: bytes.toString("base64"), mime_type: "image/jpeg" })), { type: "text", text }]
+          : text,
+        response_format: { type: "video", aspect_ratio: "16:9", resolution: this.options.resolution ?? "1080p" },
+      }),
+    });
+    const body = await answer.json().catch(() => ({})) as {
+      status?: string; error?: { message?: string };
+      steps?: Array<{ type?: string; content?: Array<{ type?: string; data?: string }> }>;
+      usage?: { total_input_tokens?: number; total_output_tokens?: number; total_thought_tokens?: number; output_tokens_by_modality?: Array<{ modality?: string; tokens?: number }> };
+    };
+    if (!answer.ok) throw new VeoRefused(`Omni refused the shot: ${body.error?.message?.slice(0, 200) ?? `HTTP ${answer.status}`}`);
+    const data = body.steps?.flatMap((step) => step.content ?? []).find((one) => one.type === "video" && one.data)?.data;
+    if (!data) throw new VeoRefused(`Omni made nothing (${body.status ?? "no status"})`);
+    const bytes = Buffer.from(data, "base64");
+    if (bytes.length < 10_000) throw new VeoRefused("the Omni clip was empty");
+    return { bytes, usd: omniUsd(body.usage) };
+  }
+
+  private async veo(model: string, prompt: string, seconds: number, references: Buffer[]): Promise<Buffer> {
     const send = this.options.fetcher ?? fetch;
     const headers = { "x-goog-api-key": this.options.key, "content-type": "application/json" };
-    const model = this.options.model ?? "veo-3.1-fast-generate-preview";
     const started = await send(`${BASE}/models/${model}:predictLongRunning`, {
       method: "POST",
       headers,
