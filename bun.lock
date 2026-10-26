@@ -6,6 +6,7 @@
       "name": "nixamp",
       "dependencies": {
         "@profullstack/auth-system": "^0.8.3",
+        "@profullstack/group-call": "^0.1.0",
         "@profullstack/hqtui": "^0.5.0",
         "@profullstack/live-translate": "^0.3.0",
         "@profullstack/notifications": "^0.1.0",
@@ -201,6 +202,8 @@
     "@profullstack/auth-system": ["@profullstack/auth-system@0.8.3", "", { "dependencies": { "bcryptjs": "^2.4.3", "jsonwebtoken": "^9.0.2", "uuid": "^11.1.0" }, "peerDependencies": { "@supabase/supabase-js": "^2.49.4", "mongodb": "^6.5.0", "mysql2": "^3.9.2", "pg": "^8.11.3", "pocketbase": "^0.21.1" }, "optionalPeers": ["@supabase/supabase-js", "mongodb", "mysql2", "pg", "pocketbase"] }, "sha512-goafDEaq8XDDCChfAfi8wvUxn1xMeGWXpr7XEH9czFU/eIq9PkehGRTy3d/YP2BGzO1iIxrTAb2m2eOMTMdYUA=="],
 
     "@profullstack/footer": ["@profullstack/footer@0.2.5", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-/CKwFP3m+qM0ZFTC9Rj11fgClutJzeYliX44Qp4qwrv2JgA/1k4tVOB3mhkPhaeckUhnfg5UyESDI1uoWr9c2w=="],
+
+    "@profullstack/group-call": ["@profullstack/group-call@0.1.0", "", {}, "sha512-RSXWWqP98SoTSIeiCZ1uuWlax4bZC1vBz7L2YmUHDSJ3xd+vNyvm+I7xCefQD9zhP86HrgifIJeR4f7oQ0fdAA=="],
 
     "@profullstack/hqtui": ["@profullstack/hqtui@0.5.0", "", { "bin": { "hqtui": "bin/hqtui.mjs" } }, "sha512-jDwILBmdQx8pQA0ao/tzzty8u5nFNS4XhvU9xXhZvdIaMeiF3HBJIVtP6cS6kigS4lXmHR7sztbb9QJpaWwhig=="],
 
