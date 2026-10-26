@@ -2002,7 +2002,8 @@ export async function writeLyrics(
     system: LYRICS_SYSTEM,
     prompt: [
       `Artist: ${artist.name} (${artist.genre}); voice: ${artist.voice}`,
-      artist.themes ? `What they sing about: ${artist.themes}` : "",
+      // Given as a word list, the themes came back as the song's words ("ledger", "crown" in every line).
+      artist.themes ? `What they sing about, as background only (do not reuse these words; find this song's own images): ${artist.themes}` : "",
       artist.cast ? `Who sings and plays it (their voice and personality shape the words): ${artist.cast}` : "",
       `Album: "${album.title}"${album.concept ? `: ${album.concept}` : ""}`,
       `Song: "${song.title}": ${song.style}`,
