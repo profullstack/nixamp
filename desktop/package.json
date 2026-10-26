@@ -18,8 +18,8 @@
     "pack": "bun run stage && electron-builder --dir --publish never"
   },
   "devDependencies": {
-    "electron": "^44.2.0",
-    "electron-builder": "^26.15.3"
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0"
   },
   "trustedDependencies": [
     "electron"
@@ -27,7 +27,7 @@
   "build": {
     "appId": "com.profullstack.nixamp",
     "productName": "nixamp",
-    "copyright": "MIT \u00a9 Profullstack, Inc.",
+    "copyright": "MIT © Profullstack, Inc.",
     "artifactName": "nixamp-${version}-${arch}.${ext}",
     "directories": {
       "output": "release",
