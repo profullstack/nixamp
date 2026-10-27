@@ -635,7 +635,11 @@ export class AuthorizationServer {
       client_id: clientId,
       scope: scope.join(" "),
       ...(handle ? { handle, preferred_username: handle } : {}),
-      ...(scope.includes("email") ? { email: record.account.email, email_verified: true } : {}),
+      // email_verified is false: nixamp has never proved an address. Sign-up
+      // is a password with no mail step, and a provider sign-in (CoinPay) may
+      // carry a placeholder. A client must bind the account to `sub`, never
+      // find an existing account of its own by this address.
+      ...(scope.includes("email") ? { email: record.account.email, email_verified: false } : {}),
     };
   }
 

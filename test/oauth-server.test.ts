@@ -421,6 +421,23 @@ test("a bad redirect URI is a page, never a redirect", async () => {
   });
 });
 
+test("userinfo never vouches for the address: nixamp has not proved it", async () => {
+  await withServer(async (harness) => {
+    const { location, verifier } = await authorize(harness, { scope: "profile email" });
+    const code = new URL(location).searchParams.get("code") ?? "";
+    assert.ok(code);
+    const granted = await exchange(harness, code, verifier);
+    const info = await fetch(`${harness.base}/api/v1/oauth/userinfo`, {
+      headers: { authorization: `Bearer ${granted["access_token"]}` },
+    });
+    const claims = (await info.json()) as Record<string, unknown>;
+    assert.equal(typeof claims["email"], "string");
+    // A client that trusted `true` here would hand a password sign-up made
+    // under somebody else's address the account that address owns.
+    assert.equal(claims["email_verified"], false);
+  });
+});
+
 test("code, PKCE and refresh: the whole grant, and the access token is a nixamp token", async () => {
   await withServer(async (harness) => {
     const { location, verifier } = await authorize(harness);

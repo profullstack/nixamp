@@ -70,7 +70,10 @@ export function coinpayProvider(clientId: string, clientSecret: string, base = "
       const subject = typeof who["sub"] === "string" ? who["sub"] : "";
       if (!subject) return null;
       const email = typeof who["email"] === "string" ? who["email"].toLowerCase() : "";
-      return { provider: "coinpay", subject, email, verified: who["email_verified"] === true };
+      // Never verified, whatever the answer says: CoinPay sends no mail to the
+      // address it reports, so anybody can register a CoinPay account under
+      // someone else's address. Its `sub` is the whole identity.
+      return { provider: "coinpay", subject, email, verified: false };
     },
   };
 }
