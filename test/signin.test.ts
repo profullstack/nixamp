@@ -450,6 +450,28 @@ test("CoinPay is OAuth 2.1: PKCE S256 on the way out, the verifier on the exchan
   assert.deepEqual(await provider.identify("at", send), { provider: "coinpay", subject: "cp-user-1", email: "fan@example.com", verified: false });
 });
 
+test("CoinPay's address is never verified, even when its answer says it is", async () => {
+  const provider = coinpayProvider("cp_client", "secret");
+  const send = (async () =>
+    new Response(JSON.stringify({ sub: "cp-attacker", email: "victim@b.com", email_verified: true }), { status: 200 })) as unknown as typeof fetch;
+  const who = await provider.identify("at", send);
+  assert.equal(who?.verified, false);
+  // And so it resolves by subject alone: the victim's account is never reached.
+  const made: Record<string, unknown>[] = [];
+  const identities = new Identities(fakeDb(), {
+    async getUserByEmail(email: string) {
+      return email === "victim@b.com" ? { id: "victim", email } : null;
+    },
+    async createUser(user: Record<string, unknown>) {
+      made.push(user);
+      return { id: "attacker-1", email: String(user["email"]) };
+    },
+  } as never);
+  const account = await identities.resolve(who!);
+  assert.notEqual(account?.id, "victim");
+  assert.equal(account?.email, "coinpay-cp-attacker@coinpay.invalid");
+});
+
 test("an unverified address (CoinPay's) never reaches the account that owns it, and is never the new account's", async () => {
   const db = fakeDb();
   const made: Record<string, unknown>[] = [];
