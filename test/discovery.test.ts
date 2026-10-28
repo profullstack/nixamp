@@ -92,6 +92,16 @@ test("the routes: text, JSON, the download page, a redirect per platform, and no
     assert.match(llms.headers.get("content-type") ?? "", /^text\/plain/);
     assert.match(await llms.text(), /^# nixamp/);
 
+    const robots = await fetch(`${base}/robots.txt`);
+    assert.match(robots.headers.get("content-type") ?? "", /^text\/plain/);
+    assert.match(await robots.text(), new RegExp(`Sitemap: ${SITE}/sitemap.xml`));
+    const index = await fetch(`${base}/sitemap.xml`);
+    assert.match(index.headers.get("content-type") ?? "", /^application\/xml/);
+    assert.ok((await index.text()).includes(`<sitemapindex`));
+    const pages = await (await fetch(`${base}/sitemaps/static.xml`)).text();
+    assert.ok(pages.includes(`<loc>${SITE}/</loc>`));
+    assert.ok(pages.includes(`<loc>${SITE}/music</loc>`));
+
     const spec = await fetch(`${base}/openapi.json`);
     assert.equal((await spec.json() as { info: { version: string } }).info.version, "1.2.3");
 

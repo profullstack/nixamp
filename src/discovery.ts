@@ -24,11 +24,52 @@ export const DESKTOP_TARGETS: ReadonlyArray<{ target: string; label: string; suf
   { target: "deb-arm64", label: "Debian/Ubuntu .deb (arm64)", suffix: "-linux-arm64.deb" },
 ];
 
-export const DISCOVERY_PATHS = new Set(["/llms.txt", "/openapi.json", "/api/v1/health", "/download"]);
+export const DISCOVERY_PATHS = new Set(["/llms.txt", "/openapi.json", "/api/v1/health", "/download", "/robots.txt", "/sitemap.xml", "/sitemaps/static.xml"]);
 export const isDiscoveryPath = (path: string): boolean => DISCOVERY_PATHS.has(path) || /^\/download\/[a-z0-9-]{1,20}$/.test(path);
 
 export interface ReleaseAsset { name: string; browser_download_url: string }
 export interface Release { tag_name: string; assets: ReleaseAsset[] }
+
+/** nixamp.com's public pages, the ones a crawler should find without a key. */
+export const SITEMAP_PAGES: ReadonlyArray<{ path: string; changefreq: string; priority: string }> = [
+  { path: "/", changefreq: "weekly", priority: "1.0" },
+  { path: "/music", changefreq: "daily", priority: "0.9" },
+  { path: "/radio", changefreq: "daily", priority: "0.8" },
+  { path: "/guide", changefreq: "hourly", priority: "0.8" },
+  { path: "/vod", changefreq: "daily", priority: "0.6" },
+  { path: "/download", changefreq: "weekly", priority: "0.7" },
+  { path: "/directory", changefreq: "daily", priority: "0.6" },
+];
+
+export function robotsTxt(site: string): string {
+  return `User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /mcp
+Disallow: /reset-password
+Allow: /api/v1/health
+
+Sitemap: ${site}/sitemap.xml
+`;
+}
+
+/** The house pattern: a sitemap index at /sitemap.xml, chunks under /sitemaps/. */
+export function sitemapIndex(site: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>${site}/sitemaps/static.xml</loc></sitemap>
+</sitemapindex>
+`;
+}
+
+export function staticSitemap(site: string): string {
+  const urls = SITEMAP_PAGES.map((one) => `  <url><loc>${site}${one.path}</loc><changefreq>${one.changefreq}</changefreq><priority>${one.priority}</priority></url>`).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls}
+</urlset>
+`;
+}
 
 /** The installer for `target` among a release's files, or null when that build is missing. */
 export function desktopAsset(release: Release | null, target: string): string | null {
@@ -195,6 +236,18 @@ export async function handleDiscovery(request: IncomingMessage, response: Server
   }
   if (path === "/llms.txt") {
     send(response, 200, "text/plain; charset=utf-8", llmsTxt(site), method);
+    return true;
+  }
+  if (path === "/robots.txt") {
+    send(response, 200, "text/plain; charset=utf-8", robotsTxt(site), method);
+    return true;
+  }
+  if (path === "/sitemap.xml") {
+    send(response, 200, "application/xml; charset=utf-8", sitemapIndex(site), method);
+    return true;
+  }
+  if (path === "/sitemaps/static.xml") {
+    send(response, 200, "application/xml; charset=utf-8", staticSitemap(site), method);
     return true;
   }
   if (path === "/openapi.json") {

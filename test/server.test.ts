@@ -266,7 +266,7 @@ test("media is streamed with ranges, and only for a track that exists", async ()
   }
 });
 
-test("the built PWA is served, and an unknown path falls back to its shell", async () => {
+test("the built PWA is served, its client routes get the shell, and an unknown path is a 404", async () => {
   const dir = mkdtempSync(join(tmpdir(), "nixamp-web-"));
   writeFileSync(join(dir, "index.html"), "<title>nixamp</title>");
   writeFileSync(join(dir, "app.js"), "export const a = 1;");
@@ -285,15 +285,29 @@ test("the built PWA is served, and an unknown path falls back to its shell", asy
       // open and server.close() waits for it until the test times out.
       assert.match(await asset.text(), /export const a/);
 
+      for (const route of ["/directory", "/live/some-event", "/v/abc123"]) {
+        const page = await fetch(`${base}${route}`);
+        assert.equal(page.status, 200, route);
+        assert.match(await page.text(), /nixamp/);
+      }
+
+      // An unknown page still gets the app, but as a 404, so it is never indexed.
       const deep = await fetch(`${base}/library/anything`);
-      assert.equal(deep.status, 200);
+      assert.equal(deep.status, 404);
       assert.match(await deep.text(), /nixamp/);
 
-      // A climb is not an error — it is just another unknown path, and an
-      // unknown path is the shell. What matters is that /etc/passwd never
-      // comes back.
+      // A file-shaped path is a plain 404, never the homepage.
+      for (const file of ["/robots.txt", "/sitemap.xml", "/.well-known/security.txt", "/nope.js"]) {
+        const missing = await fetch(`${base}${file}`);
+        assert.equal(missing.status, 404, file);
+        assert.match(missing.headers.get("content-type") ?? "", /text\/plain/);
+        assert.doesNotMatch(await missing.text(), /nixamp/);
+      }
+
+      // A climb is not an error, just another unknown path. What matters is
+      // that /etc/passwd never comes back.
       const escape = await fetch(`${base}/..%2f..%2fetc/passwd`);
-      assert.match(await escape.text(), /nixamp/);
+      assert.doesNotMatch(await escape.text(), /root:/);
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });

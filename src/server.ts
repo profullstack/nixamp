@@ -1547,6 +1547,15 @@ export function isSignInPath(path: string): boolean {
   );
 }
 
+/**
+ * The paths web/index.html routes on the client (web/src/app.ts, remote.ts):
+ * the front page, the directory, a live event, and a server's share links.
+ */
+export function isShellRoute(path: string): boolean {
+  return path === "/" || /^\/directory\/?$/.test(path) || /^\/live\/[^/]+\/?$/.test(path) ||
+    /^\/(?:admin|view|a|v)\/[^/]+\/?$/.test(path);
+}
+
 function html(response: ServerResponse, code: number, body: string): void {
   response.writeHead(code, {
     "content-type": "text/html; charset=utf-8",
@@ -7089,8 +7098,24 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       if (/^\/(radio|library)\/?$/.test(path) && isFile(join(web, "radio.html"))) file = join(web, "radio.html");
       else if (isFile(direct)) file = direct;
       else if (isFile(join(direct, "index.html"))) file = join(direct, "index.html");
-      // A single-page app: any unknown path is the shell, and the client routes.
-      else if (isFile(join(web, "index.html"))) file = join(web, "index.html");
+      // A single-page app: the shell answers the paths the client routes, and
+      // nothing else. Any other path is a 404, so robots.txt, sitemap.xml and
+      // /.well-known/* never come back as the homepage with a 200.
+      else if (isShellRoute(path) && isFile(join(web, "index.html"))) file = join(web, "index.html");
+      if (file === null && isFile(join(web, "index.html"))) {
+        if (/\.[A-Za-z0-9]{1,8}$/.test(path) || path.startsWith("/.well-known/") || (request.method !== "GET" && request.method !== "HEAD")) {
+          response.writeHead(404, { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=300" });
+          response.end(request.method === "HEAD" ? undefined : "Not found\n");
+          return;
+        }
+        // A page-shaped path still gets the app, so a mistyped link lands
+        // somewhere usable, but it says 404 so it is never indexed.
+        const shell = readIfPossible(join(web, "index.html"));
+        if (shell !== null) {
+          html(response, 404, requestHost === "nixamp.com" ? withPitFooter(shell) : shell);
+          return;
+        }
+      }
       if (file !== null) {
         if (file.endsWith("index.html") && path.startsWith("/live/") && options.events) {
           try {
