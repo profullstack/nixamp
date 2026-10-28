@@ -52,7 +52,7 @@
     "@profullstack/notifications": "^0.1.4",
     "@profullstack/profile": "0.1.6",
     "@profullstack/synconfig": "^0.1.3",
-    "@profullstack/throttle": "^0.3.5",
+    "@profullstack/throttle": "^0.4.0",
     "@profullstack/x402-gateway": "^0.15.1",
     "acme-client": "5.4.0",
     "pg": "^8.23.1"
