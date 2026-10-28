@@ -9,34 +9,41 @@ import { Accounts, type AdapterLike } from "../src/accounts.ts";
 import type { Queryable } from "../src/follows.ts";
 import { Handles } from "../src/handles.ts";
 import { LINK_SCOPE, NixampLinks, nixampExchange, type OAuthExchange, type TokenGrant } from "../src/nixamp-link.ts";
-import { streamsFor } from "../src/nixamp-link-api.ts";
+import { handleNixampLinkApi, streamsFor } from "../src/nixamp-link-api.ts";
 import { AuthorizationServer, BACKTOSCHOOL_CLIENT, clientsFrom, SCOPES } from "../src/oauth-server.ts";
 import { createServer, EmptyEngine } from "../src/server.ts";
 import { Servers } from "../src/servers.ts";
 
-/** One table, in a Map. */
-function fakeDb(): Queryable & { rows: Map<string, Record<string, unknown>> } {
-  const rows = new Map<string, Record<string, unknown>>();
-  return {
+/** One table, in a Map; `legacy` rows still carry the plaintext token columns from before 0.79. */
+function fakeDb(legacy: Record<string, unknown>[] = []): Queryable & { rows: Map<string, Record<string, unknown>>; dropped: boolean } {
+  const rows = new Map<string, Record<string, unknown>>(legacy.map((row) => [String(row["user_id"]), { ...row }]));
+  const it = {
     rows,
+    dropped: legacy.length === 0,
     async query(text: string, values: unknown[] = []) {
       const sql = text.trim().replace(/\s+/g, " ");
       if (sql.startsWith("CREATE TABLE")) return { rows: [] };
-      if (sql.startsWith("INSERT INTO nixamp_links")) {
-        const [user_id, nixamp_user_id, handle, scope, access_token, access_expires_at, refresh_token] = values;
-        const had = rows.get(String(user_id));
-        rows.set(String(user_id), { user_id, nixamp_user_id, handle, scope, access_token, access_expires_at, refresh_token, created_at: had?.["created_at"] ?? new Date() });
+      if (sql.startsWith("SELECT column_name FROM information_schema.columns")) {
+        return { rows: it.dropped ? [] : [{ column_name: "access_token" }, { column_name: "refresh_token" }, { column_name: "access_expires_at" }] };
+      }
+      if (sql.startsWith("SELECT refresh_token FROM nixamp_links WHERE refresh_token <> ''")) {
+        return { rows: [...rows.values()].filter((row) => row["refresh_token"]) };
+      }
+      if (sql.startsWith("ALTER TABLE nixamp_links DROP COLUMN")) {
+        for (const row of rows.values()) { delete row["access_token"]; delete row["refresh_token"]; delete row["access_expires_at"]; }
+        it.dropped = true;
         return { rows: [] };
       }
-      if (sql.startsWith("UPDATE nixamp_links SET access_token")) {
-        const [user_id, access_token, access_expires_at, refresh_token] = values;
-        const row = rows.get(String(user_id));
-        if (row) Object.assign(row, { access_token, access_expires_at, refresh_token });
+      if (sql.startsWith("INSERT INTO nixamp_links")) {
+        assert.equal(values.length, 4, "who and scope only: no token is written");
+        const [user_id, nixamp_user_id, handle, scope] = values;
+        const had = rows.get(String(user_id));
+        rows.set(String(user_id), { user_id, nixamp_user_id, handle, scope, created_at: had?.["created_at"] ?? new Date() });
         return { rows: [] };
       }
       if (sql.startsWith("DELETE FROM nixamp_links")) {
-        rows.delete(String(values[0]));
-        return { rows: [] };
+        const had = rows.delete(String(values[0]));
+        return { rows: had ? [{ user_id: values[0] }] : [] };
       }
       if (sql.startsWith("SELECT") && sql.includes("FROM nixamp_links WHERE user_id = $1")) {
         const row = rows.get(String(values[0]));
@@ -45,6 +52,7 @@ function fakeDb(): Queryable & { rows: Map<string, Record<string, unknown>> } {
       throw new Error(`unexpected SQL: ${sql}`);
     },
   };
+  return it;
 }
 
 function fakeExchange(log: string[]): OAuthExchange & { fail: boolean } {
@@ -58,7 +66,7 @@ function fakeExchange(log: string[]): OAuthExchange & { fail: boolean } {
       log.push(`token:${form.get("grant_type")}`);
       if (it.fail) throw new Error("invalid_grant");
       n += 1;
-      return { access_token: `nxa_access_${n}`, refresh_token: `nxr_refresh_${n}`, expires_in: 3600, scope: LINK_SCOPE };
+      return { access_token: `nxa_access_${n}`, expires_in: 3600, scope: LINK_SCOPE };
     },
     async userinfo(token: string) {
       log.push(`userinfo:${token}`);
@@ -71,45 +79,81 @@ function fakeExchange(log: string[]): OAuthExchange & { fail: boolean } {
   return it;
 }
 
-test("a connection is begun with PKCE, kept with its tokens, refreshed when stale, and withdrawn on both sides", async () => {
+test("a connection is begun with PKCE, keeps no token at rest, holds the access token in memory until it ends, and is withdrawn", async () => {
   const log: string[] = [];
   const exchange = fakeExchange(log);
   let clock = 1_000_000;
-  const links = new NixampLinks(fakeDb(), exchange, "backtoschool", () => clock);
+  const db = fakeDb();
+  const links = new NixampLinks(db, exchange, "backtoschool", () => clock);
 
   const leg = links.begin("https://backtoschool.help/api/v1/nixamp/callback");
   const url = new URL(leg.url);
   assert.equal(url.searchParams.get("client_id"), "backtoschool");
   assert.equal(url.searchParams.get("code_challenge_method"), "S256");
-  assert.equal(url.searchParams.get("scope"), LINK_SCOPE);
+  assert.equal(url.searchParams.get("scope"), "profile streams", "no offline_access: no refresh token to keep");
   assert.equal(url.searchParams.get("state"), leg.state);
   assert.ok(leg.verifier.length >= 43);
   assert.notEqual(url.searchParams.get("code_challenge"), leg.verifier, "the verifier itself never leaves");
-  assert.deepEqual(await links.of("school-1"), { connected: false, handle: "", nixampUserId: "", scope: "", since: null });
+  assert.deepEqual(await links.of("school-1"), { connected: false, ready: false, handle: "", nixampUserId: "", scope: "", since: null });
+  assert.equal(await links.accessToken("school-1"), "");
 
   const made = await links.finish("school-1", { code: "c0de", verifier: leg.verifier, redirectUri: "https://backtoschool.help/api/v1/nixamp/callback" });
   assert.equal(made.connected, true);
+  assert.equal(made.ready, true);
   assert.equal(made.handle, "chovy");
   assert.equal(made.nixampUserId, "nixamp-user-9");
   assert.deepEqual(log, ["token:authorization_code", "userinfo:nxa_access_1"]);
+  assert.ok(!JSON.stringify([...db.rows.values()]).includes("nxa_"), "the database never sees the token");
 
-  assert.equal(await links.accessToken("school-1"), "nxa_access_1", "fresh: served as kept");
+  assert.equal(await links.accessToken("school-1"), "nxa_access_1", "fresh: served from memory");
   clock += 3600 * 1000;
-  assert.equal(await links.accessToken("school-1"), "nxa_access_2", "stale: refreshed");
-  assert.equal(log.at(-1), "token:refresh_token");
-  assert.equal(await links.accessToken("school-1"), "nxa_access_2", "and the new one is kept");
+  assert.equal(await links.accessToken("school-1"), "", "ended: nothing to refresh with, the person asks again");
+  const stale = await links.of("school-1");
+  assert.equal(stale.connected, true, "the identity link survives");
+  assert.equal(stale.ready, false);
+  assert.ok(!log.includes("token:refresh_token"));
 
-  clock += 3600 * 1000;
-  exchange.fail = true;
-  assert.equal(await links.accessToken("school-1"), "", "a refused refresh is a withdrawn grant");
-  assert.equal((await links.of("school-1")).connected, false);
-  assert.equal(await links.disconnect("school-1"), false);
-
-  exchange.fail = false;
+  // A restart is a new instance over the same table: connected, not ready.
   await links.finish("school-1", { code: "c0de2", verifier: leg.verifier, redirectUri: "https://backtoschool.help/api/v1/nixamp/callback" });
+  const restarted = new NixampLinks(db, exchange, "backtoschool", () => clock);
+  assert.deepEqual([(await restarted.of("school-1")).connected, (await restarted.of("school-1")).ready], [true, false]);
+  assert.equal(await restarted.accessToken("school-1"), "");
+
+  links.drop("school-1");
+  assert.equal(await links.accessToken("school-1"), "", "a token nixamp.com refused is forgotten");
+  await links.finish("school-1", { code: "c0de3", verifier: leg.verifier, redirectUri: "https://backtoschool.help/api/v1/nixamp/callback" });
   assert.equal(await links.disconnect("school-1"), true);
-  assert.equal(log.at(-1), "revoke:nxr_refresh_3", "the refresh token is what is handed back");
+  assert.equal(log.at(-1), "revoke:nxa_access_3", "the token in memory is handed back");
   assert.equal((await links.of("school-1")).connected, false);
+  assert.equal(await links.accessToken("school-1"), "");
+  assert.equal(await links.disconnect("school-1"), false);
+});
+
+test("a refresh token sent unasked is handed straight back, never kept", async () => {
+  const log: string[] = [];
+  const exchange = fakeExchange(log);
+  exchange.token = async () => ({ access_token: "nxa_x", refresh_token: "nxr_unasked", expires_in: 3600, scope: LINK_SCOPE });
+  const db = fakeDb();
+  const links = new NixampLinks(db, exchange, "backtoschool");
+  await links.finish("school-2", { code: "c", verifier: "v", redirectUri: "https://backtoschool.help/api/v1/nixamp/callback" });
+  assert.ok(log.includes("revoke:nxr_unasked"));
+  assert.ok(!JSON.stringify([...db.rows.values()]).includes("nxr_"));
+});
+
+test("tokens kept in plain text before 0.79 are revoked on nixamp.com and their columns dropped; the link stays", async () => {
+  const log: string[] = [];
+  const db = fakeDb([
+    { user_id: "old-1", nixamp_user_id: "n1", handle: "a", scope: "profile streams offline_access", access_token: "nxa_old", access_expires_at: new Date(), refresh_token: "nxr_old", created_at: new Date() },
+    { user_id: "old-2", nixamp_user_id: "n2", handle: "b", scope: "profile streams offline_access", access_token: "", access_expires_at: null, refresh_token: "", created_at: new Date() },
+  ]);
+  const links = new NixampLinks(db, fakeExchange(log), "backtoschool");
+  const view = await links.of("old-1");
+  assert.deepEqual([view.connected, view.ready, view.handle], [true, false, "a"]);
+  assert.deepEqual(log, ["revoke:nxr_old"]);
+  assert.equal(db.dropped, true);
+  assert.equal(db.rows.size, 2);
+  assert.ok(!JSON.stringify([...db.rows.values()]).includes("nx"), "no token left in any row");
+  assert.equal(await links.accessToken("old-1"), "");
 });
 
 test("the school is a registered public client with a streams scope", () => {
@@ -198,7 +242,7 @@ test("connect, consent, callback and streams, end to end over one server that is
     assert.equal(kept.status, 201);
 
     const before = await (await at("/api/v1/nixamp/connection")).json() as { connected: boolean; available: boolean };
-    assert.deepEqual(before, { connected: false, handle: "", nixampUserId: "", scope: "", since: null, available: true });
+    assert.deepEqual(before, { connected: false, ready: false, handle: "", nixampUserId: "", scope: "", since: null, available: true });
     assert.equal((await at("/api/v1/nixamp/streams")).status, 409, "no streams before a connection");
     assert.equal((await fetch(`${base}/api/v1/nixamp/connect`, { redirect: "manual", headers: { host: "backtoschool.help" } })).status, 401);
     assert.equal((await fetch(`${base}/api/v1/nixamp/connect`, { redirect: "manual", headers: { authorization: school.authorization, host: "elsewhere.example" } })).status, 400, "only a registered site may connect");
@@ -238,11 +282,12 @@ test("connect, consent, callback and streams, end to end over one server that is
     assert.equal(after.nixampUserId, account.id);
     assert.equal(after.scope, LINK_SCOPE);
     const stored = (await pool.query("SELECT * FROM nixamp_links WHERE user_id=$1", [account.id])).rows[0];
-    assert.match(String(stored.access_token), /^nxa_/);
-    assert.match(String(stored.refresh_token), /^nxr_/);
-    // nixamp.com lists the school among the account's connections.
-    const grants = await authServer.grants(account.id);
-    assert.ok(grants.some((one) => one.clientId === "backtoschool" && one.scope.includes("streams")));
+    assert.ok(!("access_token" in stored) && !("refresh_token" in stored), "no token column at all");
+    assert.ok(!JSON.stringify(stored).includes("nxa_") && !JSON.stringify(stored).includes("nxr_"));
+    // No offline_access: nixamp.com holds no standing grant for the school.
+    assert.ok(!(await authServer.grants(account.id)).some((one) => one.clientId === "backtoschool"));
+    const live = await links.accessToken(account.id);
+    assert.match(live, /^nxa_/);
 
     // What the connection is for.
     const streamed = await at("/api/v1/nixamp/streams");
@@ -253,12 +298,11 @@ test("connect, consent, callback and streams, end to end over one server that is
     assert.equal(streams.servers[0]!.channels[0]!.id, "algebra");
     assert.equal(streams.servers[0]!.channels[0]!.link, `http://placeholder.test/?url=${encodeURIComponent(machineUrl)}&play=channel%3Aalgebra`);
 
-    // Withdrawn here, gone on nixamp.com too.
+    // Withdrawn here: the row is gone and the token in memory is revoked on nixamp.com.
     const gone = await (await at("/api/v1/nixamp/connection", { method: "DELETE" })).json() as { withdrawn: boolean };
     assert.equal(gone.withdrawn, true);
     assert.equal(((await (await at("/api/v1/nixamp/connection")).json()) as { connected: boolean }).connected, false);
-    assert.ok(!(await authServer.grants(account.id)).some((one) => one.clientId === "backtoschool"));
-    assert.equal(await accounts.whoIs(String(stored.access_token)), null, "the access token was revoked with the grant");
+    assert.equal(await accounts.whoIs(live), null, "the access token was revoked");
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -269,5 +313,33 @@ test("connect, consent, callback and streams, end to end over one server that is
     }
     await pool.query("DELETE FROM users WHERE id=$1", [account.id]);
     await pool.end();
+  }
+});
+
+test("streams after a restart: connected, but asked to refresh from nixamp rather than refreshed from a kept token", async () => {
+  const db = fakeDb();
+  const exchange = fakeExchange([]);
+  await new NixampLinks(db, exchange, "backtoschool").finish("u1", { code: "c", verifier: "v", redirectUri: "https://backtoschool.help/api/v1/nixamp/callback" });
+  const links = new NixampLinks(db, exchange, "backtoschool"); // the process came back up
+  const server = createHttp((request, response) => {
+    void handleNixampLinkApi(request, response, new URL(request.url ?? "/", "http://x"), {
+      links,
+      accounts: { whoIs: async () => ({ id: "u1", email: "u1@example.com" }) } as unknown as Parameters<typeof handleNixampLinkApi>[3]["accounts"],
+      issuer: "https://nixamp.test",
+      site: "https://backtoschool.help",
+      redirectUris: ["https://backtoschool.help/api/v1/nixamp/callback"],
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const answer = await fetch(`${base}/api/v1/nixamp/streams`);
+    assert.equal(answer.status, 409);
+    assert.deepEqual(await answer.json(), { error: "refresh from nixamp to see your streams", connected: true, refresh: true });
+    const status = await (await fetch(`${base}/api/v1/nixamp/connection`)).json() as { connected: boolean; ready: boolean };
+    assert.deepEqual([status.connected, status.ready], [true, false]);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

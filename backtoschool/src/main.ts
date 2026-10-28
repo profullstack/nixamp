@@ -207,7 +207,7 @@ function drawConnection(): void {
   nixampConnect.hidden = link.connected;
   nixampDisconnect.hidden = !link.connected;
   nixampConnection.textContent = link.connected
-    ? `Connected as @${link.handle || link.nixampUserId} on nixamp.com. Your live streams appear when you go live.`
+    ? `Connected as @${link.handle || link.nixampUserId} on nixamp.com. Your live streams appear when you go live. We keep no nixamp token at rest, so after an hour you refresh with one click on nixamp.com.`
     : "Not connected.";
 }
 
@@ -253,6 +253,8 @@ async function drawStreams(): Promise<void> {
     nixampStreamsNote.innerHTML = `<button class="text-button" type="button" data-open-settings data-i18n="Connect nixamp to pick one of your streams">Connect nixamp to pick one of your streams</button>`;
     return;
   }
+  const refresh = `<a class="text-button" href="/api/v1/nixamp/connect" data-i18n="Refresh from nixamp to pick one of your streams">Refresh from nixamp to pick one of your streams</a>`;
+  if (!link.ready) { nixampStreamsNote.innerHTML = refresh; return; }
   nixampStreamsNote.textContent = "Looking at your nixamp servers…";
   try {
     const { servers } = await api<{ servers: ServerStreams[] }>("/api/v1/nixamp/streams");
@@ -275,7 +277,9 @@ async function drawStreams(): Promise<void> {
       ? (servers.length === 0 ? "Your nixamp account remembers no servers yet. Start one, then come back." : "Nothing is live on your servers right now. Start a channel in nixamp, then pick it here.")
       : "Picking one fills in the broadcast link below.";
   } catch (error) {
-    nixampStreamsNote.textContent = error instanceof Error ? error.message : "Your nixamp streams could not be read.";
+    const message = error instanceof Error ? error.message : "Your nixamp streams could not be read.";
+    if (/refresh from nixamp/i.test(message)) nixampStreamsNote.innerHTML = refresh;
+    else nixampStreamsNote.textContent = message;
   }
 }
 

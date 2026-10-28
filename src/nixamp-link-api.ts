@@ -10,7 +10,8 @@
  *
  * All five want the site's own session: the person, signed in here. What
  * they hold on nixamp's side is a client token, and it never leaves the
- * server -- the page only ever learns a handle and a list of streams.
+ * server -- the page only ever learns a handle and a list of streams. The
+ * token is kept in memory only, for its hour; never in the database.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tokenFrom, type Accounts } from "./accounts.ts";
@@ -77,6 +78,9 @@ function landing(home: string, outcome: string, reason = ""): string {
   return `${url.pathname}${url.search}${url.hash || "#settings"}`;
 }
 
+/** nixamp.com refused the token held in memory. */
+export class StaleToken extends Error {}
+
 /**
  * Every server the nixamp account remembers, asked what it is doing.
  *
@@ -92,7 +96,8 @@ export async function streamsFor(token: string, issuer: string, pageSite: string
     headers: { authorization: `Bearer ${token}`, accept: "application/json" },
     signal: AbortSignal.timeout(8000),
   });
-  if (!answer.ok) throw new Error(answer.status === 401 ? "nixamp.com no longer accepts this connection" : `nixamp.com answered ${answer.status}`);
+  if (answer.status === 401) throw new StaleToken("nixamp.com no longer accepts this connection; refresh from nixamp");
+  if (!answer.ok) throw new Error(`nixamp.com answered ${answer.status}`);
   const body = (await answer.json().catch(() => ({}))) as { servers?: typeof servers };
   servers = Array.isArray(body.servers) ? body.servers : [];
   const page = pageSite.replace(/\/+$/, "");
@@ -210,10 +215,17 @@ export async function handleNixampLinkApi(
   // /api/v1/nixamp/streams
   if (request.method !== "GET") { json(response, 405, { error: "GET only" }); return true; }
   const token = await options.links.accessToken(account.id);
-  if (token === "") { json(response, 409, { error: "connect your nixamp account first", connected: false }); return true; }
+  if (token === "") {
+    const { connected } = await options.links.of(account.id);
+    json(response, 409, connected
+      ? { error: "refresh from nixamp to see your streams", connected: true, refresh: true }
+      : { error: "connect your nixamp account first", connected: false });
+    return true;
+  }
   try {
     json(response, 200, { servers: await streamsFor(token, options.issuer, options.issuer, options.fetcher ?? fetch) });
   } catch (error) {
+    if (error instanceof StaleToken) options.links.drop(account.id);
     json(response, 502, { error: (error as Error).message });
   }
   return true;
