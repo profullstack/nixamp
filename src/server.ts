@@ -4991,7 +4991,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           try {
             bytes = await readBytes(request, PHOTO_LIMIT);
           } catch {
-            json(response, 413, { error: "a photo may be up to 1 MB" });
+            json(response, 413, { error: "a photo may be up to 10 MB" });
             return;
           }
           const kept = await profiles.setPhoto(who.id, bytes);

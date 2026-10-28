@@ -89,7 +89,7 @@
             <label class="button button-secondary" for="profile-photo-file" data-i18n="Upload a photo">Upload a photo</label>
             <input id="profile-photo-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" class="visually-hidden" />
             <button class="text-button" type="button" id="profile-photo-remove" hidden data-i18n="Remove photo">Remove photo</button>
-            <p class="form-note">PNG, JPEG, WebP or GIF, up to 1 MB. Kept here, shown on every class you host.</p>
+            <p class="form-note">PNG, JPEG, WebP or GIF, up to 10 MB. Kept here, shown on every class you host.</p>
           </div>
         </div>
         <label><span data-i18n="Your name">Your name</span><input name="name" maxlength="100" autocomplete="name" placeholder="How students should know you" /></label>
@@ -102,7 +102,7 @@
       </form>
       <fieldset class="broadcast-options settings-section">
         <legend data-i18n="OpenProfile">OpenProfile</legend>
-        <p>Keep one profile for every site (<a href="https://logicsrc.com/openprofile" target="_blank" rel="noopener noreferrer">OpenProfile</a>). Paste its address and the card above is filled from it.</p>
+        <p>Keep one profile for every site (<a href="https://logicsrc.com/openprofile" target="_blank" rel="noopener noreferrer">OpenProfile</a>). Paste its address and the card above is filled from it. Optional: no OpenProfile, skip this.</p>
         <form id="openprofile-form" class="inline-form">
           <input id="profile-openprofile" type="url" maxlength="500" placeholder="https://you.example/.well-known/openprofile.md" aria-label="OpenProfile URL" data-i18n-aria-label="OpenProfile URL" />
           <button class="button button-small" type="submit" id="profile-import" data-i18n="Fill from OpenProfile">Fill from OpenProfile</button>

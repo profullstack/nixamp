@@ -746,7 +746,7 @@ profilePhotoFile.addEventListener("change", () => {
   const file = profilePhotoFile.files?.[0];
   if (!file) return;
   profileError.textContent = "";
-  if (file.size > 1024 * 1024) { profileError.textContent = "A photo may be up to 1 MB."; profilePhotoFile.value = ""; return; }
+  if (file.size > 10 * 1024 * 1024) { profileError.textContent = "A photo may be up to 10 MB."; profilePhotoFile.value = ""; return; }
   void fetch("/api/v1/me/profile/photo", { method: "PUT", credentials: "same-origin", body: file })
     .then(async (response) => {
       const body = await response.json() as ProfileView & { error?: string };
