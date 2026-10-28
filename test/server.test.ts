@@ -1540,7 +1540,15 @@ test("a member may put a file on the air, up to a point, and take only their own
     // Somebody else may not take it off; they may.
     assert.equal((await take(channel, "third-token")).status, 403);
     assert.equal((await take(channel, "member-token")).status, 200);
-    // A fourth ask inside the minute is the throttle's no, whatever it asks.
+    // Three a minute is configured; @profullstack/throttle 0.4 gives it 5x
+    // headroom, so the sixteenth metered ask inside the minute (the take-off
+    // above counts) is the throttle's no, whatever it asks. Asking again for
+    // what is already on the air spends an ask and changes nothing.
+    for (let i = 3; i < 15; i++) {
+      const res = await post("/api/tracks/1/live", "member-token");
+      assert.equal(res.status, 200, `ask ${i + 1} is inside the allowance`);
+      await res.body?.cancel();
+    }
     const throttled = await post("/api/tracks/2/live", "member-token");
     assert.equal(throttled.status, 429);
     assert.ok(throttled.headers.get("retry-after") || throttled.headers.get("ratelimit-remaining") !== null, "said when to try again");

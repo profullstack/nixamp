@@ -30,8 +30,8 @@ importers:
         specifier: ^0.1.3
         version: 0.1.3
       '@profullstack/throttle':
-        specifier: ^0.3.5
-        version: 0.3.5
+        specifier: ^0.4.0
+        version: 0.4.0
       '@profullstack/x402-gateway':
         specifier: ^0.15.1
         version: 0.15.1
@@ -344,8 +344,8 @@ packages:
     resolution: {integrity: sha512-Ty/90ibgu2DVlablDeoFdItcobK+c8cMQFvuTfJOUlCfyvQZWoPjgt0JHPwTvq+ynOQ4i1ivBQ3K3PY/S4rObA==}
     engines: {node: '>=22'}
 
-  '@profullstack/throttle@0.3.5':
-    resolution: {integrity: sha512-tZ04du+CyjN6ECiRekw46XVDbmD4pxxg7tUPrhgHGP6Bt4YVn+1yIgUVbzr+AcKVBIwGqCiNkH8FKcLGV9ByUw==}
+  '@profullstack/throttle@0.4.0':
+    resolution: {integrity: sha512-Lj+XHt51OxyaJ2FqosZDyr9Z5RFB8z+ARixpoUfrDu3YlvFlct5GbbZM/C0qLZkUgzeuFSDvtYt9f0NNfBkFqA==}
     engines: {node: '>=20.11'}
 
   '@profullstack/x402-gateway@0.15.1':
@@ -1101,7 +1101,7 @@ snapshots:
 
   '@profullstack/synconfig@0.1.3': {}
 
-  '@profullstack/throttle@0.3.5':
+  '@profullstack/throttle@0.4.0':
     dependencies:
       '@profullstack/x402-gateway': 0.15.1
 
