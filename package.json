@@ -53,7 +53,7 @@
     "@profullstack/profile": "0.1.6",
     "@profullstack/synconfig": "^0.1.3",
     "@profullstack/throttle": "^0.3.4",
-    "@profullstack/x402-gateway": "^0.13.1",
+    "@profullstack/x402-gateway": "^0.15.1",
     "acme-client": "5.4.0",
     "pg": "^8.23.1"
   },
@@ -86,6 +86,6 @@
   "overrides": {
     "https-proxy-agent": "7.0.6",
     "tslib": "2.8.1",
-    "@profullstack/x402-gateway": "^0.13.1"
+    "@profullstack/x402-gateway": "^0.15.1"
   }
 }
