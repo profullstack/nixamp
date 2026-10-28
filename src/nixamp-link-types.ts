@@ -6,6 +6,8 @@
 /** The connection as the account holder sees it. Never the tokens. */
 export interface LinkView {
   connected: boolean;
+  /** A token is in memory right now, so the streams can be read without asking nixamp.com again. */
+  ready: boolean;
   handle: string;
   nixampUserId: string;
   scope: string;
