@@ -30,11 +30,11 @@ importers:
         specifier: ^0.1.3
         version: 0.1.3
       '@profullstack/throttle':
-        specifier: ^0.4.0
-        version: 0.4.0
+        specifier: ^0.4.1
+        version: 0.4.1
       '@profullstack/x402-gateway':
-        specifier: ^0.15.3
-        version: 0.15.3
+        specifier: ^0.16.1
+        version: 0.16.1
       acme-client:
         specifier: 5.4.0
         version: 5.4.0
@@ -344,12 +344,12 @@ packages:
     resolution: {integrity: sha512-Ty/90ibgu2DVlablDeoFdItcobK+c8cMQFvuTfJOUlCfyvQZWoPjgt0JHPwTvq+ynOQ4i1ivBQ3K3PY/S4rObA==}
     engines: {node: '>=22'}
 
-  '@profullstack/throttle@0.4.0':
-    resolution: {integrity: sha512-Lj+XHt51OxyaJ2FqosZDyr9Z5RFB8z+ARixpoUfrDu3YlvFlct5GbbZM/C0qLZkUgzeuFSDvtYt9f0NNfBkFqA==}
+  '@profullstack/throttle@0.4.1':
+    resolution: {integrity: sha512-ffY49nQ20/ZXyp/LVh/LxXTKJozqxyggBhjt9rRGz/JCC30IKFaqN2UmNwThm721r0rgQnhikpHNOb5EqzU9kw==}
     engines: {node: '>=20.11'}
 
-  '@profullstack/x402-gateway@0.15.3':
-    resolution: {integrity: sha512-YtxaHuiNdnEmwQBkNJXGOEvFUb+5k54GPeZw5RiPKqYcKrA/tRTRVTMbyuX4XSGfmaOEo1BCGpa3w8S46+YQUg==}
+  '@profullstack/x402-gateway@0.16.1':
+    resolution: {integrity: sha512-4aRbH2t5J7vJo9n6SqODNrxD0NBI7GsCo3WjTYuAfIzuPjElHB9TwtpvdpXwOneEJGpQ0JJpHght4M6F39SJng==}
     engines: {node: '>=20.11'}
 
   '@protobufjs/aspromise@1.1.2':
@@ -1101,11 +1101,11 @@ snapshots:
 
   '@profullstack/synconfig@0.1.3': {}
 
-  '@profullstack/throttle@0.4.0':
+  '@profullstack/throttle@0.4.1':
     dependencies:
-      '@profullstack/x402-gateway': 0.15.3
+      '@profullstack/x402-gateway': 0.16.1
 
-  '@profullstack/x402-gateway@0.15.3':
+  '@profullstack/x402-gateway@0.16.1':
     dependencies:
       '@profullstack/keys': 0.1.0
 
