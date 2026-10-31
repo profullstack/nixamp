@@ -45,6 +45,7 @@
     "pack:cli": "bun scripts/pack-cli.ts"
   },
   "dependencies": {
+    "@profullstack/footer": "latest",
     "@profullstack/auth-system": "^0.8.3",
     "@profullstack/group-call": "^0.1.0",
     "@profullstack/hqtui": "^0.11.1",

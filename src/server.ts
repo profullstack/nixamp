@@ -102,7 +102,7 @@ import { aiKey } from "./ai-keys.ts";
 import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML, WATCH_APP_CSP } from "./station-page.ts";
 import { handleRoomProxy, handleRooms, isRoomPath, ROOM_PAGE, roomAddress, RoomProbe, roomEntries, roomSlugOf, roomSlugs, RoomStore, watchBase } from "./guide-rooms.ts";
 import { handleVods, VodProbe, vodEntries, VodStore, vodView } from "./guide-vods.ts";
-import { withPitFooter } from "./pit-footer.ts";
+import { withUniversalFooter } from "./universal-footer.ts";
 import { handleFollowPage } from "./follow-page.ts";
 import {
   asRadioPage, buildCatalogue, isRadioPath, NAV_STYLE, RADIO_ALBUM, RADIO_ARTIST, RADIO_CSP, RADIO_STATION, RADIO_SUB, RADIO_BUY, radioBuyLink, radioBuyQuery, radioNav, radioPeers, radioRewriter,
@@ -7112,7 +7112,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         // somewhere usable, but it says 404 so it is never indexed.
         const shell = readIfPossible(join(web, "index.html"));
         if (shell !== null) {
-          html(response, 404, requestHost === "nixamp.com" ? withPitFooter(shell) : shell);
+          html(response, 404, requestHost === "nixamp.com" ? withUniversalFooter(shell) : shell);
           return;
         }
       }
@@ -7154,17 +7154,17 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
           }
           const shell = subject ? readIfPossible(file) : null;
           if (subject && shell !== null) {
-            html(response, 200, requestHost === "nixamp.com" ? withPitFooter(joinDocument(shell, subject, eventSite ?? "https://nixamp.com")) : joinDocument(shell, subject, eventSite ?? "https://nixamp.com"));
+            html(response, 200, requestHost === "nixamp.com" ? withUniversalFooter(joinDocument(shell, subject, eventSite ?? "https://nixamp.com")) : joinDocument(shell, subject, eventSite ?? "https://nixamp.com"));
             return;
           }
         }
         // nixamp.com's own pages (the app shell, the radio console) carry the
-        // pit.world global footer, appended on the way out. A local install
+        // shared Profullstack footer, appended on the way out. A local install
         // serving the same files on its own host is left alone.
         if (requestHost === "nixamp.com" && file.endsWith(".html") && (request.method === "GET" || request.method === "HEAD")) {
           const shell = readIfPossible(file);
           if (shell !== null) {
-            const page = withPitFooter(shell);
+            const page = withUniversalFooter(shell);
             response.writeHead(200, {
               ...CORS,
               "content-type": "text/html; charset=utf-8",
