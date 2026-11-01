@@ -48,6 +48,7 @@ export interface Identity {
    * to an existing account and is never the new account's address.
    */
   verified?: boolean;
+  openprofileUrl?: string;
 }
 
 /**
@@ -73,7 +74,13 @@ export function coinpayProvider(clientId: string, clientSecret: string, base = "
       // Never verified, whatever the answer says: CoinPay sends no mail to the
       // address it reports, so anybody can register a CoinPay account under
       // someone else's address. Its `sub` is the whole identity.
-      return { provider: "coinpay", subject, email, verified: false };
+      return {
+        provider: "coinpay",
+        subject,
+        email,
+        verified: false,
+        openprofileUrl: typeof who["openprofile_url"] === "string" ? who["openprofile_url"] : undefined,
+      };
     },
   };
 }

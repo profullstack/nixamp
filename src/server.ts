@@ -47,7 +47,7 @@ import { anonymousHandle, Handles } from "./handles.ts";
 import { OpenDirs } from "./opendirs.ts";
 import { Servers } from "./servers.ts";
 import { AccountProfiles, hostCard, PHOTO_LIMIT } from "./profiles.ts";
-import { createProfileHandlers, type ProfileStore, saveSignupProfile, validateProfile } from "@profullstack/profile";
+import { createProfileHandlers, type ProfileStore, saveOpenProfileContact, saveSignupProfile, validateProfile } from "@profullstack/profile";
 import { SIGNUP_PROFILE_FIELDS, signupProfiles } from "./signup-profiles.ts";
 import { NixampLinks, nixampExchange } from "./nixamp-link.ts";
 import { handleNixampLinkApi, nixampLinkPath } from "./nixamp-link-api.ts";
@@ -5249,6 +5249,14 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       if (!result.ok || result.account === null) {
         html(response, 401, signInFailedPage(result.error || "Could not sign in."));
         return;
+      }
+
+      if (identity.provider === "coinpay" && identity.openprofileUrl && options.signupProfiles) {
+        try {
+          await saveOpenProfileContact(options.signupProfiles, String(result.account.id), identity.openprofileUrl);
+        } catch (e) {
+          console.warn("[coinpay] OpenProfile import skipped:", e instanceof Error ? e.message : e);
+        }
       }
 
       if (pending.userCode) {
