@@ -23,7 +23,7 @@
     "@profullstack/long-string-scroller": "workspace:*",
     "@profullstack/notifications": "^0.1.4",
     "@profullstack/player": "0.16.0",
-    "@profullstack/profile": "0.1.7",
+    "@profullstack/profile": "0.1.8",
     "fastenhancer-web": "^0.1.1",
     "fft.js": "4.0.4"
   }

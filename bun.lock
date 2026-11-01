@@ -11,7 +11,7 @@
         "@profullstack/hqtui": "^0.11.1",
         "@profullstack/live-translate": "^0.3.0",
         "@profullstack/notifications": "^0.1.4",
-        "@profullstack/profile": "0.1.7",
+        "@profullstack/profile": "0.1.8",
         "@profullstack/synconfig": "^0.1.3",
         "@profullstack/throttle": "^0.4.1",
         "@profullstack/x402-gateway": "^0.16.1",
@@ -60,7 +60,7 @@
         "@profullstack/long-string-scroller": "workspace:*",
         "@profullstack/notifications": "^0.1.4",
         "@profullstack/player": "0.16.0",
-        "@profullstack/profile": "0.1.7",
+        "@profullstack/profile": "0.1.8",
         "fastenhancer-web": "^0.1.1",
         "fft.js": "4.0.4",
       },
@@ -224,7 +224,7 @@
 
     "@profullstack/player": ["@profullstack/player@0.16.0", "", { "dependencies": { "hls.js": "^1.7.1", "mpegts.js": "^1.8.2" }, "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-So56P59jh0wCd5gKKa0EIxBZGHm3WKqQGC+uW4N2nCz/heb2+kPQgH4YTJueJXcxwtXpf+Zb1/CWsoxWskfvAA=="],
 
-    "@profullstack/profile": ["@profullstack/profile@0.1.7", "", { "dependencies": { "@profullstack/openprofile": "^0.2.0" }, "peerDependencies": { "@libsql/client": ">=0.6.0", "postgres": "^3.4.0", "react": ">=18" }, "optionalPeers": ["@libsql/client", "postgres", "react"], "bin": { "profile": "src/cli.js" } }, "sha512-N7UkypkkY2JkSBKzmdmyy6+DCoxI048qUZQksEjSRwSIyy4mjU9H1qW4yhZD+LJBhTEupgJv//Uxwhiy2FuGmA=="],
+    "@profullstack/profile": ["@profullstack/profile@0.1.8", "", { "dependencies": { "@profullstack/openprofile": "^0.2.0" }, "peerDependencies": { "@libsql/client": ">=0.6.0", "postgres": "^3.4.0", "react": ">=18" }, "optionalPeers": ["@libsql/client", "postgres", "react"], "bin": { "profile": "src/cli.js" } }, "sha512-MQ/AGGM++NZEbjMglRlEvjCrmsL46CXDz2GKb510eMBEKUik1cwix9ag20gakYrrVCaB5mNcNCMYon53vwDTfw=="],
 
     "@profullstack/synconfig": ["@profullstack/synconfig@0.1.3", "", {}, "sha512-Ty/90ibgu2DVlablDeoFdItcobK+c8cMQFvuTfJOUlCfyvQZWoPjgt0JHPwTvq+ynOQ4i1ivBQ3K3PY/S4rObA=="],
 
