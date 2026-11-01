@@ -92,6 +92,51 @@ type Mode = "local" | "remote";
 
 /** The sign-up profile fields (@profullstack/profile); the form has its own email box. */
 const PROFILE_FIELDS = ["first_name", "last_name", "company_domain", "job_title", "linkedin_url"] as const;
+
+function bindOpenProfileImporter(root: HTMLElement): void {
+  const box = root.querySelector<HTMLElement>("[data-pfs-openprofile-import]");
+  if (!box || box.dataset.pfsBound) return;
+  const input = box.querySelector<HTMLInputElement>("[data-pfs-openprofile-url]");
+  const button = box.querySelector<HTMLButtonElement>("[data-pfs-openprofile-button]");
+  const status = box.querySelector<HTMLElement>("[data-pfs-openprofile-status]");
+  if (!input || !button || !status) return;
+  box.dataset.pfsBound = "1";
+  input.addEventListener("input", () => { button.disabled = !input.value.trim(); });
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Fetching…";
+    status.textContent = "";
+    status.setAttribute("role", "status");
+    try {
+      const profileUrl = new URL(input.value.trim());
+      if (profileUrl.protocol !== "https:") throw new Error("Use an HTTPS OpenProfile URL.");
+      const target = new URL(box.dataset.endpoint || "/api/v1/me/profile/fields", location.href);
+      target.searchParams.set("openprofile", profileUrl.href);
+      const response = await fetch(target, { credentials: "same-origin", cache: "no-store" });
+      const body = await response.json().catch(() => ({})) as { error?: string; profile?: Record<string, unknown> };
+      if (!response.ok) throw new Error(body.error || "Could not fetch that OpenProfile.md.");
+      const form = box.closest("form");
+      let count = 0;
+      for (const [name, value] of Object.entries(body.profile || {})) {
+        if (typeof value !== "string" || !value.trim()) continue;
+        const field = form?.elements.namedItem(name);
+        if (!(field instanceof HTMLInputElement)) continue;
+        field.value = value;
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        count++;
+      }
+      if (!count) throw new Error("No contact details were found in that OpenProfile.md.");
+      status.textContent = "Fetched. Review or edit the fields before saving.";
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : "Could not fetch that OpenProfile.md.";
+      status.setAttribute("role", "alert");
+    } finally {
+      button.textContent = "Fetch and prefill";
+      button.disabled = !input.value.trim();
+    }
+  });
+}
 function profileValues(form: HTMLFormElement): Record<string, string> {
   const values: Record<string, string> = {};
   for (const name of PROFILE_FIELDS) {
@@ -344,7 +389,13 @@ export function start(): void {
   };
   dom.appVersion.textContent = `nixamp ${__NIXAMP_VERSION__}`;
   dom.accountProfile.innerHTML = renderProfileFields({ fields: [...PROFILE_FIELDS], idPrefix: "account-" });
-  dom.contactFields.innerHTML = renderProfileFields({ fields: [...PROFILE_FIELDS], idPrefix: "contact-" });
+  dom.contactFields.innerHTML = renderProfileFields({
+    fields: [...PROFILE_FIELDS],
+    idPrefix: "contact-",
+    importOpenProfile: true,
+    importEndpoint: "/api/v1/me/profile/fields",
+  });
+  bindOpenProfileImporter(dom.contactFields);
   /**
    * The icons, as inline SVG rather than glyphs. A link or copy character
    * is an empty box in most monospace faces, which is what the icons were
