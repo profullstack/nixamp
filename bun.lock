@@ -32,7 +32,7 @@
       "name": "@nixamp/backtoschool-web",
       "version": "0.1.0",
       "dependencies": {
-        "@profullstack/player": "0.16.0",
+        "@profullstack/player": "0.17.0",
       },
       "devDependencies": {
         "@types/node": "^26.6.5",
@@ -59,7 +59,7 @@
         "@profullstack/footer": "latest",
         "@profullstack/long-string-scroller": "workspace:*",
         "@profullstack/notifications": "^0.1.4",
-        "@profullstack/player": "0.16.0",
+        "@profullstack/player": "0.17.0",
         "@profullstack/profile": "0.1.8",
         "fastenhancer-web": "^0.1.1",
         "fft.js": "4.0.4",
@@ -222,7 +222,7 @@
 
     "@profullstack/openprofile": ["@profullstack/openprofile@0.2.0", "", {}, "sha512-cdFsBbfRXurvy5KqHDNcKXxurK2s/YlfVgnILFRpVl2hq3860rExqDee8IfsFGxw5cPdqGv2fxUxtek1Xy2U5Q=="],
 
-    "@profullstack/player": ["@profullstack/player@0.16.0", "", { "dependencies": { "hls.js": "^1.7.1", "mpegts.js": "^1.8.2" }, "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-So56P59jh0wCd5gKKa0EIxBZGHm3WKqQGC+uW4N2nCz/heb2+kPQgH4YTJueJXcxwtXpf+Zb1/CWsoxWskfvAA=="],
+    "@profullstack/player": ["@profullstack/player@0.17.0", "", { "dependencies": { "hls.js": "^1.7.1", "mpegts.js": "^1.8.2" }, "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-rd1aQzXqBwMMp6aIuyJ7K3O3+k7W83J1AXl7TG9PZmAVeK85lxEsuE1DwUnUbaa6zwBhJ9Xfcb0YxHVqtncYGg=="],
 
     "@profullstack/profile": ["@profullstack/profile@0.1.8", "", { "dependencies": { "@profullstack/openprofile": "^0.2.0" }, "peerDependencies": { "@libsql/client": ">=0.6.0", "postgres": "^3.4.0", "react": ">=18" }, "optionalPeers": ["@libsql/client", "postgres", "react"], "bin": { "profile": "src/cli.js" } }, "sha512-MQ/AGGM++NZEbjMglRlEvjCrmsL46CXDz2GKb510eMBEKUik1cwix9ag20gakYrrVCaB5mNcNCMYon53vwDTfw=="],
 
