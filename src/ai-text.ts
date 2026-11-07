@@ -3,11 +3,12 @@
  *
  * AI radio asks for small things: a title and a prompt for the next track, a
  * genre and a verdict for a shared file. Whichever model has a key answers --
- * Gemini, then OpenAI, then Anthropic -- and when none has, the caller is told
- * so and does without (a rule of its own, or a person). The answer is parsed
- * and handed back as an object; a model that rambles round its JSON is read
- * for the first object in what it said.
+ * c0mpute, then Gemini, then OpenAI, then Anthropic -- and when none has, the
+ * caller is told so and does without (a rule of its own, or a person). The
+ * answer is parsed and handed back as an object; a model that rambles round
+ * its JSON is read for the first object in what it said.
  */
+import { ProviderError, createAiProviders, type AiRouter } from "@profullstack/ai-providers";
 import { aiKey } from "./ai-keys.ts";
 
 export interface AskOptions {
@@ -15,7 +16,7 @@ export interface AskOptions {
   system: string;
   /** The question, with what it should answer from. */
   prompt: string;
-  /** Milliseconds before giving up (default 30 s). */
+  /** Milliseconds before giving up on a hosted model (default 30 s); c0mpute gets at least C0MPUTE_MIN_WAIT_MS. */
   timeoutMs?: number;
   /** The longest answer, in tokens (default 1024): a song's words need more than a title does. */
   maxTokens?: number;
@@ -33,7 +34,7 @@ export interface Answer {
 
 export class NoModel extends Error {
   constructor() {
-    super("no language model key is set (GEMINI_API_KEY, OPENAI_API_KEY or ANTHROPIC_API_KEY)");
+    super("no language model key is set (C0MPUTE_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY or ANTHROPIC_API_KEY)");
   }
 }
 
@@ -61,7 +62,7 @@ export function escapeInStrings(text: string): string {
 
 /** The first JSON object in a model's answer. */
 export function firstObject(text: string): Record<string, unknown> {
-  const fenced = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+  const fenced = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
   const cleaned = (() => {
     try { JSON.parse(fenced); return fenced; } catch { return escapeInStrings(fenced); }
   })();
@@ -80,14 +81,79 @@ export function firstObject(text: string): Record<string, unknown> {
   throw new Error("the model did not answer with a JSON object");
 }
 
+/** The c0mpute key, or "" when there is none or C0MPUTE_DISABLED turns it off. */
+export function c0mputeKey(env: Record<string, string | undefined> = process.env): string {
+  return /^(1|true|yes|on)$/i.test(env["C0MPUTE_DISABLED"] ?? "") ? "" : aiKey("C0MPUTE_API_KEY", env);
+}
+
 /** Whether any model can be asked. */
 export function hasModel(env: Record<string, string | undefined> = process.env): boolean {
-  return Boolean(aiKey("GEMINI_API_KEY", env) || aiKey("OPENAI_API_KEY", env) || aiKey("ANTHROPIC_API_KEY", env));
+  return Boolean(c0mputeKey(env) || aiKey("GEMINI_API_KEY", env) || aiKey("OPENAI_API_KEY", env) || aiKey("ANTHROPIC_API_KEY", env));
+}
+
+/**
+ * c0mpute's 9B model takes 30 s for a short JSON answer, longer on a busy
+ * node, so it never gets a hosted model's 30 s budget.
+ */
+export const C0MPUTE_MIN_WAIT_MS = 120_000;
+
+/** c0mpute alone: the fallbacks are this file's own chain, not the package's. */
+export function c0mputeRouter(key: string, options: { env?: Record<string, string | undefined>; fetcher?: typeof fetch; concurrency?: number } = {}): AiRouter {
+  return createAiProviders({
+    env: { ...(options.env ?? process.env), C0MPUTE_API_KEY: key },
+    paidFallback: false,
+    c0mpute: {
+      ...(options.fetcher ? { fetch: options.fetcher } : {}),
+      ...(options.concurrency ? { concurrency: options.concurrency } : {}),
+    },
+  });
+}
+
+export interface C0mputeAsk {
+  system: string;
+  user: string;
+  maxTokens: number;
+  timeoutMs: number;
+  temperature?: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * One answer from c0mpute, read by `read`. An answer `read` refuses gets one
+ * more try on the same model, told what was wrong with it, before the caller
+ * moves on: a small model misses far more often than a hosted one.
+ */
+export async function askC0mpute<T>(router: AiRouter, ask: C0mputeAsk, read: (text: string) => T): Promise<{ model: string; value: T }> {
+  const { value } = await router.run(async (provider) => {
+    const first = await provider.generate(ask);
+    try {
+      return { model: first.model, value: read(first.text) };
+    } catch (error) {
+      const again = await provider.generate({
+        ...ask,
+        user: `${ask.user}\n\nYour previous answer could not be used: ${(error as Error).message}\nAnswer again with only the corrected JSON object.`,
+      });
+      try {
+        return { model: again.model, value: read(again.text) };
+      } catch (second) {
+        throw new ProviderError("c0mpute", (second as Error).message, { kind: "output" });
+      }
+    }
+  });
+  return value;
+}
+
+/** The router askJson shares across calls, so a dead or busy c0mpute is parked for all of them. */
+let shared: { key: string; router: AiRouter } | undefined;
+function sharedRouter(key: string, env: Record<string, string | undefined>): AiRouter {
+  if (shared?.key !== key) shared = { key, router: c0mputeRouter(key, { env }) };
+  return shared.router;
 }
 
 export async function askJson(options: AskOptions): Promise<Answer> {
   const env = options.env ?? process.env;
   const send = options.fetcher ?? fetch;
+  const c0mpute = c0mputeKey(env);
   const gemini = aiKey("GEMINI_API_KEY", env);
   const openai = aiKey("OPENAI_API_KEY", env);
   const anthropic = aiKey("ANTHROPIC_API_KEY", env);
@@ -95,6 +161,16 @@ export async function askJson(options: AskOptions): Promise<Answer> {
   // answers 400 "User location is not supported" from some networks) or is
   // down is not a reason to go without when another can answer.
   const tries: Array<() => Promise<Answer>> = [];
+  if (c0mpute) tries.push(() => askC0mpute(
+    options.fetcher ? c0mputeRouter(c0mpute, { env, fetcher: options.fetcher }) : sharedRouter(c0mpute, env),
+    {
+      system: `${options.system}\nAnswer with one JSON object and nothing else.`,
+      user: options.prompt,
+      maxTokens: options.maxTokens ?? 1024,
+      timeoutMs: Math.max(options.timeoutMs ?? 0, C0MPUTE_MIN_WAIT_MS),
+    },
+    firstObject,
+  ));
   if (gemini) tries.push(async () => {
     const model = env["NIXAMP_GEMINI_MODEL"] || "gemini-flash-latest";
     const response = await send(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {

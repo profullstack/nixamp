@@ -138,6 +138,7 @@ import { Durable } from "./durable.ts";
 import { notifyAll, resendEmail, webPush, type Notification } from "./notify.ts";
 import { vapidKeysFromEnv, vapidPublicKeyResponse, type VapidKeys } from "@profullstack/notifications/server";
 import { inviteSubject, inviteText, isEmail, isPhone, watchLink } from "./invite.ts";
+import { c0mputeKey } from "./ai-text.ts";
 import { EventWriter } from "./event-writer.ts";
 import { handleLiveApi } from "./live-api.ts";
 import { LiveEvents, eventStructuredData, isTicketed, type LiveEvent } from "./live-events.ts";
@@ -8890,7 +8891,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     ...(favorites ? { favorites } : {}),
     ...(settingsSync ? { settingsSync } : {}),
     ...(events ? { events, eventWriter: new EventWriter({
-      openaiKey: process.env["OPENAI_API_KEY"], anthropicKey: process.env["ANTHROPIC_API_KEY"],
+      c0mputeKey: c0mputeKey(), openaiKey: process.env["OPENAI_API_KEY"], anthropicKey: process.env["ANTHROPIC_API_KEY"],
       openaiModel: process.env["NIXAMP_WRITER_OPENAI_MODEL"], claudeModel: process.env["NIXAMP_WRITER_CLAUDE_MODEL"],
     }) } : {}),
     ...(events && follows ? { onEventUpdated: (updated: LiveEvent, previous: LiveEvent) => {

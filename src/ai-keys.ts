@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import { stateDir } from "./daemon.ts";
 
 export const AI_KEY_NAMES = [
-  "ELEVENLABS_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+  "ELEVENLABS_API_KEY", "C0MPUTE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
   // Any OpenAI-compatible endpoint in OpenAI's place (Cloudflare Workers AI, Ollama, ...) and its model.
   "NIXAMP_OPENAI_URL", "NIXAMP_OPENAI_MODEL",
   // The label's songwriter on that endpoint (album plans, lyrics, new artists), e.g. @cf/openai/gpt-oss-120b; NIXAMP_OPENAI_MODEL when unset.
