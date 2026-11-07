@@ -189,3 +189,25 @@ test("an OpenAI-compatible endpoint stands in for OpenAI", async () => {
   assert.equal(answer.model, "@cf/meta/llama-3.3-70b-instruct-fp8-fast");
   assert.deepEqual(answer.value, { title: "T", prompt: "P" });
 });
+
+test("c0mpute answers first, and a chain falls through it to the keys behind it", async () => {
+  const { askJson, hasModel } = await import("../src/ai-text.ts");
+  const asked: string[] = [];
+  const up = (async (url: string | URL | Request) => {
+    asked.push(String(url));
+    if (String(url).endsWith("/api/chat")) return Response.json({ jobId: "j", source: "p2p", model: "m" });
+    return new Response(`event: done\ndata: ${JSON.stringify({ text: "<think>{hm}</think>{\"ok\": true}" })}\n\n`);
+  }) as typeof fetch;
+  const env = { C0MPUTE_API_KEY: "ik", GEMINI_API_KEY: "g" };
+  assert.deepEqual((await askJson({ system: "s", prompt: "p", fetcher: up, env })).value, { ok: true });
+  assert.ok(asked.every((url) => url.includes("infernetprotocol.com")));
+
+  const down = (async (url: string | URL | Request) => {
+    if (String(url).includes("infernetprotocol.com")) return new Response("{}", { status: 503 });
+    return Response.json({ candidates: [{ content: { parts: [{ text: "{\"from\": \"gemini\"}" }] } }] });
+  }) as typeof fetch;
+  assert.deepEqual((await askJson({ system: "s", prompt: "p", fetcher: down, env })).value, { from: "gemini" });
+
+  assert.equal(hasModel({ C0MPUTE_API_KEY: "ik", NIXAMP_TEST: "1" }), true);
+  assert.equal(hasModel({ C0MPUTE_API_KEY: "ik", C0MPUTE_DISABLED: "1" }), false);
+});

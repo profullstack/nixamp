@@ -275,12 +275,13 @@ enabling the sender. Invitation mail identifies the invitation rather than a fol
 The event form's optional **Write with AI** button uses its current title,
 description, and topic as the prompt, with host and schedule context. It previews
 a title, description, and topic for explicit application before saving. Configure
-server-only `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`: OpenAI runs first, with Claude
-as fallback for provider failures or invalid output. Defaults are `gpt-5-mini`
-and `claude-haiku-4-5`; override them with `NIXAMP_WRITER_OPENAI_MODEL` and
-`NIXAMP_WRITER_CLAUDE_MODEL`. Signed-in accounts may request six drafts per ten
+server-only `C0MPUTE_API_KEY`, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`: c0mpute runs
+first, then OpenAI, then Claude, each as fallback for provider failures or invalid
+output. The OpenAI and Claude defaults are `gpt-5-mini` and `claude-haiku-4-5`;
+override them with `NIXAMP_WRITER_OPENAI_MODEL` and `NIXAMP_WRITER_CLAUDE_MODEL`. Signed-in accounts may request six drafts per ten
 minutes, with one active request per account and four across the server. Requests
-time out after 25 seconds per provider and can be cancelled. Drafting never saves
+time out after 25 seconds per hosted provider, 120 seconds on c0mpute, and can be
+cancelled. Drafting never saves
 an event or changes the schedule, visibility, or broadcast links.
 
 ## Live shows, and tickets

@@ -1,10 +1,13 @@
+import { jsonInstructions, type AiRouter } from "@profullstack/ai-providers";
+import { askC0mpute, c0mputeRouter, C0MPUTE_MIN_WAIT_MS, firstObject } from "./ai-text.ts";
 import { Guard } from "./guard.ts";
 
 export interface EventDraft { title: string; description: string; topic: string }
 export interface WriterInput extends EventDraft {
   hostName: string; startsAt: string; timezone: string; duration: string; recurrence: string;
 }
-export interface EventDraftResult { draft: EventDraft; provider: "openai" | "claude" }
+type Provider = "c0mpute" | "openai" | "claude";
+export interface EventDraftResult { draft: EventDraft; provider: Provider }
 export class EventWriterError extends Error {
   constructor(message: string, readonly status: number, readonly retryAfter?: number) { super(message); }
 }
@@ -37,8 +40,7 @@ Write in the language of the host's notes. Describe what students will learn and
 Keep concrete names and facts. Do not invent dates, prices, qualifications, prerequisites, links, credentials, or promises. Omit unknown logistics. Do not expand into unrelated subjects.
 The schedule and host name are context only; never propose changing them. Return plain text in the required JSON fields, with no HTML. Short paragraphs or simple bullet lists are fine.`;
 
-function draftFrom(text: string): EventDraft {
-  const value: unknown = JSON.parse(text);
+function draftOf(value: unknown): EventDraft {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid draft");
   const row = value as Record<string, unknown>;
   const draft = {} as EventDraft;
@@ -51,34 +53,46 @@ function draftFrom(text: string): EventDraft {
 }
 
 export interface EventWriterOptions {
-  openaiKey?: string; anthropicKey?: string;
+  c0mputeKey?: string; openaiKey?: string; anthropicKey?: string;
   openaiModel?: string; claudeModel?: string;
   fetch?: typeof globalThis.fetch;
+  /** Per hosted provider (default 25 s). */
   timeoutMs?: number;
+  /** For c0mpute, which needs longer (default C0MPUTE_MIN_WAIT_MS). */
+  c0mputeTimeoutMs?: number;
 }
 
 /** Server-side only. Drafting has no access to the event store and cannot publish. */
 export class EventWriter {
   private readonly guard = new Guard();
   private readonly active = new Set<string>();
-  constructor(private readonly options: EventWriterOptions) {}
+  // Its own router: a cancelled draft must not park c0mpute for AI radio, and
+  // a draft someone is waiting for must not queue behind a label's album.
+  private readonly c0mpute?: AiRouter;
+  constructor(private readonly options: EventWriterOptions) {
+    if (options.c0mputeKey) this.c0mpute = c0mputeRouter(options.c0mputeKey, { concurrency: 4, ...(options.fetch ? { fetcher: options.fetch } : {}) });
+  }
+
+  private key(provider: Exclude<Provider, "c0mpute">): string | undefined {
+    return provider === "openai" ? this.options.openaiKey : this.options.anthropicKey;
+  }
 
   async draft(accountId: string, value: unknown, signal?: AbortSignal): Promise<EventDraftResult> {
     if (!accountId) throw new EventWriterError("Sign in to use the AI writer.", 401);
     const input = writerInput(value);
-    if (!this.options.openaiKey && !this.options.anthropicKey) throw new EventWriterError("The AI writer is temporarily unavailable. You can keep writing here.", 503);
+    if (!this.c0mpute && !this.options.openaiKey && !this.options.anthropicKey) throw new EventWriterError("The AI writer is temporarily unavailable. You can keep writing here.", 503);
     if (this.active.has(accountId)) throw new EventWriterError("A draft is already being written. Wait for it or cancel it first.", 429, 5);
     if (this.active.size >= 4) throw new EventWriterError("The AI writer is busy. Try again in a moment.", 503, 10);
     const limit = this.guard.check(accountId, {allowed: 6, windowMs: 10 * 60_000});
     if (!limit.ok) throw new EventWriterError("You have requested several drafts. Try again in a few minutes.", 429, limit.retryAfter);
     this.active.add(accountId);
     try {
-      for (const provider of ["openai", "claude"] as const) {
-        const key = provider === "openai" ? this.options.openaiKey : this.options.anthropicKey;
-        if (!key) continue;
+      for (const provider of ["c0mpute", "openai", "claude"] as const) {
+        const key = provider === "c0mpute" ? "" : this.key(provider);
+        if (provider === "c0mpute" ? !this.c0mpute : !key) continue;
         if (signal?.aborted) throw new EventWriterError("Draft cancelled.", 499);
         try {
-          const draft = await this.generate(provider, key, input, signal);
+          const draft = provider === "c0mpute" ? await this.generateC0mpute(input, signal) : await this.generate(provider, key as string, input, signal);
           if (signal?.aborted) throw new EventWriterError("Draft cancelled.", 499);
           return {draft, provider};
         }
@@ -92,6 +106,17 @@ export class EventWriter {
       }
       throw new EventWriterError("The AI writer could not finish this draft. Your text is unchanged; please try again.", 503);
     } finally { this.active.delete(accountId); }
+  }
+
+  private async generateC0mpute(input: WriterInput, signal?: AbortSignal): Promise<EventDraft> {
+    const {value} = await askC0mpute(this.c0mpute as AiRouter, {
+      system: `${INSTRUCTIONS}\n\n${jsonInstructions("event_draft", SCHEMA)}`,
+      user: JSON.stringify(input),
+      maxTokens: 2048,
+      timeoutMs: this.options.c0mputeTimeoutMs ?? C0MPUTE_MIN_WAIT_MS,
+      ...(signal ? {signal} : {}),
+    }, text => draftOf(firstObject(text)));
+    return value;
   }
 
   private async generate(provider: "openai" | "claude", key: string, input: WriterInput, signal?: AbortSignal): Promise<EventDraft> {
@@ -121,6 +146,6 @@ export class EventWriter {
     if (body["stop_reason"] === "refusal" || blocks.some(block => block?.type === "refusal")) throw new Refused();
     if (openai ? body["status"] !== "completed" : body["stop_reason"] !== "end_turn") throw new Error("incomplete draft");
     const text = blocks.filter(block => block?.type === (openai ? "output_text" : "text")).map(block => typeof block.text === "string" ? block.text : "").join("");
-    return draftFrom(text);
+    return draftOf(JSON.parse(text));
   }
 }

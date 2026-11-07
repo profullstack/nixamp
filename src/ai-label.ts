@@ -2680,7 +2680,7 @@ export class AiLabel {
     const why = !this.settings.enabled ? "the label is switched off"
       : this.settings.pausedReason
         || (composer ? "" : "no composer: set ELEVENLABS_API_KEY (nixamp station ai key ELEVENLABS_API_KEY) or NIXAMP_AI_MUSIC_COMMAND")
-        || (this.canAsk() ? "" : "no language model to write the albums: set GEMINI_API_KEY, OPENAI_API_KEY (or NIXAMP_OPENAI_URL) or ANTHROPIC_API_KEY")
+        || (this.canAsk() ? "" : "no language model to write the albums: set C0MPUTE_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY (or NIXAMP_OPENAI_URL) or ANTHROPIC_API_KEY")
         || (this.budgetLeft() < this.settings.songSeconds ? `this month's ${this.settings.monthlySeconds} s are used` : "");
     return {
       root: this.root,
@@ -2816,7 +2816,7 @@ export class AiLabel {
   /** Plan the next album for this artist now, whatever its schedule; it is composed song by song from here. */
   async plan(key: string): Promise<LabelAlbum> {
     const artist = this.require(key);
-    if (!this.canAsk()) throw new StationError("no_writer", "no language model to write the album: set GEMINI_API_KEY, OPENAI_API_KEY (or NIXAMP_OPENAI_URL) or ANTHROPIC_API_KEY", 409);
+    if (!this.canAsk()) throw new StationError("no_writer", "no language model to write the album: set C0MPUTE_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY (or NIXAMP_OPENAI_URL) or ANTHROPIC_API_KEY", 409);
     const pending = artist.albums.find((one) => !one.doneAt);
     if (pending) throw new StationError("album_in_progress", `"${pending.title}" is still being made`, 409);
     await this.ensureProfile(artist).catch(() => undefined);

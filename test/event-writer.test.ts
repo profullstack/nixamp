@@ -126,3 +126,39 @@ test("HTTP writer requires sign-in, validates input, and cannot mutate events", 
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });
+
+function c0mputeFetch(answers: string[], seen: string[] = []): typeof fetch {
+  return (async (url: string | URL | Request) => {
+    const href = String(url);
+    seen.push(href);
+    if (href.endsWith("/api/chat")) return Response.json({jobId: "j1", source: "p2p", model: "m"});
+    if (href.includes("/api/chat/stream/")) {
+      const text = answers.shift() ?? "";
+      return new Response(`event: done\ndata: ${JSON.stringify({text})}\n\n`);
+    }
+    return new Response("{}", {status: 500});
+  }) as typeof fetch;
+}
+
+test("the writer asks c0mpute first and reads a wrapped answer", async () => {
+  const seen: string[] = [];
+  const answer = `<think>{"title": "x"}</think>Here it is: ${JSON.stringify({title: "Title", description: "Description", topic: "Topic"})}`;
+  const writer = new EventWriter({c0mputeKey: "k", openaiKey: "a", fetch: c0mputeFetch([answer], seen)});
+  const result = await writer.draft("host", input);
+  assert.equal(result.provider, "c0mpute");
+  assert.equal(result.draft.title, "Title");
+  assert.ok(seen.every(url => !url.includes("openai.com")));
+});
+
+test("c0mpute alone turns the writer on, and an unusable answer falls back to the failure a person sees today", async () => {
+  const writer = new EventWriter({c0mputeKey: "k", fetch: c0mputeFetch(["no json", "still no json"])});
+  await assert.rejects(writer.draft("host", input), errorStatus(503));
+});
+
+test("the writer falls back to OpenAI when c0mpute is down", async () => {
+  const writer = new EventWriter({c0mputeKey: "k", openaiKey: "a", fetch: async (url) => {
+    if (String(url).includes("openai.com")) return openai();
+    return new Response("{}", {status: 503});
+  }});
+  assert.equal((await writer.draft("host", input)).provider, "openai");
+});

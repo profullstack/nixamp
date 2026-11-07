@@ -32,7 +32,7 @@ export const USAGE = `nixamp station — make a collection into a station
   nixamp station ai remove KEY [--files]
   nixamp station ai budget SECONDS           seconds of music a month across AI stations (0: no cap)
   nixamp station ai resume                   after the provider ran out of credit
-  nixamp station ai key NAME                 ELEVENLABS_API_KEY | GEMINI_API_KEY | OPENAI_API_KEY | ANTHROPIC_API_KEY,
+  nixamp station ai key NAME                 ELEVENLABS_API_KEY | C0MPUTE_API_KEY | GEMINI_API_KEY | OPENAI_API_KEY | ANTHROPIC_API_KEY,
                                              NIXAMP_OPENAI_URL | NIXAMP_OPENAI_MODEL (an OpenAI-compatible stand-in),
                                              NIXAMP_MUSIC_MODEL (music_v1|music_v2|music_v2_5), from stdin
 
