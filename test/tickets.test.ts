@@ -34,7 +34,7 @@ function show(overrides: Partial<LiveEvent> = {}): LiveEvent {
   };
 }
 
-const tickets = new Tickets({ coinpayKey: "cp_live_test_key", site: "https://c0ncerts.com/" });
+const tickets = new Tickets({ coinpayKey: "cp_live_test_key", site: "https://c0ncerts.pwa.pit.world/" });
 
 test("a show is only ticketed when there is a price and somewhere to pay it", () => {
   assert.equal(isTicketed(show()), true);
@@ -56,13 +56,13 @@ test("everybody on the stage is already in, and so is a ticket holder", () => {
 test("a ticket travels in its own header, or in the query for a browser", () => {
   assert.equal(ticketFrom({ [TICKET_HEADER]: " cp_abc.def " }), "cp_abc.def");
   assert.equal(
-    ticketFrom({}, new URL("https://c0ncerts.com/shows/x?ticket=cp_query.sig")),
+    ticketFrom({}, new URL("https://c0ncerts.pwa.pit.world/shows/x?ticket=cp_query.sig")),
     "cp_query.sig",
   );
   // An <audio src> cannot set a header, so the query has to work; a header
   // still wins when both are present.
   assert.equal(
-    ticketFrom({ [TICKET_HEADER]: "cp_header.sig" }, new URL("https://c0ncerts.com/?ticket=cp_query.sig")),
+    ticketFrom({ [TICKET_HEADER]: "cp_header.sig" }, new URL("https://c0ncerts.pwa.pit.world/?ticket=cp_query.sig")),
     "cp_header.sig",
   );
   assert.equal(ticketFrom({}), "");
@@ -74,7 +74,7 @@ test("the offer quotes the show's own price and pays the show's own address", ()
   assert.equal(offer.priceCents, 1200);
   assert.equal(offer.currency, "USD");
   assert.equal(offer.header, TICKET_HEADER);
-  assert.equal(offer.buy, "https://c0ncerts.com/live/the-lunar-drips-live/tickets");
+  assert.equal(offer.buy, "https://c0ncerts.pwa.pit.world/live/the-lunar-drips-live/tickets");
   const accepts = (offer.offer as { accepts: Array<{ payTo: string; maxAmountRequired: string }> }).accepts;
   assert.ok(accepts.length > 0);
   assert.equal(accepts[0]?.payTo, PAY_TO);
@@ -94,7 +94,7 @@ test("a ticket to Friday is not a ticket to Saturday", async () => {
   assert.equal(await tickets.holds(friday, "cp_not.a-ticket"), false);
   assert.equal(await tickets.holds(friday, ""), false);
   // Another deployment's secret does not open this door either.
-  const elsewhere = new Tickets({ coinpayKey: "cp_live_other_key", site: "https://c0ncerts.com" });
+  const elsewhere = new Tickets({ coinpayKey: "cp_live_other_key", site: "https://c0ncerts.pwa.pit.world" });
   assert.equal(await elsewhere.holds(friday, ticket), false);
 });
 
@@ -106,13 +106,13 @@ test("a comp ticket can be short, and an expired one is not a ticket", async () 
 
 test("a free show has no till to open", async () => {
   const free = show({ ticketPriceCents: 0 });
-  const answer = await tickets.sell(free, new Request("https://c0ncerts.com/live/x/tickets"));
+  const answer = await tickets.sell(free, new Request("https://c0ncerts.pwa.pit.world/live/x/tickets"));
   assert.equal(answer.status, 409);
   assert.equal(await tickets.holds(free, await tickets.mint(free)), false);
 });
 
 test("without a payment proof the till quotes the price", async () => {
-  const answer = await tickets.sell(show(), new Request("https://c0ncerts.com/live/x/tickets"));
+  const answer = await tickets.sell(show(), new Request("https://c0ncerts.pwa.pit.world/live/x/tickets"));
   assert.equal(answer.status, 402);
   const body = await answer.json() as { pass: { price: string; minutes: number } };
   assert.equal(body.pass.price, "12.00 USD");
@@ -130,7 +130,7 @@ test("a deployment with no CoinPay key simply has no ticketing", () => {
 });
 
 test("a concert is a MusicEvent with an offer on it, and a talk is not", () => {
-  const canonical = "https://c0ncerts.com/shows/the-lunar-drips-live";
+  const canonical = "https://c0ncerts.pwa.pit.world/shows/the-lunar-drips-live";
   const concert = eventStructuredData(
     show({ status: "live", startsAt: "2026-10-02T02:00:00.000Z", doorsOpenAt: "2026-10-02T01:30:00.000Z" }),
     canonical,
