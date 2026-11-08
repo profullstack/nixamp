@@ -355,7 +355,7 @@ const concertRow = {
   artist_ids: ["account-2"],
 };
 
-const ticketDesk = new Tickets({ coinpayKey: "cp_live_test_key", site: "https://c0ncerts.com" });
+const ticketDesk = new Tickets({ coinpayKey: "cp_live_test_key", site: "https://c0ncerts.pwa.pit.world" });
 
 test("a ticketed room answers a stranger with a price, not with silence", async () => {
   const channels = new Channels({ ffmpeg: ["sh", "-c", "cat >/dev/null", "--"] });
