@@ -3052,12 +3052,13 @@ export class AiLabel {
     return report;
   }
 
-  /** A music video cut from Veo footage, by its bit rate: those are 1080p at tens of Mbit/s, the old slideshows a couple. */
+  /** A music video cut from Veo footage, by its bit rate: 1080p Veo cuts run 5-15 Mbit/s, the old slideshows under 2.5. */
   private async isFilmed(video: string): Promise<boolean> {
     try {
       const probed = await this.deps.probe(video);
       if (!(probed.duration > 0)) return false;
-      return (statSync(video).size * 8) / probed.duration > 8_000_000;
+      // server1's filmed singles ran 5.5-15 Mbit/s, its slideshows at most 2.4.
+      return (statSync(video).size * 8) / probed.duration > 4_000_000;
     } catch {
       return false;
     }
