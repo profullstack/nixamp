@@ -202,6 +202,15 @@ export async function handleLabelRoutes(
       ctx.json(response, 202, label.status());
       return true;
     }
+    if (path === "/api/v1/stations/label/adopt" && method === "POST") {
+      // Albums already on disk (copied from another server) back on the label, with their old keys where given.
+      const input = await jsonBody(ctx, request);
+      const record = (value: unknown): Record<string, string> => value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([, one]) => typeof one === "string")) as Record<string, string>
+        : {};
+      ctx.json(response, 200, { adopted: await label.adopt({ keys: record(input["keys"]), albums: record(input["albums"]), enabled: input["enabled"] !== false }) });
+      return true;
+    }
     if (path === "/api/v1/stations/label/artists" && method === "POST") {
       const input = await jsonBody(ctx, request);
       if (input["roster"] === true) {

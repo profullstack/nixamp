@@ -86,7 +86,7 @@ import { handleAiRoutes, isPublicSharePath } from "./ai-routes.ts";
 import { AiLabel, VeoUnavailable } from "./ai-label.ts";
 import { buyLink, handleLabelRoutes, isPublicLabelPath } from "./label-routes.ts";
 import { GrantVerifier, MusicStore, PRICES } from "./music-store.ts";
-import { handleMusicRoutes, isMusicPath, MusicHub, musicPageFor, serverId } from "./music-hub.ts";
+import { handleMusicRoutes, isMusicPath, MusicHub, musicPageFor, parseMoved, serverId } from "./music-hub.ts";
 import { fileLedger, pgLedger, VeoBudgetError, VeoStudio } from "./veo-studio.ts";
 import { KnownServers } from "./known-servers.ts";
 import { handleStoreRoutes, isStorePath } from "./store-routes.ts";
@@ -8221,7 +8221,7 @@ export async function serve(argv: string[], version = "0.1.0"): Promise<void> {
     return [...new Set([...guidePeers(), ...listed, ...(knownServers?.list().map((one) => one.base) ?? [])])];
   };
   // nixamp.com/music: every server's label in one catalogue (music-hub.ts).
-  const musicHub = options.directory ? new MusicHub({ peers: musicServers }) : undefined;
+  const musicHub = options.directory ? new MusicHub({ peers: musicServers, moved: parseMoved(process.env["NIXAMP_MUSIC_MOVED"]) }) : undefined;
   const musicStore = supportPayments && supportPayments.enabled && pool && jwtSecret ? new MusicStore({
     db: pool as unknown as import("./support.ts").Db,
     support: supportPayments,

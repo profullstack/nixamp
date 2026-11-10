@@ -518,6 +518,29 @@ async function labelCommand(argv: string[], call: Call, show: Show): Promise<num
         return `Label: ${String(settings["holder"])}, ${String(settings["songsPerAlbum"])} songs of ${String(settings["songSeconds"])} s an album, every ${String(settings["everyDays"])} days, at most ${Number(settings["monthlySeconds"]) === 0 ? "unlimited" : `${String(settings["monthlySeconds"])} s`} a month${settings["enabled"] ? "" : " (off)"}.`;
       });
     }
+    case "adopt": {
+      // Albums already under the label's folder (copied from another server) back on the label.
+      // --keys FILE: {"artists": {"<name>": "<old key>"}, "albums": {"<artist key>/<album title>": "<old key>"}}.
+      const file = flag(argv, "--keys");
+      let keys: Record<string, unknown> = {};
+      if (file) {
+        try {
+          keys = JSON.parse((await import("node:fs")).readFileSync(file, "utf8")) as Record<string, unknown>;
+        } catch (error) {
+          console.error(`nixamp station label adopt: could not read ${file}: ${(error as Error).message}`);
+          return 2;
+        }
+      }
+      const body = { keys: keys["artists"] ?? {}, albums: keys["albums"] ?? {}, ...(has(argv, "--off") ? { enabled: false } : {}) };
+      return show(await call("POST", "/api/v1/stations/label/adopt", body), (answer) => {
+        const done = answer["adopted"] as Record<string, unknown>;
+        const skipped = (done["skipped"] as string[] | undefined) ?? [];
+        return [
+          `Adopted ${String(done["artists"])} artists, ${String(done["albums"])} albums, ${String(done["songs"])} songs and ${String(done["videos"])} filmed videos; ${String(done["oldKeys"])} artists kept their old keys.`,
+          ...skipped.map((one) => `  skipped ${one}`),
+        ].join("\n");
+      });
+    }
     case "run":
       return show(await call("POST", "/api/v1/stations/label/run", {}), (body) => body["waiting"] ? `Nothing to record now: ${String(body["waiting"])}.` : "Recording whatever is due.");
     case "resume":

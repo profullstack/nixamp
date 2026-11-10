@@ -26,6 +26,18 @@ artist, album artist, album, genre, track `n/total`, year, the words (`lyrics-en
 the rights holder as publisher and copyright (`℗ 2026 Profullstack, Inc.`). Words in the tags are
 published to nichedb.dev by `lyrics-publish.ts` like any owned station's.
 
+### Moving a label to another server
+
+The folders are the catalogue; the state file (`ai-label-<port>.json`) only indexes them. Copy
+`<root>` to the new server's root and run `nixamp station label adopt --keys keys.json`: every
+`<genre>/<artist>/<year>-<album>/` comes back from `artist.md`, `album.json`, the members' pages
+and the songs' own files (words, `.lrc`, cover, filmed videos), and the genre stations are made
+again. Nothing is composed, drawn or moved. `keys.json` gives artists and albums their old keys,
+`{"artists": {"Velvet Ruckus": "558bd75d95"}, "albums": {"558bd75d95/Fuel the Fire": "841d68fe"}}`,
+so old links and purchases match; the rest get new ones. On nixamp.com,
+`NIXAMP_MUSIC_MOVED=https://old:4321>https://new:4321` sends `/music` addresses under the old
+server's id to the new one and stops listing the old one.
+
 ## The people: OpenProfile pages
 
 Each artist is cast once by the language model: one person for a solo act, three to five for a
