@@ -3409,7 +3409,7 @@ export class AiLabel {
       const files = this.list()
         .flatMap((artist) => artist.albums.flatMap((album) => album.songs.map((song) => ((song.videoVersion ?? 1) >= SHOWN ? song.video ?? "" : ""))))
         .filter((file) => file && this.deps.index.itemAt(file)?.state === "ready");
-      const existing = this.deps.store.byAuto("ai:label:videos");
+      const existing = this.claimed("ai:label:videos", `${this.labelName()} AI · Music Videos`);
       if (files.length === 0) {
         // Nothing filmed yet (older slideshow videos are not shown): off the guide until there is.
         if (existing && existing.listed) this.deps.store.setAccess(existing.id, { visibility: "private", listed: false }, this.deps.owner || "ai-label");
@@ -3695,7 +3695,23 @@ export class AiLabel {
   }
 
   private stationFor(genre: string): ReturnType<StationStore["get"]> {
-    return this.deps.store.byAuto(`ai:label:${genreSlug(genre)}`);
+    return this.claimed(`ai:label:${genreSlug(genre)}`, `${this.labelName()} AI · ${genre}`);
+  }
+
+  /** "Profullstack" for "Profullstack, Inc.": how the label's stations are named. */
+  private labelName(): string {
+    return this.settings.holder.replace(/,?\s+(inc|llc|ltd|gmbh|co)\.?$/i, "");
+  }
+
+  /**
+   * The label's station for this key; else one made by hand under the very name the
+   * label would give it (a label rebuilt on another server), taken over, not doubled.
+   */
+  private claimed(key: string, name: string): ReturnType<StationStore["get"]> {
+    const marked = this.deps.store.byAuto(key);
+    if (marked) return marked;
+    const named = this.deps.store.list().find((one) => !one.auto && one.name === name);
+    return named ? this.deps.store.markAuto(named.id, key) : undefined;
   }
 
   /** The genre's station gets every song of that genre: made with the first, then kept in step. */

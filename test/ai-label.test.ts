@@ -1033,8 +1033,11 @@ test("adopt takes a catalogue copied from another server back, old keys and all"
       deps.probe = async (file) => ({ ...(await plain(file)), duration: file.endsWith(".mp4") ? 1 : 150 });
     }
 
+    // Somebody already made the genre's station by hand on the new server: it is taken over, not doubled.
+    const byHand = fresh.store.create({ name: `Profullstack AI · ${artist.genre}`, shuffle: true, repeat: true }, [join(fresh.top, "old.mp3")], "chovy");
     const report = await fresh.label.adopt({ keys: { [artist.name]: artist.key }, albums: { [`${artist.key}/${album.title}`]: album.key } });
     assert.deepEqual({ ...report, skipped: report.skipped.length }, { artists: 1, albums: 1, songs: 3, videos: 1, oldKeys: 1, skipped: 0 });
+    assert.deepEqual(fresh.store.list().filter((one) => one.name === byHand.name).map((one) => [one.id, one.auto]), [[byHand.id, `ai:label:${genreSlug(artist.genre)}`]]);
     const back = fresh.label.get(artist.key)!;
     assert.equal(back.name, artist.name);
     assert.equal(back.genre, artist.genre);
