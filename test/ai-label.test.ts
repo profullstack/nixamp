@@ -1007,3 +1007,60 @@ test("the lyric writer is told the genre's craft and given more room for rap", a
   assert.match(asked[0]!, /under 1920 characters/);
   assert.match(asked[0]!, /Never use these stock words/);
 });
+
+test("adopt takes a catalogue copied from another server back, old keys and all", { timeout: 60_000 }, async () => {
+  // The old server: one artist, one album of three songs, its pages written.
+  const old = setup(fakeComposer([]));
+  const fresh = setup(fakeComposer([]));
+  const other = setup(fakeComposer([]));
+  (old.label as unknown as { deps: Record<string, unknown> }).deps["image"] = async () => Buffer.alloc(2048, 3);
+  try {
+    old.label.configure({ seedAlbums: 1, songsPerAlbum: 3, songSeconds: 60, monthlySeconds: 0, enabled: false });
+    const artist = old.label.sign({ preset: "no-refunds" });
+    old.label.configure({ enabled: true });
+    await idle(old.label, () => Boolean(old.label.get(artist.key)!.albums[0]?.doneAt));
+    old.label.stopSchedule();
+    const album = old.label.get(artist.key)!.albums[0]!;
+    assert.equal(album.songs.filter((one) => one.file).length, 3);
+    await old.label.ensureProfile(old.label.get(artist.key)!).catch(() => undefined);
+    // A filmed single (Veo footage is tens of Mbit/s) and an .lrc; then the box is gone and only the folders are copied.
+    writeFileSync(join(album.folder, `${songBase(album.songs[0]!)}.mp4`), Buffer.alloc(3_000_000, 1));
+    writeFileSync(join(album.folder, `${songBase(album.songs[1]!)}.lrc`), "[00:01.00]la\n");
+    for (const to of [fresh, other]) execFileSync("cp", ["-r", join(old.top, "done"), to.top]);
+    for (const to of [fresh, other]) {
+      const deps = (to.label as unknown as { deps: { probe: (file: string) => Promise<Probed> } }).deps;
+      const plain = deps.probe;
+      deps.probe = async (file) => ({ ...(await plain(file)), duration: file.endsWith(".mp4") ? 1 : 150 });
+    }
+
+    const report = await fresh.label.adopt({ keys: { [artist.name]: artist.key }, albums: { [`${artist.key}/${album.title}`]: album.key } });
+    assert.deepEqual({ ...report, skipped: report.skipped.length }, { artists: 1, albums: 1, songs: 3, videos: 1, oldKeys: 1, skipped: 0 });
+    const back = fresh.label.get(artist.key)!;
+    assert.equal(back.name, artist.name);
+    assert.equal(back.genre, artist.genre);
+    assert.equal(back.sound, artist.sound);
+    assert.equal(back.albums[0]!.key, album.key);
+    assert.equal(back.albums[0]!.title, album.title);
+    assert.ok(back.albums[0]!.doneAt > 0, "a whole album is released");
+    assert.ok(back.albums[0]!.cover.endsWith("cover.jpg"));
+    assert.equal(back.albums[0]!.songs[1]!.lyrics, album.songs[1]!.lyrics);
+    assert.ok(back.albums[0]!.songs[1]!.lrc);
+    // What /music, the zips and the purchases ask for answers again, at the old keys.
+    const songs = fresh.label.publicView().genres[0]!.artists[0]!.albums[0]!.songs;
+    assert.equal(songs.length, 3);
+    assert.equal(songs[0]!.video, true, "the filmed single is shown");
+    assert.equal(songs[1]!.video, undefined);
+    assert.ok(fresh.label.publicFile(artist.key, album.key, "2.mp3")?.path.endsWith(".mp3"));
+    assert.ok(fresh.label.zipFor({ kind: "album", artist: artist.key, album: album.key, n: 0 }));
+    // Twice is harmless.
+    const again = await fresh.label.adopt({});
+    assert.equal(again.artists + again.albums, 0);
+    // Without a key an artist gets a new one, and its music all the same.
+    const plainReport = await other.label.adopt();
+    assert.equal(plainReport.oldKeys, 0);
+    assert.notEqual(other.label.list()[0]!.key, artist.key);
+    assert.equal(other.label.list()[0]!.albums[0]!.songs.filter((one) => one.file).length, 3);
+  } finally {
+    for (const one of [old, fresh, other]) rmSync(one.top, { recursive: true, force: true });
+  }
+});

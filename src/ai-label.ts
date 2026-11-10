@@ -28,7 +28,7 @@
  */
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { aiKey } from "./ai-keys.ts";
 import { composerFromEnv, OutOfCredit, type Composer } from "./ai-radio.ts";
@@ -1895,6 +1895,69 @@ export function genreSlug(genre: string): string {
   return genre.normalize("NFKD").toLowerCase().replace(/&/g, "n").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "music";
 }
 
+/** What `adopt` took back from disk. */
+export interface AdoptReport {
+  artists: number;
+  albums: number;
+  /** Recorded songs (planned ones without a file are kept too, to be made). */
+  songs: number;
+  /** Filmed music videos, shown on /music. */
+  videos: number;
+  /** Artists that kept the key they had before. */
+  oldKeys: number;
+  /** Folders left alone, and why. */
+  skipped: string[];
+}
+
+/** The folders in a folder, hidden ones left out; none when it cannot be read. */
+function listDirs(folder: string): string[] {
+  try {
+    return readdirSync(folder, { withFileTypes: true }).filter((one) => one.isDirectory() && !one.name.startsWith(".")).map((one) => one.name).sort();
+  } catch {
+    return [];
+  }
+}
+
+function readText(file: string): string {
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function readJson(file: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function mtimeOf(file: string): number {
+  try {
+    return Math.round(statSync(file).mtimeMs);
+  } catch {
+    return 0;
+  }
+}
+
+/** The text under "## <heading>" in an artist.md (bandMarkdown). */
+function section(page: string, heading: string): string {
+  const at = page.indexOf(`\n## ${heading}\n`);
+  if (at < 0) return "";
+  const rest = page.slice(at + heading.length + 5);
+  const end = rest.indexOf("\n## ");
+  return (end < 0 ? rest : rest.slice(0, end)).trim();
+}
+
+/** The bio: the paragraph between the facts list and the first section of an artist.md. */
+function intro(page: string): string {
+  const head = page.split("\n## ")[0] ?? "";
+  return head.split("\n").filter((one) => one.trim() && !one.startsWith("#") && !one.startsWith("- ")).join(" ").trim();
+}
+
 /** "001. Title", the start of a song's file names. */
 export function songBase(song: Pick<LabelSong, "n" | "title">): string {
   return `${String(song.n).padStart(3, "0")}. ${fileName(song.title)}`;
@@ -2842,6 +2905,162 @@ export class AiLabel {
     this.writeAlbumJson(artist, album);
     this.log(`${artist.name} has a new album planned: "${album.title}" (${album.songs.length} songs)`);
     return album;
+  }
+
+  /**
+   * Take back a catalogue that is on disk but not in the state file: the label's
+   * folders copied from another server (or a state file lost with its box).
+   * Every <genre>/<artist>/<year>-<album>/ under the root becomes the artist and
+   * album it was, from artist.md, album.json, the members' pages and the songs'
+   * own files, so /music, the genre stations, zips and purchases work again.
+   * `keys` gives artists their old keys by name and `albums` their albums' by
+   * "<artist key>/<album title>", so links and grants made before still match;
+   * the rest get new ones. Nothing is composed or drawn and nothing is moved;
+   * artists and albums already on the label are left as they are.
+   */
+  async adopt(input: { keys?: Record<string, string>; albums?: Record<string, string>; enabled?: boolean } = {}): Promise<AdoptReport> {
+    const report: AdoptReport = { artists: 0, albums: 0, songs: 0, videos: 0, oldKeys: 0, skipped: [] };
+    const used = new Set([...this.artists.keys()]);
+    const usedAlbums = new Set(this.list().flatMap((one) => one.albums.map((album) => album.key)));
+    const keyFor = (name: string): string => {
+      const old = input.keys?.[name];
+      if (old && /^[a-f0-9]{10}$/.test(old) && !used.has(old)) {
+        report.oldKeys += 1;
+        return old;
+      }
+      let key = randomBytes(5).toString("hex");
+      while (used.has(key)) key = randomBytes(5).toString("hex");
+      return key;
+    };
+    const albumKeyFor = (artistKey: string, title: string): string => {
+      const old = input.albums?.[`${artistKey}/${title}`];
+      if (old && /^[a-f0-9]{8}$/.test(old) && !usedAlbums.has(old)) return old;
+      let key = randomBytes(4).toString("hex");
+      while (usedAlbums.has(key)) key = randomBytes(4).toString("hex");
+      return key;
+    };
+    const touched = new Set<string>();
+    for (const genreDir of listDirs(this.root)) {
+      for (const artistDir of listDirs(join(this.root, genreDir))) {
+        const folder = join(this.root, genreDir, artistDir);
+        const page = readText(join(folder, "artist.md"));
+        const albumDirs = listDirs(folder).filter((one) => /^\d{4}-./.test(one));
+        const firstJson = albumDirs.map((one) => readJson(join(folder, one, "album.json"))).find((one) => one);
+        const name = clean(/^# (.+)$/m.exec(page)?.[1] ?? firstJson?.["artist"] ?? artistDir, 80);
+        const genre = clean(/^- \*\*Genre\*\*: (.+)$/m.exec(page)?.[1] ?? firstJson?.["genre"] ?? genreDir, 40);
+        if (genreSlug(genre) !== genreDir || fileName(name) !== artistDir) {
+          report.skipped.push(`${genreDir}/${artistDir}: its pages say ${genre}/${name}, which files elsewhere`);
+          continue;
+        }
+        const preset = Object.values(ROSTER).find((one) => one.name.toLowerCase() === name.toLowerCase());
+        let artist = this.list().find((one) => one.name.toLowerCase() === name.toLowerCase());
+        if (!artist) {
+          const key = keyFor(name);
+          used.add(key);
+          artist = {
+            key, name, genre,
+            sound: clean(section(page, "Sound") || preset?.sound || genre, 600),
+            voice: clean(section(page, "Lead voice") || preset?.voice || "expressive lead vocal", 300),
+            bio: clean(intro(page) || preset?.bio || "", 400),
+            themes: clean(section(page, "Themes") || preset?.themes || "", 300),
+            enabled: input.enabled !== false,
+            albums: [],
+            createdAt: this.now(),
+            lastAttemptAt: 0,
+            lastError: "",
+            failures: 0,
+          };
+          const members = [...page.matchAll(/\(members\/([a-z0-9-]{1,40})\.md\)/g)].map((one) => one[1]!)
+            .filter((slug) => existsSync(join(folder, "members", `${slug}.md`)));
+          if (members.length) artist.members = members;
+          this.artists.set(artist.key, artist);
+          report.artists += 1;
+        }
+        for (const albumDir of albumDirs) {
+          const albumFolder = join(folder, albumDir);
+          const json = readJson(join(albumFolder, "album.json")) ?? {};
+          const title = clean(json["album"] ?? albumDir.replace(/^\d{4}-/, ""), 120);
+          if (artist.albums.some((one) => one.title.toLowerCase() === title.toLowerCase())) continue;
+          const planned = Array.isArray(json["songs"]) ? json["songs"] as Array<Record<string, unknown>> : [];
+          const files = readdirSync(albumFolder).filter((one) => /^\d{3}\. .+\.mp3$/.test(one));
+          const numbers = new Set([...planned.map((one) => Number(one["n"])), ...files.map((one) => Number(one.slice(0, 3)))].filter((n) => Number.isInteger(n) && n > 0));
+          const songs: LabelSong[] = [];
+          for (const n of [...numbers].sort((a, b) => a - b)) {
+            const entry = planned.find((one) => Number(one["n"]) === n);
+            const mp3 = files.find((one) => Number(one.slice(0, 3)) === n);
+            const base = mp3 ? mp3.replace(/\.mp3$/, "") : "";
+            const songTitle = clean(entry?.["title"] ?? base.replace(/^\d{3}\. /, ""), 120);
+            const at = (ext: string): string => base && existsSync(join(albumFolder, `${base}${ext}`)) ? join(albumFolder, `${base}${ext}`) : "";
+            const file = mp3 ? join(albumFolder, mp3) : "";
+            let seconds = Number(entry?.["seconds"]) || this.settings.songSeconds;
+            let made = "";
+            if (file) {
+              try {
+                const probed = await this.deps.probe(file);
+                if (probed.duration > 0) seconds = Math.round(probed.duration);
+              } catch { /* the planned length */ }
+              made = "adopted";
+            }
+            const lyricsFile = at(".lyrics.txt");
+            const song: LabelSong = {
+              n, title: songTitle, style: clean(entry?.["style"] ?? json["concept"] ?? "", 600), lyrics: lyricsFile ? readText(lyricsFile).trim() : "",
+              seconds, file, lyricsFile, made, composedAt: file ? mtimeOf(file) : 0,
+            };
+            const lrc = at(".lrc");
+            if (lrc) song.lrc = lrc;
+            const video = at(".mp4");
+            if (video && file) {
+              song.video = video;
+              song.videoTagged = true;
+              // Filmed videos are 1080p Veo footage (tens of Mbit/s); the older cover-and-waveform ones were never shown.
+              const filmed = await this.isFilmed(video);
+              song.videoVersion = filmed ? FILMED : 1;
+              // Whether its singer was synced is not on disk; it is not filmed again for that.
+              if (filmed) song.singer = "unsynced";
+              if (filmed) report.videos += 1;
+            }
+            songs.push(song);
+            if (file) report.songs += 1;
+          }
+          if (songs.length === 0) continue;
+          const key = albumKeyFor(artist.key, title);
+          usedAlbums.add(key);
+          const year = Number(json["year"]) || Number(albumDir.slice(0, 4)) || new Date(this.now()).getUTCFullYear();
+          const times = songs.filter((one) => one.file).map((one) => one.composedAt);
+          const cover = existsSync(join(albumFolder, "cover.jpg")) ? join(albumFolder, "cover.jpg") : "";
+          artist.albums.push({
+            key, title, year,
+            concept: clean(json["concept"] ?? "", 600),
+            folder: albumFolder,
+            cover,
+            coverTried: true,
+            songs,
+            writer: "",
+            plannedAt: times.length ? Math.min(...times) : mtimeOf(albumFolder),
+            doneAt: songs.every((one) => one.file) ? Math.max(...times) : 0,
+          });
+          artist.albums.sort((a, b) => a.plannedAt - b.plannedAt);
+          artist.createdAt = Math.min(artist.createdAt, artist.albums[0]!.plannedAt || artist.createdAt);
+          report.albums += 1;
+          touched.add(artist.genre);
+        }
+      }
+    }
+    this.save();
+    for (const genre of touched) await this.place(genre).catch((error: unknown) => this.log(`could not put ${genre} on the air: ${(error as Error).message}`));
+    this.log(`adopted ${report.artists} artists, ${report.albums} albums, ${report.songs} songs (${report.oldKeys} kept their old keys)`);
+    return report;
+  }
+
+  /** A music video cut from Veo footage, by its bit rate: those are 1080p at tens of Mbit/s, the old slideshows a couple. */
+  private async isFilmed(video: string): Promise<boolean> {
+    try {
+      const probed = await this.deps.probe(video);
+      if (!(probed.duration > 0)) return false;
+      return (statSync(video).size * 8) / probed.duration > 8_000_000;
+    } catch {
+      return false;
+    }
   }
 
   startSchedule(everyMs = 5 * 60_000): void {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { artistFollowId, isMusicPath, MusicHub, musicPageFor, serverId } from "../src/music-hub.ts";
+import { artistFollowId, handleMusicRoutes, isMusicPath, MusicHub, musicPageFor, parseMoved, serverId } from "../src/music-hub.ts";
 import { buyLink } from "../src/label-routes.ts";
 
 const S1 = "https://server1.example.com:4321";
@@ -81,4 +81,24 @@ test("the app's paths: the pages, the catalogue, files through nixamp.com, and r
     "/api/v1/music/file/0123456789/aaaaaaaaaa/bbbbbbbb/cover.jpg", "/api/v1/music/file/0123456789/aaaaaaaaaa/bbbbbbbb/3.txt", "/api/v1/music/file/0123456789/aaaaaaaaaa/bbbbbbbb/3.mp4",
     "/api/v1/music/file/0123456789/aaaaaaaaaa/members/kai-rylan.jpg", "/api/v1/music/file/0123456789/aaaaaaaaaa/artist.md"]) assert.ok(isMusicPath(ok), ok);
   for (const no of ["/musical", "/api/v1/music/file/0123456789/aaaaaaaaaa/bbbbbbbb/1.mp3", "/api/v1/music/file/x/../../etc/passwd"]) assert.ok(!isMusicPath(no), no);
+});
+
+test("a label that moved: the old server is not listed twice and its old addresses go to the new id", async () => {
+  assert.deepEqual(parseMoved(` ${S1}/ > ${S2} ,junk,${S2}>${S2}`), { [S1]: S2 });
+  const hub = new MusicHub({ peers: () => [S1, S2], fetcher: fetcher([]), moved: { [S1]: S2 } });
+  const catalogue = await hub.catalogue();
+  assert.deepEqual(catalogue.genres.flatMap((one) => one.artists.map((artist) => artist.server)), [serverId(S2)]);
+  assert.equal(hub.movedTo(serverId(S1)), serverId(S2));
+  assert.equal(hub.movedTo(serverId(S2)), "");
+  const answered: Array<{ status: number; headers: Record<string, string> }> = [];
+  const response = { writeHead(status: number, headers: Record<string, string>) { answered.push({ status, headers }); }, end() {} } as never;
+  const ctx = { hub, json: () => undefined, readBody: async () => "", page: () => "<html></html>" };
+  for (const [path, want] of [
+    [`/music/album/${serverId(S1)}/aaaaaaaaaa/bbbbbbbb`, `/music/album/${serverId(S2)}/aaaaaaaaaa/bbbbbbbb?x=1`],
+    [`/api/v1/music/file/${serverId(S1)}/aaaaaaaaaa/bbbbbbbb/1.mp4`, `/api/v1/music/file/${serverId(S2)}/aaaaaaaaaa/bbbbbbbb/1.mp4?x=1`],
+  ] as const) {
+    answered.length = 0;
+    assert.equal(await handleMusicRoutes({ method: "GET", url: `${path}?x=1`, headers: {} } as never, response, path, ctx), true);
+    assert.deepEqual(answered, [{ status: 301, headers: { location: want, "cache-control": "public, max-age=86400" } }]);
+  }
 });

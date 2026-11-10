@@ -45,6 +45,21 @@ export interface MusicHubOptions {
   peers: () => string[];
   fetcher?: typeof fetch;
   now?: () => number;
+  /**
+   * Label servers that moved, old https origin to new (a box gone, its label adopted
+   * on another): /music addresses under the old origin's id go to the new one's.
+   */
+  moved?: Record<string, string>;
+}
+
+/** NIXAMP_MUSIC_MOVED: "https://old:4321>https://new:4321", several separated by commas. */
+export function parseMoved(text: string | undefined): Record<string, string> {
+  const moved: Record<string, string> = {};
+  for (const pair of (text ?? "").split(",")) {
+    const [from, to] = pair.split(">").map((one) => one.trim().replace(/\/+$/, ""));
+    if (from && to && /^https?:\/\//.test(from) && /^https?:\/\//.test(to) && from !== to) moved[from] = to;
+  }
+  return moved;
 }
 
 export class MusicHub {
@@ -60,8 +75,20 @@ export class MusicHub {
   /** The https origin behind an opaque id, among the servers known now. */
   resolve(id: string): string {
     if (!/^[a-f0-9]{10}$/.test(id)) return "";
-    if (!this.bases.has(id)) for (const base of this.options.peers()) this.bases.set(serverId(base), base);
+    if (!this.bases.has(id)) for (const base of this.peers()) this.bases.set(serverId(base), base);
     return this.bases.get(id) ?? "";
+  }
+
+  /** The servers to gather, less any that moved (the same label would be listed twice). */
+  private peers(): string[] {
+    const moved = this.options.moved ?? {};
+    return this.options.peers().filter((base) => !moved[base.replace(/\/+$/, "")]);
+  }
+
+  /** The id a moved server goes by now, or "" when this id never moved. */
+  movedTo(id: string): string {
+    for (const [from, to] of Object.entries(this.options.moved ?? {})) if (serverId(from) === id) return serverId(to);
+    return "";
   }
 
   /** The catalogue, gathered at most once a minute (a slow or gone server is left out, not waited on). */
@@ -85,7 +112,7 @@ export class MusicHub {
   }
 
   private async gather(): Promise<HubCatalogue> {
-    const peers = [...new Set(this.options.peers())];
+    const peers = [...new Set(this.peers())];
     const holders = new Set<string>();
     const genres = new Map<string, { genre: string; stations: HubStation[]; artists: HubArtist[] }>();
     const stations: HubStation[] = [];
@@ -192,6 +219,15 @@ export async function handleMusicRoutes(request: IncomingMessage, response: Serv
     return true;
   }
   if (method !== "GET" && method !== "HEAD") { ctx.json(response, 405, { error: "not like that" }); return true; }
+  // A label that moved to another server: its old addresses (shared links, search results) go to the new ones.
+  const old = /^(\/music\/(?:artist|album|member)\/|\/api\/v1\/music\/(?:file|member)\/)([a-f0-9]{10})(\/.*)$/.exec(path);
+  const now = old ? ctx.hub.movedTo?.(old[2]!) ?? "" : "";
+  if (old && now) {
+    const query = (request.url ?? "").includes("?") ? (request.url ?? "").slice((request.url ?? "").indexOf("?")) : "";
+    response.writeHead(301, { location: `${old[1]}${now}${old[3]}${query}`, "cache-control": "public, max-age=86400" });
+    response.end();
+    return true;
+  }
   if (path === "/api/v1/music") {
     ctx.json(response, 200, await ctx.hub.catalogue());
     return true;
