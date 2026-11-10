@@ -79,7 +79,8 @@ export function coinpayProvider(clientId: string, clientSecret: string, base = "
         subject,
         email,
         verified: false,
-        openprofileUrl: typeof who["openprofile_url"] === "string" ? who["openprofile_url"] : undefined,
+        // Only when CoinPay names one: an absent field stays absent, not `undefined`.
+        ...(typeof who["openprofile_url"] === "string" ? { openprofileUrl: who["openprofile_url"] } : {}),
       };
     },
   };
