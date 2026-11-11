@@ -174,6 +174,18 @@ test("the crawl door sells the day pass on /crawl", async () => {
   assert.equal(body.accepts[0]?.amount, "1000000");
 });
 
+test("the crawl door leaves the legal pages open to crawlers on both hosts", async () => {
+  const gate = createCrawlGate(CRAWL_ENV)!;
+  const CLAUDEBOT = "Mozilla/5.0 (compatible; ClaudeBot/1.0; +claudebot@anthropic.com)";
+  for (const host of ["nixamp.com", "backtoschool.help"]) {
+    for (const path of ["/privacy", "/terms"]) {
+      for (const ua of [GPTBOT, CLAUDEBOT]) {
+        assert.equal(await gate.handle(new Request(`http://${host}${path}`, { headers: { "user-agent": ua } })), null, `${host}${path} ${ua}`);
+      }
+    }
+  }
+});
+
 test("the crawl door lets a browser and a signed-in session through", async () => {
   const gate = createCrawlGate(CRAWL_ENV, (r) => (r.headers.get("cookie") ?? "").includes("nixamp_session="))!;
   const chrome = { "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36", "sec-fetch-mode": "navigate", "sec-fetch-site": "none", "sec-fetch-dest": "document" };

@@ -223,7 +223,8 @@ export function createCrawlGate(
     payTo,
     secret: `${apiKey}:crawl`,
     contact: "mailto:anthony@profullstack.com",
-    openPaths: ["/api/health", "/llms.txt", "/.well-known/"],
+    // /privacy and /terms (both hosts, legal.ts): a connector directory's review crawler must read them.
+    openPaths: ["/api/health", "/llms.txt", "/.well-known/", "/privacy", "/terms"],
     exempt,
   });
 }
