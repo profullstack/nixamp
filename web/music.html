@@ -9,6 +9,8 @@
     <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64" />
     <link rel="manifest" href="/music.webmanifest" />
     <link rel="apple-touch-icon" href="/icons/music/apple-touch-icon.png" />
+    <!-- WebMCP (@profullstack/webmcp): site tools + the account's /mcp tools (session cookie) for the AI agent in the visitor's browser. -->
+    <script type="module" data-webmcp src="https://cdn.jsdelivr.net/npm/@profullstack/webmcp@0/src/embed.js" data-mcp="/mcp" data-mcp-exclude="class_delete,station_unpublish,library_scan" data-pages='{"guide":"/guide","radio":"/radio","music":"/music","watch":"/watch","vod":"/vod"}'></script>
   </head>
   <body>
     <a class="skip" href="#view">Skip to the music</a>
