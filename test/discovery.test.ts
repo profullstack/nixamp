@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
-  DESKTOP_TARGETS, RELEASES, desktopAsset, handleDiscovery, isDiscoveryPath, latestRelease, llmsTxt, openapiDocument, type Release,
+  DESKTOP_TARGETS, RELEASES, desktopAsset, handleDiscovery, isDiscoveryPath, latestRelease, llmsTxt, openapiDocument, x402Document, type Release,
 } from "../src/discovery.ts";
 
 const SITE = "https://nixamp.com";
@@ -38,6 +38,15 @@ test("llms.txt names the public MCP, the stdio MCP, the API and a Desktop sectio
   const desktop = text.split(/^## Desktop app$/m)[1]!.split(/^## /m)[0]!;
   assert.match(desktop, /^Downloads: https:\/\/nixamp\.com\/download$/m);
   for (const one of DESKTOP_TARGETS) assert.ok(desktop.includes(`- ${one.label}: ${SITE}/download/${one.target}`), one.target);
+});
+
+test("/.well-known/x402 lists the crawl pass as a resource and points at both MCP endpoints (issue #409)", () => {
+  const doc = x402Document(SITE) as { version: number; resources: string[]; mcp: { public: string; authenticated: string } };
+  assert.equal(doc.version, 1);
+  assert.deepEqual(doc.resources, [`${SITE}/crawl`]);
+  assert.equal(doc.mcp.public, `${SITE}/mcp/public`);
+  assert.equal(doc.mcp.authenticated, `${SITE}/mcp`);
+  assert.match(llmsTxt(SITE), /\/\.well-known\/x402$/m);
 });
 
 test("the OpenAPI document is 3.1, points at the site, and marks the signed-in routes", () => {
@@ -101,6 +110,14 @@ test("the routes: text, JSON, the download page, a redirect per platform, and no
     const pages = await (await fetch(`${base}/sitemaps/static.xml`)).text();
     assert.ok(pages.includes(`<loc>${SITE}/</loc>`));
     assert.ok(pages.includes(`<loc>${SITE}/music</loc>`));
+
+    for (const wellKnown of ["/.well-known/x402", "/.well-known/x402.json"]) {
+      const x402 = await fetch(`${base}${wellKnown}`);
+      assert.equal(x402.status, 200);
+      assert.match(x402.headers.get("content-type") ?? "", /^application\/json/);
+      assert.equal(x402.headers.get("access-control-allow-origin"), "*");
+      assert.deepEqual((await x402.json() as { resources: string[] }).resources, [`${SITE}/crawl`]);
+    }
 
     const spec = await fetch(`${base}/openapi.json`);
     assert.equal((await spec.json() as { info: { version: string } }).info.version, "1.2.3");
