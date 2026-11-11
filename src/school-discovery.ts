@@ -15,6 +15,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { SCHOOL_PUBLIC_TOOLS, SCHOOL_TOOLS, callSchoolTool, isSchoolPublicTool, isSchoolTool } from "./school-mcp.ts";
 import { SCHOOL_SITE } from "./school-client.ts";
+import { toolsListResult } from "./mcp-annotations.ts";
 
 export interface SchoolDiscoveryContext {
   /** This school's origin, e.g. https://backtoschool.help. */
@@ -35,7 +36,8 @@ const CORS = {
   "access-control-allow-headers": "authorization, content-type, mcp-session-id, mcp-protocol-version",
 };
 
-const PATHS = new Set(["/llms.txt", "/openapi.json", "/mcp", "/mcp/public", "/.well-known/oauth-protected-resource"]);
+const PRM = "/.well-known/oauth-protected-resource";
+const PATHS = new Set(["/llms.txt", "/openapi.json", "/mcp", "/mcp/public", PRM, `${PRM}/mcp`]);
 
 /** Is this host the school? backtoschool.help (or NIXAMP_SCHOOL_URL), with or without www. */
 export function isSchoolSite(site: string | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -141,13 +143,13 @@ export async function handleSchoolDiscovery(request: IncomingMessage, response: 
     response.end();
     return true;
   }
-  if (path === "/llms.txt" || path === "/openapi.json" || path === "/.well-known/oauth-protected-resource") {
+  if (path === "/llms.txt" || path === "/openapi.json" || path === PRM || path === `${PRM}/mcp`) {
     if (method !== "GET" && method !== "HEAD") { ctx.json(response, 405, { error: "GET only" }); return true; }
     const [type, body] = path === "/llms.txt"
       ? ["text/plain; charset=utf-8", schoolLlmsTxt(site, ctx.accountSite)]
       : ["application/json; charset=utf-8", JSON.stringify(path === "/openapi.json"
         ? schoolOpenapi(site, ctx.accountSite, ctx.version)
-        : { resource: site, authorization_servers: [ctx.accountSite], bearer_methods_supported: ["header"], resource_name: "BackToSchool.help" }, null, 2)];
+        : { resource: `${site}/mcp`, authorization_servers: [ctx.accountSite], bearer_methods_supported: ["header"], resource_name: "BackToSchool.help" }, null, 2)];
     response.writeHead(200, { ...CORS, "content-type": type, "cache-control": "public, max-age=300" });
     response.end(method === "HEAD" ? undefined : body);
     return true;
@@ -193,7 +195,7 @@ export async function handleSchoolDiscovery(request: IncomingMessage, response: 
     } else if (name === "ping") {
       answers.push({ jsonrpc: "2.0", id, result: {} });
     } else if (name === "tools/list") {
-      answers.push({ jsonrpc: "2.0", id, result: { tools } });
+      answers.push({ jsonrpc: "2.0", id, result: toolsListResult(tools, signed ? "private" : "public") });
     } else if (name === "tools/call" && allowed(String(message.params?.["name"] ?? ""))) {
       const result = await callSchoolTool(String(message.params!["name"]), (message.params?.["arguments"] ?? {}) as Record<string, unknown>, {
         site, token: ctx.token || null, ...(ctx.fetcher ? { fetcher: ctx.fetcher } : {}),
