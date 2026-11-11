@@ -24,7 +24,7 @@ export const DESKTOP_TARGETS: ReadonlyArray<{ target: string; label: string; suf
   { target: "deb-arm64", label: "Debian/Ubuntu .deb (arm64)", suffix: "-linux-arm64.deb" },
 ];
 
-export const DISCOVERY_PATHS = new Set(["/llms.txt", "/openapi.json", "/api/v1/health", "/download", "/robots.txt", "/sitemap.xml", "/sitemaps/static.xml"]);
+export const DISCOVERY_PATHS = new Set(["/.well-known/x402", "/.well-known/x402.json", "/llms.txt", "/openapi.json", "/api/v1/health", "/download", "/robots.txt", "/sitemap.xml", "/sitemaps/static.xml"]);
 export const isDiscoveryPath = (path: string): boolean => DISCOVERY_PATHS.has(path) || /^\/download\/[a-z0-9-]{1,20}$/.test(path);
 
 export interface ReleaseAsset { name: string; browser_download_url: string }
@@ -107,6 +107,34 @@ export function latestRelease(fetcher: typeof fetch = fetch, now: () => number =
   };
 }
 
+/**
+ * /.well-known/x402: what a machine buyer can pay for here, by convention
+ * (`version` + `resources`, the shape x402 directories crawl). The crawl day
+ * pass is the one fixed resource; a ticketed live show sells at its own
+ * /live/<slug>/tickets, so those are described rather than listed. An unpaid
+ * request to any resource answers 402 with the offer, which is the real price.
+ */
+export function x402Document(site: string): Record<string, unknown> {
+  return {
+    version: 1,
+    name: "nixamp",
+    description: "Open source live radio, TV and film. Machine buyers pay over x402 v2 (USDC on Base, Polygon or Ethereum).",
+    resources: [`${site}/crawl`],
+    items: [
+      { resource: `${site}/crawl`, method: "GET", description: "Crawl day pass: 24 hours of crawl access to nixamp.com for $1. People, verified search crawlers and AI chat fetchers are never charged." },
+      { resource: `${site}/live/{slug}/tickets`, method: "GET", description: "A ticket to a ticketed live show; the show's price and minutes come back in the 402." },
+    ],
+    mcp: {
+      public: `${site}/mcp/public`,
+      authenticated: `${site}/mcp`,
+      note: "/mcp/public answers initialize with no account. /mcp answers 401 with a WWW-Authenticate pointing at the OAuth resource metadata, by design: that is how an MCP client learns to sign in.",
+    },
+    oauth: `${site}/.well-known/oauth-protected-resource`,
+    llms: `${site}/llms.txt`,
+    openapi: `${site}/openapi.json`,
+  };
+}
+
 export function llmsTxt(site: string): string {
   const desktop = DESKTOP_TARGETS.map((one) => `- ${one.label}: ${site}/download/${one.target}`).join("\n");
   return `# nixamp
@@ -126,6 +154,10 @@ export function llmsTxt(site: string): string {
 - Public, no account (stations, what is on, share a track): ${site}/mcp/public
 - Signed in (watch parties, rooms, transcripts, music, your stations): ${site}/mcp , a nixamp token as the bearer (\`nixamp token create\`) or OAuth
 - Local over stdio: npx -y nixamp mcp
+
+## x402
+- What a machine can pay for: ${site}/.well-known/x402
+- Crawl day pass ($1, 24 h): ${site}/crawl
 
 ## API
 - OpenAPI: ${site}/openapi.json
@@ -236,6 +268,10 @@ export async function handleDiscovery(request: IncomingMessage, response: Server
   }
   if (path === "/llms.txt") {
     send(response, 200, "text/plain; charset=utf-8", llmsTxt(site), method);
+    return true;
+  }
+  if (path === "/.well-known/x402" || path === "/.well-known/x402.json") {
+    send(response, 200, "application/json; charset=utf-8", JSON.stringify(x402Document(site), null, 2), method);
     return true;
   }
   if (path === "/robots.txt") {
