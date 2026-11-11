@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { memberProfile, musicPage, renderMusicPage } from "./music-seo.ts";
 import { readMember } from "./label-profiles.ts";
+import { fileName, genreSlug, songBase } from "./ai-label.ts";
 
 /** A server's opaque id: the first 10 hex of the SHA-256 of its https origin. Both sides can work it out. */
 export function serverId(base: string): string {
@@ -50,6 +51,13 @@ export interface MusicHubOptions {
    * on another): /music addresses under the old origin's id go to the new one's.
    */
   moved?: Record<string, string>;
+  /**
+   * Mirrors of a label server's folder, by its https origin: a static copy of the
+   * label root (genre/artist/year-album/...) such as a c0mpute hosting site,
+   * https://gateway.c0mpute.com/s/<site id>. Files are read there first and from
+   * the server itself when the mirror does not have them (yet).
+   */
+  mirrors?: Record<string, string>;
 }
 
 /** NIXAMP_MUSIC_MOVED: "https://old:4321>https://new:4321", several separated by commas. */
@@ -61,6 +69,9 @@ export function parseMoved(text: string | undefined): Record<string, string> {
   }
   return moved;
 }
+
+/** NIXAMP_MUSIC_MIRRORS: "<server origin> > <mirror base>" pairs, comma separated (same shape as NIXAMP_MUSIC_MOVED). */
+export const parseMirrors = parseMoved;
 
 export class MusicHub {
   private cache: { at: number; value: Promise<HubCatalogue> } | null = null;
@@ -83,6 +94,38 @@ export class MusicHub {
   private peers(): string[] {
     const moved = this.options.moved ?? {};
     return this.options.peers().filter((base) => !moved[base.replace(/\/+$/, "")]);
+  }
+
+  /**
+   * Where a label file (`<artist key>/...` as /api/v1/label serves it) sits on the
+   * server's mirror, or "" when the server has none or the catalogue does not know
+   * the artist, album or song. Paths follow the label's own folder names
+   * (ai-label.ts): <genre>/<artist>/<year>-<album>/<NNN. Title>.<ext>.
+   */
+  async mirrorUrl(id: string, file: string): Promise<string> {
+    const base = this.resolve(id);
+    const mirror = base ? this.options.mirrors?.[base.replace(/\/+$/, "")] : undefined;
+    if (!mirror) return "";
+    const catalogue = await this.catalogue().catch(() => null);
+    const [artistKey, second, third] = file.split("/");
+    const artist = catalogue?.genres.flatMap((one) => one.artists).find((one) => one.server === id && one.key === artistKey);
+    if (!artist) return "";
+    const parts = [genreSlug(artist.genre), fileName(artist.name)];
+    if (second === "artist.md") parts.push("artist.md");
+    else if (second === "members" && third) parts.push("members", third);
+    else {
+      const album = artist.albums.find((one) => one.key === second);
+      if (!album || !third) return "";
+      parts.push(`${album.year}-${fileName(album.title)}`);
+      const song = /^(\d{1,3})\.(txt|mp4)$/.exec(third);
+      if (third === "cover.jpg") parts.push("cover.jpg");
+      else if (song) {
+        const one = album.songs.find((each) => each.n === Number(song[1]));
+        if (!one) return "";
+        parts.push(`${songBase(one)}${song[2] === "txt" ? ".lyrics.txt" : ".mp4"}`);
+      } else return "";
+    }
+    return `${mirror.replace(/\/+$/, "")}/${parts.map(encodeURIComponent).join("/")}`;
   }
 
   /** The id a moved server goes by now, or "" when this id never moved. */
@@ -258,12 +301,23 @@ export async function handleMusicRoutes(request: IncomingMessage, response: Serv
     try {
       // A video is asked for in byte ranges (that is how a player seeks); passed on both ways.
       const range = typeof request.headers.range === "string" ? request.headers.range : "";
-      const upstream = await fetch(`${base}/api/v1/label/${file[2]}`, { signal: AbortSignal.timeout(15_000), ...(range ? { headers: { range } } : {}) });
+      const ask = (url: string, ms: number): Promise<Response> => fetch(url, { signal: AbortSignal.timeout(ms), ...(range ? { headers: { range } } : {}) });
+      // The server's mirror (a c0mpute hosting site) first; the server itself when the
+      // mirror is slow, down or has not got the file yet (an album that just landed).
+      const mirrored = await ctx.hub.mirrorUrl(file[1]!, file[2]!).catch(() => "");
+      let upstream: Response | null = null;
+      if (mirrored) {
+        upstream = await ask(mirrored, 8_000).catch(() => null);
+        if (upstream && !(upstream.ok && upstream.body)) { await upstream.body?.cancel().catch(() => undefined); upstream = null; }
+      }
+      const fromMirror = upstream !== null;
+      upstream ??= await ask(`${base}/api/v1/label/${file[2]}`, 15_000);
       if (!upstream.ok || !upstream.body) { ctx.json(response, upstream.status === 404 ? 404 : upstream.status === 416 ? 416 : 502, { error: "not there" }); return true; }
       const pass = (name: string): Record<string, string> => (upstream.headers.get(name) ? { [name]: upstream.headers.get(name)! } : {});
       response.writeHead(upstream.status === 206 ? 206 : 200, {
         "content-type": upstream.headers.get("content-type") ?? "application/octet-stream",
         "cache-control": "public, max-age=3600",
+        "x-nixamp-source": fromMirror ? "mirror" : "server",
         ...pass("content-length"), ...pass("content-range"), ...pass("accept-ranges"),
       });
       if (method === "HEAD") { response.end(); return true; }

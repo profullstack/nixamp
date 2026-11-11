@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { artistFollowId, handleMusicRoutes, isMusicPath, MusicHub, musicPageFor, parseMoved, serverId } from "../src/music-hub.ts";
+import { artistFollowId, handleMusicRoutes, isMusicPath, MusicHub, musicPageFor, parseMirrors, parseMoved, serverId } from "../src/music-hub.ts";
 import { buyLink } from "../src/label-routes.ts";
 
 const S1 = "https://server1.example.com:4321";
@@ -100,5 +100,51 @@ test("a label that moved: the old server is not listed twice and its old address
     answered.length = 0;
     assert.equal(await handleMusicRoutes({ method: "GET", url: `${path}?x=1`, headers: {} } as never, response, path, ctx), true);
     assert.deepEqual(answered, [{ status: 301, headers: { location: want, "cache-control": "public, max-age=86400" } }]);
+  }
+});
+
+test("files come from the server's mirror (a c0mpute site) first, by the label's own folder names, and from the server when the mirror lacks them", async () => {
+  const MIRROR = "https://gateway.c0mpute.example/s/28c1945dfaf4e11f1350";
+  assert.deepEqual(parseMirrors(`${S1}/ > ${MIRROR}/`), { [S1]: MIRROR });
+  const label = (async (url: string) => {
+    if (url === `${S1}/api/v1/label`) return Response.json({ holder: "Profullstack, Inc.", genres: [{ genre: "Celtic Punk Core", station: "", artists: [{ key: "aaaaaaaaaa", name: "Blackshore Brigade", genre: "Celtic Punk Core", bio: "", albums: [
+      { key: "bbbbbbbb", title: "Rebel Tides Rise", year: 2026, concept: "", cover: true, complete: true, songs: [{ n: 1, title: "Riot's Edge", seconds: 180 }, { n: 12, title: "Whistle: and Rise?", seconds: 600 }] }] }] }] });
+    return new Response("gone", { status: 503 });
+  }) as typeof fetch;
+  const hub = new MusicHub({ peers: () => [S1], fetcher: label, mirrors: parseMirrors(`${S1}>${MIRROR}`) });
+  const id = serverId(S1);
+  const folder = `${MIRROR}/celtic-punk-core/Blackshore%20Brigade/2026-Rebel%20Tides%20Rise`;
+  assert.equal(await hub.mirrorUrl(id, "aaaaaaaaaa/bbbbbbbb/cover.jpg"), `${folder}/cover.jpg`);
+  assert.equal(await hub.mirrorUrl(id, "aaaaaaaaaa/bbbbbbbb/1.txt"), `${folder}/001.%20Riot's%20Edge.lyrics.txt`);
+  // The label's file names drop what a file system refuses (fileName in ai-label.ts).
+  assert.equal(await hub.mirrorUrl(id, "aaaaaaaaaa/bbbbbbbb/12.mp4"), `${folder}/012.%20Whistle%20and%20Rise.mp4`);
+  assert.equal(await hub.mirrorUrl(id, "aaaaaaaaaa/artist.md"), `${MIRROR}/celtic-punk-core/Blackshore%20Brigade/artist.md`);
+  assert.equal(await hub.mirrorUrl(id, "aaaaaaaaaa/members/kai.jpg"), `${MIRROR}/celtic-punk-core/Blackshore%20Brigade/members/kai.jpg`);
+  for (const unknown of ["aaaaaaaaaa/bbbbbbbb/2.txt", "aaaaaaaaaa/cccccccc/cover.jpg", "zzzzzzzzzz/artist.md"]) assert.equal(await hub.mirrorUrl(id, unknown), "", unknown);
+  assert.equal(await new MusicHub({ peers: () => [S1], fetcher: label }).mirrorUrl(id, "aaaaaaaaaa/bbbbbbbb/cover.jpg"), "", "no mirror set up");
+
+  const asked: string[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    asked.push(String(url));
+    if (String(url) === `${folder}/cover.jpg`) return new Response("from-mirror", { headers: { "content-type": "image/jpeg" } });
+    if (String(url).startsWith(MIRROR)) return new Response("not yet", { status: 404 });
+    if (String(url) === `${S1}/api/v1/label/aaaaaaaaaa/bbbbbbbb/1.txt`) return new Response("from-server", { headers: { "content-type": "text/plain" } });
+    return new Response("gone", { status: 503 });
+  }) as typeof fetch;
+  try {
+    for (const [file, body, source] of [["aaaaaaaaaa/bbbbbbbb/cover.jpg", "from-mirror", "mirror"], ["aaaaaaaaaa/bbbbbbbb/1.txt", "from-server", "server"]] as const) {
+      const path = `/api/v1/music/file/${id}/${file}`;
+      let head: Record<string, string> = {};
+      const chunks: string[] = [];
+      const response = { headersSent: false, writeHead(_status: number, headers: Record<string, string>) { head = headers; }, write(chunk: Uint8Array) { chunks.push(Buffer.from(chunk).toString()); return true; }, end() {}, once() {} } as never;
+      const ctx = { hub, json: () => undefined, readBody: async () => "", page: () => "<html></html>" };
+      assert.equal(await handleMusicRoutes({ method: "GET", url: path, headers: {} } as never, response, path, ctx), true);
+      assert.equal(chunks.join(""), body, file);
+      assert.equal(head["x-nixamp-source"], source, file);
+    }
+    assert.deepEqual(asked, [`${folder}/cover.jpg`, `${folder}/001.%20Riot's%20Edge.lyrics.txt`, `${S1}/api/v1/label/aaaaaaaaaa/bbbbbbbb/1.txt`]);
+  } finally {
+    globalThis.fetch = real;
   }
 });
