@@ -174,6 +174,8 @@ interface ChannelRow {
   name?: string;
   kind?: string;
   live?: boolean;
+  /** Wall clock when its show ended (the outro is playing). */
+  ended?: number;
   playlist?: unknown[];
   codecs?: { tags?: { title?: string; artist?: string; album?: string } };
 }
@@ -211,7 +213,10 @@ export class RoomProbe {
       if (!row) return null;
       const tags = row.codecs?.tags;
       return {
-        live: row.live !== false,
+        // On the air until its show has ended. The row's own `live` says whether
+        // the SOURCE is a live feed: a podcast mp3 carried as a channel is
+        // live:false the whole time it plays, and its room read as offline.
+        live: !row.ended,
         name: String(row.name ?? address.channel).replace(/\/+$/, "").slice(0, 120),
         kind: row.kind === "video" ? "video" : "audio",
         nowPlaying: tags && (tags.title || tags.artist) ? { title: String(tags.title ?? ""), artist: String(tags.artist ?? "") } : null,

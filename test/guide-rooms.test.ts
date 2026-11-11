@@ -61,6 +61,10 @@ test("the probe reads a room's name, kind and what is on from its own server, an
   const probe = new RoomProbe(fakeServer([CHANNEL]));
   assert.deepEqual(await probe.state(PLAY), { live: true, name: "Dropkick Murphys - Studio Discography", kind: "audio", nowPlaying: { title: "John Law", artist: "Dropkick Murphys" }, folder: true, album: "" });
   assert.equal(await new RoomProbe(fakeServer([])).state(PLAY), null);
+  // A podcast mp3 carried as a channel is not a live SOURCE but is on the air until it ends.
+  const episode = { id: "folder-b19b85542264", name: "Episode 1", kind: "audio", live: false };
+  assert.equal((await new RoomProbe(fakeServer([episode])).state(PLAY))?.live, true);
+  assert.equal((await new RoomProbe(fakeServer([{ ...episode, ended: Date.now() }])).state(PLAY))?.live, false);
   assert.equal(await new RoomProbe(fakeServer([CHANNEL]), async () => "a private address").state(PLAY), null);
 });
 
