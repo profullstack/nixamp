@@ -5,6 +5,7 @@
  *
  *   /.well-known/oauth-authorization-server  what and where everything is
  *   /api/v1/oauth/authorize                  the consent page, and the code
+ *   /api/v1/oauth/register                   RFC 7591: an MCP connector registers
  *   /api/v1/oauth/token                      code or refresh -> tokens
  *   /api/v1/oauth/revoke                     hand a token back
  *   /api/v1/oauth/userinfo                   who the token belongs to
@@ -23,6 +24,7 @@
  * answer the web app, the CLI, the desktop app, the MCP server and the site
  * on the other side of the link, and none of them is a special case.
  */
+import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tokenFrom, type Account, type Accounts } from "./accounts.ts";
 import type { Handles } from "./handles.ts";
@@ -66,8 +68,13 @@ function json(response: ServerResponse, code: number, body: unknown, headers: Re
   response.end(value);
 }
 
-function html(response: ServerResponse, code: number, body: string, headers: Record<string, string> = {}): void {
+function html(response: ServerResponse, code: number, body: string, headers: Record<string, string> = {}, nonce = ""): void {
   response.writeHead(code, {
+    // The consent page must never be framed: an Allow button under someone
+    // else's page is a grant they did not mean (clickjacking).
+    "x-frame-options": "DENY",
+    "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https: http://localhost:* http://127.0.0.1:*; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'${nonce ? `; script-src 'nonce-${nonce}'` : ""}`,
+    "referrer-policy": "no-referrer",
     ...headers,
     "content-type": "text/html; charset=utf-8",
     "content-length": Buffer.byteLength(body),
@@ -146,14 +153,39 @@ export function consentPage(request: AuthorizeRequest, account: Account, handle:
   );
 }
 
-function signInFirst(url: URL): string {
+/**
+ * Not signed in on this browser yet. The form signs in right here (the same
+ * /api/v1/auth/login the web app uses, which sets the session cookie) and
+ * reloads, so an MCP connector's sign-in window comes back to the consent
+ * page instead of telling the person to find the link again.
+ */
+export function signInFirst(url: URL, nonce: string, client = ""): string {
   const back = `${url.pathname}${url.search}`;
   return page(
     "Sign in to nixamp",
     `<h1>Sign in first</h1>
-     <p>Something wants to connect to your nixamp account, and nixamp does not
-        know who you are on this device yet.</p>
-     <p><a href="/?next=${encodeURIComponent(back)}">Sign in at nixamp.com</a>, then open this link again.</p>`,
+     <p>${client ? `<b>${escape(client)}</b> wants` : "Something wants"} to connect to your nixamp account.
+        Sign in, and you will be asked whether to allow it.</p>
+     <form id="signin">
+       <input name="email" type="email" autocomplete="username" placeholder="email" required style="font:inherit;width:100%;padding:.5rem;background:#111;color:#cfcfcf;border:1px solid #2a2a2a">
+       <input name="password" type="password" autocomplete="current-password" placeholder="password" required style="font:inherit;width:100%;padding:.5rem;background:#111;color:#cfcfcf;border:1px solid #2a2a2a">
+       <button type="submit" class="primary">Sign in</button>
+     </form>
+     <p id="said" role="status"></p>
+     <p>No account, or you use another way in? <a href="/" target="_blank" rel="noopener">Sign in at nixamp.com</a>, then <a href="${escape(back)}">reload this page</a>.</p>
+     <script nonce="${nonce}">
+       document.getElementById("signin").addEventListener("submit", async (event) => {
+         event.preventDefault();
+         const form = new FormData(event.target);
+         const said = document.getElementById("said");
+         said.textContent = "Signing in...";
+         const answer = await fetch("/api/v1/auth/login", { method: "POST", headers: { "content-type": "application/json" }, credentials: "same-origin",
+           body: JSON.stringify({ email: form.get("email"), password: form.get("password") }) }).catch(() => null);
+         if (answer && answer.ok) { location.reload(); return; }
+         const body = answer ? await answer.json().catch(() => ({})) : {};
+         said.textContent = body.error || "Could not sign in.";
+       });
+     </script>`,
   );
 }
 
@@ -204,6 +236,9 @@ export function oauthApiPath(path: string): boolean {
   return (
     path === "/.well-known/oauth-authorization-server" ||
     path === "/.well-known/openid-configuration" ||
+    // The RFC 7591 default an MCP client falls back to when it does not read
+    // the metadata: it must get JSON, never the web app's HTML.
+    path === "/register" ||
     path.startsWith("/api/v1/oauth/") ||
     path === "/api/v1/watch-parties" ||
     path.startsWith("/api/v1/watch-parties/")
@@ -216,8 +251,11 @@ export async function handleOAuthApi(
   url: URL,
   options: OAuthApiOptions,
 ): Promise<boolean> {
-  const path = url.pathname;
-  if (!oauthApiPath(path)) return false;
+  if (!oauthApiPath(url.pathname)) return false;
+  // POST /register is dynamic registration under its default name; a GET is a
+  // person, and goes on to the web app.
+  if (url.pathname === "/register" && request.method !== "POST" && request.method !== "OPTIONS") return false;
+  const path = url.pathname === "/register" ? "/api/v1/oauth/register" : url.pathname;
   const server = options.server;
 
   try {
@@ -236,7 +274,7 @@ export async function handleOAuthApi(
       }
       const params =
         method === "POST" ? new URLSearchParams(await readBody(request)) : new URLSearchParams(url.search);
-      const checked = server.check(params);
+      const checked = await server.check(params);
       if ("error" in checked) {
         // Redirect the refusal only where the redirect URI itself checked out.
         if (checked.redirectUri) {
@@ -245,6 +283,7 @@ export async function handleOAuthApi(
               error: checked.error,
               error_description: checked.description,
               state: checked.state ?? "",
+              iss: server.issuer,
             }),
           });
           response.end();
@@ -256,7 +295,8 @@ export async function handleOAuthApi(
 
       const account = await options.accounts.whoIs(tokenFrom(request.headers));
       if (account === null) {
-        html(response, 401, signInFirst(url));
+        const nonce = randomBytes(16).toString("base64");
+        html(response, 401, signInFirst(url, nonce, checked.client.name), {}, nonce);
         return true;
       }
 
@@ -272,6 +312,7 @@ export async function handleOAuthApi(
             error: "access_denied",
             error_description: "the person said not now",
             state: checked.state,
+            iss: server.issuer,
           }),
         });
         response.end();
@@ -280,13 +321,44 @@ export async function handleOAuthApi(
 
       const code = await server.issueCode(checked, account);
       response.writeHead(302, {
-        location: AuthorizationServer.redirect(checked.redirectUri, { code, state: checked.state }),
+        // RFC 9207: the issuer rides along, so a client talking to several
+        // servers can tell which one answered (ChatGPT checks it).
+        location: AuthorizationServer.redirect(checked.redirectUri, { code, state: checked.state, iss: server.issuer }),
       });
       response.end();
       return true;
     }
 
+    // --- RFC 7591: an MCP connector registers itself ----------------------
+    if (path === "/api/v1/oauth/register") {
+      if (request.method === "OPTIONS") {
+        response.writeHead(204, CORS);
+        response.end();
+        return true;
+      }
+      if (request.method !== "POST") {
+        json(response, 405, { error: "invalid_request", error_description: "POST the client metadata as JSON" });
+        return true;
+      }
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(request));
+      } catch {
+        body = null;
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        throw new OAuthError("invalid_client_metadata", "send the client metadata as a JSON object");
+      }
+      json(response, 201, await server.register(body as Record<string, unknown>));
+      return true;
+    }
+
     // --- the token endpoint ----------------------------------------------
+    if ((path === "/api/v1/oauth/token" || path === "/api/v1/oauth/revoke") && request.method === "OPTIONS") {
+      response.writeHead(204, CORS);
+      response.end();
+      return true;
+    }
     if (path === "/api/v1/oauth/token") {
       if (request.method !== "POST") {
         json(response, 405, { error: "invalid_request", error_description: "POST only" });
@@ -296,7 +368,7 @@ export async function handleOAuthApi(
       const authorization = Array.isArray(request.headers["authorization"])
         ? request.headers["authorization"][0]
         : request.headers["authorization"];
-      const client = server.authenticateClient(form, authorization);
+      const client = await server.authenticateClient(form, authorization);
       const grantType = form.get("grant_type") ?? "";
       if (grantType === "authorization_code") {
         json(response, 200, await server.exchangeCode(client, form));
@@ -324,7 +396,7 @@ export async function handleOAuthApi(
       const authorization = Array.isArray(request.headers["authorization"])
         ? request.headers["authorization"][0]
         : request.headers["authorization"];
-      const client = server.authenticateClient(form, authorization);
+      const client = await server.authenticateClient(form, authorization);
       await server.revoke(client, form.get("token") ?? "");
       // RFC 7009: a token that was never valid is the same answer as one that
       // just stopped being. Saying which would be a way to test tokens.

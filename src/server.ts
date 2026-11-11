@@ -65,6 +65,7 @@ import {
 } from "./oauth.ts";
 import { AuthorizationServer, BACKTOSCHOOL_CLIENT, SCOPE_NAMES, clientsFrom } from "./oauth-server.ts";
 import { handleOAuthApi, oauthApiPath } from "./oauth-api.ts";
+import { toolsListResult } from "./mcp-annotations.ts";
 import { WatchParties } from "./watch-party.ts";
 import { needsAdmin, needsMember, Owner } from "./owner.ts";
 import { createHash as sha } from "node:crypto";
@@ -4737,7 +4738,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         } else if (method === "ping") {
           answers.push({ jsonrpc: "2.0", id, result: {} });
         } else if (method === "tools/list") {
-          answers.push({ jsonrpc: "2.0", id, result: { tools: PUBLIC_TOOLS } });
+          answers.push({ jsonrpc: "2.0", id, result: toolsListResult(PUBLIC_TOOLS, "public") });
         } else if (method === "tools/call" && isPublicTool(String(message.params?.["name"] ?? ""))) {
           answers.push({ jsonrpc: "2.0", id, result: await callPublicTool(String(message.params!["name"]), (message.params?.["arguments"] ?? {}) as Record<string, unknown>, { guide: stationGuide }) });
         } else {
@@ -4820,9 +4821,11 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     }
 
     /* Where a client of /mcp finds the authorization server (RFC 9728). */
-    if (path === "/.well-known/oauth-protected-resource" && options.site && options.authServer) {
+    // `resource` is the MCP URL itself (RFC 9728 §3.3: a client checks it equals
+    // the URL it was given), also at the path-suffixed form clients try first.
+    if ((path === "/.well-known/oauth-protected-resource" || path === "/.well-known/oauth-protected-resource/mcp") && options.site && options.authServer) {
       json(response, 200, {
-        resource: options.site,
+        resource: `${options.site.replace(/\/+$/, "")}/mcp`,
         authorization_servers: [options.site],
         bearer_methods_supported: ["header"],
         scopes_supported: SCOPE_NAMES,

@@ -345,7 +345,7 @@ test("MCP over HTTP at /mcp: a bearer token, one message or a batch, silence for
     assert.equal((await fetch(`${base}/mcp`, { method: "POST", headers: mine, body: "{" })).status, 400);
 
     const metadata = (await (await fetch(`${base}/.well-known/oauth-protected-resource`)).json()) as { resource: string; authorization_servers: string[] };
-    assert.equal(metadata.resource, "https://nixamp.test");
+    assert.equal(metadata.resource, "https://nixamp.test/mcp");
     assert.deepEqual(metadata.authorization_servers, ["https://nixamp.test"]);
   });
 });

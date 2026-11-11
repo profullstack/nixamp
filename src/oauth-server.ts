@@ -45,6 +45,13 @@ export interface OAuthClient {
   secretHash?: string;
   /** Where the client lives, shown as a link on the consent page. */
   homepage?: string;
+  /**
+   * Registered over RFC 7591 (an MCP connector: claude.ai, ChatGPT, Claude
+   * Code) rather than built in. Such a client is public, gets a refresh token
+   * without having to know to ask for offline_access, and is never trusted
+   * for anything a built-in client is (watch links on its hosts, say).
+   */
+  dynamic?: boolean;
 }
 
 /** What a client may ask for, and what each word means to the rest of nixamp. */
@@ -168,6 +175,23 @@ export function redirectAllowed(client: OAuthClient, candidate: string): boolean
   });
 }
 
+/** What a registered client id looks like: `mcp_` and 32 hex digits. */
+const DYNAMIC_ID = /^mcp_[0-9a-f]{32}$/;
+
+/** May a connector register this redirect? https anywhere, or http on loopback. */
+export function registrableRedirect(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 2000) return false;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.hash || url.username || url.password) return false;
+  if (url.protocol === "https:") return true;
+  return loopback(url);
+}
+
 // --- PKCE ----------------------------------------------------------------------
 
 /** RFC 7636 §4.1: 43 to 128 of the unreserved characters. */
@@ -209,8 +233,15 @@ export interface AuthorizeRefusal {
   state?: string;
 }
 
-export function parseScope(value: unknown): Scope[] | null {
-  const words = typeof value === "string" && value.trim() !== "" ? value.trim().split(/\s+/) : ["profile"];
+/**
+ * What a registered MCP connector gets when it asks for no scope, which is
+ * what claude.ai and ChatGPT do: everything the MCP tools need, and a refresh
+ * token. Not `email`: an address is a credential and a connector must ask.
+ */
+export const CONNECTOR_SCOPE: Scope[] = ["profile", "parties", "streams", "stations", "offline_access"];
+
+export function parseScope(value: unknown, fallback: readonly Scope[] = ["profile"]): Scope[] | null {
+  const words = typeof value === "string" && value.trim() !== "" ? value.trim().split(/\s+/) : [...fallback];
   const chosen: Scope[] = [];
   for (const word of words) {
     if (!SCOPE_NAMES.includes(word as Scope)) return null;
@@ -232,6 +263,7 @@ export class OAuthError extends Error {
 // --- storage -------------------------------------------------------------------
 
 const CODES = "nixamp_oauth_codes";
+const CLIENTS = "nixamp_oauth_clients";
 const REFRESH = "nixamp_oauth_refresh";
 
 const SCHEMA = `
@@ -264,6 +296,14 @@ const SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS ${REFRESH}_family ON ${REFRESH} (family);
   CREATE INDEX IF NOT EXISTS ${REFRESH}_user ON ${REFRESH} (user_id);
+  CREATE TABLE IF NOT EXISTS ${CLIENTS} (
+    client_id     TEXT PRIMARY KEY,
+    client_name   TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    client_uri    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at  TIMESTAMPTZ
+  );
 `;
 
 export const REFRESH_PREFIX = "nxr_";
@@ -335,8 +375,94 @@ export class AuthorizationServer {
     await this.ready;
   }
 
+  /** A built-in (or NIXAMP_OAUTH_CLIENTS) client. Never a registered one. */
   client(id: unknown): OAuthClient | null {
     return typeof id === "string" ? (this.clients.find((one) => one.id === id) ?? null) : null;
+  }
+
+  /** Any client: built in first, then one registered over RFC 7591. */
+  async findClient(id: unknown): Promise<OAuthClient | null> {
+    const known = this.client(id);
+    if (known) return known;
+    if (typeof id !== "string" || !DYNAMIC_ID.test(id)) return null;
+    await this.ensure();
+    const { rows } = await this.options.db.query(
+      `SELECT client_id, client_name, redirect_uris, client_uri FROM ${CLIENTS} WHERE client_id = $1`,
+      [id],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    let uris: unknown = [];
+    try {
+      uris = JSON.parse(String(row["redirect_uris"] ?? "[]"));
+    } catch {
+      uris = [];
+    }
+    return {
+      id: String(row["client_id"]),
+      name: String(row["client_name"] ?? id),
+      redirectUris: Array.isArray(uris) ? uris.filter((one): one is string => typeof one === "string") : [],
+      ...(row["client_uri"] ? { homepage: String(row["client_uri"]) } : {}),
+      dynamic: true,
+    };
+  }
+
+  /**
+   * RFC 7591 dynamic client registration, for MCP connectors. Public clients
+   * only: there is no secret to hand out, PKCE is what protects the code.
+   * Redirects are https (no fragment, no credentials) or http on a loopback
+   * address (RFC 8252), whose port may then change on every sign-in.
+   */
+  async register(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const uris = body["redirect_uris"];
+    if (!Array.isArray(uris) || uris.length === 0 || uris.length > 20) {
+      throw new OAuthError("invalid_redirect_uri", "redirect_uris must list 1 to 20 URIs");
+    }
+    for (const uri of uris) {
+      if (!registrableRedirect(uri)) {
+        throw new OAuthError("invalid_redirect_uri", `not allowed: ${String(uri).slice(0, 200)} (https, or http on localhost/127.0.0.1)`);
+      }
+    }
+    const method = body["token_endpoint_auth_method"] ?? "none";
+    if (method !== "none") {
+      throw new OAuthError("invalid_client_metadata", "only public clients may register: token_endpoint_auth_method must be none");
+    }
+    const grants = Array.isArray(body["grant_types"]) ? body["grant_types"].map(String) : ["authorization_code", "refresh_token"];
+    if (grants.some((one) => one !== "authorization_code" && one !== "refresh_token")) {
+      throw new OAuthError("invalid_client_metadata", "grant_types may only be authorization_code and refresh_token");
+    }
+    const types = Array.isArray(body["response_types"]) ? body["response_types"].map(String) : ["code"];
+    if (types.some((one) => one !== "code")) throw new OAuthError("invalid_client_metadata", "response_types may only be code");
+    const name = typeof body["client_name"] === "string"
+      ? body["client_name"].replace(/[\u0000-\u001f\u007f<>]/g, "").trim().slice(0, 100)
+      : "";
+    let homepage: string | null = null;
+    if (typeof body["client_uri"] === "string") {
+      try {
+        if (new URL(body["client_uri"]).protocol === "https:") homepage = body["client_uri"].slice(0, 500);
+      } catch {
+        homepage = null;
+      }
+    }
+    await this.ensure();
+    const id = `mcp_${randomBytes(16).toString("hex")}`;
+    const redirectUris = [...new Set(uris as string[])];
+    const at = this.now();
+    await this.options.db.query(
+      `INSERT INTO ${CLIENTS} (client_id, client_name, redirect_uris, client_uri, created_at) VALUES ($1, $2, $3, $4, $5)`,
+      [id, name || "MCP client", JSON.stringify(redirectUris), homepage, new Date(at).toISOString()],
+    );
+    return {
+      client_id: id,
+      client_id_issued_at: Math.floor(at / 1000),
+      client_name: name || "MCP client",
+      redirect_uris: redirectUris,
+      ...(homepage ? { client_uri: homepage } : {}),
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      scope: CONNECTOR_SCOPE.join(" "),
+    };
   }
 
   /** RFC 8414. Everything a client needs to find, in the place it looks. */
@@ -345,11 +471,13 @@ export class AuthorizationServer {
       issuer: this.issuer,
       authorization_endpoint: `${this.issuer}/api/v1/oauth/authorize`,
       token_endpoint: `${this.issuer}/api/v1/oauth/token`,
+      registration_endpoint: `${this.issuer}/api/v1/oauth/register`,
       revocation_endpoint: `${this.issuer}/api/v1/oauth/revoke`,
       userinfo_endpoint: `${this.issuer}/api/v1/oauth/userinfo`,
       scopes_supported: SCOPE_NAMES,
       response_types_supported: ["code"],
       response_modes_supported: ["query"],
+      authorization_response_iss_parameter_supported: true,
       grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["none", "client_secret_basic", "client_secret_post"],
@@ -363,8 +491,8 @@ export class AuthorizationServer {
    * The order matters: the client and redirect URI are checked first, and a
    * problem with either is answered to the browser, never to the URI.
    */
-  check(params: URLSearchParams): AuthorizeRequest | AuthorizeRefusal {
-    const client = this.client(params.get("client_id"));
+  async check(params: URLSearchParams): Promise<AuthorizeRequest | AuthorizeRefusal> {
+    const client = await this.findClient(params.get("client_id"));
     if (client === null) return { error: "invalid_client", description: "unknown client_id" };
     const redirectUri = params.get("redirect_uri") ?? "";
     if (!redirectUri || !redirectAllowed(client, redirectUri)) {
@@ -380,7 +508,7 @@ export class AuthorizationServer {
     if (method !== "S256" || !CHALLENGE.test(codeChallenge)) {
       return refuse("invalid_request", "code_challenge with code_challenge_method=S256 is required");
     }
-    const scope = parseScope(params.get("scope"));
+    const scope = parseScope(params.get("scope"), client.dynamic ? CONNECTOR_SCOPE : ["profile"]);
     if (scope === null) return refuse("invalid_scope", `scope may name ${SCOPE_NAMES.join(", ")}`);
     return { client, redirectUri, scope, state, codeChallenge };
   }
@@ -423,7 +551,7 @@ export class AuthorizationServer {
    * its secret, in the body or as basic auth; a public client must not
    * present one it does not have. Either way the client named must exist.
    */
-  authenticateClient(form: URLSearchParams, authorization: string | undefined): OAuthClient {
+  async authenticateClient(form: URLSearchParams, authorization: string | undefined): Promise<OAuthClient> {
     let id = form.get("client_id") ?? "";
     let secret = form.get("client_secret") ?? "";
     const basic = /^Basic\s+(.+)$/i.exec(authorization ?? "")?.[1];
@@ -435,7 +563,7 @@ export class AuthorizationServer {
         secret = decodeURIComponent(decoded.slice(cut + 1));
       }
     }
-    const client = this.client(id);
+    const client = await this.findClient(id);
     if (client === null) throw new OAuthError("invalid_client", "unknown client_id", 401);
     if (client.secretHash) {
       if (!secret || !sameHash(client.secretHash, hashSecret(secret))) {
@@ -477,7 +605,9 @@ export class AuthorizationServer {
       expires_in: Math.round(ACCESS_TTL_MS / 1000),
       scope,
     };
-    if (words.includes("offline_access")) {
+    // A registered connector always gets one: claude.ai and ChatGPT never ask
+    // for offline_access, and an hourly re-consent would be the result.
+    if (words.includes("offline_access") || client.dynamic) {
       const refresh = mintRefresh();
       const at = this.now();
       await this.options.db.query(
@@ -652,12 +782,17 @@ export class AuthorizationServer {
         ORDER BY created_at DESC`,
       [userId],
     );
+    const names = new Map<string, string>();
+    for (const row of rows) {
+      const clientId = String(row["client_id"] ?? "");
+      if (!names.has(clientId)) names.set(clientId, (await this.findClient(clientId))?.name ?? clientId);
+    }
     return rows.map((row) => {
       const clientId = String(row["client_id"] ?? "");
       return {
         id: String(row["id"] ?? ""),
         clientId,
-        clientName: this.client(clientId)?.name ?? clientId,
+        clientName: names.get(clientId) ?? clientId,
         scope: String(row["scope"] ?? ""),
         createdAt: asTime(row["created_at"]) ?? 0,
       };

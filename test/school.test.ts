@@ -160,8 +160,17 @@ test("the school's host has its own llms.txt, OpenAPI and MCP; nixamp.com keeps 
     const anonymous = await rpc("/mcp", { jsonrpc: "2.0", id: 3, method: "tools/list" });
     assert.equal(anonymous.status, 401);
     assert.match(anonymous.headers.get("www-authenticate") ?? "", /oauth-protected-resource/);
-    const all = await (await rpc("/mcp", { jsonrpc: "2.0", id: 4, method: "tools/list" }, TOKEN)).json() as { result: { tools: unknown[] } };
+    // RFC 9728: `resource` is exactly the MCP URL, at both discovery paths, and nixamp.com is the AS.
+    for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
+      const prm = await (await fetch(`${base}${path}`)).json() as { resource: string; authorization_servers: string[] };
+      assert.equal(prm.resource, `${site.replace(/\/+$/, "")}/mcp`);
+      assert.deepEqual(prm.authorization_servers, ["https://nixamp.com"]);
+    }
+    const all = await (await rpc("/mcp", { jsonrpc: "2.0", id: 4, method: "tools/list" }, TOKEN)).json() as { result: { tools: Array<{ title?: string; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }>; ttlMs?: number; cacheScope?: string } };
     assert.equal(all.result.tools.length, SCHOOL_TOOLS.length);
+    assert.ok(all.result.tools.every((one) => one.title && typeof one.annotations?.readOnlyHint === "boolean" && typeof one.annotations?.destructiveHint === "boolean"));
+    assert.equal(all.result.cacheScope, "private");
+    assert.equal(typeof all.result.ttlMs, "number");
     const taught = await (await rpc("/mcp", { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "class_create", arguments: { title: "Draft one" } } }, TOKEN)).json() as { result: { content: Array<{ text: string }> } };
     assert.match(taught.result.content[0]!.text, /Made \(draft\)/);
     assert.equal(fake.events.size, 1);

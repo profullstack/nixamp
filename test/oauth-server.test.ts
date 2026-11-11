@@ -27,6 +27,7 @@ import { cleanPartyCode, cleanPartyUrl, WatchParties } from "../src/watch-party.
  */
 function fakeDb(): Queryable & { events: Map<string, Record<string, unknown>> } {
   const codes = new Map<string, Record<string, unknown>>();
+  const clients = new Map<string, Record<string, unknown>>();
   const refresh = new Map<string, Record<string, unknown>>();
   const tokens = new Map<string, Record<string, unknown>>();
   const parties = new Map<string, Record<string, unknown>>();
@@ -52,6 +53,17 @@ function fakeDb(): Queryable & { events: Map<string, Record<string, unknown>> } 
       return { rows: row ? [row] : [] };
     }
     if (sql.startsWith("UPDATE nixamp_tokens SET last_used_at")) return { rows: [] };
+
+    // --- nixamp_oauth_clients (RFC 7591) -----------------------------------
+    if (sql.startsWith("INSERT INTO nixamp_oauth_clients")) {
+      const [client_id, client_name, redirect_uris, client_uri, created_at] = values;
+      clients.set(String(client_id), { client_id, client_name, redirect_uris, client_uri, created_at });
+      return { rows: [] };
+    }
+    if (sql.startsWith("SELECT") && sql.includes("FROM nixamp_oauth_clients WHERE client_id = $1")) {
+      const row = clients.get(String(values[0]));
+      return { rows: row ? [row] : [] };
+    }
 
     // --- nixamp_oauth_codes -----------------------------------------------
     if (sql.startsWith("INSERT INTO nixamp_oauth_codes")) {
@@ -255,7 +267,7 @@ interface Harness {
   session: string;
 }
 
-async function withServer(run: (harness: Harness) => Promise<void>): Promise<void> {
+async function withServer(run: (harness: Harness) => Promise<void>, extra: { site?: string } = {}): Promise<void> {
   const db = fakeDb();
   const accounts = fakeAccounts(db);
   const authServer = new AuthorizationServer({
@@ -280,6 +292,7 @@ async function withServer(run: (harness: Harness) => Promise<void>): Promise<voi
     authServer,
     parties,
     events,
+    ...extra,
   });
   await new Promise<void>((done) => http.listen(0, "127.0.0.1", done));
   const { port } = http.address() as AddressInfo;
@@ -748,4 +761,184 @@ test("an account can see what it connected, and take it away", async () => {
     // Disconnecting withdraws the access token the connection was holding.
     assert.equal(await harness.accounts.whoIs(token), null);
   });
+});
+
+// --- MCP connectors: RFC 7591 registration (claude.ai, ChatGPT, Claude Code) ---
+
+const CLAUDE = "https://claude.ai/api/mcp/auth_callback";
+const CHATGPT = "https://chatgpt.com/connector_platform_oauth_redirect";
+
+async function register(harness: Harness, body: unknown, path = "/api/v1/oauth/register"): Promise<{ status: number; body: Record<string, unknown>; type: string }> {
+  const answer = await fetch(`${harness.base}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { status: answer.status, body: (await answer.json()) as Record<string, unknown>, type: answer.headers.get("content-type") ?? "" };
+}
+
+test("the metadata advertises registration, S256 only, refresh, and the iss parameter", async () => {
+  await withServer(async (harness) => {
+    const meta = (await (await fetch(`${harness.base}/.well-known/oauth-authorization-server`)).json()) as Record<string, unknown>;
+    assert.equal(meta["registration_endpoint"], "https://nixamp.test/api/v1/oauth/register");
+    assert.deepEqual(meta["code_challenge_methods_supported"], ["S256"]);
+    assert.deepEqual(meta["response_types_supported"], ["code"]);
+    assert.deepEqual(meta["grant_types_supported"], ["authorization_code", "refresh_token"]);
+    assert.ok((meta["token_endpoint_auth_methods_supported"] as string[]).includes("none"));
+    assert.equal(meta["authorization_response_iss_parameter_supported"], true);
+  });
+});
+
+test("a connector registers as a public client, with the redirects claude.ai, ChatGPT and a CLI use", async () => {
+  await withServer(async (harness) => {
+    const made = await register(harness, {
+      client_name: "Claude",
+      redirect_uris: [CLAUDE, CHATGPT, "http://localhost:33418/callback", "http://127.0.0.1:6274/callback"],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    });
+    assert.equal(made.status, 201);
+    assert.match(String(made.body["client_id"]), /^mcp_[0-9a-f]{32}$/);
+    assert.equal(made.body["token_endpoint_auth_method"], "none");
+    assert.equal(made.body["client_secret"], undefined);
+
+    // Refused: a confidential client, a plain-http host, a fragment, nothing at all.
+    assert.equal((await register(harness, { redirect_uris: [CLAUDE], token_endpoint_auth_method: "client_secret_basic" })).body["error"], "invalid_client_metadata");
+    assert.equal((await register(harness, { redirect_uris: ["http://evil.example/callback"] })).body["error"], "invalid_redirect_uri");
+    assert.equal((await register(harness, { redirect_uris: ["https://x.example/cb#frag"] })).body["error"], "invalid_redirect_uri");
+    assert.equal((await register(harness, { redirect_uris: [] })).status, 400);
+    assert.equal((await register(harness, { redirect_uris: [CLAUDE], grant_types: ["password"] })).body["error"], "invalid_client_metadata");
+
+    // The RFC 7591 default path answers JSON too, never the web app's page.
+    const fallback = await register(harness, { redirect_uris: [CLAUDE] }, "/register");
+    assert.equal(fallback.status, 201);
+    assert.match(fallback.type, /application\/json/);
+  });
+});
+
+test("a registered connector: consent, code with iss, form-encoded exchange, refresh without asking, then /mcp", async () => {
+  await withServer(async (harness) => {
+    const made = await register(harness, { client_name: "Claude", redirect_uris: [CLAUDE, "http://localhost/callback"] });
+    const clientId = String(made.body["client_id"]);
+    const verifier = randomBytes(32).toString("base64url");
+    const asked = new URLSearchParams({
+      response_type: "code",
+      client_id: clientId,
+      // A loopback redirect may come back on any port.
+      redirect_uri: "http://localhost:51234/callback",
+      state: "s1",
+      code_challenge: challengeFor(verifier),
+      code_challenge_method: "S256",
+      resource: "https://nixamp.test/mcp",
+    });
+
+    // Not signed in: a page that signs in here, unframeable, naming the client.
+    const anonymous = await fetch(`${harness.base}/api/v1/oauth/authorize?${asked}`);
+    assert.equal(anonymous.status, 401);
+    const signIn = await anonymous.text();
+    assert.match(signIn, /Claude/);
+    assert.match(signIn, /\/api\/v1\/auth\/login/);
+    assert.match(anonymous.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
+
+    // Signed in: the consent page names the client.
+    const consent = await fetch(`${harness.base}/api/v1/oauth/authorize?${asked}`, { headers: { authorization: `Bearer ${harness.session}` } });
+    assert.equal(consent.status, 200);
+    assert.match(await consent.text(), /Connect Claude/);
+
+    const allowed = await fetch(`${harness.base}/api/v1/oauth/authorize`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { authorization: `Bearer ${harness.session}`, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ ...Object.fromEntries(asked), decision: "allow" }).toString(),
+    });
+    const back = new URL(allowed.headers.get("location") ?? "");
+    assert.equal(back.origin + back.pathname, "http://localhost:51234/callback");
+    assert.equal(back.searchParams.get("state"), "s1");
+    assert.equal(back.searchParams.get("iss"), "https://nixamp.test");
+    const code = back.searchParams.get("code") ?? "";
+
+    const answer = await fetch(`${harness.base}/api/v1/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "authorization_code", client_id: clientId, redirect_uri: "http://localhost:51234/callback", code, code_verifier: verifier }).toString(),
+    });
+    assert.equal(answer.status, 200);
+    const granted = (await answer.json()) as Record<string, string>;
+    assert.ok(granted["access_token"]?.startsWith("nxa_"));
+    // claude.ai never asks for offline_access; a connector gets a refresh token anyway.
+    assert.ok(granted["refresh_token"]?.startsWith("nxr_"));
+    assert.equal(granted["scope"], "profile parties streams stations offline_access");
+    assert.equal(Number(granted["expires_in"]), 3600);
+    assert.equal((await harness.accounts.whoIs(granted["access_token"]!))?.id, "host-1");
+
+    const refreshed = await fetch(`${harness.base}/api/v1/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "refresh_token", client_id: clientId, refresh_token: granted["refresh_token"]! }).toString(),
+    });
+    assert.equal(refreshed.status, 200);
+    const next = (await refreshed.json()) as Record<string, string>;
+    assert.notEqual(next["refresh_token"], granted["refresh_token"]);
+
+    // The connections list names the registered client.
+    const connections = (await (await fetch(`${harness.base}/api/v1/oauth/connections`, { headers: { authorization: `Bearer ${harness.session}` } })).json()) as { connections: { clientName: string }[] };
+    assert.ok(connections.connections.some((one) => one.clientName === "Claude"));
+
+    // An unknown client is a page, never a redirect.
+    const unknown = await fetch(`${harness.base}/api/v1/oauth/authorize?${new URLSearchParams({ ...Object.fromEntries(asked), client_id: "mcp_00000000000000000000000000000000" })}`, { redirect: "manual", headers: { authorization: `Bearer ${harness.session}` } });
+    assert.equal(unknown.status, 400);
+  });
+});
+
+test("/mcp: 401 pointing at metadata whose resource is the MCP URL; OAuth token and the old nixamp token both list annotated tools", async () => {
+  await withServer(async (harness) => {
+    const call = (token?: string) => fetch(`${harness.base}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const refused = await call();
+    assert.equal(refused.status, 401);
+    assert.equal(refused.headers.get("www-authenticate"), 'Bearer resource_metadata="https://nixamp.test/.well-known/oauth-protected-resource"');
+    for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
+      const prm = (await (await fetch(`${harness.base}${path}`)).json()) as { resource: string; authorization_servers: string[] };
+      assert.equal(prm.resource, "https://nixamp.test/mcp");
+      assert.equal(prm.authorization_servers[0], "https://nixamp.test");
+    }
+
+    // The token a person already had (CLI or session) still works.
+    const old = await call(harness.session);
+    assert.equal(old.status, 200);
+
+    const made = await register(harness, { client_name: "ChatGPT", redirect_uris: [CHATGPT] });
+    const clientId = String(made.body["client_id"]);
+    const verifier = randomBytes(32).toString("base64url");
+    const allowed = await fetch(`${harness.base}/api/v1/oauth/authorize`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { authorization: `Bearer ${harness.session}`, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ response_type: "code", client_id: clientId, redirect_uri: CHATGPT, state: "z", code_challenge: challengeFor(verifier), code_challenge_method: "S256", decision: "allow" }).toString(),
+    });
+    const code = new URL(allowed.headers.get("location") ?? "").searchParams.get("code") ?? "";
+    const granted = (await (await fetch(`${harness.base}/api/v1/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "authorization_code", client_id: clientId, redirect_uri: CHATGPT, code, code_verifier: verifier }).toString(),
+    })).json()) as Record<string, string>;
+
+    const listed = await call(granted["access_token"]);
+    assert.equal(listed.status, 200);
+    const result = ((await listed.json()) as { result: { tools: { name: string; title?: string; annotations?: Record<string, unknown> }[]; ttlMs?: number; cacheScope?: string; resultType?: string } }).result;
+    assert.ok(result.tools.length >= 40);
+    assert.equal(result.resultType, "complete");
+    assert.equal(typeof result.ttlMs, "number");
+    assert.equal(result.cacheScope, "private");
+    for (const tool of result.tools) {
+      assert.ok(tool.title, `${tool.name} has a title`);
+      assert.equal(typeof tool.annotations?.["readOnlyHint"], "boolean", `${tool.name} readOnlyHint`);
+      assert.equal(typeof tool.annotations?.["destructiveHint"], "boolean", `${tool.name} destructiveHint`);
+      assert.equal(typeof tool.annotations?.["openWorldHint"], "boolean", `${tool.name} openWorldHint`);
+    }
+  }, { site: "https://nixamp.test" });
 });

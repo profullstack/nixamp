@@ -34,6 +34,7 @@ import { STATION_TOOLS, callStationTool, isStationTool, type StationToolOptions 
 import { PUBLIC_TOOLS, callPublicTool, isPublicTool, type PublicToolOptions } from "./directory-mcp.ts";
 import { LIBRARY_TOOLS, callLibraryTool, isLibraryTool } from "./library-mcp.ts";
 import { SCHOOL_TOOLS, callSchoolTool, isSchoolTool } from "./school-mcp.ts";
+import { toolsListResult } from "./mcp-annotations.ts";
 
 export const PROTOCOL_VERSION = "2025-06-18";
 
@@ -676,7 +677,7 @@ export async function handleMessage(message: Request, options: McpOptions = {}):
   if (message.id === undefined || message.id === null) {
     if (message.method.startsWith("notifications/")) return null;
   }
-  if (message.method === "tools/list") return reply({ tools: TOOLS });
+  if (message.method === "tools/list") return reply(toolsListResult(TOOLS));
   if (message.method === "ping") return reply({});
   if (message.method === "tools/call") {
     const name = String(message.params?.["name"] ?? "");
