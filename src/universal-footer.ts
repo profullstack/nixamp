@@ -7,6 +7,8 @@ const OPTIONS = {
   links: [
     { label: "Code", href: "https://github.com/profullstack/nixamp" },
     { label: "r/nixamp", href: "https://www.reddit.com/r/nixamp" },
+    { label: "Privacy", href: "/privacy" },
+    { label: "Terms", href: "/terms" },
   ],
   builtIndieHref: "https://built.indie.pit.world/for?site=https://nixamp.com/",
   pwamartHref: "https://pwamart.com/for?site=https://nixamp.com/",

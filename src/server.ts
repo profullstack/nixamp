@@ -103,6 +103,7 @@ import { STATION_APP_CSP, STATION_PAGE, STATION_PAGE_CSP, STATION_PAGE_HTML, WAT
 import { handleRoomProxy, handleRooms, isRoomPath, ROOM_PAGE, roomAddress, RoomProbe, roomEntries, roomSlugOf, roomSlugs, RoomStore, watchBase } from "./guide-rooms.ts";
 import { handleVods, VodProbe, vodEntries, VodStore, vodView } from "./guide-vods.ts";
 import { withUniversalFooter } from "./universal-footer.ts";
+import { isLegalPath, legalPage } from "./legal.ts";
 import { handleFollowPage } from "./follow-page.ts";
 import {
   asRadioPage, buildCatalogue, isRadioPath, NAV_STYLE, RADIO_ALBUM, RADIO_ARTIST, RADIO_CSP, RADIO_STATION, RADIO_SUB, RADIO_BUY, radioBuyLink, radioBuyQuery, radioNav, radioPeers, radioRewriter,
@@ -2880,6 +2881,23 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
     // The public station guide: at /guide, and at the front of a host named
     // for it (a Moshpit name such as live.streaming, NIXAMP_GUIDE_HOSTS).
     const requestHost = String(request.headers["x-forwarded-host"] ?? request.headers.host ?? "").split(",")[0]!.trim().replace(/:\d+$/, "").toLowerCase();
+    // /privacy and /terms: nixamp.com's and backtoschool.help's own, never a self-hosted box's (legal.ts).
+    const legalKind = request.method === "GET" || request.method === "HEAD" ? isLegalPath(path) : null;
+    if (legalKind) {
+      const school = Boolean(webSite && isSchoolSite(webSite.site));
+      if (school || requestHost === "nixamp.com" || requestHost === "www.nixamp.com") {
+        const page = school
+          ? legalPage(legalKind, "school", webSite!.site)
+          : withUniversalFooter(legalPage(legalKind, "nixamp", "https://nixamp.com"));
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "content-length": Buffer.byteLength(page),
+          "cache-control": "public, max-age=300",
+        });
+        response.end(request.method === "HEAD" ? undefined : page);
+        return;
+      }
+    }
     const isGuidePage = Boolean(options.stations) && (request.method === "GET" || request.method === "HEAD") &&
       (path === "/guide" || (path === "/" && guideHosts().has(requestHost)));
     // nixamp.com's own /radio is the radio app (web/radio.html), not live.streaming's
