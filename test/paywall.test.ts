@@ -161,7 +161,12 @@ test("the crawl door is off without a key and a payee", () => {
 
 test("the crawl door charges GPTBot with a PAYMENT-REQUIRED header", async () => {
   const gate = createCrawlGate(CRAWL_ENV)!;
-  const answer = await gate.handle(new Request("http://localhost/", { headers: { "user-agent": GPTBOT, accept: "application/json" } }));
+  // x402-gateway gives a training crawler 100 free requests a minute per address to evaluate the site; past them it pays.
+  const ask = () => gate.handle(new Request("http://localhost/music", { headers: { "user-agent": GPTBOT, accept: "application/json", "x-real-ip": "203.0.113.7" } }));
+  let answer = await ask();
+  let free = 0;
+  for (; free < 200 && !answer; free++) answer = await ask();
+  assert.ok(free >= 1, "the first look is free");
   assert.equal(answer?.status, 402);
   assert.ok(answer?.headers.get("payment-required"));
 });
