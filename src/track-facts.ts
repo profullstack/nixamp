@@ -50,6 +50,73 @@ export interface Holder {
   license: string;
 }
 
+/**
+ * How long a file plays, for one the library has not indexed: a station's
+ * files can live outside every library folder (an AI label's ai-radio links),
+ * and without a length the player's clock, progress bar and karaoke stop.
+ * Answers at once from the cache, else 0 while ffprobe runs in the background;
+ * the player asks the clock again every few seconds and gets the length then.
+ */
+export class DurationProbe {
+  private cache = new Map<string, { key: string; seconds: number }>();
+  private running = new Set<string>();
+
+  constructor(private readonly ffprobe: string[]) {}
+
+  of(path: string): number {
+    let key = "";
+    try {
+      const info = statSync(path);
+      key = `${info.size}:${info.mtimeMs}`;
+    } catch {
+      return 0;
+    }
+    const hit = this.cache.get(path);
+    if (hit && hit.key === key) return hit.seconds;
+    this.probe(path, key);
+    return 0;
+  }
+
+  /** The length, waiting for ffprobe when it is not known yet. */
+  async wait(path: string): Promise<number> {
+    const now = this.of(path);
+    if (now > 0) return now;
+    for (let i = 0; i < 200 && this.running.has(path); i++) await new Promise((done) => setTimeout(done, 50));
+    return this.cache.get(path)?.seconds ?? 0;
+  }
+
+  private probe(path: string, key: string): void {
+    const [command, ...prefix] = this.ffprobe;
+    if (!command || this.running.has(path)) return;
+    this.running.add(path);
+    const child = spawn(command, [...prefix, "-v", "error", "-print_format", "json", "-show_entries", "format=duration", path], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    timer.unref?.();
+    child.stdout.on("data", (chunk: Buffer) => { if (out.length < 64 * 1024) out += chunk.toString("utf8"); });
+    let done = false;
+    const finish = (seconds: number): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      this.running.delete(path);
+      if (this.cache.size > 5000) this.cache.clear();
+      // A failed probe is remembered too (as 0), so it is not rerun on every clock.
+      this.cache.set(path, { key, seconds });
+    };
+    child.on("error", () => finish(0));
+    child.on("close", () => {
+      let seconds = 0;
+      try {
+        seconds = Number((JSON.parse(out) as { format?: { duration?: string } }).format?.duration ?? 0);
+      } catch {
+        // Not JSON: no length.
+      }
+      finish(Number.isFinite(seconds) && seconds > 0 ? seconds : 0);
+    });
+  }
+}
+
 /** The tags ffprobe reads from a file, lower-cased, cached by size and time. */
 export class TagReader {
   private cache = new Map<string, { key: string; tags: Record<string, string> }>();

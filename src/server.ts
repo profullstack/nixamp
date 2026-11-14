@@ -95,7 +95,7 @@ import { MusicLicenses } from "./music-license.ts";
 import { handleLicenseRoutes, isLicensePath } from "./license-routes.ts";
 import { AiRadio } from "./ai-radio.ts";
 import { ListenerShares } from "./listener-shares.ts";
-import { HolderStore, TagReader, factsFor } from "./track-facts.ts";
+import { DurationProbe, HolderStore, TagReader, factsFor } from "./track-facts.ts";
 import { SUPPORT_CSP, SUPPORT_PAGE, Support, SupportError, SupportSubscriptions, supportHoldersFrom } from "./support.ts";
 import { LyricsFinder } from "./lyrics.ts";
 import { LyricsPublisher } from "./lyrics-publish.ts";
@@ -2060,6 +2060,9 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
   const release = latestRelease();
 
   const tracker = options.connections ?? new Connections();
+  // A station file the library has not indexed (an AI label's ai-radio links) still has a length for the clock.
+  const durations = new DurationProbe(options.ffprobe ?? []);
+  const durationOf = (file: string): number => options.library?.index.itemAt(file)?.duration || durations.of(file);
   const started = Date.now();
 
   /** Count a request in, count its bytes, and close it out exactly once. */
@@ -3625,7 +3628,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         },
         trackFor: (file) => trackFor(engine, file),
         ...(options.library ? { isVideo: (file: string) => options.library!.index.itemAt(file)?.video === true } : {}),
-        ...(options.library ? { durationOf: (file: string) => options.library!.index.itemAt(file)?.duration ?? 0 } : {}),
+        durationOf,
         base: `${scheme}://${request.headers.host ?? "localhost"}`,
         publicBase: options.stations.publicBase?.() ?? "",
         json,

@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HolderStore, aiFromTags, factsFor, type Holder } from "../src/track-facts.ts";
+import { DurationProbe, HolderStore, aiFromTags, factsFor, type Holder } from "../src/track-facts.ts";
 import { Support, supportHoldersFrom } from "../src/support.ts";
 import type { Station } from "../src/stations.ts";
 
@@ -145,4 +145,25 @@ test("monthly support: month one at once, a link a month while paid, lapsed when
   assert.equal((await monthly.cancel(again.id, String(row["token"]))).canceled, true);
   assert.equal(row["status"], "canceled");
   await assert.rejects(monthly.cancel(again.id, "wrong"), /not one of ours/);
+});
+
+test("a file outside the library still gets a length for the clock (ai-radio links)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nixamp-duration-"));
+  try {
+    const song = join(dir, "001. Whispers in Dark.mp3");
+    writeFileSync(song, "not really audio");
+    // A stand-in ffprobe: the length a real one reads from the file's header.
+    const stub = join(dir, "ffprobe.sh");
+    writeFileSync(stub, "printf '{\"format\":{\"duration\":\"120.032653\"}}'\n");
+    const probe = new DurationProbe(["sh", stub]);
+    assert.equal(probe.of(song), 0, "unknown at first: answers at once, probes in the background");
+    assert.equal(await probe.wait(song), 120.032653);
+    assert.equal(probe.of(song), 120.032653, "then from the cache");
+    assert.equal(new DurationProbe(["sh", stub]).of(join(dir, "gone.mp3")), 0, "a missing file is 0, never a crash");
+    const broken = join(dir, "broken.sh");
+    writeFileSync(broken, "echo nope\n");
+    assert.equal(await new DurationProbe(["sh", broken]).wait(song), 0, "ffprobe that says nothing useful is 0");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
