@@ -195,7 +195,7 @@ export async function askToHear(session: Pick<Session, "site" | "token">, ask: A
 }
 
 /** A WAV around 16-bit mono PCM at RATE, for one window. */
-function wavOfPcm(pcm: Buffer): Uint8Array {
+export function wavOfPcm(pcm: Buffer): Uint8Array {
   const header = Buffer.alloc(44);
   header.write("RIFF", 0, "ascii");
   header.writeUInt32LE(36 + pcm.length, 4);
