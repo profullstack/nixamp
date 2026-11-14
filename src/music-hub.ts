@@ -73,9 +73,14 @@ export function parseMoved(text: string | undefined): Record<string, string> {
 /** NIXAMP_MUSIC_MIRRORS: "<server origin> > <mirror base>" pairs, comma separated (same shape as NIXAMP_MUSIC_MOVED). */
 export const parseMirrors = parseMoved;
 
+/** How long a server's last catalogue stands in for it while it does not answer. */
+export const STALE_MS = 30 * 60_000;
+
 export class MusicHub {
   private cache: { at: number; value: Promise<HubCatalogue> } | null = null;
   private bases = new Map<string, string>();
+  /** Each server's last good answers: one slow reply (a busy box) must not empty /music. */
+  private lastGood = new Map<string, { label?: { at: number; value: LabelView }; guide?: { at: number; value: { stations?: GuideStation[] } } }>();
 
   constructor(private readonly options: MusicHubOptions) {}
 
@@ -162,10 +167,18 @@ export class MusicHub {
     await Promise.all(peers.map(async (base) => {
       const id = serverId(base);
       this.bases.set(id, base);
-      const [label, guide] = await Promise.all([
+      const [freshLabel, freshGuide] = await Promise.all([
         this.read<LabelView>(`${base}/api/v1/label`),
         this.read<{ stations?: GuideStation[] }>(`${base}/api/v1/stations/guide?local=1`),
       ]);
+      // A server that timed out (6 s) keeps what it said last, for up to STALE_MS.
+      const kept = this.lastGood.get(base) ?? {};
+      const now = this.now();
+      if (freshLabel) kept.label = { at: now, value: freshLabel };
+      if (freshGuide) kept.guide = { at: now, value: freshGuide };
+      this.lastGood.set(base, kept);
+      const label = freshLabel ?? (kept.label && now - kept.label.at < STALE_MS ? kept.label.value : null);
+      const guide = freshGuide ?? (kept.guide && now - kept.guide.at < STALE_MS ? kept.guide.value : null);
       // A station is heard through its own server; the page's token is its listen key.
       const byId = new Map<string, HubStation>();
       for (const one of guide?.stations ?? []) {

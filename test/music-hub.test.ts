@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { artistFollowId, handleMusicRoutes, isMusicPath, MusicHub, musicPageFor, parseMirrors, parseMoved, serverId } from "../src/music-hub.ts";
+import { artistFollowId, handleMusicRoutes, isMusicPath, MusicHub, musicPageFor, parseMirrors, parseMoved, serverId, STALE_MS } from "../src/music-hub.ts";
 import { buyLink } from "../src/label-routes.ts";
 
 const S1 = "https://server1.example.com:4321";
@@ -147,4 +147,19 @@ test("files come from the server's mirror (a c0mpute site) first, by the label's
   } finally {
     globalThis.fetch = real;
   }
+});
+
+test("a server that stops answering keeps its last catalogue for a while, so /music is not emptied by one slow reply", async () => {
+  let now = 0;
+  let down = false;
+  const ok = fetcher([]);
+  const hub = new MusicHub({ peers: () => [S1], now: () => now, fetcher: (async (url: string) => down ? new Response("busy", { status: 503 }) : ok(url)) as typeof fetch });
+  assert.equal((await hub.catalogue()).genres.length, 1);
+  down = true;
+  now += 61_000;
+  const stale = await hub.catalogue();
+  assert.deepEqual(stale.genres.map((one) => one.genre), ["Punk"], "kept while the server is slow");
+  assert.equal(stale.stations[0]?.id, "punkstatio");
+  now += STALE_MS;
+  assert.equal((await hub.catalogue()).genres.length, 0, "and dropped once it has been gone too long");
 });
