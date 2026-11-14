@@ -34,6 +34,8 @@ import { aiKey } from "./ai-keys.ts";
 import { composerFromEnv, OutOfCredit, type Composer } from "./ai-radio.ts";
 import { askJson, hasModel } from "./ai-text.ts";
 import { formatLrc, parseLrc, type SyncedLine } from "./lyrics.ts";
+import { earAligner } from "./lyric-align.ts";
+import { readSession } from "./session.ts";
 import { bandMarkdown, castLine, inventMembers, readMembers, writeMembers, type Member } from "./label-profiles.ts";
 import type { LibraryIndex, Probed } from "./library-index.ts";
 import type { StationRunner } from "./station-runner.ts";
@@ -3114,11 +3116,25 @@ export class AiLabel {
    * song's tags (seconds each), then old cover-and-waveform videos made again
    * as storyboards.
    */
-  /** The aligner this server can use: the dependency, else ElevenLabs with its key, else none. */
+  /**
+   * The aligner this server can use: the dependency, else ElevenLabs with its
+   * key and nixamp.com's ear when ElevenLabs refuses (a dead key answered 401
+   * to every song, and the karaoke stopped), else the ear alone.
+   */
   private aligner(): ((audio: string, text: string) => Promise<TimedWord[]>) | null {
     if (this.deps.align !== undefined) return this.deps.align;
+    const ear = earAligner(() => readSession());
     const key = aiKey("ELEVENLABS_API_KEY");
-    return key ? elevenLabsAligner(key) : null;
+    if (!key) return ear;
+    const eleven = elevenLabsAligner(key);
+    return async (audio, text) => {
+      try {
+        return await eleven(audio, text);
+      } catch (error) {
+        this.log(`ElevenLabs could not time the words (${(error as Error).message}); asking nixamp.com's ear`);
+        return ear(audio, text);
+      }
+    };
   }
 
   /** A song's words timed to its recording, written as 001. <title>.lrc beside it. Once per song (a failure is not retried this run). */
