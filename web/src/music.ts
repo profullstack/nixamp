@@ -512,6 +512,16 @@ function highlight(heard: number): void {
 
 interface Facts { title?: string; artist?: string; album?: string; art?: string; lyrics?: string }
 
+/** Retries of one song's lyrics while its station wakes (a few, a few seconds apart). */
+const LYRIC_RETRY_MS = 3000;
+const LYRIC_RETRIES = 5;
+let lyricTries = { src: "", n: 0 };
+function lyricRetry(src: string): boolean {
+  if (lyricTries.src !== src) lyricTries = { src, n: 0 };
+  lyricTries.n += 1;
+  return lyricTries.n <= LYRIC_RETRIES;
+}
+
 /** What is on the station now: title, artist, cover, and the words (timed when the song has them). */
 async function refreshNow(): Promise<void> {
   const station = playing;
@@ -529,7 +539,16 @@ async function refreshNow(): Promise<void> {
   const panel = $("#lyrics-panel");
   if (facts.lyrics && panel.dataset["src"] !== facts.lyrics) {
     panel.dataset["src"] = facts.lyrics;
-    const words = await fetch(base + facts.lyrics).then((r) => r.json()).catch(() => null) as { lyrics?: { title: string; text: string; synced?: SyncedLine[] } } | null;
+    const words = await fetch(base + facts.lyrics).then((r) => (r.ok ? r.json() : null)).catch(() => null) as { lyrics?: { title: string; text: string; synced?: SyncedLine[] } } | null;
+    if (station !== playing) return;
+    if (!words?.lyrics && lyricRetry(facts.lyrics)) {
+      // A station that was asleep answers "no lyrics" until it is live (the
+      // first listener wakes it), and refreshNow only runs again when the song
+      // changes: ask again shortly instead of showing "No lyrics" all song.
+      delete panel.dataset["src"];
+      setTimeout(() => { if (station === playing) void refreshNow(); }, LYRIC_RETRY_MS);
+      return;
+    }
     drawLyrics(words?.lyrics ?? null);
   } else if (!facts.lyrics) {
     delete panel.dataset["src"];
