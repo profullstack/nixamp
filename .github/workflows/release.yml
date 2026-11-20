@@ -214,9 +214,18 @@ jobs:
         if: steps.guard.outputs.have == 'yes'
         env:
           GH_TOKEN: ${{ secrets.LOGICSRC_PUBLISH_TOKEN }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
           set -eu
-          raw="${{ github.event.inputs.tag || github.ref_name }}"
+          if [ -n "${INPUT_TAG:-}" ]; then
+            if [[ ! "$INPUT_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Invalid tag input (expected e.g. v0.1.0)"
+              exit 1
+            fi
+            raw="$INPUT_TAG"
+          else
+            raw="$GITHUB_REF_NAME"
+          fi
           v="${raw#v}"
           id="$(date -u +%Y-%m-%d)-nixamp-${v}"
           cd logicsrc
