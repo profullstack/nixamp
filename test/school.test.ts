@@ -180,3 +180,36 @@ test("the school's host has its own llms.txt, OpenAPI and MCP; nixamp.com keeps 
     fake.close();
   }
 });
+
+test("backtoschool.help answers robots.txt and sitemap.xml for itself, with its public classes", async () => {
+  const front = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://x");
+    void handleSchoolDiscovery(request, response, url.pathname, {
+      site: "https://backtoschool.help", accountSite: "https://nixamp.com", version: "1",
+      whoIs: async () => null, token: "",
+      readBody: async () => "",
+      json: (out, status, body) => { out.writeHead(status, { "content-type": "application/json" }); out.end(JSON.stringify(body)); },
+      classes: async () => [
+        { slug: "intro-to-synths", status: "live", updatedAt: "2026-11-20T10:00:00Z" },
+        { slug: "half-written", status: "draft", updatedAt: "2026-11-21T10:00:00Z" },
+      ],
+    }).then((handled) => { if (!handled) { response.writeHead(404); response.end(); } });
+  });
+  await new Promise<void>((done) => front.listen(0, "127.0.0.1", done));
+  const base = `http://127.0.0.1:${(front.address() as AddressInfo).port}`;
+  try {
+    const robots = await fetch(`${base}/robots.txt`);
+    assert.match(robots.headers.get("content-type") ?? "", /text\/plain/);
+    const text = await robots.text();
+    assert.match(text, /^Sitemap: https:\/\/backtoschool\.help\/sitemap\.xml$/m);
+    assert.doesNotMatch(text, /nixamp\.com|Disallow: \/sitemap/);
+    const sitemap = await fetch(`${base}/sitemap.xml`);
+    assert.match(sitemap.headers.get("content-type") ?? "", /application\/xml/);
+    const xml = await sitemap.text();
+    const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
+    assert.deepEqual(locs, ["https://backtoschool.help/", "https://backtoschool.help/privacy", "https://backtoschool.help/terms", "https://backtoschool.help/live/intro-to-synths"]);
+    assert.match(xml, /<lastmod>2026-11-20<\/lastmod>/);
+  } finally {
+    front.close();
+  }
+});

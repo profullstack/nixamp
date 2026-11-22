@@ -3673,6 +3673,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
       if (await handleSchoolDiscovery(request, response, path, {
         site: webSite.site, accountSite: options.site ?? "https://nixamp.com", version: options.version,
         whoIs: (token) => accounts.whoIs(token), token: tokenFrom(request.headers), readBody, json,
+        ...(options.events ? { classes: () => options.events!.list({ limit: 100 }) } : {}),
       })) return;
     }
     // Every way into nixamp, for agents and stores: llms.txt, OpenAPI, health, desktop downloads (discovery.ts).
