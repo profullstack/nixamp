@@ -28,6 +28,44 @@ export interface SchoolDiscoveryContext {
   readBody: (request: IncomingMessage, limit: number) => Promise<string>;
   json: (response: ServerResponse, status: number, body: unknown) => void;
   fetcher?: typeof fetch;
+  /** Public classes for the sitemap (LiveEvents.list with no owner: public, not archived). */
+  classes?: () => Promise<ReadonlyArray<SitemapClass>>;
+}
+
+export interface SitemapClass { slug: string; status: string; updatedAt?: string | null }
+
+/** The school's public pages; each class adds /live/<slug>. */
+export const SCHOOL_SITEMAP_PAGES = ["/", "/privacy", "/terms"] as const;
+
+export function schoolRobotsTxt(site: string): string {
+  return `User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /mcp
+Disallow: /reset-password
+
+Sitemap: ${site}/sitemap.xml
+`;
+}
+
+const xmlEscape = (value: string): string => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** One <urlset> on the school's own origin: its pages, then every public class that is not a draft. */
+export function schoolSitemap(site: string, classes: ReadonlyArray<SitemapClass>): string {
+  const day = (value: string | null | undefined): string => {
+    const date = value ? new Date(value) : null;
+    return date && !Number.isNaN(date.getTime()) ? `<lastmod>${date.toISOString().slice(0, 10)}</lastmod>` : "";
+  };
+  const listed = classes.filter((one) => one.slug && one.status !== "draft");
+  const urls = [
+    ...SCHOOL_SITEMAP_PAGES.map((path) => `  <url><loc>${xmlEscape(`${site}${path}`)}</loc></url>`),
+    ...listed.map((one) => `  <url><loc>${xmlEscape(`${site}/live/${encodeURIComponent(one.slug)}`)}</loc>${day(one.updatedAt)}</url>`),
+  ];
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls.join("\n")}
+</urlset>
+`;
 }
 
 const CORS = {
@@ -37,7 +75,7 @@ const CORS = {
 };
 
 const PRM = "/.well-known/oauth-protected-resource";
-const PATHS = new Set(["/llms.txt", "/openapi.json", "/mcp", "/mcp/public", PRM, `${PRM}/mcp`]);
+const PATHS = new Set(["/llms.txt", "/openapi.json", "/mcp", "/mcp/public", PRM, `${PRM}/mcp`, "/robots.txt", "/sitemap.xml", "/sitemaps/static.xml"]);
 
 /** Is this host the school? backtoschool.help (or NIXAMP_SCHOOL_URL), with or without www. */
 export function isSchoolSite(site: string | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -141,6 +179,23 @@ export async function handleSchoolDiscovery(request: IncomingMessage, response: 
   if (method === "OPTIONS") {
     response.writeHead(204, CORS);
     response.end();
+    return true;
+  }
+  // Crawlers: the school's own robots.txt and sitemap, never nixamp.com's.
+  if (path === "/robots.txt" || path === "/sitemap.xml" || path === "/sitemaps/static.xml") {
+    if (method !== "GET" && method !== "HEAD") { ctx.json(response, 405, { error: "GET only" }); return true; }
+    let body: string;
+    let type: string;
+    if (path === "/robots.txt") {
+      body = schoolRobotsTxt(site);
+      type = "text/plain; charset=utf-8";
+    } else {
+      const classes = ctx.classes ? await ctx.classes().catch(() => []) : [];
+      body = schoolSitemap(site, classes);
+      type = "application/xml; charset=utf-8";
+    }
+    response.writeHead(200, { "content-type": type, "cache-control": "public, max-age=300" });
+    response.end(method === "HEAD" ? undefined : body);
     return true;
   }
   if (path === "/llms.txt" || path === "/openapi.json" || path === PRM || path === `${PRM}/mcp`) {
