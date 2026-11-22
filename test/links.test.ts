@@ -4,9 +4,60 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  contentTypeFor, directLink, downloadArgs, fileNameFor, inputArgsFor, isDirectMedia, isPlaylistLink, linkChannelId,
+  c0mputeLive, contentTypeFor, directLink, downloadArgs, fileNameFor, inputArgsFor, isDirectMedia, isPlaylistLink, linkChannelId,
   mergeDownloadArgs, parseResolved, playableLink, playlistFrom, playlistNameOf, playlistTitleIn, reasonFrom, resolveArgs, resolveLink, resolvePlaylist,
+  unreachableReason,
 } from "../src/links.ts";
+import { refusedDestination } from "../src/destinations.ts";
+
+test("a c0mpute Live stream is played from its page or its playlist, as one link", async () => {
+  const playlist = "https://c0mpute.com/live/st_9fK2/index.m3u8";
+  // The playlist is taken as it is: a file, a live one, and no yt-dlp asked.
+  assert.equal(playableLink(playlist), playlist);
+  assert.equal(isDirectMedia(playlist), true);
+  // The watch page is what people copy, and is the same stream.
+  assert.equal(playableLink("https://c0mpute.com/live/st_9fK2"), playlist);
+  assert.equal(playableLink(" https://www.c0mpute.com/live/st_9fK2/ "), playlist);
+  assert.equal(playableLink("http://c0mpute.com/live/st_9fK2#chat"), playlist);
+  assert.equal(linkChannelId(playableLink("https://c0mpute.com/live/st_9fK2")), linkChannelId(playlist));
+  // What an unlisted stream's link carries is kept.
+  assert.equal(playableLink("https://c0mpute.com/live/st_9fK2?t=abc"), `${playlist}?t=abc`);
+  assert.deepEqual(c0mputeLive(playlist), { id: "st_9fK2", playlist, watch: "https://c0mpute.com/live/st_9fK2" });
+
+  // Not a stream: the listing, the dashboard, a deeper page, another host.
+  for (const other of [
+    "https://c0mpute.com/live", "https://c0mpute.com/live/", "https://c0mpute.com/dashboard/live",
+    "https://c0mpute.com/live/st_9fK2/chat", "https://c0mpute.com/live/a/b/index.m3u8",
+    "https://c0mpute.com.evil.example/live/st_9fK2", "https://evil.example/live/st_9fK2",
+    "https://c0mpute.com:8443/live/st_9fK2", "rtmp://c0mpute.com/live/st_9fK2",
+  ]) {
+    assert.equal(c0mputeLive(other), null, other);
+    assert.equal(playableLink(other), other);
+  }
+
+  // Resolved without asking anybody (a yt-dlp that always fails is never
+  // run), and named by the stream, not "index.m3u8".
+  const resolved = await resolveLink(["false"], playableLink("https://c0mpute.com/live/st_9fK2"));
+  assert.ok(!("error" in resolved));
+  if ("error" in resolved) return;
+  assert.equal(resolved.media, playlist);
+  assert.equal(resolved.live, true);
+  assert.equal(resolved.title, "c0mpute Live st_9fK2");
+  assert.equal(resolved.page, "https://c0mpute.com/live/st_9fK2");
+  assert.equal(resolved.extractor, "c0mpute");
+
+  // A member's paste passes the public-address guard: the playlist's own
+  // host is what is checked, and the hop to a gateway is ffmpeg's to follow.
+  const dns = async (host: string) => (host === "c0mpute.com" ? ["104.152.209.195"] : []);
+  assert.equal(await refusedDestination(resolved.media, dns), "");
+});
+
+test("a c0mpute stream that is off the air is said to be that, not a site refusing", () => {
+  // The playlist is a 404 until the streamer publishes; ffprobe reads nothing.
+  assert.match(unreachableReason(directLink("https://c0mpute.com/live/st_9fK2/index.m3u8")), /off the air/);
+  assert.match(unreachableReason(directLink("https://cdn.example/live/index.m3u8")), /^direct would not hand this server the media/);
+  assert.match(unreachableReason({ media: "https://x.example/v", extractor: "" }), /^the site would not/);
+});
 
 /** What yt-dlp said about a SoundCloud track on 2026-09-10, trimmed. */
 const SOUNDCLOUD = {

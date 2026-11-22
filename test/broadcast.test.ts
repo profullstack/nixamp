@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_ENCODER,
+  PRESETS,
   type Destination,
   buildBroadcastArgs,
   ingestUrl,
@@ -47,6 +48,20 @@ test("a key is never shown in full", () => {
   assert.doesNotMatch(JSON.stringify(shown), /abcd-efgh/);
   // Nothing to hide is shown as nothing, not as four bullets.
   assert.equal(redact(dest({ key: "" })).key, "");
+});
+
+test("a c0mpute Live key goes to its ingest and is never shown in full", () => {
+  const c0mpute = dest({ name: "c0mpute", url: PRESETS["c0mpute"] as string, key: "c0l_4f9a2b7c81d3" });
+  assert.equal(isRtmp(c0mpute.url), true);
+  assert.equal(ingestUrl(c0mpute), "rtmp://live.c0mpute.com/live/c0l_4f9a2b7c81d3");
+  const shown = redact(c0mpute);
+  assert.equal(shown.key, "••••81d3");
+  assert.doesNotMatch(JSON.stringify(shown), /c0l_|4f9a2b7c/);
+  // Alone, it is one plain FLV push with a keyframe a second, which is what
+  // an HLS segmenter behind an RTMP ingest cuts on.
+  const args = buildBroadcastArgs(plan({ destinations: [c0mpute] }));
+  assert.deepEqual(args.slice(-3), ["-f", "flv", "rtmp://live.c0mpute.com/live/c0l_4f9a2b7c81d3"]);
+  assert.equal(args[args.indexOf("-g") + 1], String(DEFAULT_ENCODER.framerate * DEFAULT_ENCODER.keyframeInterval));
 });
 
 test("a tee output always ignores its own failure", () => {

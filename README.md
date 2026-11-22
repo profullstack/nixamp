@@ -860,8 +860,8 @@ Out to as many places as you like, at once:
 nixamp serve ~/Music --rtmp youtube=<key> --rtmp x=<key> --rtmp tiktok=<key>
 ```
 
-`youtube`, `x`, `facebook`, `tiktok`, `twitch` and `kick` are known by name and
-need only a key; anything else takes a full `rtmp://host/app/key`.
+`youtube`, `x`, `facebook`, `tiktok`, `twitch`, `kick` and `c0mpute` are known
+by name and need only a key; anything else takes a full `rtmp://host/app/key`.
 
 One ffmpeg, one encode, many outputs, through the `tee` muxer. An ffmpeg per
 destination is the obvious shape and it encodes the same frames four times.
@@ -878,6 +878,62 @@ wants a video track either way.
 Stream keys are read from the command line or the environment and never from a
 request. `/api/broadcast/destinations` shows names and URLs with the keys
 redacted.
+
+### c0mpute Live
+
+[c0mpute Live](https://c0mpute.com/live) is live streaming carried by the
+c0mpute network: you publish RTMP, relays on the network carry it, and viewers
+watch HLS. nixamp works with it in both directions.
+
+**Publishing a station to it.** Make a stream at
+[c0mpute.com/dashboard/live](https://c0mpute.com/dashboard/live), or with the
+API and a `c0k_` key:
+
+```
+curl -X POST https://c0mpute.com/api/v1/live/streams \
+  -H "Authorization: Bearer c0k_…" -H "content-type: application/json" \
+  -d '{"name":"my-station","title":"My station"}'
+```
+
+The answer carries a `stream_key` (it starts `c0l_`), a `watch_url` and a
+`playback_url`. Hand the key to nixamp by name, like any other destination:
+
+```
+nixamp serve ~/Music --rtmp c0mpute=c0l_…
+```
+
+That is `rtmp://live.c0mpute.com/live/<stream_key>`. Nothing goes out until
+the broadcast is started, which is administering the server and so needs the
+control link's key or the owner's account:
+
+```
+POST   /api/broadcast    {"source": "http://127.0.0.1:4321/api/live?k=KEY"}
+GET    /api/broadcast    is it live, since when, to where
+DELETE /api/broadcast    stop
+```
+
+`source` is anything ffmpeg can read. `/api/live` is the server's own playlist
+as one address that keeps playing, and `/api/channels/<id>` is one channel, so
+either is a station; with no `source` at all it is the file playing now, and
+the broadcast ends when that file does. It goes out as the same encode every
+other destination gets: a black picture with a keyframe every second, H.264
+and AAC, which is what c0mpute's ingest cuts into HLS. A black picture costs
+almost nothing to send, so a station is about 230 kbit/s, near 100 MB an hour.
+
+Relays are paid $0.01 per GB out of the streamer's c0mpute balance, and the
+free tier carries 720p to 25 viewers at once.
+
+**Playing a c0mpute stream as a channel.** Paste its watch page or its playlist
+into "Play a link", or send either to the API:
+
+```
+POST /api/links/play   {"url": "https://c0mpute.com/live/<id>", "live": true}
+```
+
+`https://c0mpute.com/live/<id>` and `https://c0mpute.com/live/<id>/index.m3u8`
+are the same stream and become the same channel. The playlist only answers
+while the streamer is publishing, so a stream that is off the air is refused
+with a message that says so, and can be pasted again when it is on.
 
 ## Paying to listen
 

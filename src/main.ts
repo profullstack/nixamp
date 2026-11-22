@@ -127,7 +127,9 @@ Options for serve:
       --ingest     accept a live stream in at POST /api/ingest
       --rtmp-in N  also listen for RTMP publishers (OBS, Larix) from port N
       --rtmp-streams N  how many may publish at once (default 3, a port each)
-      --rtmp D     broadcast out, e.g. --rtmp youtube=<key>. Repeatable
+      --rtmp D     broadcast out, e.g. --rtmp youtube=<key>. Repeatable.
+                   Known by name: youtube, x, facebook, tiktok, twitch, kick,
+                   c0mpute. Anything else: name=rtmp://host/app/key
       --x402       charge for listening once more than 5 people are listening
       --no-x402    never charge
 

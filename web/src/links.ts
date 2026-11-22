@@ -184,6 +184,19 @@ export function localPlayback(entered: string, hlsNatively = false): LocalPlayba
 
   const path = url.pathname + url.search;
   const name = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() ?? url.hostname);
+
+  // A c0mpute Live stream, pasted as its watch page or as its playlist: both
+  // are the playlist at c0mpute.com/live/<id>/index.m3u8. A browser that
+  // plays HLS itself plays it here; any other hands it to a server, which
+  // takes either address too.
+  const c0mpute = host === "c0mpute.com" && url.port === ""
+    ? /^\/live\/([A-Za-z0-9_-]{1,128})(?:\/(?:index\.m3u8)?)?$/.exec(url.pathname)?.[1]
+    : undefined;
+  if (c0mpute) {
+    if (!hlsNatively) return null;
+    return { kind: "direct", url: `https://c0mpute.com/live/${c0mpute}/index.m3u8${url.search}`, video: true, label: `c0mpute Live · ${c0mpute}` };
+  }
+
   if (LIST.test(path)) return { kind: "list", url: url.toString(), label: listNameOf(url.toString()) };
   if (AUDIO.test(path)) return { kind: "direct", url: url.toString(), video: false, label: name };
   if (VIDEO.test(path)) return { kind: "direct", url: url.toString(), video: true, label: name };

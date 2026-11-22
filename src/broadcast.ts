@@ -50,6 +50,9 @@ export const PRESETS: Record<string, string> = {
   tiktok: "rtmp://push.tiktokcdn.com/live",
   twitch: "rtmp://live.twitch.tv/app",
   kick: "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app",
+  // c0mpute Live: live streaming carried by the c0mpute network's relays. The
+  // key is a `c0l_…` from c0mpute.com/dashboard/live.
+  c0mpute: "rtmp://live.c0mpute.com/live",
 };
 
 export function resolutionOf(resolution: EncoderSettings["resolution"]): { width: number; height: number } {

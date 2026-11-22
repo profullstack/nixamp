@@ -90,6 +90,49 @@ export function isDirectMedia(url: string): boolean {
 }
 
 /**
+ * A c0mpute Live stream, from either address it has.
+ *
+ * c0mpute Live is live streaming over the c0mpute network: a streamer
+ * publishes RTMP, relays carry it, and a viewer gets HLS. A stream has a
+ * watch page at c0mpute.com/live/<id> and a playlist at
+ * c0mpute.com/live/<id>/index.m3u8, which answers 302 to whichever gateway
+ * is carrying it while it is on and 404 while it is off the air. People copy
+ * the page out of the address bar, so both are taken and the playlist is what
+ * is played: ffmpeg reads it as it is and follows the hop, and every redial
+ * starts at c0mpute.com again and gets the gateway of the moment.
+ *
+ * Null for anything else, the listing at /live included.
+ */
+export function c0mputeLive(url: string): { id: string; playlist: string; watch: string } | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/i.test(parsed.protocol) || !/^(www\.)?c0mpute\.com$/i.test(parsed.hostname)) return null;
+  if (parsed.port !== "") return null;
+  const id = /^\/live\/([A-Za-z0-9_-]{1,128})(?:\/(?:index\.m3u8)?)?$/.exec(parsed.pathname)?.[1];
+  if (!id) return null;
+  const watch = `https://c0mpute.com/live/${id}`;
+  // The query stays: an unlisted stream's link may carry what lets it be read.
+  return { id, playlist: `${watch}/index.m3u8${parsed.search}`, watch };
+}
+
+/**
+ * Why a link whose media answered nothing could not be played, as a sentence
+ * for whoever pasted it. A c0mpute stream that is off the air is the ordinary
+ * case, a 404 until its streamer publishes, and is said as that; anywhere
+ * else nothing coming back is nearly always the site refusing this server.
+ */
+export function unreachableReason(link: Pick<ResolvedLink, "media" | "extractor">): string {
+  if (c0mputeLive(link.media)) {
+    return "that c0mpute Live stream is off the air. Its playlist only answers while the streamer is publishing, so try again when it is on.";
+  }
+  return `${link.extractor || "the site"} would not hand this server the media (often a sign-in or a bot check on a datacenter address). It plays in a browser instead.`;
+}
+
+/**
  * A plain m3u: a list of things to play, one per line, which is not a thing
  * ffmpeg reads. The .m3u8 of HLS is a list of segments of one thing, which
  * it does, and stays in DIRECT above.
@@ -232,7 +275,9 @@ export function playableLink(entered: unknown): string {
   } catch {
     return "";
   }
-  return trimmed.slice(0, 2048);
+  // A c0mpute Live watch page is played as its playlist, so the page and the
+  // playlist are one link, one channel, and need no yt-dlp between them.
+  return (c0mputeLive(trimmed)?.playlist ?? trimmed).slice(0, 2048);
 }
 
 /** A channel id for a link: stable, so two people pasting the same link share one decoder. */
@@ -403,6 +448,15 @@ export function oneLine(text: string): string {
 
 /** A bare file link, described without asking anybody. */
 export function directLink(url: string): ResolvedLink {
+  // Every c0mpute stream's file is called index.m3u8, which names none of
+  // them; the stream's id does, and its page is the watch page.
+  const c0mpute = c0mputeLive(url);
+  if (c0mpute) {
+    return {
+      title: `c0mpute Live ${c0mpute.id}`, media: url, audio: "", live: true, duration: 0, video: true, headers: {},
+      extractor: "c0mpute", ext: "m3u8", page: c0mpute.watch, thumbnail: "", about: "",
+    };
+  }
   return {
     title: fileNameOf(url),
     media: url,
