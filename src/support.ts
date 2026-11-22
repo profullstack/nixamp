@@ -16,6 +16,7 @@
  * pretended.
  */
 import { createHash, randomUUID } from "node:crypto";
+import { version } from "./meta.ts";
 
 export interface SupportHolder { id: string; name: string }
 
@@ -33,6 +34,8 @@ const MAX_USD = 1000;
 
 const SESSION = /^cs_[A-Za-z0-9]{16,64}$/;
 const COINPAY = "https://coinpayportal.com";
+/** Names nixamp.com in CoinPay's logs and throttle instead of a bare runtime UA. */
+const COINPAY_UA = `nixamp.com/${version()} (+https://nixamp.com)`;
 
 /** A CoinPay hosted checkout session id (cs_...), as stored where a payment id used to be. */
 export function isSessionRef(ref: string): boolean {
@@ -96,7 +99,7 @@ export class Support {
     const response = await (this.options.fetcher ?? fetch)(`https://coinpayportal.com${path}`, {
       ...init,
       signal: AbortSignal.timeout(15_000),
-      headers: { authorization: `Bearer ${this.options.key}`, "content-type": "application/json", ...(init.headers ?? {}) },
+      headers: { authorization: `Bearer ${this.options.key}`, "content-type": "application/json", "user-agent": COINPAY_UA, ...(init.headers ?? {}) },
     });
     const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
     if (!response.ok || body["success"] !== true) throw new SupportError("The payment service did not answer; nothing was charged. Try again.", 502, "provider");
@@ -169,7 +172,7 @@ export class Support {
       try {
         const response = await (this.options.fetcher ?? fetch)(`${COINPAY}/api/checkout/sessions/${encodeURIComponent(paymentId)}`, {
           signal: AbortSignal.timeout(15_000),
-          headers: { authorization: `Bearer ${this.options.key}` },
+          headers: { authorization: `Bearer ${this.options.key}`, "user-agent": COINPAY_UA },
         });
         if (!response.ok) return null;
         const body = (await response.json()) as { session?: { id?: string; status?: string } };
@@ -182,7 +185,7 @@ export class Support {
     try {
       const response = await (this.options.fetcher ?? fetch)(`https://coinpayportal.com/api/payments/${encodeURIComponent(paymentId)}`, {
         signal: AbortSignal.timeout(15_000),
-        headers: { authorization: `Bearer ${this.options.key}` },
+        headers: { authorization: `Bearer ${this.options.key}`, "user-agent": COINPAY_UA },
       });
       if (!response.ok) return null;
       const body = (await response.json()) as { payment?: { status?: string } };
@@ -206,7 +209,7 @@ export class Support {
     try {
       const response = await (this.options.fetcher ?? fetch)(`${COINPAY}/api/checkout/sessions/${encodeURIComponent(ref)}`, {
         signal: AbortSignal.timeout(15_000),
-        headers: { authorization: `Bearer ${this.options.key}` },
+        headers: { authorization: `Bearer ${this.options.key}`, "user-agent": COINPAY_UA },
       });
       if (!response.ok) return null;
       const body = (await response.json()) as { session?: { id?: string; status?: string; expires_at?: string } };

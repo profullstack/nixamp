@@ -20,6 +20,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { Account } from "./accounts.ts";
 import type { DeviceGrants } from "./device.ts";
 import type { Queryable } from "./follows.ts";
+import { version } from "./meta.ts";
 
 export interface Provider {
   /** As it appears in a URL and in `nixamp login --with <id>`. */
@@ -92,7 +93,7 @@ export function pkcePair(): { verifier: string; challenge: string } {
   return { verifier, challenge: createHash("sha256").update(verifier).digest("base64url") };
 }
 
-const AGENT = { "user-agent": "nixamp" };
+const AGENT = { "user-agent": `nixamp.com/${version()} (+https://nixamp.com)` };
 
 async function readJson(answer: Response): Promise<Record<string, unknown>> {
   if (!answer.ok) return {};
