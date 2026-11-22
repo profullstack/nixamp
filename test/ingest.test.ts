@@ -34,6 +34,14 @@ test("a preset destination needs only a key", () => {
   const [tiktok] = parseDestinations(["TikTok=k"]);
   assert.equal(tiktok?.url, PRESETS["tiktok"]);
   assert.equal(tiktok?.name, "TikTok");
+
+  // c0mpute Live: the key is a c0l_ one, and the ingest is known by name.
+  const [c0mpute] = parseDestinations(["c0mpute=c0l_4f9a2b7c"]);
+  assert.equal(c0mpute?.url, "rtmp://live.c0mpute.com/live");
+  assert.equal(c0mpute?.url, PRESETS["c0mpute"]);
+  assert.equal(c0mpute?.key, "c0l_4f9a2b7c");
+  assert.equal(c0mpute?.name, "c0mpute");
+  assert.equal(c0mpute?.enabled, true);
 });
 
 test("a full URL is split at the last slash", () => {

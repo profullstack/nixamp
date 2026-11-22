@@ -1046,6 +1046,14 @@ test("a pasted link plays here when it can: YouTube, Vimeo and SoundCloud in a f
   // A playlist of segments only where the browser plays those itself.
   assert.equal(localPlayback("https://x.example/live.m3u8"), null);
   assert.equal(localPlayback("https://x.example/live.m3u8", true)?.kind, "direct");
+  // A c0mpute Live stream is its playlist, whichever of its addresses was
+  // pasted; a browser without HLS leaves it to a server, which takes both.
+  const c0mpute = { kind: "direct", url: "https://c0mpute.com/live/st_9fK2/index.m3u8", video: true, label: "c0mpute Live · st_9fK2" };
+  assert.deepEqual(localPlayback("https://c0mpute.com/live/st_9fK2", true), c0mpute);
+  assert.deepEqual(localPlayback("https://www.c0mpute.com/live/st_9fK2/index.m3u8", true), c0mpute);
+  assert.equal(localPlayback("https://c0mpute.com/live/st_9fK2"), null);
+  assert.equal(localPlayback("https://c0mpute.com/live", true), null);
+  assert.equal(localPlayback("https://c0mpute.com/dashboard/live", true), null);
 
   // Anything else -- a podcast's page, a TikTok live -- is a server's job.
   assert.equal(localPlayback("https://www.tiktok.com/@a/live"), null);

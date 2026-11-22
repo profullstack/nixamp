@@ -121,7 +121,7 @@ import { handleChannelCompression, handleCompressionApi, handleStaticRelay, type
 import { DEFAULT_SITE as NICHEDB, Enricher, type EnrichKind, FIXTURE_TTL_MS } from "./enrich.ts";
 import {
   contentTypeFor, downloadArgs, fileNameFor, inputArgsFor, linkChannelId, mergeDownloadArgs, playableLink, resolveLink,
-  saveFormat,
+  saveFormat, unreachableReason,
   type ResolvedLink,
 } from "./links.ts";
 import { CALL_IN_NUMBER, OPT_IN_PATH, optInPage } from "./optin.ts";
@@ -5950,9 +5950,7 @@ export function createHandler(engine: Engine, options: HandlerOptions) {
         );
         if (reachable.video === "" && reachable.audio === "") {
           links.delete(link);
-          json(response, 422, {
-            error: `${resolved.extractor || "the site"} would not hand this server the media (often a sign-in or a bot check on a datacenter address). It plays in a browser instead.`,
-          });
+          json(response, 422, { error: unreachableReason(resolved) });
           return;
         }
         const started = await pullChannel(
