@@ -82,8 +82,24 @@ jobs:
           tar -xzf release/nixamp-cli-*.tar.gz -C /tmp/cli-check
           cd /tmp/cli-check/nixamp-cli-*
           test "$(node bin/nixamp.mjs --version)" = "$(node -p "require('./package.json').version")"
+      # Re-runnable: a version that is already on npm is skipped, so a release
+      # whose publish was done by hand (0.81.0, when NPM_TOKEN had died) can be
+      # dispatched again to build and attach its assets. The lookup is anonymous
+      # on purpose (no userconfig, so no token): a dead token must not be able
+      # to turn "already published" into a failure, and a version that is not
+      # on npm still publishes exactly as before and fails loudly if it cannot.
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        run: |
+          set -eu
+          name=$(node -p "require('./package.json').name")
+          v=$(node -p "require('./package.json').version")
+          published=$(npm view "${name}@${v}" version --userconfig /dev/null --registry https://registry.npmjs.org 2>/dev/null || true)
+          if [ "$published" = "$v" ]; then
+            echo "::notice::${name}@${v} is already on npm; skipping npm publish."
+            exit 0
+          fi
+          echo "${name}@${v} is not on npm yet; publishing."
+          npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - uses: actions/upload-artifact@v4
